@@ -1,0 +1,6 @@
+{
+  "name": "Camera Pro",
+  "description": "Professional camera with manual controls, Human Vision natural perspective, Dolly Zoom, Night Multi-Frame Fusion, 50MP RAW, Portrait, and Cinema Log modes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
