@@ -41,6 +41,8 @@ import android.util.SizeF
 import android.view.Surface
 import com.example.camera.model.*
 import com.example.camera.data.CubeLutParser
+import com.example.camera.engine.night.*
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -2672,10 +2674,7 @@ class Camera2Engine(private val context: Context) {
      * boosts signal-to-noise ratio by temporal averaging, and applies adaptive tone mapping.
      */
     fun takeNightPhoto(
-        durationSeconds: Int = 2,
-        isAntiGhosting: Boolean = true,
-        noiseSuppression: Float = 0.85f,
-        shadowLift: Float = 1.25f,
+        config: NightConfig = NightConfig(),
         onProgress: (NightCaptureProgress) -> Unit = {},
         onComplete: (Uri?) -> Unit
     ) {
@@ -2693,50 +2692,110 @@ class Camera2Engine(private val context: Context) {
         }
 
         _isCapturing.value = true
-        val targetFrameCount = (durationSeconds * 3).coerceIn(4, 12)
-        val collectedBitmaps = java.util.Collections.synchronizedList(mutableListOf<Bitmap>())
+        gyroStabilizationEngine.start()
+
+        val activeLens = _selectedLens.value
+        val chars = activeLens?.let { getCharacteristics(it.cameraId) }
+        val previewResult = lastCaptureResult
+
+        // 1. Analyze hardware sensor limits, scene illuminance & gyro stability
+        val analyzer = NightSceneAnalyzer()
+        val plan = analyzer.createPlan(chars, previewResult, gyroStabilizationEngine, config)
+        val bracketFrames = plan.bracketFrames
+        val targetFrameCount = bracketFrames.size
+
+        val collectedFrames = java.util.Collections.synchronizedList(mutableListOf<CapturedNightFrame>())
         val isCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
 
         val initialProgress = NightCaptureProgress(
             isCapturing = true,
-            remainingSeconds = durationSeconds.toFloat(),
+            remainingSeconds = (plan.totalEstimatedDurationMs / 1000f),
             progress = 0.05f,
-            statusText = "Hold device steady... Capturing burst"
+            statusText = "Hold device steady... [${plan.sceneLevel.label}]",
+            detectedScene = plan.sceneLevel.label,
+            activeFrameCount = 0,
+            targetFrameCount = targetFrameCount,
+            isTripodDetected = plan.isTripod,
+            exposureTimeMs = (bracketFrames.firstOrNull()?.exposureTimeNs ?: 33_333_333L) / 1_000_000f,
+            iso = bracketFrames.firstOrNull()?.iso ?: 400
         )
         _nightProgress.value = initialProgress
         onProgress(initialProgress)
 
-        // Countdown timer job
+        // Real-time countdown timer job
+        val totalMs = plan.totalEstimatedDurationMs
         val countdownJob = engineScope.launch {
-            val totalMs = durationSeconds * 1000L
             val stepMs = 100L
             var elapsedMs = 0L
             while (elapsedMs < totalMs && !isCompleted.get()) {
                 delay(stepMs)
                 elapsedMs += stepMs
                 val remSec = max(0f, (totalMs - elapsedMs) / 1000f)
-                val prog = (elapsedMs.toFloat() / totalMs * 0.5f).coerceIn(0.05f, 0.5f)
-                val status = "Hold device steady (${collectedBitmaps.size}/$targetFrameCount frames)"
+                val prog = (elapsedMs.toFloat() / totalMs * 0.45f).coerceIn(0.05f, 0.45f)
+                val currentFrameIdx = collectedFrames.size.coerceIn(0, targetFrameCount - 1)
+                val activeBracket = bracketFrames[currentFrameIdx]
                 val current = NightCaptureProgress(
                     isCapturing = true,
                     remainingSeconds = remSec,
                     progress = prog,
-                    statusText = status
+                    statusText = "Hold steady (${collectedFrames.size}/$targetFrameCount frames)",
+                    detectedScene = plan.sceneLevel.label,
+                    activeFrameCount = collectedFrames.size,
+                    targetFrameCount = targetFrameCount,
+                    isTripodDetected = plan.isTripod,
+                    exposureTimeMs = activeBracket.exposureTimeNs / 1_000_000f,
+                    iso = activeBracket.iso
                 )
                 _nightProgress.value = current
                 withContext(Dispatchers.Main) { onProgress(current) }
             }
         }
 
+        val orientation = getCaptureJpegOrientation()
+
         readerJpeg.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
             try {
                 val buffer = image.planes[0].buffer
                 val bytes = ByteArray(buffer.remaining())
                 buffer.get(bytes)
-                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (bmp != null) {
-                    collectedBitmaps.add(bmp)
+                    val frameIdx = collectedFrames.size
+                    val bracket = bracketFrames.getOrElse(frameIdx) { bracketFrames.last() }
+
+                    val gyroPitch = gyroStabilizationEngine.latestPitchSpeed
+                    val gyroYaw = gyroStabilizationEngine.latestYawSpeed
+
+                    val capturedFrame = CapturedNightFrame(
+                        index = frameIdx,
+                        bitmap = bmp,
+                        exposureTimeNs = bracket.exposureTimeNs,
+                        iso = bracket.iso,
+                        timestampNanos = System.nanoTime(),
+                        type = bracket.type,
+                        isReference = bracket.isAnchorFrame,
+                        gyroPitchVelocity = gyroPitch,
+                        gyroYawVelocity = gyroYaw
+                    )
+                    collectedFrames.add(capturedFrame)
+
+                    val prog = 0.05f + (collectedFrames.size.toFloat() / targetFrameCount * 0.40f)
+                    val status = "Acquired frame ${collectedFrames.size}/$targetFrameCount (${bracket.type.name})"
+                    val progressUpdate = NightCaptureProgress(
+                        isCapturing = true,
+                        remainingSeconds = max(0f, (totalMs - (frameIdx * 250L)) / 1000f),
+                        progress = prog,
+                        statusText = status,
+                        detectedScene = plan.sceneLevel.label,
+                        activeFrameCount = collectedFrames.size,
+                        targetFrameCount = targetFrameCount,
+                        isTripodDetected = plan.isTripod,
+                        exposureTimeMs = bracket.exposureTimeNs / 1_000_000f,
+                        iso = bracket.iso
+                    )
+                    _nightProgress.value = progressUpdate
+                    engineScope.launch(Dispatchers.Main) { onProgress(progressUpdate) }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error acquiring night burst frame", e)
@@ -2744,33 +2803,60 @@ class Camera2Engine(private val context: Context) {
                 image.close()
             }
 
-            if (collectedBitmaps.size >= targetFrameCount && isCompleted.compareAndSet(false, true)) {
+            if (collectedFrames.size >= targetFrameCount && isCompleted.compareAndSet(false, true)) {
                 countdownJob.cancel()
-                finalizeNightCapture(
-                    collectedBitmaps,
-                    noiseSuppression,
-                    shadowLift,
-                    isAntiGhosting,
-                    onProgress,
-                    onComplete
+                finalizeUltraNightCapture(
+                    frames = collectedFrames,
+                    plan = plan,
+                    config = config,
+                    onProgress = onProgress,
+                    onComplete = onComplete
                 )
             }
         }, backgroundHandler)
 
         try {
             val requests = mutableListOf<CaptureRequest>()
-            val orientation = getCaptureJpegOrientation()
+            val availableCaps = chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+            val hasManualSensor = availableCaps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+
             for (i in 0 until targetFrameCount) {
+                val bracket = bracketFrames[i]
                 val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                 builder.addTarget(readerJpeg.surface)
                 applyCommonSettings(builder)
+
+                if (hasManualSensor) {
+                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, bracket.exposureTimeNs)
+                    builder.set(CaptureRequest.SENSOR_SENSITIVITY, bracket.iso)
+                } else {
+                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    val aeStep = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) ?: android.util.Rational(1, 3)
+                    val stepFloat = aeStep.numerator.toFloat() / aeStep.denominator.toFloat()
+                    val compIndex = (bracket.evOffset / stepFloat).toInt()
+                    val compRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: Range(-6, 6)
+                    builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, compIndex.coerceIn(compRange.lower, compRange.upper))
+                }
+
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
                 builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
                 builder.set(CaptureRequest.JPEG_ORIENTATION, orientation)
                 builder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
                 requests.add(builder.build())
             }
-            session.captureBurst(requests, null, backgroundHandler)
+
+            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    val expAccepted = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                    val isoAccepted = result.get(CaptureResult.SENSOR_SENSITIVITY)
+                    Log.d(TAG, "[NIGHT_FRAME_ACCEPTED] Accepted Exposure: ${expAccepted}ns, ISO: $isoAccepted")
+                }
+            }, backgroundHandler)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to submit night burst requests", e)
             isCompleted.set(true)
@@ -2781,44 +2867,93 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun finalizeNightCapture(
-        frames: List<Bitmap>,
-        noiseSuppression: Float,
-        shadowLift: Float,
-        isAntiGhosting: Boolean,
+    // Overload for backward compatibility
+    fun takeNightPhoto(
+        durationSeconds: Int,
+        isAntiGhosting: Boolean = true,
+        noiseSuppression: Float = 0.85f,
+        shadowLift: Float = 1.35f,
+        onProgress: (NightCaptureProgress) -> Unit = {},
+        onComplete: (Uri?) -> Unit
+    ) {
+        takeNightPhoto(
+            config = NightConfig(
+                durationSeconds = durationSeconds,
+                antiGhostingEnabled = isAntiGhosting,
+                noiseSuppression = noiseSuppression,
+                shadowLift = shadowLift
+            ),
+            onProgress = onProgress,
+            onComplete = onComplete
+        )
+    }
+
+    private fun finalizeUltraNightCapture(
+        frames: List<CapturedNightFrame>,
+        plan: NightBracketPlan,
+        config: NightConfig,
         onProgress: (NightCaptureProgress) -> Unit,
         onComplete: (Uri?) -> Unit
     ) {
         engineScope.launch(Dispatchers.Default) {
-            val progressUpdate: (Float) -> Unit = { p ->
-                val overall = 0.5f + (p * 0.45f)
-                val status = if (p < 0.5f) "Aligning Frames & Anti-Ghosting..." else "Adaptive Tone Mapping..."
+            val updateProgressText: (Float, String) -> Unit = { p, status ->
                 val state = NightCaptureProgress(
                     isCapturing = true,
                     remainingSeconds = 0f,
-                    progress = overall,
-                    statusText = status
+                    progress = p,
+                    statusText = status,
+                    detectedScene = plan.sceneLevel.label,
+                    activeFrameCount = frames.size,
+                    targetFrameCount = plan.bracketFrames.size,
+                    isTripodDetected = plan.isTripod,
+                    exposureTimeMs = (plan.bracketFrames.firstOrNull()?.exposureTimeNs ?: 33_333_333L) / 1_000_000f,
+                    iso = plan.bracketFrames.firstOrNull()?.iso ?: 400
                 )
                 _nightProgress.value = state
                 engineScope.launch(Dispatchers.Main) { onProgress(state) }
             }
 
-            val fusedBitmap = try {
-                nightFusionProcessor.processNightFrames(
-                    frames = frames,
-                    noiseSuppression = noiseSuppression,
-                    shadowLift = shadowLift,
-                    isAntiGhostingEnabled = isAntiGhosting,
-                    onProgress = progressUpdate
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Night fusion failed, using base frame", e)
-                frames.firstOrNull() ?: Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+            updateProgressText(0.48f, "Selecting optical anchor frame...")
+
+            val alignmentEngine = NightAlignmentEngine()
+            val ultraEngine = UltraNightFusionEngine()
+
+            val refIdx = alignmentEngine.selectOptimalReferenceFrame(frames)
+
+            updateProgressText(0.55f, "Gyro-assisted alignment & optical flow...")
+            val alignedData = alignmentEngine.alignFrames(frames, refIdx) { alignProg ->
+                updateProgressText(0.55f + alignProg * 0.18f, "Sub-pixel alignment & anti-ghosting...")
             }
 
+            updateProgressText(0.75f, "HDR radiance fusion & temporal denoising...")
+            val fusedBitmap = try {
+                ultraEngine.processUltraNightFrames(
+                    frames = frames,
+                    alignedData = alignedData,
+                    config = config,
+                    onProgress = { fusionProg ->
+                        val subText = when {
+                            fusionProg < 0.40f -> "Linear HDR Radiance Accumulation..."
+                            fusionProg < 0.70f -> "Bilateral Local Tone Mapping..."
+                            fusionProg < 0.90f -> "Shadow Recovery & Chromatic Adaptation..."
+                            else -> "Edge Sharpening & Noise Filtering..."
+                        }
+                        updateProgressText(0.75f + fusionProg * 0.22f, subText)
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Flagship night fusion failed, falling back to reference frame", e)
+                frames.getOrNull(refIdx)?.bitmap ?: frames.first().bitmap
+            }
+
+            updateProgressText(0.98f, "Saving ultra-bright night photo...")
             val uri = saveBitmapToMediaStore(fusedBitmap, 0)
 
-            frames.forEach { if (!it.isRecycled && it != fusedBitmap) it.recycle() }
+            frames.forEach { frame ->
+                if (!frame.bitmap.isRecycled && frame.bitmap != fusedBitmap) {
+                    frame.bitmap.recycle()
+                }
+            }
             if (!fusedBitmap.isRecycled) fusedBitmap.recycle()
 
             _isCapturing.value = false
@@ -2826,7 +2961,11 @@ class Camera2Engine(private val context: Context) {
                 isCapturing = false,
                 remainingSeconds = 0f,
                 progress = 1.0f,
-                statusText = "Completed"
+                statusText = "Completed",
+                detectedScene = plan.sceneLevel.label,
+                activeFrameCount = frames.size,
+                targetFrameCount = plan.bracketFrames.size,
+                isTripodDetected = plan.isTripod
             )
             _nightProgress.value = finalProgress
             updateStorageStats()

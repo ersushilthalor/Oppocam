@@ -122,6 +122,26 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
         }
     }
 
+    val latestPitchSpeed: Float
+        get() = gyroRingBuffer.peekLast()?.wx ?: 0f
+
+    val latestYawSpeed: Float
+        get() = gyroRingBuffer.peekLast()?.wy ?: 0f
+
+    val latestRollSpeed: Float
+        get() = gyroRingBuffer.peekLast()?.wz ?: 0f
+
+    fun getRecentRmsMotion(): Float {
+        val list = gyroRingBuffer.toList()
+        if (list.isEmpty()) return 0f
+        val recent = if (list.size > 20) list.subList(list.size - 20, list.size) else list
+        var sumSquares = 0.0
+        for (s in recent) {
+            sumSquares += (s.wx * s.wx + s.wy * s.wy + s.wz * s.wz).toDouble()
+        }
+        return kotlin.math.sqrt(sumSquares / recent.size).toFloat()
+    }
+
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     /**

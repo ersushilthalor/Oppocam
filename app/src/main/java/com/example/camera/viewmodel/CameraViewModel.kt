@@ -1225,13 +1225,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun triggerNightCapture() {
         if (engine.isCapturing.value) return
+
+        val timerSeconds = _timerMode.value.seconds
+        if (timerSeconds > 0) {
+            timerJob?.cancel()
+            timerJob = viewModelScope.launch {
+                for (remaining in timerSeconds downTo 1) {
+                    _activeTimerCountdown.value = remaining
+                    delay(1000)
+                }
+                _activeTimerCountdown.value = null
+                executeNightCapture()
+            }
+        } else {
+            executeNightCapture()
+        }
+    }
+
+    private fun executeNightCapture() {
         com.example.camera.sound.CameraSoundManager.playShutter()
         val config = _nightConfig.value
         engine.takeNightPhoto(
-            durationSeconds = config.durationSeconds,
-            isAntiGhosting = config.antiGhostingEnabled,
-            noiseSuppression = config.noiseSuppression,
-            shadowLift = config.shadowLift,
+            config = config,
             onProgress = {},
             onComplete = { uri ->
                 if (uri != null) {
