@@ -198,6 +198,10 @@ fun CameraScreen(
     val isZoomProcessing by viewModel.isZoomProcessing.collectAsStateWithLifecycle()
     val zoomProgress by viewModel.zoomProgress.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
+    val hdrExposurePair by viewModel.hdrExposurePair.collectAsStateWithLifecycle()
+    val sceneAnalysisMetrics by viewModel.sceneAnalysisMetrics.collectAsStateWithLifecycle()
+    val adaptiveHdrMode by viewModel.adaptiveHdrMode.collectAsStateWithLifecycle()
+    val isDualExposureRecording by viewModel.isDualExposureRecording.collectAsStateWithLifecycle()
 
     val isUsingRearMainLens = remember(selectedLens, currentZoom) {
         selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
@@ -363,6 +367,20 @@ fun CameraScreen(
             capabilities = capabilities,
             modifier = Modifier.fillMaxSize()
         )
+
+        // Adaptive Dual-Exposure HDR Live Indicator (Subtle Pro HUD)
+        if (cameraMode == CameraMode.VIDEO) {
+            com.example.camera.hdr.ui.HdrLiveIndicator(
+                mode = adaptiveHdrMode,
+                isRecording = isRecordingVideo || isDualExposureRecording,
+                exposurePair = hdrExposurePair,
+                metrics = sceneAnalysisMetrics,
+                onToggleMode = { viewModel.toggleAdaptiveHdrMode() },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 74.dp, end = 16.dp)
+            )
+        }
 
         // Subtle High-Quality Zoom processing pill (non-blocking indicator)
         if (isZoomProcessing) {

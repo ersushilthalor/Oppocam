@@ -569,6 +569,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VideoQualityOption.UHD_4K_30)
 
+    // Adaptive Dual-Exposure HDR Video System
+    val hdrExposurePair: StateFlow<com.example.camera.hdr.model.HdrExposurePair?> = engine.hdrExposurePair
+    val sceneAnalysisMetrics: StateFlow<com.example.camera.hdr.model.SceneAnalysisMetrics?> = engine.sceneAnalysisMetrics
+    private val _adaptiveHdrMode = MutableStateFlow(preferences.adaptiveHdrVideoMode)
+    val adaptiveHdrMode: StateFlow<com.example.camera.hdr.model.AdaptiveHdrMode> = _adaptiveHdrMode.asStateFlow()
+    val isDualExposureRecording: StateFlow<Boolean> = engine.isDualExposureRecording
+
+    fun toggleAdaptiveHdrMode() {
+        val next = when (_adaptiveHdrMode.value) {
+            com.example.camera.hdr.model.AdaptiveHdrMode.OFF -> com.example.camera.hdr.model.AdaptiveHdrMode.AUTO
+            com.example.camera.hdr.model.AdaptiveHdrMode.AUTO -> com.example.camera.hdr.model.AdaptiveHdrMode.ALWAYS_ON
+            com.example.camera.hdr.model.AdaptiveHdrMode.ALWAYS_ON -> com.example.camera.hdr.model.AdaptiveHdrMode.OFF
+        }
+        _adaptiveHdrMode.value = next
+        preferences.adaptiveHdrVideoMode = next
+        showToast("Adaptive HDR: ${next.name}")
+    }
+
     private var timerJob: Job? = null
     private var focusDismissJob: Job? = null
     private var toastDismissJob: Job? = null

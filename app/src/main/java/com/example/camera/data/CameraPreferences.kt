@@ -1297,4 +1297,61 @@ class CameraPreferences(context: Context) {
             .putFloat("pref_va_tex_micro_contrast", va.textureMicroContrast)
             .apply()
     }
+
+    // --- Adaptive Dual-Exposure HDR Video Preferences ---
+
+    var adaptiveHdrVideoMode: com.example.camera.hdr.model.AdaptiveHdrMode
+        get() {
+            val name = prefs.getString("pref_adaptive_hdr_video_mode", com.example.camera.hdr.model.AdaptiveHdrMode.AUTO.name)
+            return try {
+                com.example.camera.hdr.model.AdaptiveHdrMode.valueOf(name ?: com.example.camera.hdr.model.AdaptiveHdrMode.AUTO.name)
+            } catch (e: Exception) {
+                com.example.camera.hdr.model.AdaptiveHdrMode.AUTO
+            }
+        }
+        set(value) = prefs.edit().putString("pref_adaptive_hdr_video_mode", value.name).apply()
+
+    var hdrExposureStrength: com.example.camera.hdr.model.HdrExposureStrength
+        get() {
+            val name = prefs.getString("pref_hdr_exposure_strength", com.example.camera.hdr.model.HdrExposureStrength.AUTO.name)
+            return try {
+                com.example.camera.hdr.model.HdrExposureStrength.valueOf(name ?: com.example.camera.hdr.model.HdrExposureStrength.AUTO.name)
+            } catch (e: Exception) {
+                com.example.camera.hdr.model.HdrExposureStrength.AUTO
+            }
+        }
+        set(value) = prefs.edit().putString("pref_hdr_exposure_strength", value.name).apply()
+
+    var hdrProcessingPriority: com.example.camera.hdr.model.ProcessingPriority
+        get() {
+            val name = prefs.getString("pref_hdr_processing_priority", com.example.camera.hdr.model.ProcessingPriority.MAXIMUM.name)
+            return try {
+                com.example.camera.hdr.model.ProcessingPriority.valueOf(name ?: com.example.camera.hdr.model.ProcessingPriority.MAXIMUM.name)
+            } catch (e: Exception) {
+                com.example.camera.hdr.model.ProcessingPriority.MAXIMUM
+            }
+        }
+        set(value) = prefs.edit().putString("pref_hdr_processing_priority", value.name).apply()
+
+    var hdrSourceCapture: com.example.camera.hdr.model.HdrSourceCapture
+        get() {
+            val name = prefs.getString("pref_hdr_source_capture", com.example.camera.hdr.model.HdrSourceCapture.AUTOMATIC.name)
+            return try {
+                com.example.camera.hdr.model.HdrSourceCapture.valueOf(name ?: com.example.camera.hdr.model.HdrSourceCapture.AUTOMATIC.name)
+            } catch (e: Exception) {
+                com.example.camera.hdr.model.HdrSourceCapture.AUTOMATIC
+            }
+        }
+        set(value) = prefs.edit().putString("pref_hdr_source_capture", value.name).apply()
+
+    var hdrOutputFormat: com.example.camera.hdr.model.HdrOutputFormat
+        get() {
+            val name = prefs.getString("pref_hdr_output_format", com.example.camera.hdr.model.HdrOutputFormat.HDR_10BIT.name)
+            return try {
+                com.example.camera.hdr.model.HdrOutputFormat.valueOf(name ?: com.example.camera.hdr.model.HdrOutputFormat.HDR_10BIT.name)
+            } catch (e: Exception) {
+                com.example.camera.hdr.model.HdrOutputFormat.HDR_10BIT
+            }
+        }
+        set(value) = prefs.edit().putString("pref_hdr_output_format", value.name).apply()
 }

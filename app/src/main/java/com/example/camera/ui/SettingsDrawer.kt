@@ -28,6 +28,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.camera.model.*
+import androidx.compose.ui.platform.LocalContext
+import com.example.camera.data.CameraPreferences
+import com.example.camera.hdr.model.*
 import kotlin.math.roundToInt
 
 /**
@@ -728,6 +731,168 @@ fun SettingsDrawer(
                                     checked = windNoiseReduction,
                                     onCheckedChange = onWindNoiseReductionToggle
                                 )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        SamsungSectionHeader("ADAPTIVE DUAL-EXPOSURE HDR VIDEO")
+                        SamsungCard {
+                            val context = LocalContext.current
+                            val cameraPrefs = remember { CameraPreferences(context) }
+                            var hdrMode by remember { mutableStateOf(cameraPrefs.adaptiveHdrVideoMode) }
+                            var hdrStrength by remember { mutableStateOf(cameraPrefs.hdrExposureStrength) }
+                            var hdrPriority by remember { mutableStateOf(cameraPrefs.hdrProcessingPriority) }
+                            var hdrSource by remember { mutableStateOf(cameraPrefs.hdrSourceCapture) }
+                            var hdrOutput by remember { mutableStateOf(cameraPrefs.hdrOutputFormat) }
+
+                            // 1. Adaptive HDR Video Mode
+                            SamsungRowItem(
+                                icon = Icons.Outlined.HdrOn,
+                                title = "Adaptive HDR Video",
+                                subtitle = when (hdrMode) {
+                                    AdaptiveHdrMode.OFF -> "Off · Single standard exposure"
+                                    AdaptiveHdrMode.AUTO -> "Auto · Enabled automatically for high-dynamic-range scenes"
+                                    AdaptiveHdrMode.ALWAYS_ON -> "Always On · Alternating dual-exposure 60 FPS capture"
+                                }
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    AdaptiveHdrMode.values().forEach { mode ->
+                                        SamsungSmallChip(
+                                            label = when (mode) {
+                                                AdaptiveHdrMode.OFF -> "Off"
+                                                AdaptiveHdrMode.AUTO -> "Auto"
+                                                AdaptiveHdrMode.ALWAYS_ON -> "Always"
+                                            },
+                                            isSelected = hdrMode == mode,
+                                            onClick = {
+                                                hdrMode = mode
+                                                cameraPrefs.adaptiveHdrVideoMode = mode
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            SamsungDivider()
+
+                            // 2. HDR Exposure Strength
+                            SamsungRowItem(
+                                icon = Icons.Outlined.Tune,
+                                title = "HDR Exposure Strength",
+                                subtitle = when (hdrStrength) {
+                                    HdrExposureStrength.AUTO -> "Auto · Dynamic EV separation based on scene contrast"
+                                    HdrExposureStrength.MILD -> "Mild · 1.0 - 1.5 EV separation"
+                                    HdrExposureStrength.STANDARD -> "Standard · 1.5 - 2.5 EV separation"
+                                    HdrExposureStrength.HIGH -> "High · 2.5 - 3.5 EV separation"
+                                    HdrExposureStrength.MAXIMUM -> "Maximum · Up to 4.5 EV separation"
+                                }
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    HdrExposureStrength.values().forEach { str ->
+                                        SamsungSmallChip(
+                                            label = when (str) {
+                                                HdrExposureStrength.AUTO -> "Auto"
+                                                HdrExposureStrength.MILD -> "Mild"
+                                                HdrExposureStrength.STANDARD -> "Std"
+                                                HdrExposureStrength.HIGH -> "High"
+                                                HdrExposureStrength.MAXIMUM -> "Max"
+                                            },
+                                            isSelected = hdrStrength == str,
+                                            onClick = {
+                                                hdrStrength = str
+                                                cameraPrefs.hdrExposureStrength = str
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            SamsungDivider()
+
+                            // 3. Processing Priority
+                            SamsungRowItem(
+                                icon = Icons.Outlined.Memory,
+                                title = "Processing Priority",
+                                subtitle = when (hdrPriority) {
+                                    ProcessingPriority.MAXIMUM -> "Maximum Speed · Full GPU/CPU compute"
+                                    ProcessingPriority.BALANCED -> "Balanced · Smooth background processing"
+                                    ProcessingPriority.BATTERY_SAVER -> "Battery Saver · Throttled to keep device cool"
+                                }
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    ProcessingPriority.values().forEach { prio ->
+                                        SamsungSmallChip(
+                                            label = when (prio) {
+                                                ProcessingPriority.MAXIMUM -> "Max Speed"
+                                                ProcessingPriority.BALANCED -> "Balanced"
+                                                ProcessingPriority.BATTERY_SAVER -> "Saver"
+                                            },
+                                            isSelected = hdrPriority == prio,
+                                            onClick = {
+                                                hdrPriority = prio
+                                                cameraPrefs.hdrProcessingPriority = prio
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            SamsungDivider()
+
+                            // 4. Source Capture
+                            SamsungRowItem(
+                                icon = Icons.Outlined.CameraAlt,
+                                title = "Source Capture",
+                                subtitle = when (hdrSource) {
+                                    HdrSourceCapture.RAW_IF_SUPPORTED -> "RAW when supported · Lossless sensor data"
+                                    HdrSourceCapture.HIGHEST_QUALITY_SUPPORTED -> "Highest Quality Supported"
+                                    HdrSourceCapture.AUTOMATIC -> "Automatic · Device optimal sensor stream"
+                                }
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    HdrSourceCapture.values().forEach { src ->
+                                        SamsungSmallChip(
+                                            label = when (src) {
+                                                HdrSourceCapture.RAW_IF_SUPPORTED -> "RAW"
+                                                HdrSourceCapture.HIGHEST_QUALITY_SUPPORTED -> "HQ"
+                                                HdrSourceCapture.AUTOMATIC -> "Auto"
+                                            },
+                                            isSelected = hdrSource == src,
+                                            onClick = {
+                                                hdrSource = src
+                                                cameraPrefs.hdrSourceCapture = src
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            SamsungDivider()
+
+                            // 5. Output Format
+                            SamsungRowItem(
+                                icon = Icons.Outlined.VideoSettings,
+                                title = "Output Format",
+                                subtitle = when (hdrOutput) {
+                                    HdrOutputFormat.HDR_10BIT -> "10-bit HDR (HEVC Main10 BT.2020 HLG)"
+                                    HdrOutputFormat.HDR_PLUS_SDR_COMPAT -> "HDR 10-bit + SDR Compatibility Copy"
+                                }
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    HdrOutputFormat.values().forEach { out ->
+                                        SamsungSmallChip(
+                                            label = when (out) {
+                                                HdrOutputFormat.HDR_10BIT -> "10-bit HDR"
+                                                HdrOutputFormat.HDR_PLUS_SDR_COMPAT -> "HDR+SDR"
+                                            },
+                                            isSelected = hdrOutput == out,
+                                            onClick = {
+                                                hdrOutput = out
+                                                cameraPrefs.hdrOutputFormat = out
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

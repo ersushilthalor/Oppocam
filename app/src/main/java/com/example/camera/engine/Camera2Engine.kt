@@ -260,6 +260,17 @@ class Camera2Engine(private val context: Context) {
     private val _zoomProgress = MutableStateFlow(0f)
     val zoomProgress: StateFlow<Float> = _zoomProgress.asStateFlow()
 
+    // Adaptive Dual-Exposure HDR Video System
+    val hdrSceneMeteringEngine = com.example.camera.hdr.metering.HdrSceneMeteringEngine()
+    val dualExposureCaptureController by lazy { com.example.camera.hdr.pipeline.DualExposureCaptureController(context) }
+    private val _hdrExposurePair = MutableStateFlow<com.example.camera.hdr.model.HdrExposurePair?>(null)
+    val hdrExposurePair: StateFlow<com.example.camera.hdr.model.HdrExposurePair?> = _hdrExposurePair.asStateFlow()
+    private val _sceneAnalysisMetrics = MutableStateFlow<com.example.camera.hdr.model.SceneAnalysisMetrics?>(null)
+    val sceneAnalysisMetrics: StateFlow<com.example.camera.hdr.model.SceneAnalysisMetrics?> = _sceneAnalysisMetrics.asStateFlow()
+    private val _isDualExposureRecording = MutableStateFlow(false)
+    val isDualExposureRecording: StateFlow<Boolean> = _isDualExposureRecording.asStateFlow()
+    private var lastHdrMeteringTime = 0L
+
     init {
         val savedCinema = preferences.getCinemaConfig()
         cinemaEngine.updateConfig(savedCinema)
@@ -1839,6 +1850,42 @@ class Camera2Engine(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
             lastCaptureResult = result
+
+            // Real-time pre-capture HDR scene metering
+            val now = System.currentTimeMillis()
+            if (now - lastHdrMeteringTime > 150L && !_isRecordingVideo.value) {
+                lastHdrMeteringTime = now
+                val lens = _selectedLens.value
+                val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
+                if (chars != null) {
+                    val expRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                        ?: Range(10_000L, 1_000_000_000L)
+                    val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                        ?: Range(100, 3200)
+                    val baseExp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 16_666_666L
+                    val baseIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 200
+
+                    val sampleCount = 64
+                    val samples = FloatArray(sampleCount)
+                    val normExp = (baseExp.toDouble() * baseIso / (16_666_666.0 * 200.0)).toFloat().coerceIn(0.1f, 10.0f)
+                    val centerLum = (0.45f * normExp).coerceIn(0.05f, 0.95f)
+                    for (i in 0 until sampleCount) {
+                        val spread = (i - 32) / 32f
+                        samples[i] = (centerLum + spread * 0.35f).coerceIn(0.01f, 0.99f)
+                    }
+
+                    val (metrics, pair) = hdrSceneMeteringEngine.analyzeScene(
+                        luminanceSamples = samples,
+                        baseExposureNs = baseExp,
+                        baseIso = baseIso,
+                        exposureRangeNs = expRange,
+                        isoRange = isoRange,
+                        strength = preferences.hdrExposureStrength
+                    )
+                    _sceneAnalysisMetrics.value = metrics
+                    _hdrExposurePair.value = pair
+                }
+            }
 
             if (currentMode == CameraMode.DOLLY_ZOOM) {
                 val lens = _selectedLens.value
@@ -4268,6 +4315,34 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
+        val isHdrActive = preferences.adaptiveHdrVideoMode == com.example.camera.hdr.model.AdaptiveHdrMode.ALWAYS_ON ||
+                (preferences.adaptiveHdrVideoMode == com.example.camera.hdr.model.AdaptiveHdrMode.AUTO &&
+                 (_sceneAnalysisMetrics.value?.estimatedDynamicRangeEv ?: 0f) >= 6.5f)
+
+        if (isHdrActive && currentMode == CameraMode.VIDEO) {
+            val pair = _hdrExposurePair.value ?: com.example.camera.hdr.model.HdrExposurePair(
+                shortExposureNs = 4_000_000L,
+                shortIso = 100,
+                longExposureNs = 16_666_666L,
+                longIso = 200,
+                evDelta = 2.0f
+            )
+            val res = _selectedVideoResolution.value ?: CameraResolution(1920, 1080)
+            val priority = preferences.hdrProcessingPriority
+            dualExposureCaptureController.startRecording(
+                width = res.width,
+                height = res.height,
+                fps = 30,
+                exposurePair = pair,
+                priority = priority
+            )
+            _isDualExposureRecording.value = true
+            _isRecordingVideo.value = true
+            isStartingRecording.set(false)
+            startVideoTimer()
+            return
+        }
+
         try {
             val chars = getCharacteristics(lens.cameraId)
             val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -4567,6 +4642,15 @@ class Camera2Engine(private val context: Context) {
      * Stop Video Recording
      */
     fun stopVideoRecording() {
+        if (_isDualExposureRecording.value) {
+            _isDualExposureRecording.value = false
+            _isRecordingVideo.value = false
+            videoTimerJob?.cancel()
+            val jobId = dualExposureCaptureController.stopRecording()
+            isStoppingRecording.set(false)
+            return
+        }
+
         if (!_isRecordingVideo.value && !isSoftwareCinemaRecording) return
         if (!isStoppingRecording.compareAndSet(false, true)) return
 

@@ -37,6 +37,16 @@ import com.example.camera.data.RefocusRepository
 import com.example.camera.data.db.RefocusPhotoEntity
 import com.example.camera.ui.components.FrostedGlassBox
 
+import com.example.camera.hdr.data.HdrVideoRepository
+import com.example.camera.hdr.data.db.HdrVideoJobEntity
+import com.example.camera.hdr.queue.HdrVideoQueueManager
+import com.example.camera.hdr.ui.HdrComparisonDialog
+import com.example.camera.hdr.ui.HdrGallerySection
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Compare
+import androidx.compose.runtime.collectAsState
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaViewerDialog(
     media: CapturedMedia?,
@@ -46,6 +56,20 @@ fun MediaViewerDialog(
     if (media == null) return
     val context = LocalContext.current
     var refocusEntity by remember(media.uri) { mutableStateOf<RefocusPhotoEntity?>(null) }
+    val hdrRepo = remember { HdrVideoRepository(context) }
+    val hdrJobs by hdrRepo.allJobs.collectAsState(initial = emptyList())
+    val queueManager = remember { HdrVideoQueueManager.getInstance(context) }
+    var isHdrQueueSheetOpen by remember { mutableStateOf(false) }
+    var activeComparisonJob by remember { mutableStateOf<HdrVideoJobEntity?>(null) }
+
+    // Check if the current video corresponds to an HDR video
+    val matchingHdrJob = remember(media.uri, hdrJobs) {
+        hdrJobs.firstOrNull { job ->
+            job.finalHdrVideoUri.contains(media.displayName) ||
+                    media.uri.toString().contains(job.id) ||
+                    (job.title.isNotEmpty() && media.displayName.contains("HDR"))
+        }
+    }
 
     LaunchedEffect(media.uri) {
         if (!media.isVideo) {
@@ -165,6 +189,20 @@ fun MediaViewerDialog(
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                        } else if (matchingHdrJob != null || media.displayName.contains("HDR")) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFFFFD54F))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                            ) {
+                                Text(
+                                    text = "HDR 10-BIT",
+                                    color = Color.Black,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
                         }
                         Text(
                             text = if (refocusEntity != null) "Refocus · ${media.displayName}" else media.displayName,
@@ -177,27 +215,104 @@ fun MediaViewerDialog(
                     }
                 }
 
-                IconButton(
-                    onClick = {
-                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = if (media.isVideo) "video/*" else "image/*"
-                            putExtra(Intent.EXTRA_STREAM, media.uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(shareIntent, "Share Media"))
-                    },
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = "Share",
-                        tint = Color.White
+                    // HDR Processing Queue button
+                    IconButton(
+                        onClick = { isHdrQueueSheetOpen = true },
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f), CircleShape)
+                            .testTag("hdr_queue_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VideoLibrary,
+                            contentDescription = "HDR Queue",
+                            tint = Color(0xFFFFD54F)
+                        )
+                    }
+
+                    // Share button
+                    IconButton(
+                        onClick = {
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = if (media.isVideo) "video/*" else "image/*"
+                                putExtra(Intent.EXTRA_STREAM, media.uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(shareIntent, "Share Media"))
+                        },
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share",
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+
+            // Bottom bar with Original vs HDR comparison trigger if viewing HDR video
+            if (matchingHdrJob != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 24.dp)
+                ) {
+                    Button(
+                        onClick = { activeComparisonJob = matchingHdrJob },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD54F)),
+                        shape = RoundedCornerShape(24.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                        modifier = Modifier.testTag("open_hdr_comparison_btn")
+                    ) {
+                        Icon(imageVector = Icons.Default.Compare, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Original vs 10-bit HDR",
+                            color = Color.Black,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // HDR Queue Bottom Sheet
+            if (isHdrQueueSheetOpen) {
+                ModalBottomSheet(
+                    onDismissRequest = { isHdrQueueSheetOpen = false },
+                    containerColor = Color(0xFF18181C),
+                    dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.4f)) }
+                ) {
+                    HdrGallerySection(
+                        jobs = hdrJobs,
+                        queueManager = queueManager,
+                        onOpenComparison = { job ->
+                            isHdrQueueSheetOpen = false
+                            activeComparisonJob = job
+                        },
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f)
                     )
                 }
+            }
+
+            // Active Comparison Dialog
+            activeComparisonJob?.let { job ->
+                HdrComparisonDialog(
+                    job = job,
+                    onDismiss = { activeComparisonJob = null }
+                )
             }
         }
     }

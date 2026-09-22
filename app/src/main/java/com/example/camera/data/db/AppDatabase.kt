@@ -5,9 +5,13 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [RefocusPhotoEntity::class], version = 1, exportSchema = false)
+import com.example.camera.hdr.data.db.HdrVideoJobDao
+import com.example.camera.hdr.data.db.HdrVideoJobEntity
+
+@Database(entities = [RefocusPhotoEntity::class, HdrVideoJobEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun refocusDao(): RefocusDao
+    abstract fun hdrVideoJobDao(): HdrVideoJobDao
 
     companion object {
         @Volatile
