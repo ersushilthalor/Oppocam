@@ -19,7 +19,8 @@ data class UltraFastBurstEntity(
     val timestamp: Long = System.currentTimeMillis(),
     val width: Int = 0,
     val height: Int = 0,
-    val title: String = ""
+    val title: String = "",
+    val isCompleted: Boolean = true
 ) {
     /**
      * Parses the photo URIs stored in JSON array format.

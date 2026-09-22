@@ -17,6 +17,10 @@ class UltraFastBurstRepository(context: Context) {
         dao.insertBurst(burst)
     }
 
+    suspend fun updateBurst(burst: UltraFastBurstEntity) = withContext(Dispatchers.IO) {
+        dao.updateBurst(burst)
+    }
+
     suspend fun getBurstById(burstId: String): UltraFastBurstEntity? = withContext(Dispatchers.IO) {
         dao.getBurstById(burstId)
     }

@@ -7,7 +7,6 @@ package com.example.camera.ultrafast.engine
 class FastSensorFrame(
     val burstId: String,
     val frameIndex: Int,
-    val totalFrames: Int,
     val timestampNs: Long,
     val width: Int,
     val height: Int,

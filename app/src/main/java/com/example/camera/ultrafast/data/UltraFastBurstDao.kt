@@ -9,6 +9,9 @@ interface UltraFastBurstDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBurst(burst: UltraFastBurstEntity)
 
+    @Update
+    suspend fun updateBurst(burst: UltraFastBurstEntity)
+
     @Query("SELECT * FROM ultra_fast_bursts WHERE burstId = :burstId LIMIT 1")
     suspend fun getBurstById(burstId: String): UltraFastBurstEntity?
 

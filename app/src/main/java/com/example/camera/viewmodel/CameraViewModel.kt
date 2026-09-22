@@ -200,17 +200,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _ultraFastShutterFps = MutableStateFlow(preferences.getModeUltraFastShutterFps(preferences.cameraMode))
     val ultraFastShutterFps: StateFlow<Int> = _ultraFastShutterFps.asStateFlow()
 
-    private val _ultraFastShutterBurstCount = MutableStateFlow(preferences.getModeUltraFastShutterBurstCount(preferences.cameraMode))
-    val ultraFastShutterBurstCount: StateFlow<Int> = _ultraFastShutterBurstCount.asStateFlow()
-
-    val ultraFastProgressState: StateFlow<com.example.camera.ultrafast.model.UltraFastProgressState> = engine.ultraFastProgressState
+    val fastShutterFrameCount: StateFlow<Int> = engine.fastShutterFrameCount
+    val isFastShutterHolding: StateFlow<Boolean> = engine.isFastShutterHolding
 
     fun setUltraFastShutterEnabled(enabled: Boolean) {
         _isUltraFastShutterEnabled.value = enabled
         preferences.isUltraFastShutterEnabled = enabled
         preferences.setModeUltraFastShutterEnabled(_cameraMode.value, enabled)
         engine.isUltraFastShutterEnabled = enabled
-        showToast(if (enabled) "Ultra Fast Shutter: ON (${_ultraFastShutterFps.value} FPS)" else "Ultra Fast Shutter: OFF")
+        showToast(if (enabled) "Fast Shutter: ON (${_ultraFastShutterFps.value} FPS)" else "Fast Shutter: OFF")
     }
 
     fun setUltraFastShutterFps(fps: Int) {
@@ -222,34 +220,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Capture Rate: $clamped FPS")
     }
 
-    fun setUltraFastShutterBurstCount(count: Int) {
-        val clamped = count.coerceIn(5, 30)
-        _ultraFastShutterBurstCount.value = clamped
-        preferences.ultraFastShutterBurstCount = clamped
-        preferences.setModeUltraFastShutterBurstCount(_cameraMode.value, clamped)
-        engine.ultraFastShutterBurstCount = clamped
-        showToast("Burst: $clamped Frames")
-    }
-
     /**
-     * Executes exactly 1 ultra-fast sensor frame on single tap.
+     * Executes normal single photo on single tap.
      */
     fun onFastShutterSingleTap() {
-        if (_cameraMode.value != CameraMode.PHOTO) {
-            onMainActionButtonClick()
-            return
-        }
-        com.example.camera.sound.CameraSoundManager.playShutter()
-        engine.takeUltraFastSinglePhoto(
-            fps = _ultraFastShutterFps.value,
-            onComplete = { uri ->
-                if (uri != null) {
-                    showToast("Saved to DCIM/Camera")
-                } else {
-                    showToast("Capture failed")
-                }
-            }
-        )
+        onMainActionButtonClick()
     }
 
     /**
@@ -699,7 +674,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.refocusFrameCount = preferences.getModeRefocusFrameCount(initialMode)
         engine.isUltraFastShutterEnabled = preferences.getModeUltraFastShutterEnabled(initialMode)
         engine.ultraFastShutterFps = preferences.getModeUltraFastShutterFps(initialMode)
-        engine.ultraFastShutterBurstCount = preferences.getModeUltraFastShutterBurstCount(initialMode)
         engine.isHighQualityZoomEnabled = preferences.getModeHqZoomEnabled(initialMode)
         engine.zoomProcessingQuality = preferences.getModeZoomQuality(initialMode)
         engine.setMode(initialMode)
@@ -854,10 +828,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mFastFps = preferences.getModeUltraFastShutterFps(mode)
         _ultraFastShutterFps.value = mFastFps
         engine.ultraFastShutterFps = mFastFps
-
-        val mFastCount = preferences.getModeUltraFastShutterBurstCount(mode)
-        _ultraFastShutterBurstCount.value = mFastCount
-        engine.ultraFastShutterBurstCount = mFastCount
 
         val mHqZoom = preferences.getModeHqZoomEnabled(mode)
         _isHighQualityZoomEnabled.value = mHqZoom

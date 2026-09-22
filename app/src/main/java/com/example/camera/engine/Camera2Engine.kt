@@ -265,10 +265,10 @@ class Camera2Engine(private val context: Context) {
         context,
         com.example.camera.ultrafast.data.UltraFastBurstRepository(context)
     )
-    val ultraFastProgressState: StateFlow<com.example.camera.ultrafast.model.UltraFastProgressState> = ultraFastShutterEngine.progressState
+    val fastShutterFrameCount: StateFlow<Int> = ultraFastShutterEngine.liveFrameCount
+    val isFastShutterHolding: StateFlow<Boolean> = ultraFastShutterEngine.isHolding
     var isUltraFastShutterEnabled: Boolean = false
     var ultraFastShutterFps: Int = 15
-    var ultraFastShutterBurstCount: Int = 15
 
     // Adaptive Dual-Exposure HDR Video System
     val hdrSceneMeteringEngine = com.example.camera.hdr.metering.HdrSceneMeteringEngine()
@@ -3310,101 +3310,6 @@ class Camera2Engine(private val context: Context) {
     private val isHoldingContinuousCapture = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
-     * Captures exactly one ultra-fast uncompressed RAW/YUV sensor frame with background conversion.
-     */
-    fun takeUltraFastSinglePhoto(
-        fps: Int = 15,
-        onComplete: (Uri?) -> Unit
-    ) {
-        val camera = cameraDevice ?: run {
-            onComplete(null)
-            return
-        }
-        val session = captureSession ?: run {
-            onComplete(null)
-            return
-        }
-        val readerYuv = imageReaderYuv ?: run {
-            takePhoto(onComplete)
-            return
-        }
-
-        _isCapturing.value = true
-        val burstId = java.util.UUID.randomUUID().toString()
-        val clampedFps = fps.coerceIn(5, 20)
-        val fpsRange = Range(clampedFps, clampedFps)
-
-        try {
-            // Set listener on readerYuv for sensor frame extraction into pool
-            val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
-            readerYuv.setOnImageAvailableListener({ reader ->
-                ultraFastShutterEngine.onSensorImageAvailable(
-                    reader = reader,
-                    sensorOrientation = getCaptureJpegOrientation(),
-                    isFrontFacing = isFront,
-                    saveMirrored = saveSelfieAsPreviewed
-                )
-            }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
-
-            val captureBuilder = try {
-                camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
-            } catch (e: Exception) {
-                camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-            }
-            captureBuilder.addTarget(readerYuv.surface)
-            previewSurface?.let { captureBuilder.addTarget(it) }
-            applyCommonSettings(captureBuilder)
-
-            captureBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
-            captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-            captureBuilder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-            captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-            captureBuilder.setTag("ULTRA_FAST_SINGLE_$burstId")
-
-            ultraFastShutterEngine.startSingleCapture(
-                burstId = burstId,
-                fps = clampedFps,
-                onComplete = { coverUri ->
-                    _isCapturing.value = false
-                    updateStorageStats()
-                    if (coverUri != null) {
-                        _lastCapturedMedia.value = CapturedMedia(
-                            uri = coverUri,
-                            isVideo = false,
-                            timestamp = System.currentTimeMillis(),
-                            displayName = "IMG_${burstId.take(8)}.jpg"
-                        )
-                    }
-                    onComplete(coverUri)
-                }
-            )
-
-            session.capture(
-                captureBuilder.build(),
-                object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureFailed(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        failure: CaptureFailure
-                    ) {
-                        super.onCaptureFailed(session, request, failure)
-                        Log.w(TAG, "Ultra Fast single frame capture failed: ${failure.reason}")
-                        _isCapturing.value = false
-                        onComplete(null)
-                    }
-                },
-                ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler
-            )
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed executing Ultra Fast single capture", t)
-            ultraFastShutterEngine.reset()
-            _isCapturing.value = false
-            takePhoto(onComplete)
-        }
-    }
-
-    /**
      * Starts continuous RAW capture at selected 5-20 FPS. Holds until stopUltraFastContinuousCapture() is called.
      * Viewfinder remains completely smooth by streaming to preview surface concurrently with zero stall.
      */
@@ -3544,114 +3449,9 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Executes real sensor burst acquisition using the fastest uncompressed RAW/YUV sensor path.
-     * Preserves maximum native resolution, buffering in-memory before asynchronous background JPEG conversion.
-     */
-    fun takeUltraFastBurst(
-        fps: Int = 15,
-        frameCount: Int = 15,
-        onComplete: (Uri?) -> Unit
-    ) {
-        val camera = cameraDevice ?: run {
-            onComplete(null)
-            return
-        }
-        val session = captureSession ?: run {
-            onComplete(null)
-            return
-        }
-        val readerYuv = imageReaderYuv ?: run {
-            takePhoto(onComplete)
-            return
-        }
-
-        _isCapturing.value = true
-        val burstId = java.util.UUID.randomUUID().toString()
-
-        val requests = ArrayList<CaptureRequest>(frameCount)
-        try {
-            val clampedFps = fps.coerceIn(5, 20)
-            val fpsRange = Range(clampedFps, clampedFps)
-
-            for (i in 0 until frameCount) {
-                val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                captureBuilder.addTarget(readerYuv.surface)
-
-                applyCommonSettings(captureBuilder)
-
-                // High-speed capture pipeline configuration
-                captureBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
-                captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                captureBuilder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                captureBuilder.setTag("ULTRA_FAST_BURST_${burstId}_$i")
-
-                requests.add(captureBuilder.build())
-            }
-
-            ultraFastShutterEngine.startBurst(
-                burstId = burstId,
-                fps = clampedFps,
-                frameCount = frameCount,
-                onComplete = { coverUri ->
-                    _isCapturing.value = false
-                    updateStorageStats()
-                    if (coverUri != null) {
-                        _lastCapturedMedia.value = CapturedMedia(
-                            uri = coverUri,
-                            isVideo = false,
-                            timestamp = System.currentTimeMillis(),
-                            displayName = "BURST_${burstId.take(8)}.jpg"
-                        )
-                    }
-                    onComplete(coverUri)
-                }
-            )
-
-            session.captureBurst(
-                requests,
-                object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureSequenceCompleted(
-                        session: CameraCaptureSession,
-                        sequenceId: Int,
-                        frameNumber: Long
-                    ) {
-                        super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
-                        Log.i(TAG, "Ultra Fast sensor captureBurst completed for sequence $sequenceId")
-                    }
-
-                    override fun onCaptureFailed(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        failure: CaptureFailure
-                    ) {
-                        super.onCaptureFailed(session, request, failure)
-                        Log.w(TAG, "Ultra Fast capture frame failure: ${failure.reason}")
-                    }
-                },
-                ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler
-            )
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed executing Ultra Fast sensor captureBurst", t)
-            ultraFastShutterEngine.reset()
-            _isCapturing.value = false
-            takePhoto(onComplete)
-        }
-    }
-
-    /**
      * Take still photo (JPEG + optional RAW). In 50M mode, triggers single-frame computational 50MP capture.
      */
     fun takePhoto(onComplete: (Uri?) -> Unit) {
-        if (isUltraFastShutterEnabled && currentMode == CameraMode.PHOTO) {
-            takeUltraFastSinglePhoto(
-                fps = ultraFastShutterFps,
-                onComplete = onComplete
-            )
-            return
-        }
-
         if (photoMegapixelMode == PhotoMegapixelMode.M50) {
             takePhoto50M(onComplete)
             return
@@ -5191,7 +4991,7 @@ class Camera2Engine(private val context: Context) {
             val targetExport = File(context.cacheDir, "EXPORT_${System.currentTimeMillis()}_${tempFile.name}")
             val success = try {
                 val isNormalVideoWithAdj = (!isCinema && currentMode == CameraMode.VIDEO && !currentVideoAdjustments.isDefault)
-                val effectiveColorMatrix = if (isCinema) cinemaColorMatrix?.array else if (!isNormalVideoWithAdj) normalVideoColorMatrix?.array else null
+                val effectiveColorMatrix = if (isCinema) cinemaColorMatrix?.array else if (isNormalVideoWithAdj) normalVideoColorMatrix?.array else null
                 val effVignette = if (!isCinema) currentVideoAdjustments.vignette else 0f
                 val effGrain = if (!isCinema) (currentVideoAdjustments.grain + currentVideoAdjustments.textureFilmGrain) else 0f
                 val effSoftLight = if (!isCinema) currentVideoAdjustments.lightFxSoftLight else 0f

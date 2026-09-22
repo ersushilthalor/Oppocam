@@ -2,11 +2,12 @@ package com.example.camera.ultrafast.engine
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
-import android.hardware.camera2.*
 import android.media.ExifInterface
 import android.media.Image
 import android.media.ImageReader
@@ -17,12 +18,9 @@ import android.os.HandlerThread
 import android.os.Process
 import android.provider.MediaStore
 import android.util.Log
-import android.util.Range
 import android.util.Size
-import com.example.camera.model.CapturedMedia
 import com.example.camera.ultrafast.data.UltraFastBurstRepository
 import com.example.camera.ultrafast.model.UltraFastBurstEntity
-import com.example.camera.ultrafast.model.UltraFastProgressState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,72 +34,85 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * High-Speed Ultra Fast Shutter Acquisition and Asynchronous Background Processing Engine.
+ * Brand-new Fast Shutter Engine rebuilt from scratch.
  *
- * Architecture:
- * 1. Dedicated high-priority Capture Thread (Process.THREAD_PRIORITY_URGENT_AUDIO) to service
- *    Camera2 hardware callbacks without jitter or frame dropping.
- * 2. Real sensor RAW/YUV420 uncompressed sensor acquisition path, bypassing slow hardware JPEG encoding.
- * 3. Lightweight in-memory bounded ring buffer with zero-allocation memory recycling via [UltraFastFramePool].
- * 4. Asynchronous multi-threaded background processing worker pool that converts uncompressed frames
- *    into full-resolution native JPEGs with EXIF metadata, never blocking the sensor capture loop.
- * 5. Room Database integration for burst grouping in gallery / in-app viewer.
+ * Direct Camera2 RAW/YUV sensor acquisition with completely asynchronous
+ * background JPEG conversion and zero viewfinder / camera preview blocking.
+ *
+ * Producer:
+ * - Uncompressed YUV_420_888 / RAW sensor frames extracted in < 1ms on a dedicated
+ *   high-priority Capture Thread.
+ * - Live frame count (1, 2, 3...) emitted immediately to [liveFrameCount] StateFlow.
+ * - Frames enqueued to a bounded blocking queue with memory-pooled byte arrays.
+ *
+ * Consumer:
+ * - Background worker threads continuously decode, compress to high-quality JPEG,
+ *   write EXIF metadata, and stream to storage.
+ * - Groups all burst frames into Room [UltraFastBurstEntity], progressively adding
+ *   each processed frame so they appear in gallery immediately.
+ * - Marks burst completed when all frames finish processing.
  */
 class UltraFastShutterEngine(
     private val context: Context,
     private val burstRepository: UltraFastBurstRepository
 ) {
     companion object {
-        private const val TAG = "UltraFastShutterEngine"
-        private const val RING_BUFFER_CAPACITY = 60
+        private const val TAG = "FastShutterEngine"
+        private const val QUEUE_CAPACITY = 40
     }
 
     private val engineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-    // Capture & Background Progress State Flow
-    private val _progressState = MutableStateFlow(UltraFastProgressState())
-    val progressState: StateFlow<UltraFastProgressState> = _progressState.asStateFlow()
+    // Live frame counter on viewfinder: strictly a clean integer 1, 2, 3... (0 when not holding)
+    private val _liveFrameCount = MutableStateFlow(0)
+    val liveFrameCount: StateFlow<Int> = _liveFrameCount.asStateFlow()
 
-    // High-priority Capture Thread
+    private val _isHolding = MutableStateFlow(false)
+    val isHolding: StateFlow<Boolean> = _isHolding.asStateFlow()
+
+    // Dedicated high-priority Capture Thread
     private var captureThread: HandlerThread? = null
     private var captureHandler: Handler? = null
 
-    // Multi-threaded background processing executor
+    // Multi-threaded background processing pool
     private val backgroundProcessor = Executors.newFixedThreadPool(
         maxOf(2, Runtime.getRuntime().availableProcessors() - 1)
     )
 
-    // Bounded Ring Buffer for in-flight uncompressed sensor frames
-    private val ringBuffer = ArrayBlockingQueue<FastSensorFrame>(RING_BUFFER_CAPACITY)
+    // Bounded Producer-Consumer queue
+    private val frameQueue = ArrayBlockingQueue<FastSensorFrame>(QUEUE_CAPACITY)
 
-    // Memory Pool for reusable byte arrays
+    // Pre-allocated memory pool for byte buffers
     private var framePool: UltraFastFramePool? = null
     private var poolDimensions: Size? = null
 
-    // Active burst state tracking
-    private val isBurstInProgress = AtomicBoolean(false)
-    private val isContinuousBurst = AtomicBoolean(false)
-    private val isAcquisitionStopped = AtomicBoolean(false)
+    // Active continuous burst tracking
+    private val isBurstActive = AtomicBoolean(false)
     private val acquiredFrameCounter = AtomicInteger(0)
     private val processedFrameCounter = AtomicInteger(0)
-    private var currentBurstId: String = ""
-    private var currentBurstTotalFrames: Int = 0
-    private var currentBurstFps: Int = 15
+
+    @Volatile private var activeBurstId: String = ""
+    @Volatile private var activeFps: Int = 15
+    @Volatile private var activeWidth: Int = 0
+    @Volatile private var activeHeight: Int = 0
+    @Volatile private var coverPhotoUri: Uri? = null
+
     private val burstSavedUris = Collections.synchronizedList(mutableListOf<String>())
     private var burstCompletionCallback: ((Uri?) -> Unit)? = null
 
     init {
         startCaptureThread()
-        startBackgroundProcessingLoop()
+        startConsumerLoop()
     }
 
     private fun startCaptureThread() {
         if (captureThread == null) {
-            captureThread = HandlerThread("UltraFastCaptureThread", Process.THREAD_PRIORITY_URGENT_AUDIO).apply {
+            captureThread = HandlerThread("FastShutterCapture", Process.THREAD_PRIORITY_URGENT_AUDIO).apply {
                 start()
                 captureHandler = Handler(looper)
             }
@@ -110,23 +121,66 @@ class UltraFastShutterEngine(
 
     fun getCaptureHandler(): Handler? = captureHandler
 
-    /**
-     * Initializes or resizes the memory pool to match the sensor capture dimensions.
-     */
     fun configureFramePool(width: Int, height: Int) {
-        val newSize = Size(width, height)
-        if (poolDimensions != newSize) {
-            poolDimensions = newSize
-            val frameByteSize = width * height * 3 / 2
-            framePool?.clear()
-            framePool = UltraFastFramePool(frameByteSize = frameByteSize, maxPoolCapacity = 30)
-            Log.i(TAG, "Configured UltraFastFramePool: ${width}x${height} (${frameByteSize} bytes per frame)")
+        val yuvByteSize = width * height * 3 / 2
+        if (poolDimensions?.width != width || poolDimensions?.height != height || framePool == null) {
+            poolDimensions = Size(width, height)
+            framePool = UltraFastFramePool(yuvByteSize, maxPoolCapacity = 30)
+            Log.i(TAG, "Configured Fast Shutter frame pool: ${width}x$height ($yuvByteSize bytes/frame)")
         }
     }
 
     /**
-     * Extracts an uncompressed sensor frame directly into the ring buffer from an ImageReader callback.
-     * Guaranteed to execute in ~1-2 milliseconds and immediately closes the Camera2 Image.
+     * Called when user presses & holds shutter button.
+     * Starts continuous capture at selected 5-20 FPS.
+     */
+    fun startContinuousBurst(
+        burstId: String,
+        fps: Int,
+        onComplete: (Uri?) -> Unit
+    ) {
+        activeBurstId = burstId
+        activeFps = fps.coerceIn(5, 20)
+        burstCompletionCallback = onComplete
+        burstSavedUris.clear()
+        coverPhotoUri = null
+        acquiredFrameCounter.set(0)
+        processedFrameCounter.set(0)
+
+        isBurstActive.set(true)
+        _isHolding.value = true
+        _liveFrameCount.value = 0
+
+        Log.i(TAG, "Fast Shutter continuous burst started: burstId=$burstId, fps=$fps")
+    }
+
+    /**
+     * Called when user releases shutter button.
+     * Stops continuous capture immediately; live counter is immediately hidden and reset.
+     */
+    fun stopContinuousBurst() {
+        if (!isBurstActive.getAndSet(false)) return
+
+        // Immediately reset and hide live counter on viewfinder
+        _isHolding.value = false
+        _liveFrameCount.value = 0
+
+        val totalAcquired = acquiredFrameCounter.get()
+        Log.i(TAG, "Fast Shutter continuous burst stopped. Total acquired: $totalAcquired frames")
+
+        // If no frames were acquired, complete immediately
+        if (totalAcquired == 0) {
+            burstCompletionCallback?.invoke(null)
+            burstCompletionCallback = null
+        }
+    }
+
+    fun isBurstActive(): Boolean = isBurstActive.get()
+
+    /**
+     * Producer: Camera2 ImageReader callback on dedicated high-priority capture thread.
+     * Acquires real sensor frame in < 1ms, copies planar bytes to memory-pooled buffer,
+     * updates live frame count, and pushes to background consumer queue.
      */
     fun onSensorImageAvailable(
         reader: ImageReader,
@@ -134,533 +188,357 @@ class UltraFastShutterEngine(
         isFrontFacing: Boolean,
         saveMirrored: Boolean
     ) {
-        val image: Image = try {
-            reader.acquireNextImage() ?: return
+        val image: Image? = try {
+            reader.acquireLatestImage()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed acquiring next image from sensor reader", e)
-            return
+            null
         }
 
-        if (!isBurstInProgress.get()) {
-            // Not in an active burst; release sensor buffer immediately back to HAL
-            image.close()
-            return
-        }
+        if (image == null) return
 
-        // If acquisition stopped and not in continuous mode, or reached total expected frames
-        if (isAcquisitionStopped.get() && currentBurstTotalFrames > 0 && acquiredFrameCounter.get() >= currentBurstTotalFrames) {
+        if (!isBurstActive.get()) {
             image.close()
             return
         }
 
         val width = image.width
         val height = image.height
-        configureFramePool(width, height)
+        activeWidth = width
+        activeHeight = height
 
-        val pool = framePool
-        val destinationBuffer = pool?.acquire()
-        if (destinationBuffer == null) {
-            Log.w(TAG, "Memory pool buffer acquisition failed (backpressure / low memory). Dropping frame.")
-            image.close()
+        val expectedSize = width * height * 3 / 2
+        var pool = framePool
+        if (pool == null || poolDimensions?.width != width || poolDimensions?.height != height) {
+            configureFramePool(width, height)
+            pool = framePool
+        }
+
+        val pooledBuffer = pool?.acquire() ?: ByteArray(expectedSize)
+
+        // Extract planar NV21 data directly into pooled byte array
+        val success = extractNv21FromImage(image, pooledBuffer, width, height)
+        image.close() // Close ImageReader buffer immediately (< 1ms)
+
+        if (!success) {
+            pool?.recycle(pooledBuffer)
             return
         }
 
-        try {
-            // Extract raw planar YUV_420_888 into NV21 layout
-            extractYuvToNv21(image, destinationBuffer, width, height)
-            val timestamp = image.timestamp
-            val frameIdx = acquiredFrameCounter.getAndIncrement()
+        val frameIdx = acquiredFrameCounter.incrementAndGet()
+        // Update live counter overlay strictly with simple integer count
+        _liveFrameCount.value = frameIdx
 
-            val fastFrame = FastSensorFrame(
-                burstId = currentBurstId,
-                frameIndex = frameIdx,
-                totalFrames = currentBurstTotalFrames,
-                timestampNs = timestamp,
-                width = width,
-                height = height,
-                sensorOrientation = sensorOrientation,
-                isFrontFacing = isFrontFacing,
-                saveMirrored = saveMirrored,
-                yuvData = destinationBuffer,
-                targetFps = currentBurstFps
-            )
-
-            // Offer to ring buffer with non-blocking backpressure
-            val accepted = ringBuffer.offer(fastFrame)
-            if (!accepted) {
-                // If ring buffer is full, remove oldest frame to prioritize fresh sensor frames
-                val dropped = ringBuffer.poll()
-                dropped?.let { pool.recycle(it.yuvData) }
-                ringBuffer.offer(fastFrame)
-                processedFrameCounter.incrementAndGet()
-                Log.w(TAG, "Ring buffer capacity reached; oldest frame dropped to maintain real-time sensor loop.")
-            }
-
-            val acquired = acquiredFrameCounter.get()
-            val isStillCapturing = if (isContinuousBurst.get()) true else (currentBurstTotalFrames <= 0 || acquired < currentBurstTotalFrames)
-
-            _progressState.value = _progressState.value.copy(
-                isCapturing = isStillCapturing,
-                isContinuousHolding = isContinuousBurst.get(),
-                acquiredFrames = acquired,
-                statusText = if (isContinuousBurst.get()) {
-                    "Burst capturing: $acquired frames ($currentBurstFps FPS)"
-                } else {
-                    "Acquired $acquired / $currentBurstTotalFrames real sensor frames"
-                }
-            )
-
-            if (!isContinuousBurst.get() && currentBurstTotalFrames > 0 && acquired >= currentBurstTotalFrames) {
-                isAcquisitionStopped.set(true)
-                Log.i(TAG, "Completed sensor acquisition for burst $currentBurstId: $acquired frames captured.")
-            }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Error extracting sensor frame", t)
-            pool.recycle(destinationBuffer)
-        } finally {
-            // Crucial: return HAL buffer instantly so Camera2 never stalls
-            image.close()
-        }
-    }
-
-    /**
-     * Continuous background consumer thread pool. Converts uncompressed frames into full-resolution JPEGs.
-     */
-    private fun startBackgroundProcessingLoop() {
-        engineScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                try {
-                    val frame = withContext(Dispatchers.IO) {
-                        ringBuffer.take() // Block safely until a sensor frame is ready
-                    }
-
-                    backgroundProcessor.execute {
-                        processAndSaveFrame(frame)
-                    }
-                } catch (e: InterruptedException) {
-                    break
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Error in background processing loop", t)
-                }
-            }
-        }
-    }
-
-    /**
-     * Converts a single uncompressed sensor frame into full-resolution JPEG with full EXIF preservation.
-     */
-    private fun processAndSaveFrame(frame: FastSensorFrame) {
-        val pool = framePool
-        try {
-            val width = frame.width
-            val height = frame.height
-
-            // High-speed native YuvImage compression
-            val yuvImage = YuvImage(frame.yuvData, ImageFormat.NV21, width, height, null)
-            val jpegStream = ByteArrayOutputStream(width * height / 3)
-            // Quality 95 for maximum fidelity
-            yuvImage.compressToJpeg(Rect(0, 0, width, height), 95, jpegStream)
-            val rawJpegBytes = jpegStream.toByteArray()
-
-            // Handle orientation and front-camera mirror if necessary
-            val finalJpegBytes = prepareFinalJpeg(
-                rawJpegBytes = rawJpegBytes,
-                rotationDegrees = frame.sensorOrientation,
-                isFrontFacing = frame.isFrontFacing,
-                saveMirrored = frame.saveMirrored
-            )
-
-            // Save to MediaStore (DCIM/Camera) preserving maximum native resolution
-            val savedUri = saveToMediaStore(
-                jpegBytes = finalJpegBytes,
-                width = width,
-                height = height,
-                burstId = frame.burstId,
-                frameIndex = frame.frameIndex,
-                timestampNs = frame.timestampNs,
-                targetFps = frame.targetFps
-            )
-
-            if (savedUri != null) {
-                burstSavedUris.add(savedUri.toString())
-            }
-
-            val processed = processedFrameCounter.incrementAndGet()
-            val total = currentBurstTotalFrames
-            val isAcqDone = isAcquisitionStopped.get()
-            val isDone = isAcqDone && total > 0 && processed >= total
-
-            _progressState.value = _progressState.value.copy(
-                isProcessing = !isDone,
-                processedFrames = processed,
-                statusText = if (isDone) {
-                    "Saved $processed JPEGs (${frame.targetFps} FPS)"
-                } else {
-                    "Saved $processed ${if (total > 0) "/ $total" else ""} full-res JPEGs (${frame.targetFps} FPS)"
-                },
-                latestSavedUri = savedUri
-            )
-
-            // If this was the last frame and sensor acquisition has ended, finish burst
-            if (isDone && isBurstInProgress.get()) {
-                finishBurst(frame.burstId, frame.targetFps, width, height)
-            }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed converting and saving frame ${frame.frameIndex}", t)
-            val processed = processedFrameCounter.incrementAndGet()
-            val total = currentBurstTotalFrames
-            val isAcqDone = isAcquisitionStopped.get()
-            if (isAcqDone && total > 0 && processed >= total && isBurstInProgress.get()) {
-                finishBurst(frame.burstId, frame.targetFps, frame.width, frame.height)
-            }
-        } finally {
-            // Return buffer to pool
-            pool?.recycle(frame.yuvData)
-        }
-    }
-
-    /**
-     * Finishes a burst sequence: creates the database entity and notifies UI listeners.
-     */
-    private fun finishBurst(burstId: String, fps: Int, width: Int, height: Int) {
-        isBurstInProgress.set(false)
-        val uris = ArrayList(burstSavedUris)
-        val coverUri = uris.firstOrNull() ?: ""
-
-        val entity = UltraFastBurstEntity(
-            burstId = burstId,
-            coverUri = coverUri,
-            photoUrisJson = UltraFastBurstEntity.createJsonFromUris(uris),
-            frameCount = uris.size,
-            fps = fps,
-            timestamp = System.currentTimeMillis(),
+        val sensorFrame = FastSensorFrame(
+            burstId = activeBurstId,
+            frameIndex = frameIdx,
+            timestampNs = System.nanoTime(),
             width = width,
             height = height,
-            title = "Ultra Fast Burst (${uris.size} shots · ${fps} FPS)"
+            sensorOrientation = sensorOrientation,
+            isFrontFacing = isFrontFacing,
+            saveMirrored = saveMirrored,
+            yuvData = pooledBuffer,
+            targetFps = activeFps
         )
 
-        engineScope.launch {
+        // Push to bounded queue with backpressure protection
+        val enqueued = frameQueue.offer(sensorFrame)
+        if (!enqueued) {
+            Log.w(TAG, "Consumer queue full ($QUEUE_CAPACITY). Frame $frameIdx dropped to prevent OOM")
+            pool?.recycle(pooledBuffer)
+        }
+    }
+
+    /**
+     * Consumer Loop: Multi-threaded background workers pulling from queue,
+     * converting to JPEG, writing EXIF, saving to disk, and progressively updating Room burst entity.
+     */
+    private fun startConsumerLoop() {
+        val workerCount = maxOf(2, Runtime.getRuntime().availableProcessors() - 1)
+        for (i in 0 until workerCount) {
+            backgroundProcessor.execute {
+                while (!Thread.currentThread().isInterrupted) {
+                    try {
+                        val frame = frameQueue.poll(300, TimeUnit.MILLISECONDS) ?: continue
+                        processSensorFrame(frame)
+                    } catch (e: InterruptedException) {
+                        break
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Error in background processing worker", t)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun processSensorFrame(frame: FastSensorFrame) {
+        try {
+            val yuvImage = YuvImage(frame.yuvData, ImageFormat.NV21, frame.width, frame.height, null)
+            val jpegStream = ByteArrayOutputStream(frame.yuvData.size / 4)
+            yuvImage.compressToJpeg(Rect(0, 0, frame.width, frame.height), 95, jpegStream)
+
+            // Immediately recycle YUV byte array back to pool for zero GC churn
+            framePool?.recycle(frame.yuvData)
+
+            val jpegBytes = jpegStream.toByteArray()
+            val uri = saveJpegToStorage(
+                jpegBytes = jpegBytes,
+                burstId = frame.burstId,
+                frameIndex = frame.frameIndex,
+                orientation = frame.sensorOrientation,
+                isFront = frame.isFrontFacing,
+                saveMirrored = frame.saveMirrored,
+                width = frame.width,
+                height = frame.height
+            )
+
+            if (uri != null) {
+                burstSavedUris.add(uri.toString())
+                if (coverPhotoUri == null) {
+                    coverPhotoUri = uri
+                }
+
+                // Progressively update Room burst group entity
+                updateBurstEntityProgressive(frame.burstId)
+            }
+
+            val processed = processedFrameCounter.incrementAndGet()
+            val acquired = acquiredFrameCounter.get()
+
+            // Check if burst capture is stopped and all acquired frames have finished processing
+            if (!isBurstActive.get() && processed >= acquired && acquired > 0) {
+                completeBurstSequence(frame.burstId)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to process frame ${frame.frameIndex}", t)
+            framePool?.recycle(frame.yuvData)
+        }
+    }
+
+    private fun updateBurstEntityProgressive(burstId: String) {
+        val uris = synchronized(burstSavedUris) { burstSavedUris.toList() }
+        if (uris.isEmpty()) return
+
+        val cover = coverPhotoUri?.toString() ?: uris.first()
+        val count = uris.size
+
+        engineScope.launch(Dispatchers.IO) {
+            val entity = UltraFastBurstEntity(
+                burstId = burstId,
+                coverUri = cover,
+                photoUrisJson = UltraFastBurstEntity.createJsonFromUris(uris),
+                frameCount = count,
+                fps = activeFps,
+                timestamp = System.currentTimeMillis(),
+                width = activeWidth,
+                height = activeHeight,
+                title = "Burst ${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}",
+                isCompleted = false
+            )
             burstRepository.saveBurst(entity)
-            Log.i(TAG, "Persisted UltraFastBurstEntity $burstId with ${uris.size} shots.")
+        }
+    }
+
+    private fun completeBurstSequence(burstId: String) {
+        val uris = synchronized(burstSavedUris) { burstSavedUris.toList() }
+        val cover = coverPhotoUri ?: (if (uris.isNotEmpty()) Uri.parse(uris.first()) else null)
+
+        engineScope.launch(Dispatchers.IO) {
+            if (uris.isNotEmpty()) {
+                val entity = UltraFastBurstEntity(
+                    burstId = burstId,
+                    coverUri = cover?.toString() ?: uris.first(),
+                    photoUrisJson = UltraFastBurstEntity.createJsonFromUris(uris),
+                    frameCount = uris.size,
+                    fps = activeFps,
+                    timestamp = System.currentTimeMillis(),
+                    width = activeWidth,
+                    height = activeHeight,
+                    title = "Burst ${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}",
+                    isCompleted = true
+                )
+                burstRepository.saveBurst(entity)
+                Log.i(TAG, "Fast Shutter burst complete: burstId=$burstId, totalSaved=${uris.size}")
+            }
 
             withContext(Dispatchers.Main) {
-                _progressState.value = _progressState.value.copy(
-                    isCapturing = false,
-                    isProcessing = false,
-                    statusText = "Completed burst capture (${uris.size} photos)"
-                )
-                burstCompletionCallback?.invoke(if (coverUri.isNotEmpty()) Uri.parse(coverUri) else null)
+                burstCompletionCallback?.invoke(cover)
                 burstCompletionCallback = null
             }
         }
     }
 
-    /**
-     * Prepares the final JPEG bytes with rotation and front mirror handling.
-     */
-    private fun prepareFinalJpeg(
-        rawJpegBytes: ByteArray,
-        rotationDegrees: Int,
-        isFrontFacing: Boolean,
-        saveMirrored: Boolean
-    ): ByteArray {
-        return try {
-            val exifStream = ByteArrayOutputStream()
-            exifStream.write(rawJpegBytes)
-            val bytes = exifStream.toByteArray()
-
-            // Update EXIF tags directly in byte array
-            val tempFile = File.createTempFile("burst_exif_", ".jpg", context.cacheDir)
-            FileOutputStream(tempFile).use { it.write(bytes) }
-
-            val exif = ExifInterface(tempFile.absolutePath)
-            val exifOrientation = when (rotationDegrees) {
-                90 -> ExifInterface.ORIENTATION_ROTATE_90
-                180 -> ExifInterface.ORIENTATION_ROTATE_180
-                270 -> ExifInterface.ORIENTATION_ROTATE_270
-                else -> ExifInterface.ORIENTATION_NORMAL
-            }
-            exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
-            exif.setAttribute(ExifInterface.TAG_DATETIME, SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date()))
-            exif.saveAttributes()
-
-            val resultBytes = tempFile.readBytes()
-            tempFile.delete()
-            resultBytes
-        } catch (e: Exception) {
-            rawJpegBytes
-        }
-    }
-
-    /**
-     * Saves full-resolution JPEG into MediaStore DCIM/Camera directory.
-     */
-    private fun saveToMediaStore(
+    private fun saveJpegToStorage(
         jpegBytes: ByteArray,
-        width: Int,
-        height: Int,
         burstId: String,
         frameIndex: Int,
-        timestampNs: Long,
-        targetFps: Int
+        orientation: Int,
+        isFront: Boolean,
+        saveMirrored: Boolean,
+        width: Int,
+        height: Int
     ): Uri? {
-        val fileName = "BURST_${burstId.take(8)}_${String.format(Locale.US, "%03d", frameIndex + 1)}.jpg"
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.WIDTH, width)
-            put(MediaStore.Images.Media.HEIGHT, height)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
+        val fileName = "BURST_${burstId.take(8)}_${String.format(Locale.US, "%04d", frameIndex)}.jpg"
+
+        // Handle front camera mirroring / rotation if needed
+        val finalBytes: ByteArray = if (isFront && saveMirrored && orientation != 0) {
+            try {
+                val original = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+                if (original != null) {
+                    val matrix = Matrix().apply {
+                        postScale(-1f, 1f)
+                        postRotate(orientation.toFloat())
+                    }
+                    val transformed = Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
+                    val out = ByteArrayOutputStream()
+                    transformed.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    original.recycle()
+                    transformed.recycle()
+                    out.toByteArray()
+                } else jpegBytes
+            } catch (e: Throwable) {
+                jpegBytes
+            }
+        } else jpegBytes
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Camera/Burst")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
-        }
 
-        val resolver = context.contentResolver
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            if (uri != null) {
+                resolver.openOutputStream(uri)?.use { os ->
+                    os.write(finalBytes)
+                    os.flush()
+                }
 
-        try {
-            resolver.openOutputStream(uri)?.use { out ->
-                out.write(jpegBytes)
-                out.flush()
+                // Write EXIF orientation tag
+                try {
+                    resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                        val exif = ExifInterface(pfd.fileDescriptor)
+                        val exifOrientation = when (orientation) {
+                            90 -> ExifInterface.ORIENTATION_ROTATE_90
+                            180 -> ExifInterface.ORIENTATION_ROTATE_180
+                            270 -> ExifInterface.ORIENTATION_ROTATE_270
+                            else -> ExifInterface.ORIENTATION_NORMAL
+                        }
+                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                        exif.saveAttributes()
+                    }
+                } catch (ignored: Exception) {}
+
+                contentValues.clear()
+                contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
             }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                values.clear()
-                values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                resolver.update(uri, values, null, null)
+            uri
+        } else {
+            val dir = File(context.getExternalFilesDir(null), "Burst")
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, fileName)
+            FileOutputStream(file).use { os ->
+                os.write(finalBytes)
+                os.flush()
             }
-            return uri
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed writing JPEG to MediaStore uri $uri", t)
-            try { resolver.delete(uri, null, null) } catch (ignored: Exception) {}
-            return null
+            try {
+                val exif = ExifInterface(file.absolutePath)
+                val exifOrientation = when (orientation) {
+                    90 -> ExifInterface.ORIENTATION_ROTATE_90
+                    180 -> ExifInterface.ORIENTATION_ROTATE_180
+                    270 -> ExifInterface.ORIENTATION_ROTATE_270
+                    else -> ExifInterface.ORIENTATION_NORMAL
+                }
+                exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                exif.saveAttributes()
+            } catch (ignored: Exception) {}
+
+            Uri.fromFile(file)
         }
     }
 
-    /**
-     * High-speed planar YUV_420_888 to NV21 converter.
-     */
-    private fun extractYuvToNv21(image: Image, outNv21: ByteArray, width: Int, height: Int) {
-        val planes = image.planes
-        val yPlane = planes[0]
-        val uPlane = planes[1]
-        val vPlane = planes[2]
+    private fun extractNv21FromImage(
+        image: Image,
+        nv21Buffer: ByteArray,
+        width: Int,
+        height: Int
+    ): Boolean {
+        try {
+            val planes = image.planes
+            val yPlane = planes[0]
+            val uPlane = planes[1]
+            val vPlane = planes[2]
 
-        val yBuffer = yPlane.buffer
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
+            val yBuffer = yPlane.buffer
+            val uBuffer = uPlane.buffer
+            val vBuffer = vPlane.buffer
 
-        val yRowStride = yPlane.rowStride
-        val yPixelStride = yPlane.pixelStride
+            val yRowStride = yPlane.rowStride
+            val yPixelStride = yPlane.pixelStride
+            val uvRowStride = uPlane.rowStride
+            val uvPixelStride = uPlane.pixelStride
 
-        // Copy Y plane
-        var outOffset = 0
-        if (yPixelStride == 1 && yRowStride == width) {
-            val ySize = width * height
-            yBuffer.get(outNv21, 0, ySize)
-            outOffset = ySize
-        } else {
-            for (row in 0 until height) {
-                yBuffer.position(row * yRowStride)
-                yBuffer.get(outNv21, outOffset, width)
-                outOffset += width
-            }
-        }
+            var offset = 0
 
-        // Copy UV planes (interleaved V, U for NV21)
-        val uvRowStride = vPlane.rowStride
-        val uvPixelStride = vPlane.pixelStride
-        val halfWidth = width / 2
-        val halfHeight = height / 2
-
-        if (uvPixelStride == 2 && vPlane.buffer == uPlane.buffer) {
-            // Buffer already interleaved
-            val uvSize = width * halfHeight
-            vBuffer.position(0)
-            vBuffer.get(outNv21, outOffset, uvSize)
-        } else {
-            for (row in 0 until halfHeight) {
-                val vRowPos = row * uvRowStride
-                val uRowPos = row * uPlane.rowStride
-                for (col in 0 until halfWidth) {
-                    val vVal = vBuffer.get(vRowPos + col * uvPixelStride)
-                    val uVal = uBuffer.get(uRowPos + col * uPlane.pixelStride)
-                    outNv21[outOffset++] = vVal
-                    outNv21[outOffset++] = uVal
+            // Copy Y plane
+            if (yRowStride == width && yPixelStride == 1) {
+                yBuffer.position(0)
+                yBuffer.get(nv21Buffer, 0, width * height)
+                offset = width * height
+            } else {
+                for (row in 0 until height) {
+                    yBuffer.position(row * yRowStride)
+                    if (yPixelStride == 1) {
+                        yBuffer.get(nv21Buffer, offset, width)
+                        offset += width
+                    } else {
+                        for (col in 0 until width) {
+                            nv21Buffer[offset++] = yBuffer.get(row * yRowStride + col * yPixelStride)
+                        }
+                    }
                 }
             }
+
+            // Copy NV21 interleaved VU plane
+            val uvHeight = height / 2
+            val uvWidth = width / 2
+
+            for (row in 0 until uvHeight) {
+                val vRowOffset = row * uvRowStride
+                val uRowOffset = row * uvRowStride
+                for (col in 0 until uvWidth) {
+                    nv21Buffer[offset++] = vBuffer.get(vRowOffset + col * uvPixelStride)
+                    nv21Buffer[offset++] = uBuffer.get(uRowOffset + col * uvPixelStride)
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed extracting NV21 from Image", e)
+            return false
         }
     }
-
-    /**
-     * Starts continuous burst capture at the selected FPS. Captures frames until stopContinuousBurst() is invoked.
-     */
-    fun startContinuousBurst(
-        burstId: String = UUID.randomUUID().toString(),
-        fps: Int,
-        onComplete: ((Uri?) -> Unit)? = null
-    ) {
-        if (isBurstInProgress.getAndSet(true)) {
-            Log.w(TAG, "Burst already in progress, re-initializing for continuous capture.")
-        }
-
-        currentBurstId = burstId
-        currentBurstTotalFrames = 0
-        currentBurstFps = fps.coerceIn(5, 20)
-        isContinuousBurst.set(true)
-        isAcquisitionStopped.set(false)
-        acquiredFrameCounter.set(0)
-        processedFrameCounter.set(0)
-        burstSavedUris.clear()
-        burstCompletionCallback = onComplete
-
-        _progressState.value = UltraFastProgressState(
-            isCapturing = true,
-            isProcessing = false,
-            isContinuousHolding = true,
-            burstId = burstId,
-            targetFps = currentBurstFps,
-            totalFrames = 0,
-            acquiredFrames = 0,
-            processedFrames = 0,
-            statusText = "Continuous RAW capture active ($currentBurstFps FPS)..."
-        )
-        Log.i(TAG, "Started continuous Ultra Fast Burst $burstId at $fps FPS")
-    }
-
-    /**
-     * Immediately stops sensor acquisition for an active continuous burst.
-     * Queued frames in the buffer continue converting in the background until saved.
-     */
-    fun stopContinuousBurst() {
-        if (!isContinuousBurst.get()) return
-        isContinuousBurst.set(false)
-        isAcquisitionStopped.set(true)
-
-        val total = acquiredFrameCounter.get()
-        currentBurstTotalFrames = total
-        Log.i(TAG, "Stopped continuous burst $currentBurstId: total $total frames acquired from sensor.")
-
-        if (total == 0) {
-            isBurstInProgress.set(false)
-            _progressState.value = UltraFastProgressState()
-            burstCompletionCallback?.invoke(null)
-            burstCompletionCallback = null
-            return
-        }
-
-        val processed = processedFrameCounter.get()
-        val stillProcessing = processed < total
-        _progressState.value = _progressState.value.copy(
-            isCapturing = false,
-            isContinuousHolding = false,
-            isProcessing = stillProcessing,
-            totalFrames = total,
-            statusText = if (stillProcessing) "Converting JPEGs ($processed / $total)..." else "Burst complete ($total photos)"
-        )
-
-        if (!stillProcessing && isBurstInProgress.get()) {
-            val width = poolDimensions?.width ?: 0
-            val height = poolDimensions?.height ?: 0
-            finishBurst(currentBurstId, currentBurstFps, width, height)
-        }
-    }
-
-    /**
-     * Captures a single ultra-fast uncompressed RAW/YUV frame.
-     */
-    fun startSingleCapture(
-        burstId: String = UUID.randomUUID().toString(),
-        fps: Int,
-        onComplete: ((Uri?) -> Unit)? = null
-    ) {
-        if (isBurstInProgress.getAndSet(true)) {
-            Log.w(TAG, "A capture is already active; proceeding with single capture.")
-        }
-
-        currentBurstId = burstId
-        currentBurstTotalFrames = 1
-        currentBurstFps = fps.coerceIn(5, 20)
-        isContinuousBurst.set(false)
-        isAcquisitionStopped.set(false)
-        acquiredFrameCounter.set(0)
-        processedFrameCounter.set(0)
-        burstSavedUris.clear()
-        burstCompletionCallback = onComplete
-
-        _progressState.value = UltraFastProgressState(
-            isCapturing = true,
-            isProcessing = false,
-            isContinuousHolding = false,
-            burstId = burstId,
-            targetFps = currentBurstFps,
-            totalFrames = 1,
-            acquiredFrames = 0,
-            processedFrames = 0,
-            statusText = "Capturing 1 fast sensor frame..."
-        )
-        Log.i(TAG, "Started single Ultra Fast Capture $burstId")
-    }
-
-    /**
-     * Initiates a real sensor burst capture using the fastest uncompressed acquisition path.
-     */
-    fun startBurst(
-        burstId: String = UUID.randomUUID().toString(),
-        fps: Int,
-        frameCount: Int,
-        onComplete: (Uri?) -> Unit
-    ) {
-        if (frameCount == 1) {
-            startSingleCapture(burstId, fps, onComplete)
-            return
-        }
-
-        if (isBurstInProgress.getAndSet(true)) {
-            Log.w(TAG, "A burst capture is already active; ignoring trigger.")
-            return
-        }
-
-        currentBurstId = burstId
-        currentBurstTotalFrames = frameCount
-        currentBurstFps = fps.coerceIn(5, 20)
-        isContinuousBurst.set(false)
-        isAcquisitionStopped.set(false)
-        acquiredFrameCounter.set(0)
-        processedFrameCounter.set(0)
-        burstSavedUris.clear()
-        burstCompletionCallback = onComplete
-
-        _progressState.value = UltraFastProgressState(
-            isCapturing = true,
-            isProcessing = true,
-            isContinuousHolding = false,
-            burstId = burstId,
-            targetFps = currentBurstFps,
-            totalFrames = frameCount,
-            acquiredFrames = 0,
-            processedFrames = 0,
-            statusText = "Capturing $frameCount real sensor frames at $fps FPS..."
-        )
-
-        Log.i(TAG, "Started Ultra Fast Burst $burstId: $frameCount frames at $fps FPS")
-    }
-
-    fun isBurstActive(): Boolean = isBurstInProgress.get()
 
     fun reset() {
-        isBurstInProgress.set(false)
-        _progressState.value = UltraFastProgressState()
+        isBurstActive.set(false)
+        _isHolding.value = false
+        _liveFrameCount.value = 0
+        frameQueue.clear()
+        burstSavedUris.clear()
+        burstCompletionCallback = null
     }
 
     fun release() {
-        engineScope.cancel()
+        reset()
         captureThread?.quitSafely()
         captureThread = null
         captureHandler = null
+        backgroundProcessor.shutdown()
         framePool?.clear()
         framePool = null
-        backgroundProcessor.shutdown()
+        engineScope.cancel()
     }
 }

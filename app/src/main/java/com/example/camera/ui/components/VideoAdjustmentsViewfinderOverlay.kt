@@ -28,12 +28,6 @@ fun VideoAdjustmentsViewfinderOverlay(
     adjustments: VideoAdjustments,
     modifier: Modifier = Modifier
 ) {
-    // If GPU RuntimeShader is active on the TextureView, all spatial effects and grain
-    // are rendered directly on the GPU in a single pass. Skip redundant Compose drawing.
-    if (VideoAdjustmentsPipeline.isGpuShaderSupported) {
-        return
-    }
-
     if (adjustments.isDefault || !VideoAdjustmentsPipeline.hasSpatialEffects(adjustments)) {
         return
     }

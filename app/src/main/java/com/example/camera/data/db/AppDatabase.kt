@@ -10,7 +10,7 @@ import com.example.camera.hdr.data.db.HdrVideoJobEntity
 import com.example.camera.ultrafast.data.UltraFastBurstDao
 import com.example.camera.ultrafast.model.UltraFastBurstEntity
 
-@Database(entities = [RefocusPhotoEntity::class, HdrVideoJobEntity::class, UltraFastBurstEntity::class], version = 3, exportSchema = false)
+@Database(entities = [RefocusPhotoEntity::class, HdrVideoJobEntity::class, UltraFastBurstEntity::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun refocusDao(): RefocusDao
     abstract fun hdrVideoJobDao(): HdrVideoJobDao

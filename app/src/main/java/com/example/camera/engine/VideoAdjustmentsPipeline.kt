@@ -184,11 +184,15 @@ object VideoAdjustmentsPipeline {
             return
         }
 
-        if (isGpuShaderSupported) {
-            applyGpuShader(view, adjustments)
+        val matrix = computeColorMatrix(adjustments)
+        if (matrix != null) {
+            val paint = fallbackPaint ?: Paint().also { fallbackPaint = it }
+            paint.colorFilter = ColorMatrixColorFilter(matrix)
+            view.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
         } else {
-            applyFallbackMatrix(view, adjustments)
+            view.setLayerType(View.LAYER_TYPE_NONE, null)
         }
+        view.invalidate()
     }
 
     private var currentAttachedView: java.lang.ref.WeakReference<View>? = null
