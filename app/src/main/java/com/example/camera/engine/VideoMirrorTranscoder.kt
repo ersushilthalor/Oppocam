@@ -22,6 +22,7 @@ import android.view.Surface
 import android.graphics.SurfaceTexture
 import android.graphics.Bitmap
 import android.opengl.GLUtils
+import com.example.camera.model.VideoAdjustments
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -107,7 +108,8 @@ object VideoMirrorTranscoder {
         orientationHint: Int? = null,
         vignette: Float = 0f,
         grain: Float = 0f,
-        softLight: Float = 0f
+        softLight: Float = 0f,
+        videoAdjustments: VideoAdjustments? = null
     ): Boolean {
         if (!inputFile.exists() || inputFile.length() == 0L) {
             Log.e(TAG, "Input file does not exist or is empty")
@@ -316,7 +318,8 @@ object VideoMirrorTranscoder {
                                     colorMatrix = colorMatrix,
                                     vignette = vignette,
                                     grain = grain,
-                                    softLight = softLight
+                                    softLight = softLight,
+                                    videoAdjustments = videoAdjustments
                                 )
                                 eglHelper.setPresentationTime(bufferInfo.presentationTimeUs * 1000L)
                                 eglHelper.swapBuffers()
@@ -501,6 +504,27 @@ object VideoMirrorTranscoder {
         private var uVignetteLoc: Int = -1
         private var uGrainLoc: Int = -1
         private var uSoftLightLoc: Int = -1
+        private var uHasVideoAdjustmentsLoc: Int = -1
+        private var uVaExposureLoc: Int = -1
+        private var uVaTonalityLoc: Int = -1
+        private var uVaContrastLoc: Int = -1
+        private var uVaSaturationLoc: Int = -1
+        private var uVaColorVibranceLoc: Int = -1
+        private var uVaHighlightsLoc: Int = -1
+        private var uVaShadowsLoc: Int = -1
+        private var uVaTemperatureLoc: Int = -1
+        private var uVaTintLoc: Int = -1
+        private var uVaCurveBlacksLoc: Int = -1
+        private var uVaCurveShadowsLoc: Int = -1
+        private var uVaCurveMidtonesLoc: Int = -1
+        private var uVaCurveHighlightsLoc: Int = -1
+        private var uVaCurveWhitesLoc: Int = -1
+        private var uVaColorBalanceRLoc: Int = -1
+        private var uVaColorBalanceGLoc: Int = -1
+        private var uVaColorBalanceBLoc: Int = -1
+        private var uVaBloomLoc: Int = -1
+        private var uVaFlashLoc: Int = -1
+        private var uVaHalationLoc: Int = -1
         private var aPositionLoc: Int = -1
         private var aTextureCoordLoc: Int = -1
 
@@ -621,6 +645,28 @@ object VideoMirrorTranscoder {
                 uniform float uGrain;
                 uniform float uSoftLight;
 
+                uniform int uHasVideoAdjustments;
+                uniform float uVaExposure;
+                uniform float uVaTonality;
+                uniform float uVaContrast;
+                uniform float uVaSaturation;
+                uniform float uVaColorVibrance;
+                uniform float uVaHighlights;
+                uniform float uVaShadows;
+                uniform float uVaTemperature;
+                uniform float uVaTint;
+                uniform float uVaCurveBlacks;
+                uniform float uVaCurveShadows;
+                uniform float uVaCurveMidtones;
+                uniform float uVaCurveHighlights;
+                uniform float uVaCurveWhites;
+                uniform float uVaColorBalanceR;
+                uniform float uVaColorBalanceG;
+                uniform float uVaColorBalanceB;
+                uniform float uVaBloom;
+                uniform float uVaFlash;
+                uniform float uVaHalation;
+
                 vec3 sample3DLut(sampler2D lutTex, vec3 color, float lutSize) {
                     float maxColor = lutSize - 1.0;
                     vec3 c = clamp(color, 0.0, 1.0) * maxColor;
@@ -643,10 +689,84 @@ object VideoMirrorTranscoder {
                 void main() {
                     vec4 texColor = texture2D(sTexture, vTextureCoord);
                     vec3 curRgb = texColor.rgb;
-                    if (uHasColorMatrix != 0) {
+
+                    if (uHasVideoAdjustments != 0) {
+                        float luma = dot(curRgb, vec3(0.2126, 0.7152, 0.0722));
+
+                        // 1. Independent Luminance-based Tonal Masks (Smoothstep parabolic curves)
+                        float shadowT = 1.0 - smoothstep(0.0, 0.50, luma);
+                        float shadowMask = shadowT * shadowT;
+                        float shadowAdj = (uVaShadows + uVaCurveShadows) * 0.35 * shadowMask;
+
+                        float hlT = smoothstep(0.45, 1.0, luma);
+                        float hlMask = hlT * hlT;
+                        float hlAdj = (uVaHighlights + uVaCurveHighlights) * 0.35 * hlMask;
+
+                        float blackT = 1.0 - smoothstep(0.0, 0.25, luma);
+                        float blackAdj = uVaCurveBlacks * 0.25 * (blackT * blackT);
+
+                        float whiteT = smoothstep(0.75, 1.0, luma);
+                        float whiteAdj = uVaCurveWhites * 0.25 * (whiteT * whiteT);
+
+                        float midDist = abs(luma - 0.5);
+                        float midMask = clamp(1.0 - 4.0 * midDist * midDist, 0.0, 1.0);
+                        float midAdj = uVaCurveMidtones * 0.25 * midMask;
+
+                        curRgb += vec3(shadowAdj + hlAdj + blackAdj + whiteAdj + midAdj);
+                        curRgb += vec3(uVaTonality * 0.10);
+
+                        // 2. Exposure & Contrast
+                        if (abs(uVaExposure) > 0.001) {
+                            curRgb *= pow(2.0, uVaExposure * 0.45);
+                        }
+                        if (abs(uVaContrast) > 0.001) {
+                            float c = 1.0 + uVaContrast * 0.65;
+                            curRgb = (curRgb - 0.5) * c + 0.5;
+                        }
+
+                        // 3. White Balance: Temperature & Tint
+                        if (abs(uVaTemperature) > 0.001 || abs(uVaTint) > 0.001) {
+                            float tFactor = uVaTemperature * 0.22;
+                            float tintFactor = uVaTint * 0.18;
+                            curRgb.r *= (1.0 + tFactor) * (1.0 + tintFactor * 0.5);
+                            curRgb.g *= (1.0 - tintFactor);
+                            curRgb.b *= (1.0 - tFactor) * (1.0 + tintFactor * 0.5);
+                        }
+
+                        // 4. Color Vibrance & Saturation
+                        float totalSat = uVaSaturation + (uVaColorVibrance * 0.65);
+                        if (abs(totalSat) > 0.001) {
+                            float newLuma = dot(curRgb, vec3(0.2126, 0.7152, 0.0722));
+                            float s = max(0.0, 1.0 + totalSat);
+                            curRgb = mix(vec3(newLuma), curRgb, s);
+                        }
+
+                        // 5. RGB Balance
+                        curRgb.r += uVaColorBalanceR * 0.08;
+                        curRgb.g += uVaColorBalanceG * 0.08;
+                        curRgb.b += uVaColorBalanceB * 0.08;
+
+                        // 6. Spatial Effects: Bloom, Flash, Halation
+                        if (uVaBloom > 0.001) {
+                            float bDist = length(vTextureCoord - vec2(0.5, 0.42));
+                            float bFactor = (1.0 - smoothstep(0.0, 0.65, bDist)) * uVaBloom * 0.15;
+                            curRgb += vec3(1.0, 0.85, 0.3) * bFactor;
+                        }
+                        if (uVaHalation > 0.001) {
+                            float hDist = length(vTextureCoord - 0.5);
+                            float hFactor = smoothstep(0.35, 0.85, hDist) * uVaHalation * 0.15;
+                            curRgb.r += hFactor;
+                        }
+                        if (uVaFlash > 0.001) {
+                            float yDist = abs(vTextureCoord.y - 0.48);
+                            float fStreak = (1.0 - smoothstep(0.0, 0.03, yDist)) * uVaFlash * 0.35;
+                            curRgb += vec3(0.6, 0.8, 1.0) * fStreak;
+                        }
+                    } else if (uHasColorMatrix != 0) {
                         vec3 transformed = mat3(uColorMatrix) * curRgb + uColorOffset.rgb;
                         curRgb = clamp(transformed, 0.0, 1.0);
                     }
+
                     if (uHas3DLut != 0 && uLutIntensity > 0.001) {
                         vec3 graded = sample3DLut(uLutTexture, curRgb, uLutSize);
                         curRgb = mix(curRgb, graded, uLutIntensity);
@@ -705,6 +825,27 @@ object VideoMirrorTranscoder {
             uVignetteLoc = GLES20.glGetUniformLocation(program, "uVignette")
             uGrainLoc = GLES20.glGetUniformLocation(program, "uGrain")
             uSoftLightLoc = GLES20.glGetUniformLocation(program, "uSoftLight")
+            uHasVideoAdjustmentsLoc = GLES20.glGetUniformLocation(program, "uHasVideoAdjustments")
+            uVaExposureLoc = GLES20.glGetUniformLocation(program, "uVaExposure")
+            uVaTonalityLoc = GLES20.glGetUniformLocation(program, "uVaTonality")
+            uVaContrastLoc = GLES20.glGetUniformLocation(program, "uVaContrast")
+            uVaSaturationLoc = GLES20.glGetUniformLocation(program, "uVaSaturation")
+            uVaColorVibranceLoc = GLES20.glGetUniformLocation(program, "uVaColorVibrance")
+            uVaHighlightsLoc = GLES20.glGetUniformLocation(program, "uVaHighlights")
+            uVaShadowsLoc = GLES20.glGetUniformLocation(program, "uVaShadows")
+            uVaTemperatureLoc = GLES20.glGetUniformLocation(program, "uVaTemperature")
+            uVaTintLoc = GLES20.glGetUniformLocation(program, "uVaTint")
+            uVaCurveBlacksLoc = GLES20.glGetUniformLocation(program, "uVaCurveBlacks")
+            uVaCurveShadowsLoc = GLES20.glGetUniformLocation(program, "uVaCurveShadows")
+            uVaCurveMidtonesLoc = GLES20.glGetUniformLocation(program, "uVaCurveMidtones")
+            uVaCurveHighlightsLoc = GLES20.glGetUniformLocation(program, "uVaCurveHighlights")
+            uVaCurveWhitesLoc = GLES20.glGetUniformLocation(program, "uVaCurveWhites")
+            uVaColorBalanceRLoc = GLES20.glGetUniformLocation(program, "uVaColorBalanceR")
+            uVaColorBalanceGLoc = GLES20.glGetUniformLocation(program, "uVaColorBalanceG")
+            uVaColorBalanceBLoc = GLES20.glGetUniformLocation(program, "uVaColorBalanceB")
+            uVaBloomLoc = GLES20.glGetUniformLocation(program, "uVaBloom")
+            uVaFlashLoc = GLES20.glGetUniformLocation(program, "uVaFlash")
+            uVaHalationLoc = GLES20.glGetUniformLocation(program, "uVaHalation")
 
             val textures = IntArray(1)
             GLES20.glGenTextures(1, textures, 0)
@@ -793,7 +934,8 @@ object VideoMirrorTranscoder {
             colorMatrix: FloatArray? = null,
             vignette: Float = 0f,
             grain: Float = 0f,
-            softLight: Float = 0f
+            softLight: Float = 0f,
+            videoAdjustments: VideoAdjustments? = null
         ) {
             makeCurrent()
             GLES20.glViewport(0, 0, width, height)
@@ -814,9 +956,41 @@ object VideoMirrorTranscoder {
             GLES20.glUniformMatrix4fv(uMVPMatrixLoc, 1, false, mvpMatrix, 0)
             GLES20.glUniformMatrix4fv(uSTMatrixLoc, 1, false, stMatrix, 0)
 
-            if (uVignetteLoc != -1) GLES20.glUniform1f(uVignetteLoc, (vignette / 100f).coerceIn(0f, 1f))
-            if (uGrainLoc != -1) GLES20.glUniform1f(uGrainLoc, (grain / 100f).coerceIn(0f, 1f))
-            if (uSoftLightLoc != -1) GLES20.glUniform1f(uSoftLightLoc, (softLight / 100f).coerceIn(0f, 1f))
+            val effVignette = if (videoAdjustments != null && videoAdjustments.vignette > 0f) videoAdjustments.vignette else vignette
+            val effGrain = if (videoAdjustments != null && (videoAdjustments.grain + videoAdjustments.textureFilmGrain) > 0f) {
+                videoAdjustments.grain + videoAdjustments.textureFilmGrain
+            } else grain
+            val effSoftLight = if (videoAdjustments != null && videoAdjustments.lightFxSoftLight > 0f) videoAdjustments.lightFxSoftLight else softLight
+
+            if (uVignetteLoc != -1) GLES20.glUniform1f(uVignetteLoc, (effVignette / 100f).coerceIn(0f, 1f))
+            if (uGrainLoc != -1) GLES20.glUniform1f(uGrainLoc, (effGrain / 100f).coerceIn(0f, 1f))
+            if (uSoftLightLoc != -1) GLES20.glUniform1f(uSoftLightLoc, (effSoftLight / 100f).coerceIn(0f, 1f))
+
+            if (videoAdjustments != null && !videoAdjustments.isDefault) {
+                if (uHasVideoAdjustmentsLoc != -1) GLES20.glUniform1i(uHasVideoAdjustmentsLoc, 1)
+                if (uVaExposureLoc != -1) GLES20.glUniform1f(uVaExposureLoc, videoAdjustments.exposure)
+                if (uVaTonalityLoc != -1) GLES20.glUniform1f(uVaTonalityLoc, videoAdjustments.tonality / 100f)
+                if (uVaContrastLoc != -1) GLES20.glUniform1f(uVaContrastLoc, videoAdjustments.contrast / 100f)
+                if (uVaSaturationLoc != -1) GLES20.glUniform1f(uVaSaturationLoc, videoAdjustments.saturation / 100f)
+                if (uVaColorVibranceLoc != -1) GLES20.glUniform1f(uVaColorVibranceLoc, videoAdjustments.colorVibrance / 100f)
+                if (uVaHighlightsLoc != -1) GLES20.glUniform1f(uVaHighlightsLoc, videoAdjustments.highlights / 100f)
+                if (uVaShadowsLoc != -1) GLES20.glUniform1f(uVaShadowsLoc, videoAdjustments.shadows / 100f)
+                if (uVaTemperatureLoc != -1) GLES20.glUniform1f(uVaTemperatureLoc, videoAdjustments.temperature / 100f)
+                if (uVaTintLoc != -1) GLES20.glUniform1f(uVaTintLoc, videoAdjustments.tint / 100f)
+                if (uVaCurveBlacksLoc != -1) GLES20.glUniform1f(uVaCurveBlacksLoc, videoAdjustments.curveBlacks / 100f)
+                if (uVaCurveShadowsLoc != -1) GLES20.glUniform1f(uVaCurveShadowsLoc, videoAdjustments.curveShadows / 100f)
+                if (uVaCurveMidtonesLoc != -1) GLES20.glUniform1f(uVaCurveMidtonesLoc, videoAdjustments.curveMidtones / 100f)
+                if (uVaCurveHighlightsLoc != -1) GLES20.glUniform1f(uVaCurveHighlightsLoc, videoAdjustments.curveHighlights / 100f)
+                if (uVaCurveWhitesLoc != -1) GLES20.glUniform1f(uVaCurveWhitesLoc, videoAdjustments.curveWhites / 100f)
+                if (uVaColorBalanceRLoc != -1) GLES20.glUniform1f(uVaColorBalanceRLoc, videoAdjustments.colorBalanceR / 100f)
+                if (uVaColorBalanceGLoc != -1) GLES20.glUniform1f(uVaColorBalanceGLoc, videoAdjustments.colorBalanceG / 100f)
+                if (uVaColorBalanceBLoc != -1) GLES20.glUniform1f(uVaColorBalanceBLoc, videoAdjustments.colorBalanceB / 100f)
+                if (uVaBloomLoc != -1) GLES20.glUniform1f(uVaBloomLoc, videoAdjustments.lightFxBloom / 100f)
+                if (uVaFlashLoc != -1) GLES20.glUniform1f(uVaFlashLoc, videoAdjustments.lightFxFlash / 100f)
+                if (uVaHalationLoc != -1) GLES20.glUniform1f(uVaHalationLoc, videoAdjustments.textureHalation / 100f)
+            } else {
+                if (uHasVideoAdjustmentsLoc != -1) GLES20.glUniform1i(uHasVideoAdjustmentsLoc, 0)
+            }
 
             if (colorMatrix != null && colorMatrix.size >= 20) {
                 GLES20.glUniform1i(uHasColorMatrixLoc, 1)

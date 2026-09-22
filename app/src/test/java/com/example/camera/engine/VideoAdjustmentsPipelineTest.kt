@@ -80,6 +80,40 @@ class VideoAdjustmentsPipelineTest {
     }
 
     @Test
+    fun testSettingIndependence() {
+        var adjustments = VideoAdjustments()
+        assertEquals(0f, adjustments.shadows, 0.001f)
+        assertEquals(0f, adjustments.highlights, 0.001f)
+        assertEquals(0f, adjustments.contrast, 0.001f)
+
+        // Set Shadows = +40
+        adjustments = adjustments.copy(shadows = 40f)
+        assertEquals(40f, adjustments.shadows, 0.001f)
+        assertEquals(0f, adjustments.highlights, 0.001f)
+        assertEquals(0f, adjustments.contrast, 0.001f)
+
+        // Now modify Contrast to +20 and Exposure to +1.5
+        adjustments = adjustments.copy(contrast = 20f, exposure = 1.5f)
+        // Verify Shadows is NOT overwritten and remains exactly +40
+        assertEquals(40f, adjustments.shadows, 0.001f)
+        assertEquals(20f, adjustments.contrast, 0.001f)
+        assertEquals(1.5f, adjustments.exposure, 0.001f)
+        assertEquals(0f, adjustments.highlights, 0.001f)
+    }
+
+    @Test
+    fun testGpuShaderApplication() {
+        val textureView = android.view.TextureView(context)
+        val custom = VideoAdjustments(shadows = 40f, highlights = -25f, vignette = 30f)
+
+        // Verify applying to view does not crash and updates pipeline state smoothly
+        VideoAdjustmentsPipeline.applyToView(textureView, custom)
+
+        // Test clearing adjustments
+        VideoAdjustmentsPipeline.clearAdjustments(textureView)
+    }
+
+    @Test
     fun testPreferencesSaveAndRestore() {
         val custom = VideoAdjustments(
             exposure = 1.2f,

@@ -4742,7 +4742,8 @@ class Camera2Engine(private val context: Context) {
         val fileToSave: File = if (needsExportPipeline) {
             val targetExport = File(context.cacheDir, "EXPORT_${System.currentTimeMillis()}_${tempFile.name}")
             val success = try {
-                val effectiveColorMatrix = if (isCinema) cinemaColorMatrix?.array else normalVideoColorMatrix?.array
+                val isNormalVideoWithAdj = (!isCinema && currentMode == CameraMode.VIDEO && !currentVideoAdjustments.isDefault)
+                val effectiveColorMatrix = if (isCinema) cinemaColorMatrix?.array else if (!isNormalVideoWithAdj) normalVideoColorMatrix?.array else null
                 val effVignette = if (!isCinema) currentVideoAdjustments.vignette else 0f
                 val effGrain = if (!isCinema) (currentVideoAdjustments.grain + currentVideoAdjustments.textureFilmGrain) else 0f
                 val effSoftLight = if (!isCinema) currentVideoAdjustments.lightFxSoftLight else 0f
@@ -4758,7 +4759,8 @@ class Camera2Engine(private val context: Context) {
                     orientationHint = getVideoOrientationHint(),
                     vignette = effVignette,
                     grain = effGrain,
-                    softLight = effSoftLight
+                    softLight = effSoftLight,
+                    videoAdjustments = if (isNormalVideoWithAdj) currentVideoAdjustments else null
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Video export transcoding failed", e)

@@ -316,19 +316,22 @@ private fun BasicAdjustmentsView(
         Spacer(modifier = Modifier.height(18.dp))
 
         // Floating Slider Card for Currently Selected Control
-        val currentValue = adjustments.getValue(selectedControl)
-        SliderCard(
-            label = selectedControl.label,
-            valueString = selectedControl.formatValue(currentValue),
-            value = currentValue,
-            min = selectedControl.min,
-            max = selectedControl.max,
-            isDecimal = selectedControl.isDecimal,
-            onValueChange = { newVal ->
-                onValueChange(selectedControl, newVal)
-            },
-            isActive = true
-        )
+        key(selectedControl) {
+            val currentValue = adjustments.getValue(selectedControl)
+            SliderCard(
+                sliderKey = selectedControl,
+                label = selectedControl.label,
+                valueString = selectedControl.formatValue(currentValue),
+                value = currentValue,
+                min = selectedControl.min,
+                max = selectedControl.max,
+                isDecimal = selectedControl.isDecimal,
+                onValueChange = { newVal ->
+                    onValueChange(selectedControl, newVal)
+                },
+                isActive = true
+            )
+        }
     }
 }
 
@@ -650,6 +653,7 @@ fun SliderCard(
     max: Float,
     isDecimal: Boolean = false,
     isActive: Boolean = true,
+    sliderKey: Any? = label,
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -702,14 +706,13 @@ fun SliderCard(
 
             // Custom Tick Ruler Slider
             RulerTickSlider(
+                sliderKey = sliderKey ?: label,
                 value = value,
                 min = min,
                 max = max,
                 isDecimal = isDecimal,
                 isActive = isActive,
-                onValueChange = { newVal ->
-                    onValueChange(newVal)
-                }
+                onValueChange = onValueChange
             )
         }
     }
@@ -725,35 +728,40 @@ fun RulerTickSlider(
     max: Float,
     isDecimal: Boolean,
     isActive: Boolean,
+    sliderKey: Any? = null,
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
-    var lastHapticValue by remember { mutableStateOf(value) }
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentMin by rememberUpdatedState(min)
+    val currentMax by rememberUpdatedState(max)
+    val currentIsDecimal by rememberUpdatedState(isDecimal)
+    var lastHapticValue by remember(sliderKey) { mutableStateOf(value) }
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .height(34.dp)
-            .pointerInput(min, max, isDecimal) {
+            .pointerInput(sliderKey, min, max, isDecimal) {
                 detectTapGestures { offset ->
                     val norm = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                    val rawVal = min + norm * (max - min)
-                    val rounded = if (isDecimal) {
+                    val rawVal = currentMin + norm * (currentMax - currentMin)
+                    val rounded = if (currentIsDecimal) {
                         (rawVal * 10f).roundToInt() / 10f
                     } else {
                         rawVal.roundToInt().toFloat()
                     }
-                    onValueChange(rounded)
+                    currentOnValueChange(rounded)
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 }
             }
-            .pointerInput(min, max, isDecimal) {
+            .pointerInput(sliderKey, min, max, isDecimal) {
                 detectDragGestures { change, _ ->
                     change.consume()
                     val norm = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
-                    val rawVal = min + norm * (max - min)
-                    val rounded = if (isDecimal) {
+                    val rawVal = currentMin + norm * (currentMax - currentMin)
+                    val rounded = if (currentIsDecimal) {
                         (rawVal * 10f).roundToInt() / 10f
                     } else {
                         rawVal.roundToInt().toFloat()
@@ -766,7 +774,7 @@ fun RulerTickSlider(
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         }
                     }
-                    onValueChange(rounded)
+                    currentOnValueChange(rounded)
                 }
             }
     ) {

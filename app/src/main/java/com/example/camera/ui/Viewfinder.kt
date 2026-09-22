@@ -275,12 +275,11 @@ fun Viewfinder(
                                 colorMatrix.postConcat(leicaMat)
                                 hasFilter = true
                             }
-                        } else if (cameraMode == CameraMode.VIDEO && videoAdjustments != null) {
-                            val adjMat = com.example.camera.engine.VideoAdjustmentsPipeline.computeColorMatrix(videoAdjustments)
-                            if (adjMat != null) {
-                                colorMatrix.postConcat(adjMat)
-                                hasFilter = true
-                            }
+                        } else if (cameraMode == CameraMode.VIDEO) {
+                            com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
+                            return@AndroidView
+                        } else {
+                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                         }
 
                         if (hasFilter) {

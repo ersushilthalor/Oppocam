@@ -293,31 +293,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setVideoAdjustmentsOpen(!_isVideoAdjustmentsOpen.value)
     }
 
+    private var saveVideoAdjustmentsJob: kotlinx.coroutines.Job? = null
+
     fun updateVideoAdjustments(adjustments: com.example.camera.model.VideoAdjustments) {
-        val oldExposure = _videoAdjustments.value.exposure
         _videoAdjustments.value = adjustments
-        preferences.saveVideoAdjustments(adjustments)
         engine.currentVideoAdjustments = adjustments
 
-        // Hardware camera exposure compensation integration
-        if (adjustments.exposure != oldExposure) {
-            val lens = engine.selectedLens.value
-            val chars = lens?.let { engine.getCharacteristics(it.cameraId) }
-            val step = chars?.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0.333f
-            val compRange = chars?.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
-            if (compRange != null && step > 0f) {
-                val compIndex = kotlin.math.round(adjustments.exposure / step).toInt().coerceIn(compRange.lower, compRange.upper)
-                engine.exposureCompensationIndex = compIndex
-                engine.updatePreviewSettings()
-            }
+        // Debounce persistence to background thread to prevent UI lag while dragging sliders
+        saveVideoAdjustmentsJob?.cancel()
+        saveVideoAdjustmentsJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            kotlinx.coroutines.delay(300)
+            preferences.saveVideoAdjustments(adjustments)
         }
     }
 
     fun resetVideoAdjustments() {
+        saveVideoAdjustmentsJob?.cancel()
         val def = com.example.camera.model.VideoAdjustments()
-        updateVideoAdjustments(def)
-        engine.exposureCompensationIndex = 0
-        engine.updatePreviewSettings()
+        _videoAdjustments.value = def
+        engine.currentVideoAdjustments = def
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            preferences.saveVideoAdjustments(def)
+        }
     }
 
     fun updateCinemaConfig(config: CinemaConfig) {
