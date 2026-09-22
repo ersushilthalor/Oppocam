@@ -124,6 +124,10 @@ fun CameraScreen(
     val photoMegapixelMode by viewModel.photoMegapixelMode.collectAsStateWithLifecycle()
     val isRefocusPhotoEnabled by viewModel.isRefocusPhotoEnabled.collectAsStateWithLifecycle()
     val refocusFrameCount by viewModel.refocusFrameCount.collectAsStateWithLifecycle()
+    val isUltraFastShutterEnabled by viewModel.isUltraFastShutterEnabled.collectAsStateWithLifecycle()
+    val ultraFastShutterFps by viewModel.ultraFastShutterFps.collectAsStateWithLifecycle()
+    val ultraFastShutterBurstCount by viewModel.ultraFastShutterBurstCount.collectAsStateWithLifecycle()
+    val ultraFastProgressState by viewModel.ultraFastProgressState.collectAsStateWithLifecycle()
     val isVideoSettingsPanelOpen by viewModel.isVideoSettingsPanelOpen.collectAsStateWithLifecycle()
 
     val cinemaConfig by viewModel.cinemaConfig.collectAsStateWithLifecycle()
@@ -440,6 +444,88 @@ fun CameraScreen(
                         color = Color.White,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
+        // Ultra Fast Shutter Burst Capture & Background Conversion Indicator
+        if (ultraFastProgressState.isCapturing || ultraFastProgressState.isProcessing) {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xF0111827),
+                border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.6f)),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 74.dp)
+                    .testTag("ultra_fast_shutter_progress_indicator")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        progress = {
+                            if (ultraFastProgressState.isCapturing) {
+                                ultraFastProgressState.captureProgress
+                            } else {
+                                ultraFastProgressState.processingProgress
+                            }
+                        },
+                        modifier = Modifier.size(16.dp),
+                        color = Color(0xFFF59E0B),
+                        trackColor = Color(0x33F59E0B),
+                        strokeWidth = 2.5.dp
+                    )
+                    Column {
+                        Text(
+                            text = if (ultraFastProgressState.isCapturing) {
+                                "Capturing Frame ${ultraFastProgressState.acquiredFrames}/${ultraFastProgressState.totalFrames}"
+                            } else {
+                                "Converting JPEGs (${(ultraFastProgressState.processingProgress * 100).toInt()}%)"
+                            },
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (ultraFastProgressState.isCapturing) {
+                                "${ultraFastProgressState.targetFps} FPS high-speed sensor stream"
+                            } else {
+                                "Saved ${ultraFastProgressState.processedFrames}/${ultraFastProgressState.totalFrames} full-res JPEGs"
+                            },
+                            color = Color(0xFFD1D5DB),
+                            fontSize = 10.5.sp
+                        )
+                    }
+                }
+            }
+        } else if (isUltraFastShutterEnabled && cameraMode == CameraMode.PHOTO) {
+            // Subtle badge when armed and idle
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0x99111827),
+                border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 74.dp, start = 16.dp)
+                    .testTag("ultra_fast_shutter_badge")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "⚡",
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "ULTRA FAST ${ultraFastShutterFps} FPS",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -832,6 +918,12 @@ fun CameraScreen(
             photoMegapixelMode = photoMegapixelMode,
             isRefocusPhotoEnabled = isRefocusPhotoEnabled,
             refocusFrameCount = refocusFrameCount,
+            isUltraFastShutterEnabled = isUltraFastShutterEnabled,
+            ultraFastShutterFps = ultraFastShutterFps,
+            ultraFastShutterBurstCount = ultraFastShutterBurstCount,
+            onUltraFastShutterToggle = { viewModel.setUltraFastShutterEnabled(it) },
+            onUltraFastShutterFpsChange = { viewModel.setUltraFastShutterFps(it) },
+            onUltraFastShutterBurstCountChange = { viewModel.setUltraFastShutterBurstCount(it) },
             isHighQualityZoomEnabled = isHighQualityZoomEnabled,
             zoomProcessingQuality = zoomProcessingQuality,
             videoFps = videoFps,

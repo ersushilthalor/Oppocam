@@ -77,6 +77,9 @@ fun SettingsDrawer(
     photoMegapixelMode: PhotoMegapixelMode = PhotoMegapixelMode.M12,
     isRefocusPhotoEnabled: Boolean = false,
     refocusFrameCount: Int = 5,
+    isUltraFastShutterEnabled: Boolean = false,
+    ultraFastShutterFps: Int = 15,
+    ultraFastShutterBurstCount: Int = 15,
     isHighQualityZoomEnabled: Boolean = true,
     zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality = com.example.camera.zoom.ZoomProcessingQuality.BALANCED,
     videoFps: Int = 30,
@@ -123,6 +126,9 @@ fun SettingsDrawer(
     onPhotoMegapixelModeSelected: (PhotoMegapixelMode) -> Unit = {},
     onRefocusPhotoToggle: (Boolean) -> Unit = {},
     onRefocusFrameCountChange: (Int) -> Unit = {},
+    onUltraFastShutterToggle: (Boolean) -> Unit = {},
+    onUltraFastShutterFpsChange: (Int) -> Unit = {},
+    onUltraFastShutterBurstCountChange: (Int) -> Unit = {},
     onHighQualityZoomToggle: (Boolean) -> Unit = {},
     onZoomProcessingQualitySelect: (com.example.camera.zoom.ZoomProcessingQuality) -> Unit = {},
     onVideoResolutionSelected: (CameraResolution) -> Unit = {},
@@ -417,6 +423,89 @@ fun SettingsDrawer(
                                                 onClick = { onRefocusFrameCountChange(count) }
                                             )
                                         }
+                                    }
+                                }
+                            }
+
+                            SamsungDivider()
+
+                            // Ultra Fast Shutter
+                            SamsungSwitchItem(
+                                icon = Icons.Outlined.Bolt,
+                                title = "Ultra Fast Shutter",
+                                subtitle = "Fastest RAW/sensor acquisition with async background JPEG conversion",
+                                checked = isUltraFastShutterEnabled,
+                                onCheckedChange = onUltraFastShutterToggle
+                            )
+
+                            if (isUltraFastShutterEnabled) {
+                                SamsungDivider()
+                                SamsungRowItem(
+                                    icon = Icons.Outlined.Speed,
+                                    title = "Capture Rate",
+                                    subtitle = "$ultraFastShutterFps FPS continuous sensor acquisition"
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        listOf(5, 10, 15, 20).forEach { fps ->
+                                            SamsungSmallChip(
+                                                label = "${fps} FPS",
+                                                isSelected = ultraFastShutterFps == fps,
+                                                onClick = { onUltraFastShutterFpsChange(fps) }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                SamsungDivider()
+                                SamsungRowItem(
+                                    icon = Icons.Outlined.BurstMode,
+                                    title = "Burst Length",
+                                    subtitle = "$ultraFastShutterBurstCount frames per sequence"
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        listOf(5, 10, 15, 20).forEach { count ->
+                                            SamsungSmallChip(
+                                                label = "${count}f",
+                                                isSelected = ultraFastShutterBurstCount == count,
+                                                onClick = { onUltraFastShutterBurstCountChange(count) }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                SamsungDivider()
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFFF3F4F6))
+                                        .padding(12.dp)
+                                ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Bolt,
+                                                contentDescription = null,
+                                                tint = Color(0xFFF59E0B),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = "Maximum Native Sensor Pipeline",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF1F2937)
+                                            )
+                                        }
+                                        Text(
+                                            text = "Captures directly from the uncompressed sensor stream into a memory ring buffer at up to 20 FPS. Asynchronous background workers convert frames to maximum native resolution JPEGs with complete EXIF metadata without dropping preview frames.",
+                                            fontSize = 11.sp,
+                                            lineHeight = 15.sp,
+                                            color = Color(0xFF4B5563)
+                                        )
                                     }
                                 }
                             }

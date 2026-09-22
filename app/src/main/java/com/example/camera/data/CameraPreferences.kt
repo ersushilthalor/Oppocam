@@ -36,6 +36,9 @@ class CameraPreferences(context: Context) {
         private const val KEY_VIEWFINDER_RESOLUTION = "pref_viewfinder_resolution"
         private const val KEY_REFOCUS_PHOTO_ENABLED = "pref_refocus_photo_enabled"
         private const val KEY_REFOCUS_FRAME_COUNT = "pref_refocus_frame_count"
+        private const val KEY_ULTRA_FAST_SHUTTER_ENABLED = "pref_ultra_fast_shutter_enabled"
+        private const val KEY_ULTRA_FAST_SHUTTER_FPS = "pref_ultra_fast_shutter_fps"
+        private const val KEY_ULTRA_FAST_SHUTTER_BURST_COUNT = "pref_ultra_fast_shutter_burst_count"
         private const val KEY_HQ_ZOOM_ENABLED = "pref_hq_zoom_enabled"
         private const val KEY_ZOOM_PROCESSING_QUALITY = "pref_zoom_processing_quality"
         private const val KEY_TRACKING_LENS = "pref_tracking_lens"
@@ -116,6 +119,18 @@ class CameraPreferences(context: Context) {
     var refocusFrameCount: Int
         get() = prefs.getInt(KEY_REFOCUS_FRAME_COUNT, 5).coerceIn(5, 20)
         set(value) = prefs.edit().putInt(KEY_REFOCUS_FRAME_COUNT, value.coerceIn(5, 20)).apply()
+
+    var isUltraFastShutterEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ULTRA_FAST_SHUTTER_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_ULTRA_FAST_SHUTTER_ENABLED, value).apply()
+
+    var ultraFastShutterFps: Int
+        get() = prefs.getInt(KEY_ULTRA_FAST_SHUTTER_FPS, 15).coerceIn(5, 20)
+        set(value) = prefs.edit().putInt(KEY_ULTRA_FAST_SHUTTER_FPS, value.coerceIn(5, 20)).apply()
+
+    var ultraFastShutterBurstCount: Int
+        get() = prefs.getInt(KEY_ULTRA_FAST_SHUTTER_BURST_COUNT, 15).coerceIn(5, 30)
+        set(value) = prefs.edit().putInt(KEY_ULTRA_FAST_SHUTTER_BURST_COUNT, value.coerceIn(5, 30)).apply()
 
     var cameraMode: CameraMode
         get() {
@@ -865,6 +880,35 @@ class CameraPreferences(context: Context) {
 
     fun getModeRefocusFrameCount(mode: CameraMode): Int {
         return prefs.getInt(modeKey(mode, "refocus_count"), refocusFrameCount)
+    }
+
+    fun setModeUltraFastShutterEnabled(mode: CameraMode, enabled: Boolean) {
+        isUltraFastShutterEnabled = enabled
+        prefs.edit().putBoolean(modeKey(mode, "ultra_fast_shutter_enabled"), enabled).apply()
+    }
+
+    fun getModeUltraFastShutterEnabled(mode: CameraMode): Boolean {
+        return if (prefs.contains(modeKey(mode, "ultra_fast_shutter_enabled"))) {
+            prefs.getBoolean(modeKey(mode, "ultra_fast_shutter_enabled"), false)
+        } else isUltraFastShutterEnabled
+    }
+
+    fun setModeUltraFastShutterFps(mode: CameraMode, fps: Int) {
+        ultraFastShutterFps = fps
+        prefs.edit().putInt(modeKey(mode, "ultra_fast_shutter_fps"), fps).apply()
+    }
+
+    fun getModeUltraFastShutterFps(mode: CameraMode): Int {
+        return prefs.getInt(modeKey(mode, "ultra_fast_shutter_fps"), ultraFastShutterFps)
+    }
+
+    fun setModeUltraFastShutterBurstCount(mode: CameraMode, count: Int) {
+        ultraFastShutterBurstCount = count
+        prefs.edit().putInt(modeKey(mode, "ultra_fast_shutter_burst_count"), count).apply()
+    }
+
+    fun getModeUltraFastShutterBurstCount(mode: CameraMode): Int {
+        return prefs.getInt(modeKey(mode, "ultra_fast_shutter_burst_count"), ultraFastShutterBurstCount)
     }
 
     fun setModeHqZoomEnabled(mode: CameraMode, enabled: Boolean) {

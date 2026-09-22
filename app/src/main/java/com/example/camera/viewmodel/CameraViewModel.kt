@@ -193,6 +193,44 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Refocus: $clamped Focus Planes")
     }
 
+    // Ultra Fast Shutter System
+    private val _isUltraFastShutterEnabled = MutableStateFlow(preferences.getModeUltraFastShutterEnabled(preferences.cameraMode))
+    val isUltraFastShutterEnabled: StateFlow<Boolean> = _isUltraFastShutterEnabled.asStateFlow()
+
+    private val _ultraFastShutterFps = MutableStateFlow(preferences.getModeUltraFastShutterFps(preferences.cameraMode))
+    val ultraFastShutterFps: StateFlow<Int> = _ultraFastShutterFps.asStateFlow()
+
+    private val _ultraFastShutterBurstCount = MutableStateFlow(preferences.getModeUltraFastShutterBurstCount(preferences.cameraMode))
+    val ultraFastShutterBurstCount: StateFlow<Int> = _ultraFastShutterBurstCount.asStateFlow()
+
+    val ultraFastProgressState: StateFlow<com.example.camera.ultrafast.model.UltraFastProgressState> = engine.ultraFastProgressState
+
+    fun setUltraFastShutterEnabled(enabled: Boolean) {
+        _isUltraFastShutterEnabled.value = enabled
+        preferences.isUltraFastShutterEnabled = enabled
+        preferences.setModeUltraFastShutterEnabled(_cameraMode.value, enabled)
+        engine.isUltraFastShutterEnabled = enabled
+        showToast(if (enabled) "Ultra Fast Shutter: ON (${_ultraFastShutterFps.value} FPS)" else "Ultra Fast Shutter: OFF")
+    }
+
+    fun setUltraFastShutterFps(fps: Int) {
+        val clamped = fps.coerceIn(5, 20)
+        _ultraFastShutterFps.value = clamped
+        preferences.ultraFastShutterFps = clamped
+        preferences.setModeUltraFastShutterFps(_cameraMode.value, clamped)
+        engine.ultraFastShutterFps = clamped
+        showToast("Capture Rate: $clamped FPS")
+    }
+
+    fun setUltraFastShutterBurstCount(count: Int) {
+        val clamped = count.coerceIn(5, 30)
+        _ultraFastShutterBurstCount.value = clamped
+        preferences.ultraFastShutterBurstCount = clamped
+        preferences.setModeUltraFastShutterBurstCount(_cameraMode.value, clamped)
+        engine.ultraFastShutterBurstCount = clamped
+        showToast("Burst: $clamped Frames")
+    }
+
     // High-Quality Zoom Engine (Multi-Frame Lanczos-3 & Micro-Detail Recovery)
     private val _isHighQualityZoomEnabled = MutableStateFlow(preferences.getModeHqZoomEnabled(preferences.cameraMode))
     val isHighQualityZoomEnabled: StateFlow<Boolean> = _isHighQualityZoomEnabled.asStateFlow()
@@ -614,6 +652,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.photoMegapixelMode = preferences.getModePhotoMegapixelMode(initialMode)
         engine.isRefocusPhotoEnabled = preferences.getModeRefocusEnabled(initialMode)
         engine.refocusFrameCount = preferences.getModeRefocusFrameCount(initialMode)
+        engine.isUltraFastShutterEnabled = preferences.getModeUltraFastShutterEnabled(initialMode)
+        engine.ultraFastShutterFps = preferences.getModeUltraFastShutterFps(initialMode)
+        engine.ultraFastShutterBurstCount = preferences.getModeUltraFastShutterBurstCount(initialMode)
         engine.isHighQualityZoomEnabled = preferences.getModeHqZoomEnabled(initialMode)
         engine.zoomProcessingQuality = preferences.getModeZoomQuality(initialMode)
         engine.setMode(initialMode)
@@ -760,6 +801,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mRefocusCount = preferences.getModeRefocusFrameCount(mode)
         _refocusFrameCount.value = mRefocusCount
         engine.refocusFrameCount = mRefocusCount
+
+        val mFastShutter = preferences.getModeUltraFastShutterEnabled(mode)
+        _isUltraFastShutterEnabled.value = mFastShutter
+        engine.isUltraFastShutterEnabled = mFastShutter
+
+        val mFastFps = preferences.getModeUltraFastShutterFps(mode)
+        _ultraFastShutterFps.value = mFastFps
+        engine.ultraFastShutterFps = mFastFps
+
+        val mFastCount = preferences.getModeUltraFastShutterBurstCount(mode)
+        _ultraFastShutterBurstCount.value = mFastCount
+        engine.ultraFastShutterBurstCount = mFastCount
 
         val mHqZoom = preferences.getModeHqZoomEnabled(mode)
         _isHighQualityZoomEnabled.value = mHqZoom

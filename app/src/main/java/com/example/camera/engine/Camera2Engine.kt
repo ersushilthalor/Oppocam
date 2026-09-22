@@ -260,6 +260,16 @@ class Camera2Engine(private val context: Context) {
     private val _zoomProgress = MutableStateFlow(0f)
     val zoomProgress: StateFlow<Float> = _zoomProgress.asStateFlow()
 
+    // Ultra Fast Shutter System
+    val ultraFastShutterEngine = com.example.camera.ultrafast.engine.UltraFastShutterEngine(
+        context,
+        com.example.camera.ultrafast.data.UltraFastBurstRepository(context)
+    )
+    val ultraFastProgressState: StateFlow<com.example.camera.ultrafast.model.UltraFastProgressState> = ultraFastShutterEngine.progressState
+    var isUltraFastShutterEnabled: Boolean = false
+    var ultraFastShutterFps: Int = 15
+    var ultraFastShutterBurstCount: Int = 15
+
     // Adaptive Dual-Exposure HDR Video System
     val hdrSceneMeteringEngine = com.example.camera.hdr.metering.HdrSceneMeteringEngine()
     val dualExposureCaptureController by lazy { com.example.camera.hdr.pipeline.DualExposureCaptureController(context) }
@@ -1618,10 +1628,22 @@ class Camera2Engine(private val context: Context) {
                 yuvWidth,
                 yuvHeight,
                 ImageFormat.YUV_420_888,
-                3
+                8
             )
+            ultraFastShutterEngine.configureFramePool(yuvWidth, yuvHeight)
+            imageReaderYuv?.setOnImageAvailableListener({ reader ->
+                if (ultraFastShutterEngine.isBurstActive()) {
+                    val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
+                    ultraFastShutterEngine.onSensorImageAvailable(
+                        reader = reader,
+                        sensorOrientation = getCaptureJpegOrientation(),
+                        isFrontFacing = isFront,
+                        saveMirrored = saveSelfieAsPreviewed
+                    )
+                }
+            }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to create uncompressed YUV ImageReader for Custom Pipeline", t)
+            Log.e(TAG, "Failed to create uncompressed YUV ImageReader for Custom Pipeline / Ultra Fast Shutter", t)
         }
 
         if (caps.supportsRaw && isRawCaptureEnabled && caps.supportedRawResolutions.isNotEmpty()) {
@@ -3285,9 +3307,115 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
+     * Executes real sensor burst acquisition using the fastest uncompressed RAW/YUV sensor path.
+     * Preserves maximum native resolution, buffering in-memory before asynchronous background JPEG conversion.
+     */
+    fun takeUltraFastBurst(
+        fps: Int = 15,
+        frameCount: Int = 15,
+        onComplete: (Uri?) -> Unit
+    ) {
+        val camera = cameraDevice ?: run {
+            onComplete(null)
+            return
+        }
+        val session = captureSession ?: run {
+            onComplete(null)
+            return
+        }
+        val readerYuv = imageReaderYuv ?: run {
+            takePhoto(onComplete)
+            return
+        }
+
+        _isCapturing.value = true
+        val burstId = java.util.UUID.randomUUID().toString()
+
+        val requests = ArrayList<CaptureRequest>(frameCount)
+        try {
+            val clampedFps = fps.coerceIn(5, 20)
+            val fpsRange = Range(clampedFps, clampedFps)
+
+            for (i in 0 until frameCount) {
+                val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                captureBuilder.addTarget(readerYuv.surface)
+
+                applyCommonSettings(captureBuilder)
+
+                // High-speed capture pipeline configuration
+                captureBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+                captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                captureBuilder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                captureBuilder.setTag("ULTRA_FAST_BURST_${burstId}_$i")
+
+                requests.add(captureBuilder.build())
+            }
+
+            ultraFastShutterEngine.startBurst(
+                burstId = burstId,
+                fps = clampedFps,
+                frameCount = frameCount,
+                onComplete = { coverUri ->
+                    _isCapturing.value = false
+                    updateStorageStats()
+                    if (coverUri != null) {
+                        _lastCapturedMedia.value = CapturedMedia(
+                            uri = coverUri,
+                            isVideo = false,
+                            timestamp = System.currentTimeMillis(),
+                            displayName = "BURST_${burstId.take(8)}.jpg"
+                        )
+                    }
+                    onComplete(coverUri)
+                }
+            )
+
+            session.captureBurst(
+                requests,
+                object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureSequenceCompleted(
+                        session: CameraCaptureSession,
+                        sequenceId: Int,
+                        frameNumber: Long
+                    ) {
+                        super.onCaptureSequenceCompleted(session, sequenceId, frameNumber)
+                        Log.i(TAG, "Ultra Fast sensor captureBurst completed for sequence $sequenceId")
+                    }
+
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        super.onCaptureFailed(session, request, failure)
+                        Log.w(TAG, "Ultra Fast capture frame failure: ${failure.reason}")
+                    }
+                },
+                ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed executing Ultra Fast sensor captureBurst", t)
+            ultraFastShutterEngine.reset()
+            _isCapturing.value = false
+            takePhoto(onComplete)
+        }
+    }
+
+    /**
      * Take still photo (JPEG + optional RAW). In 50M mode, triggers single-frame computational 50MP capture.
      */
     fun takePhoto(onComplete: (Uri?) -> Unit) {
+        if (isUltraFastShutterEnabled && currentMode == CameraMode.PHOTO) {
+            takeUltraFastBurst(
+                fps = ultraFastShutterFps,
+                frameCount = ultraFastShutterBurstCount,
+                onComplete = onComplete
+            )
+            return
+        }
+
         if (photoMegapixelMode == PhotoMegapixelMode.M50) {
             takePhoto50M(onComplete)
             return
