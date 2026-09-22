@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.sp
 import com.example.camera.model.*
 import androidx.compose.ui.platform.LocalContext
 import com.example.camera.data.CameraPreferences
-import com.example.camera.hdr.model.*
+import com.example.camera.jpegpipeline.JpegPipelineProfile
 import kotlin.math.roundToInt
 
 /**
@@ -94,6 +94,13 @@ fun SettingsDrawer(
     hybridStabilizationConfig: HybridStabilizationConfig = HybridStabilizationConfig(),
     nightConfig: NightConfig = NightConfig(),
     tapFocusConfig: TapFocusConfig = TapFocusConfig(),
+    // JPEG Pipeline Video State
+    jpegPipelineVideoEnabled: Boolean = true,
+    jpegPipelineProfile: JpegPipelineProfile = JpegPipelineProfile.STANDARD,
+    jpegPipelineVideoCodec: String = "H264",
+    onJpegPipelineVideoToggle: (Boolean) -> Unit = {},
+    onJpegPipelineProfileSelected: (JpegPipelineProfile) -> Unit = {},
+    onJpegPipelineVideoCodecSelected: (String) -> Unit = {},
     // Extended Settings State
     videoCodec: String = "HEVC",
     jpegQuality: Int = 95,
@@ -805,163 +812,110 @@ fun SettingsDrawer(
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
-                        SamsungSectionHeader("ADAPTIVE DUAL-EXPOSURE HDR VIDEO")
+                        SamsungSectionHeader("JPEG PIPELINE VIDEO (PHOTO-STYLE ISP RENDERING)")
                         SamsungCard {
                             val context = LocalContext.current
                             val cameraPrefs = remember { CameraPreferences(context) }
-                            var hdrMode by remember { mutableStateOf(cameraPrefs.adaptiveHdrVideoMode) }
-                            var hdrStrength by remember { mutableStateOf(cameraPrefs.hdrExposureStrength) }
-                            var hdrPriority by remember { mutableStateOf(cameraPrefs.hdrProcessingPriority) }
-                            var hdrSource by remember { mutableStateOf(cameraPrefs.hdrSourceCapture) }
-                            var hdrOutput by remember { mutableStateOf(cameraPrefs.hdrOutputFormat) }
+                            var pipelineEnabled by remember { mutableStateOf(cameraPrefs.jpegPipelineVideoEnabled) }
+                            var selectedProfile by remember { mutableStateOf(cameraPrefs.jpegPipelineProfile) }
+                            var videoCodec by remember { mutableStateOf(cameraPrefs.jpegPipelineVideoCodec) }
 
-                            // 1. Adaptive HDR Video Mode
-                            SamsungRowItem(
-                                icon = Icons.Outlined.HdrOn,
-                                title = "Adaptive HDR Video",
-                                subtitle = when (hdrMode) {
-                                    AdaptiveHdrMode.OFF -> "Off · Single standard exposure"
-                                    AdaptiveHdrMode.AUTO -> "Auto · Enabled automatically for high-dynamic-range scenes"
-                                    AdaptiveHdrMode.ALWAYS_ON -> "Always On · Alternating dual-exposure 60 FPS capture"
+                            // 1. JPEG Pipeline Video Master Switch
+                            SamsungSwitchItem(
+                                icon = Icons.Outlined.PhotoCamera,
+                                title = "JPEG Pipeline Video",
+                                subtitle = if (pipelineEnabled) {
+                                    "Active · Finished photo-style ISP rendering straight to video encoder (No RAW / No LOG / No Multi-Frame HDR)"
+                                } else {
+                                    "Standard Video · Default camera HAL stream"
+                                },
+                                checked = pipelineEnabled,
+                                onCheckedChange = { enabled ->
+                                    pipelineEnabled = enabled
+                                    cameraPrefs.jpegPipelineVideoEnabled = enabled
+                                    onJpegPipelineVideoToggle(enabled)
                                 }
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    AdaptiveHdrMode.values().forEach { mode ->
-                                        SamsungSmallChip(
-                                            label = when (mode) {
-                                                AdaptiveHdrMode.OFF -> "Off"
-                                                AdaptiveHdrMode.AUTO -> "Auto"
-                                                AdaptiveHdrMode.ALWAYS_ON -> "Always"
-                                            },
-                                            isSelected = hdrMode == mode,
-                                            onClick = {
-                                                hdrMode = mode
-                                                cameraPrefs.adaptiveHdrVideoMode = mode
-                                            }
-                                        )
+                            )
+
+                            if (pipelineEnabled) {
+                                SamsungDivider()
+
+                                // 2. Rendering Profiles
+                                SamsungRowItem(
+                                    icon = Icons.Outlined.Palette,
+                                    title = "ISP Rendering Profile",
+                                    subtitle = when (selectedProfile) {
+                                        JpegPipelineProfile.IPHONE -> "iPhone Style · Natural color, controlled highlights, realistic contrast, natural skin tones"
+                                        JpegPipelineProfile.SAMSUNG -> "Samsung Style · Stronger detail, punchier color/contrast, controlled highlights & sharpening"
+                                        JpegPipelineProfile.OPPO -> "OPPO Style · Natural warm rendering, smooth highlights, good shadow detail & moderate sharpening"
+                                        JpegPipelineProfile.STANDARD -> "JPEG Pipeline Style · Standard photo ISP rendering with balanced contrast & natural roll-off"
+                                    }
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        JpegPipelineProfile.entries.forEach { profile ->
+                                            SamsungSmallChip(
+                                                label = profile.shortLabel,
+                                                isSelected = selectedProfile == profile,
+                                                onClick = {
+                                                    selectedProfile = profile
+                                                    cameraPrefs.jpegPipelineProfile = profile
+                                                    onJpegPipelineProfileSelected(profile)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
-                            }
 
-                            SamsungDivider()
+                                SamsungDivider()
 
-                            // 2. HDR Exposure Strength
-                            SamsungRowItem(
-                                icon = Icons.Outlined.Tune,
-                                title = "HDR Exposure Strength",
-                                subtitle = when (hdrStrength) {
-                                    HdrExposureStrength.AUTO -> "Auto · Dynamic EV separation based on scene contrast"
-                                    HdrExposureStrength.MILD -> "Mild · 1.0 - 1.5 EV separation"
-                                    HdrExposureStrength.STANDARD -> "Standard · 1.5 - 2.5 EV separation"
-                                    HdrExposureStrength.HIGH -> "High · 2.5 - 3.5 EV separation"
-                                    HdrExposureStrength.MAXIMUM -> "Maximum · Up to 4.5 EV separation"
-                                }
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    HdrExposureStrength.values().forEach { str ->
-                                        SamsungSmallChip(
-                                            label = when (str) {
-                                                HdrExposureStrength.AUTO -> "Auto"
-                                                HdrExposureStrength.MILD -> "Mild"
-                                                HdrExposureStrength.STANDARD -> "Std"
-                                                HdrExposureStrength.HIGH -> "High"
-                                                HdrExposureStrength.MAXIMUM -> "Max"
-                                            },
-                                            isSelected = hdrStrength == str,
-                                            onClick = {
-                                                hdrStrength = str
-                                                cameraPrefs.hdrExposureStrength = str
-                                            }
-                                        )
+                                // 3. Video Encoder Codec
+                                SamsungRowItem(
+                                    icon = Icons.Outlined.VideoSettings,
+                                    title = "Hardware Video Codec",
+                                    subtitle = when (videoCodec) {
+                                        "H265" -> "H.265 / HEVC · High compression efficiency, crisp single-frame photo detail"
+                                        else -> "H.264 / AVC · Universal playback compatibility, direct ISP-to-encoder stream"
+                                    }
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        listOf("H264" to "H.264", "H265" to "H.265").forEach { (code, label) ->
+                                            SamsungSmallChip(
+                                                label = label,
+                                                isSelected = videoCodec == code,
+                                                onClick = {
+                                                    videoCodec = code
+                                                    cameraPrefs.jpegPipelineVideoCodec = code
+                                                    onJpegPipelineVideoCodecSelected(code)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
-                            }
 
-                            SamsungDivider()
+                                SamsungDivider()
 
-                            // 3. Processing Priority
-                            SamsungRowItem(
-                                icon = Icons.Outlined.Memory,
-                                title = "Processing Priority",
-                                subtitle = when (hdrPriority) {
-                                    ProcessingPriority.MAXIMUM -> "Maximum Speed · Full GPU/CPU compute"
-                                    ProcessingPriority.BALANCED -> "Balanced · Smooth background processing"
-                                    ProcessingPriority.BATTERY_SAVER -> "Battery Saver · Throttled to keep device cool"
-                                }
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    ProcessingPriority.values().forEach { prio ->
-                                        SamsungSmallChip(
-                                            label = when (prio) {
-                                                ProcessingPriority.MAXIMUM -> "Max Speed"
-                                                ProcessingPriority.BALANCED -> "Balanced"
-                                                ProcessingPriority.BATTERY_SAVER -> "Saver"
-                                            },
-                                            isSelected = hdrPriority == prio,
-                                            onClick = {
-                                                hdrPriority = prio
-                                                cameraPrefs.hdrProcessingPriority = prio
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-
-                            SamsungDivider()
-
-                            // 4. Source Capture
-                            SamsungRowItem(
-                                icon = Icons.Outlined.CameraAlt,
-                                title = "Source Capture",
-                                subtitle = when (hdrSource) {
-                                    HdrSourceCapture.RAW_IF_SUPPORTED -> "RAW when supported · Lossless sensor data"
-                                    HdrSourceCapture.HIGHEST_QUALITY_SUPPORTED -> "Highest Quality Supported"
-                                    HdrSourceCapture.AUTOMATIC -> "Automatic · Device optimal sensor stream"
-                                }
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    HdrSourceCapture.values().forEach { src ->
-                                        SamsungSmallChip(
-                                            label = when (src) {
-                                                HdrSourceCapture.RAW_IF_SUPPORTED -> "RAW"
-                                                HdrSourceCapture.HIGHEST_QUALITY_SUPPORTED -> "HQ"
-                                                HdrSourceCapture.AUTOMATIC -> "Auto"
-                                            },
-                                            isSelected = hdrSource == src,
-                                            onClick = {
-                                                hdrSource = src
-                                                cameraPrefs.hdrSourceCapture = src
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-
-                            SamsungDivider()
-
-                            // 5. Output Format
-                            SamsungRowItem(
-                                icon = Icons.Outlined.VideoSettings,
-                                title = "Output Format",
-                                subtitle = when (hdrOutput) {
-                                    HdrOutputFormat.HDR_10BIT -> "10-bit HDR (HEVC Main10 BT.2020 HLG)"
-                                    HdrOutputFormat.HDR_PLUS_SDR_COMPAT -> "HDR 10-bit + SDR Compatibility Copy"
-                                }
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    HdrOutputFormat.values().forEach { out ->
-                                        SamsungSmallChip(
-                                            label = when (out) {
-                                                HdrOutputFormat.HDR_10BIT -> "10-bit HDR"
-                                                HdrOutputFormat.HDR_PLUS_SDR_COMPAT -> "HDR+SDR"
-                                            },
-                                            isSelected = hdrOutput == out,
-                                            onClick = {
-                                                hdrOutput = out
-                                                cameraPrefs.hdrOutputFormat = out
-                                            }
-                                        )
-                                    }
+                                // 4. ISP Hardware Capabilities & HAL Documentation
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = "Camera2 ISP Pipeline Diagnostics",
+                                        color = Color(0xFF64B5F6),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "• Architecture: Sensor → Camera ISP (photo rendering) → YUV surface → Hardware Video Encoder → MP4\n" +
+                                               "• Processing: Contrast S-Curve, High-Quality Noise Reduction, Edge Detail, Color Correction & Lens Shading\n" +
+                                               "• Strict Zero-Latency: Single-frame processing in hardware ISP, zero computational multi-frame delay\n" +
+                                               "• HAL Protection: If proprietary ISP features are locked by vendor HAL, closest single-frame ISP modes are used without falling back to RAW/LOG.",
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 11.sp,
+                                        lineHeight = 15.sp
+                                    )
                                 }
                             }
                         }

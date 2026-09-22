@@ -627,22 +627,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VideoQualityOption.UHD_4K_30)
 
-    // Adaptive Dual-Exposure HDR Video System
-    val hdrExposurePair: StateFlow<com.example.camera.hdr.model.HdrExposurePair?> = engine.hdrExposurePair
-    val sceneAnalysisMetrics: StateFlow<com.example.camera.hdr.model.SceneAnalysisMetrics?> = engine.sceneAnalysisMetrics
-    private val _adaptiveHdrMode = MutableStateFlow(preferences.adaptiveHdrVideoMode)
-    val adaptiveHdrMode: StateFlow<com.example.camera.hdr.model.AdaptiveHdrMode> = _adaptiveHdrMode.asStateFlow()
-    val isDualExposureRecording: StateFlow<Boolean> = engine.isDualExposureRecording
+    // JPEG Pipeline Video System (Photo-style single-frame ISP rendering straight to video encoder)
+    val jpegPipelineProfile: StateFlow<com.example.camera.jpegpipeline.JpegPipelineProfile> = engine.jpegPipelineProfile
+    val jpegPipelineCapabilities: StateFlow<com.example.camera.jpegpipeline.JpegPipelineCapabilities> = engine.jpegPipelineCapabilities
+    private val _jpegPipelineVideoEnabled = MutableStateFlow(preferences.jpegPipelineVideoEnabled)
+    val jpegPipelineVideoEnabled: StateFlow<Boolean> = _jpegPipelineVideoEnabled.asStateFlow()
+    private val _jpegPipelineVideoCodec = MutableStateFlow(preferences.jpegPipelineVideoCodec)
+    val jpegPipelineVideoCodec: StateFlow<String> = _jpegPipelineVideoCodec.asStateFlow()
 
-    fun toggleAdaptiveHdrMode() {
-        val next = when (_adaptiveHdrMode.value) {
-            com.example.camera.hdr.model.AdaptiveHdrMode.OFF -> com.example.camera.hdr.model.AdaptiveHdrMode.AUTO
-            com.example.camera.hdr.model.AdaptiveHdrMode.AUTO -> com.example.camera.hdr.model.AdaptiveHdrMode.ALWAYS_ON
-            com.example.camera.hdr.model.AdaptiveHdrMode.ALWAYS_ON -> com.example.camera.hdr.model.AdaptiveHdrMode.OFF
+    fun setJpegPipelineProfile(profile: com.example.camera.jpegpipeline.JpegPipelineProfile) {
+        engine.setJpegPipelineProfile(profile)
+        showToast("Profile: ${profile.title}")
+    }
+
+    fun setJpegPipelineVideoEnabled(enabled: Boolean) {
+        _jpegPipelineVideoEnabled.value = enabled
+        preferences.jpegPipelineVideoEnabled = enabled
+        if (_cameraMode.value == CameraMode.VIDEO) {
+            engine.updatePreviewSettings()
         }
-        _adaptiveHdrMode.value = next
-        preferences.adaptiveHdrVideoMode = next
-        showToast("Adaptive HDR: ${next.name}")
+        showToast(if (enabled) "JPEG Pipeline Video Enabled" else "Standard Video Enabled")
+    }
+
+    fun setJpegPipelineVideoCodec(codec: String) {
+        _jpegPipelineVideoCodec.value = codec
+        preferences.jpegPipelineVideoCodec = codec
+        showToast("Video Codec: $codec")
     }
 
     private var timerJob: Job? = null

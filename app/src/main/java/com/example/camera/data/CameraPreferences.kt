@@ -1342,60 +1342,24 @@ class CameraPreferences(context: Context) {
             .apply()
     }
 
-    // --- Adaptive Dual-Exposure HDR Video Preferences ---
+    // --- JPEG Pipeline Video Preferences ---
 
-    var adaptiveHdrVideoMode: com.example.camera.hdr.model.AdaptiveHdrMode
+    var jpegPipelineVideoEnabled: Boolean
+        get() = prefs.getBoolean("pref_jpeg_pipeline_video_enabled", true)
+        set(value) = prefs.edit().putBoolean("pref_jpeg_pipeline_video_enabled", value).apply()
+
+    var jpegPipelineProfile: com.example.camera.jpegpipeline.JpegPipelineProfile
         get() {
-            val name = prefs.getString("pref_adaptive_hdr_video_mode", com.example.camera.hdr.model.AdaptiveHdrMode.AUTO.name)
+            val name = prefs.getString("pref_jpeg_pipeline_profile", com.example.camera.jpegpipeline.JpegPipelineProfile.STANDARD.name)
             return try {
-                com.example.camera.hdr.model.AdaptiveHdrMode.valueOf(name ?: com.example.camera.hdr.model.AdaptiveHdrMode.AUTO.name)
+                com.example.camera.jpegpipeline.JpegPipelineProfile.valueOf(name ?: com.example.camera.jpegpipeline.JpegPipelineProfile.STANDARD.name)
             } catch (e: Exception) {
-                com.example.camera.hdr.model.AdaptiveHdrMode.AUTO
+                com.example.camera.jpegpipeline.JpegPipelineProfile.STANDARD
             }
         }
-        set(value) = prefs.edit().putString("pref_adaptive_hdr_video_mode", value.name).apply()
+        set(value) = prefs.edit().putString("pref_jpeg_pipeline_profile", value.name).apply()
 
-    var hdrExposureStrength: com.example.camera.hdr.model.HdrExposureStrength
-        get() {
-            val name = prefs.getString("pref_hdr_exposure_strength", com.example.camera.hdr.model.HdrExposureStrength.AUTO.name)
-            return try {
-                com.example.camera.hdr.model.HdrExposureStrength.valueOf(name ?: com.example.camera.hdr.model.HdrExposureStrength.AUTO.name)
-            } catch (e: Exception) {
-                com.example.camera.hdr.model.HdrExposureStrength.AUTO
-            }
-        }
-        set(value) = prefs.edit().putString("pref_hdr_exposure_strength", value.name).apply()
-
-    var hdrProcessingPriority: com.example.camera.hdr.model.ProcessingPriority
-        get() {
-            val name = prefs.getString("pref_hdr_processing_priority", com.example.camera.hdr.model.ProcessingPriority.MAXIMUM.name)
-            return try {
-                com.example.camera.hdr.model.ProcessingPriority.valueOf(name ?: com.example.camera.hdr.model.ProcessingPriority.MAXIMUM.name)
-            } catch (e: Exception) {
-                com.example.camera.hdr.model.ProcessingPriority.MAXIMUM
-            }
-        }
-        set(value) = prefs.edit().putString("pref_hdr_processing_priority", value.name).apply()
-
-    var hdrSourceCapture: com.example.camera.hdr.model.HdrSourceCapture
-        get() {
-            val name = prefs.getString("pref_hdr_source_capture", com.example.camera.hdr.model.HdrSourceCapture.AUTOMATIC.name)
-            return try {
-                com.example.camera.hdr.model.HdrSourceCapture.valueOf(name ?: com.example.camera.hdr.model.HdrSourceCapture.AUTOMATIC.name)
-            } catch (e: Exception) {
-                com.example.camera.hdr.model.HdrSourceCapture.AUTOMATIC
-            }
-        }
-        set(value) = prefs.edit().putString("pref_hdr_source_capture", value.name).apply()
-
-    var hdrOutputFormat: com.example.camera.hdr.model.HdrOutputFormat
-        get() {
-            val name = prefs.getString("pref_hdr_output_format", com.example.camera.hdr.model.HdrOutputFormat.HDR_10BIT.name)
-            return try {
-                com.example.camera.hdr.model.HdrOutputFormat.valueOf(name ?: com.example.camera.hdr.model.HdrOutputFormat.HDR_10BIT.name)
-            } catch (e: Exception) {
-                com.example.camera.hdr.model.HdrOutputFormat.HDR_10BIT
-            }
-        }
-        set(value) = prefs.edit().putString("pref_hdr_output_format", value.name).apply()
+    var jpegPipelineVideoCodec: String
+        get() = prefs.getString("pref_jpeg_pipeline_video_codec", "H264") ?: "H264"
+        set(value) = prefs.edit().putString("pref_jpeg_pipeline_video_codec", value).apply()
 }

@@ -203,10 +203,10 @@ fun CameraScreen(
     val isZoomProcessing by viewModel.isZoomProcessing.collectAsStateWithLifecycle()
     val zoomProgress by viewModel.zoomProgress.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
-    val hdrExposurePair by viewModel.hdrExposurePair.collectAsStateWithLifecycle()
-    val sceneAnalysisMetrics by viewModel.sceneAnalysisMetrics.collectAsStateWithLifecycle()
-    val adaptiveHdrMode by viewModel.adaptiveHdrMode.collectAsStateWithLifecycle()
-    val isDualExposureRecording by viewModel.isDualExposureRecording.collectAsStateWithLifecycle()
+    val jpegPipelineProfile by viewModel.jpegPipelineProfile.collectAsStateWithLifecycle()
+    val jpegPipelineCapabilities by viewModel.jpegPipelineCapabilities.collectAsStateWithLifecycle()
+    val jpegPipelineVideoEnabled by viewModel.jpegPipelineVideoEnabled.collectAsStateWithLifecycle()
+    val jpegPipelineVideoCodec by viewModel.jpegPipelineVideoCodec.collectAsStateWithLifecycle()
 
     val isUsingRearMainLens = remember(selectedLens, currentZoom) {
         selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
@@ -380,14 +380,14 @@ fun CameraScreen(
             modifier = Modifier.align(Alignment.Center)
         )
 
-        // Adaptive Dual-Exposure HDR Live Indicator (Subtle Pro HUD)
+        // JPEG Pipeline Video Live Indicator (Photo-style single-frame ISP rendering HUD)
         if (cameraMode == CameraMode.VIDEO) {
-            com.example.camera.hdr.ui.HdrLiveIndicator(
-                mode = adaptiveHdrMode,
-                isRecording = isRecordingVideo || isDualExposureRecording,
-                exposurePair = hdrExposurePair,
-                metrics = sceneAnalysisMetrics,
-                onToggleMode = { viewModel.toggleAdaptiveHdrMode() },
+            com.example.camera.jpegpipeline.JpegPipelineLiveIndicator(
+                isEnabled = jpegPipelineVideoEnabled,
+                isRecording = isRecordingVideo,
+                currentProfile = jpegPipelineProfile,
+                capabilities = jpegPipelineCapabilities,
+                onSelectProfile = { viewModel.setJpegPipelineProfile(it) },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 74.dp, end = 16.dp)
@@ -879,6 +879,13 @@ fun CameraScreen(
                 }
             },
             onMainCameraStabilizationModeSelected = { viewModel.setMainCameraStabilizationMode(it) },
+            // JPEG Pipeline Video
+            jpegPipelineVideoEnabled = jpegPipelineVideoEnabled,
+            jpegPipelineProfile = jpegPipelineProfile,
+            jpegPipelineVideoCodec = jpegPipelineVideoCodec,
+            onJpegPipelineVideoToggle = { viewModel.setJpegPipelineVideoEnabled(it) },
+            onJpegPipelineProfileSelected = { viewModel.setJpegPipelineProfile(it) },
+            onJpegPipelineVideoCodecSelected = { viewModel.setJpegPipelineVideoCodec(it) },
             // Extended Settings States
             videoCodec = videoCodec,
             jpegQuality = jpegQuality,
