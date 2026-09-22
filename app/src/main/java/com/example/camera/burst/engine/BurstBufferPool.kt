@@ -16,20 +16,10 @@ class BurstBufferPool(
     }
 
     private val pool = ConcurrentLinkedQueue<ByteArray>()
+    private val allocatedCount = java.util.concurrent.atomic.AtomicInteger(0)
 
-    init {
-        // Pre-allocate initial batch of buffers if memory permits
-        val initialBatch = minOf(maxPoolCapacity / 2, 10)
-        try {
-            for (i in 0 until initialBatch) {
-                if (isMemorySafe()) {
-                    pool.offer(ByteArray(frameByteSize))
-                }
-            }
-        } catch (e: OutOfMemoryError) {
-            Log.w(TAG, "Initial buffer pre-allocation reduced due to memory limit")
-        }
-    }
+    // No eager allocation in init: buffers are allocated strictly on-demand during active capture
+    // to keep memory footprint near zero during normal camera preview.
 
     /**
      * Obtains an available byte buffer from the pool, or allocates a new one if memory allows.
@@ -67,6 +57,7 @@ class BurstBufferPool(
      */
     fun clear() {
         pool.clear()
+        allocatedCount.set(0)
     }
 
     private fun isMemorySafe(): Boolean {

@@ -270,6 +270,32 @@ class Camera2Engine(private val context: Context) {
     var isUltraFastShutterEnabled: Boolean = false
     var ultraFastShutterFps: Int = 15
 
+    fun updateFastShutterState(enabled: Boolean, fps: Int) {
+        val wasEnabled = isUltraFastShutterEnabled
+        isUltraFastShutterEnabled = enabled
+        ultraFastShutterFps = fps.coerceIn(5, 20)
+
+        if (wasEnabled != enabled) {
+            if (!enabled) {
+                try {
+                    imageReaderYuv?.close()
+                } catch (ignored: Throwable) {}
+                imageReaderYuv = null
+                ultraFastShutterEngine.reset()
+                if (cameraDevice != null && captureSession != null && !isConfiguringSession) {
+                    createCameraCaptureSession()
+                }
+            } else if (currentMode == CameraMode.PHOTO) {
+                val activeLens = _selectedLens.value
+                val cameraId = activeLens?.physicalCameraId ?: activeLens?.cameraId ?: return
+                if (cameraDevice != null && !isConfiguringSession) {
+                    setupImageReaders(cameraId)
+                    createCameraCaptureSession()
+                }
+            }
+        }
+    }
+
     // JPEG Pipeline Video Engine (Photo-style single-frame ISP rendering straight to video encoder)
     val jpegPipelineEngine = com.example.camera.jpegpipeline.JpegPipelineEngine()
     private val _jpegPipelineProfile = MutableStateFlow(preferences.jpegPipelineProfile)
@@ -1660,30 +1686,46 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        try {
-            val optimalBurstSize = getOptimalBurstYuvSize(activeLens, cameraId, targetSize)
-            val yuvWidth = optimalBurstSize.width
-            val yuvHeight = optimalBurstSize.height
-            imageReaderYuv = ImageReader.newInstance(
-                yuvWidth,
-                yuvHeight,
-                ImageFormat.YUV_420_888,
-                8
-            )
-            ultraFastShutterEngine.configureFramePool(yuvWidth, yuvHeight)
-            imageReaderYuv?.setOnImageAvailableListener({ reader ->
-                if (ultraFastShutterEngine.isBurstActive()) {
-                    val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
-                    ultraFastShutterEngine.onSensorImageAvailable(
-                        reader = reader,
-                        sensorOrientation = getCaptureJpegOrientation(),
-                        isFrontFacing = isFront,
-                        saveMirrored = saveSelfieAsPreviewed
-                    )
-                }
-            }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to create uncompressed YUV ImageReader for Custom Pipeline / Ultra Fast Shutter", t)
+        val isFastShutterSupported = currentMode == CameraMode.PHOTO && isUltraFastShutterEnabled
+        if (isFastShutterSupported) {
+            try {
+                val optimalBurstSize = getOptimalBurstYuvSize(activeLens, cameraId, targetSize)
+                val yuvWidth = optimalBurstSize.width
+                val yuvHeight = optimalBurstSize.height
+                imageReaderYuv = ImageReader.newInstance(
+                    yuvWidth,
+                    yuvHeight,
+                    ImageFormat.YUV_420_888,
+                    8
+                )
+                ultraFastShutterEngine.configureFramePool(yuvWidth, yuvHeight)
+                imageReaderYuv?.setOnImageAvailableListener({ reader ->
+                    if (ultraFastShutterEngine.isBurstActive()) {
+                        CameraPerformanceMonitor.onYuvFrame()
+                        val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
+                        ultraFastShutterEngine.onSensorImageAvailable(
+                            reader = reader,
+                            sensorOrientation = getCaptureJpegOrientation(),
+                            isFrontFacing = isFront,
+                            saveMirrored = saveSelfieAsPreviewed
+                        )
+                    } else {
+                        // Immediately drain stray frame if any so ImageReader never stalls or holds memory
+                        try {
+                            reader.acquireLatestImage()?.close()
+                        } catch (ignored: Throwable) {}
+                    }
+                }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
+                Log.i(TAG, "[FAST_SHUTTER] Created YUV ImageReader ${yuvWidth}x${yuvHeight} (idle, not in preview repeating request)")
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to create uncompressed YUV ImageReader for Ultra Fast Shutter", t)
+                imageReaderYuv = null
+            }
+        } else {
+            try {
+                imageReaderYuv?.close()
+            } catch (ignored: Throwable) {}
+            imageReaderYuv = null
         }
 
         if (caps.supportsRaw && isRawCaptureEnabled && caps.supportedRawResolutions.isNotEmpty()) {
@@ -1805,10 +1847,15 @@ class Camera2Engine(private val context: Context) {
                     outputConfigs.add(rawConfig)
                 }
 
+                val activeOutputs = mutableListOf<String>("PREVIEW")
+                if (imageReaderJpeg != null) activeOutputs.add("JPEG")
+                if (imageReaderYuv != null) activeOutputs.add("YUV_ARMED")
+                if (imageReaderRaw != null) activeOutputs.add("RAW")
+                CameraPerformanceMonitor.setActiveOutputs(activeOutputs)
+
                 val template = CameraDevice.TEMPLATE_PREVIEW
                 previewRequestBuilder = camera.createCaptureRequest(template).apply {
                     addTarget(previewSurf)
-                    imageReaderYuv?.surface?.let { addTarget(it) }
                     applyCommonSettings(this)
                 }
 
@@ -1826,6 +1873,7 @@ class Camera2Engine(private val context: Context) {
                                     session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
                                 }
                                 _isCameraReady.value = true
+                                CameraPerformanceMonitor.start()
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to start repeating preview request", e)
                             }
@@ -1856,11 +1904,16 @@ class Camera2Engine(private val context: Context) {
             imageReaderYuv?.surface?.let { surfaces.add(it) }
             imageReaderRaw?.surface?.let { surfaces.add(it) }
 
+            val activeOutputs = mutableListOf<String>("PREVIEW")
+            if (imageReaderJpeg != null) activeOutputs.add("JPEG")
+            if (imageReaderYuv != null) activeOutputs.add("YUV_ARMED")
+            if (imageReaderRaw != null) activeOutputs.add("RAW")
+            CameraPerformanceMonitor.setActiveOutputs(activeOutputs)
+
             val template = CameraDevice.TEMPLATE_PREVIEW
 
             previewRequestBuilder = camera.createCaptureRequest(template).apply {
                 addTarget(previewSurf)
-                imageReaderYuv?.surface?.let { addTarget(it) }
                 applyCommonSettings(this)
             }
 
@@ -1876,6 +1929,7 @@ class Camera2Engine(private val context: Context) {
                                 session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
                             }
                             _isCameraReady.value = true
+                            CameraPerformanceMonitor.start()
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to start repeating preview request", e)
                         }
@@ -1913,6 +1967,7 @@ class Camera2Engine(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
             lastCaptureResult = result
+            CameraPerformanceMonitor.onPreviewFrame()
 
             if (currentMode == CameraMode.DOLLY_ZOOM) {
                 val lens = _selectedLens.value
@@ -3367,6 +3422,8 @@ class Camera2Engine(private val context: Context) {
             try {
                 builder.addTarget(readerYuv.surface)
                 session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                CameraPerformanceMonitor.setActiveOutputs(listOf("PREVIEW", "YUV_BURST_ACTIVE"))
+                Log.i(TAG, "[FAST_SHUTTER] Attached YUV surface to repeating request for active burst capture")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed ensuring repeating request includes YUV target", e)
             }
@@ -3396,6 +3453,23 @@ class Camera2Engine(private val context: Context) {
      */
     fun stopUltraFastContinuousCapture() {
         if (!isHoldingContinuousCapture.getAndSet(false)) return
+        val readerYuv = imageReaderYuv
+        val session = captureSession
+        val builder = previewRequestBuilder
+        if (builder != null && readerYuv != null && session != null) {
+            try {
+                builder.removeTarget(readerYuv.surface)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                val activeOutputs = mutableListOf<String>("PREVIEW")
+                if (imageReaderJpeg != null) activeOutputs.add("JPEG")
+                if (imageReaderYuv != null) activeOutputs.add("YUV_ARMED")
+                if (imageReaderRaw != null) activeOutputs.add("RAW")
+                CameraPerformanceMonitor.setActiveOutputs(activeOutputs)
+                Log.i(TAG, "[FAST_SHUTTER] Detached YUV surface from repeating request; preview back to single-surface")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed removing YUV target from repeating request", e)
+            }
+        }
         ultraFastShutterEngine.stopContinuousBurst()
     }
 
@@ -5348,8 +5422,10 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun closeCameraInternal() {
+        CameraPerformanceMonitor.stop()
         _isCameraReady.value = false
         gyroStabilizationEngine.stop()
+        ultraFastShutterEngine.reset()
         lastStabilizedCrop = null
         motorolaSwitchEngine.closeBackgroundCamera()
         closeCameraCaptureSession()

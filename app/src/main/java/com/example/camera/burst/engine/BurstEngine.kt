@@ -121,27 +121,33 @@ class BurstEngine(
     private var burstCompletionCallback: ((Uri?) -> Unit)? = null
 
     init {
-        startCaptureThread()
+        // Start consumer workers; they will block in zero-CPU wait state on frameQueue.take()
         startConsumerWorkers()
     }
 
     private fun startCaptureThread() {
         if (captureThread == null) {
-            captureThread = HandlerThread("BurstCaptureThread", Process.THREAD_PRIORITY_URGENT_AUDIO).apply {
+            captureThread = HandlerThread("BurstCaptureThread", Process.THREAD_PRIORITY_DEFAULT).apply {
                 start()
                 captureHandler = Handler(looper)
             }
         }
     }
 
-    fun getCaptureHandler(): Handler? = captureHandler
+    fun getCaptureHandler(): Handler? {
+        if (captureHandler == null) {
+            startCaptureThread()
+        }
+        return captureHandler
+    }
 
     private fun startConsumerWorkers() {
         for (i in 0 until workerCount) {
             backgroundProcessor.execute {
                 while (!Thread.currentThread().isInterrupted) {
                     try {
-                        val frame = frameQueue.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                        // Blocks thread in deep wait state with 0% CPU and 0 wakeups until an item arrives
+                        val frame = frameQueue.take()
                         processQueuedFrame(frame)
                     } catch (e: InterruptedException) {
                         break
@@ -461,6 +467,7 @@ class BurstEngine(
             }
 
             _isProcessingQueue.value = false
+            bufferPool?.clear()
 
             withContext(Dispatchers.Main) {
                 val cb = burstCompletionCallback
@@ -690,6 +697,7 @@ class BurstEngine(
         _isProcessingQueue.value = false
         frameQueue.clear()
         savedUrisMap.clear()
+        bufferPool?.clear()
         burstCompletionCallback = null
     }
 

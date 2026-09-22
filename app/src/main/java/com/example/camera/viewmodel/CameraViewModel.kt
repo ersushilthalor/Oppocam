@@ -207,7 +207,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isUltraFastShutterEnabled.value = enabled
         preferences.isUltraFastShutterEnabled = enabled
         preferences.setModeUltraFastShutterEnabled(_cameraMode.value, enabled)
-        engine.isUltraFastShutterEnabled = enabled
+        engine.updateFastShutterState(enabled, _ultraFastShutterFps.value)
         showToast(if (enabled) "Fast Shutter: ON (${_ultraFastShutterFps.value} FPS)" else "Fast Shutter: OFF")
     }
 
@@ -216,7 +216,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _ultraFastShutterFps.value = clamped
         preferences.ultraFastShutterFps = clamped
         preferences.setModeUltraFastShutterFps(_cameraMode.value, clamped)
-        engine.ultraFastShutterFps = clamped
+        engine.updateFastShutterState(_isUltraFastShutterEnabled.value, clamped)
         showToast("Capture Rate: $clamped FPS")
     }
 
