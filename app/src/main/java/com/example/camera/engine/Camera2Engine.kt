@@ -1591,6 +1591,35 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    /**
+     * Resolves the optimal high-speed YUV_420_888 resolution for BurstEngine.
+     * Selects up to 1080p/1440p matching the photo aspect ratio for smooth 20 FPS continuous streaming
+     * without camera HAL frame drops or excessive memory footprint.
+     */
+    fun getOptimalBurstYuvSize(lens: LensInfo?, cameraId: String, targetSize: Size): Size {
+        val targetId = lens?.physicalCameraId ?: cameraId
+        val chars = try {
+            getCharacteristics(targetId) ?: getCharacteristics(cameraId)
+        } catch (e: Exception) {
+            null
+        }
+        val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: emptyList()
+        if (yuvSizes.isEmpty()) {
+            return if (targetSize.width <= 1920 && targetSize.height <= 1440) targetSize else Size(1920, 1080)
+        }
+
+        val targetAspect = targetSize.width.toFloat() / targetSize.height.toFloat()
+        val aspectMatches = yuvSizes.filter { size ->
+            val aspect = size.width.toFloat() / size.height.toFloat()
+            kotlin.math.abs(aspect - targetAspect) < 0.05f && size.width <= 1920 && size.height <= 1440
+        }
+
+        return aspectMatches.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: yuvSizes.filter { it.width <= 1920 && it.height <= 1440 }.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: Size(1920, 1080)
+    }
+
     private fun setupImageReaders(cameraId: String) {
         try {
             imageReaderJpeg?.close()
@@ -1632,8 +1661,9 @@ class Camera2Engine(private val context: Context) {
         }
 
         try {
-            val yuvWidth = imageReaderJpeg?.width ?: targetSize.width
-            val yuvHeight = imageReaderJpeg?.height ?: targetSize.height
+            val optimalBurstSize = getOptimalBurstYuvSize(activeLens, cameraId, targetSize)
+            val yuvWidth = optimalBurstSize.width
+            val yuvHeight = optimalBurstSize.height
             imageReaderYuv = ImageReader.newInstance(
                 yuvWidth,
                 yuvHeight,
@@ -1778,6 +1808,7 @@ class Camera2Engine(private val context: Context) {
                 val template = CameraDevice.TEMPLATE_PREVIEW
                 previewRequestBuilder = camera.createCaptureRequest(template).apply {
                     addTarget(previewSurf)
+                    imageReaderYuv?.surface?.let { addTarget(it) }
                     applyCommonSettings(this)
                 }
 
@@ -1829,6 +1860,7 @@ class Camera2Engine(private val context: Context) {
 
             previewRequestBuilder = camera.createCaptureRequest(template).apply {
                 addTarget(previewSurf)
+                imageReaderYuv?.surface?.let { addTarget(it) }
                 applyCommonSettings(this)
             }
 
@@ -3289,12 +3321,12 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private var continuousCaptureJob: Job? = null
     private val isHoldingContinuousCapture = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
-     * Starts continuous RAW capture at selected 5-20 FPS. Holds until stopUltraFastContinuousCapture() is called.
-     * Viewfinder remains completely smooth by streaming to preview surface concurrently with zero stall.
+     * Starts continuous high-speed Burst capture at selected 5-20 FPS. Holds until stopUltraFastContinuousCapture() is called.
+     * Uses continuous sensor streaming into preallocated buffer pool and bounded queue.
+     * Never calls normal ImageCapture or session.capture() in a loop; viewfinder runs smooth without stall.
      */
     fun startUltraFastContinuousCapture(
         fps: Int = 15,
@@ -3314,7 +3346,6 @@ class Camera2Engine(private val context: Context) {
         }
 
         val clampedFps = fps.coerceIn(5, 20)
-        val intervalMs = 1000L / clampedFps
         val burstId = java.util.UUID.randomUUID().toString()
 
         isHoldingContinuousCapture.set(true)
@@ -3330,6 +3361,17 @@ class Camera2Engine(private val context: Context) {
             )
         }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
 
+        // Ensure repeating request includes YUV target for continuous frame acquisition
+        val builder = previewRequestBuilder
+        if (builder != null) {
+            try {
+                builder.addTarget(readerYuv.surface)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed ensuring repeating request includes YUV target", e)
+            }
+        }
+
         ultraFastShutterEngine.startContinuousBurst(
             burstId = burstId,
             fps = clampedFps,
@@ -3341,93 +3383,19 @@ class Camera2Engine(private val context: Context) {
                         uri = coverUri,
                         isVideo = false,
                         timestamp = System.currentTimeMillis(),
-                        displayName = "BURST_${burstId.take(8)}.jpg"
+                        displayName = "BURST_${burstId.take(8)}_0001.jpg"
                     )
                 }
                 onComplete(coverUri)
             }
         )
-
-        continuousCaptureJob?.cancel()
-        continuousCaptureJob = engineScope.launch(Dispatchers.Default) {
-            val fpsRange = Range(clampedFps, clampedFps)
-            var frameIndex = 0
-            val maxContinuousFrames = 100 // Safety bound to prevent runaway capture
-            val inFlightCaptures = java.util.concurrent.atomic.AtomicInteger(0)
-
-            while (isActive && isHoldingContinuousCapture.get() && frameIndex < maxContinuousFrames) {
-                val frameStartTime = System.currentTimeMillis()
-                try {
-                    // Use TEMPLATE_ZERO_SHUTTER_LAG or TEMPLATE_PREVIEW for continuous burst so sensor operates at full native rate
-                    val captureBuilder = try {
-                        camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
-                    } catch (e: Exception) {
-                        camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                    }
-                    captureBuilder.addTarget(readerYuv.surface)
-                    previewSurface?.let { captureBuilder.addTarget(it) }
-                    applyCommonSettings(captureBuilder)
-
-                    captureBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
-                    captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    captureBuilder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                    captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                    captureBuilder.setTag("ULTRA_FAST_FRAME_${burstId}_$frameIndex")
-
-                    inFlightCaptures.incrementAndGet()
-                    session.capture(
-                        captureBuilder.build(),
-                        object : CameraCaptureSession.CaptureCallback() {
-                            override fun onCaptureCompleted(
-                                session: CameraCaptureSession,
-                                request: CaptureRequest,
-                                result: TotalCaptureResult
-                            ) {
-                                inFlightCaptures.decrementAndGet()
-                            }
-
-                            override fun onCaptureFailed(
-                                session: CameraCaptureSession,
-                                request: CaptureRequest,
-                                failure: CaptureFailure
-                            ) {
-                                inFlightCaptures.decrementAndGet()
-                                Log.w(TAG, "Ultra Fast continuous frame $frameIndex failed: ${failure.reason}")
-                            }
-                        },
-                        ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler
-                    )
-                    frameIndex++
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error triggering continuous frame $frameIndex", e)
-                    break
-                }
-
-                // Precise capture timing control strictly driven by selected 5-20 FPS
-                val elapsed = System.currentTimeMillis() - frameStartTime
-                val delayTime = (intervalMs - elapsed).coerceAtLeast(0L)
-                if (delayTime > 0) {
-                    delay(delayTime)
-                }
-
-                // Backpressure throttle: prevent camera HAL request over-queuing so release stops instantly
-                var backpressureWaits = 0
-                while (isActive && isHoldingContinuousCapture.get() && inFlightCaptures.get() >= 2 && backpressureWaits < 10) {
-                    delay(10)
-                    backpressureWaits++
-                }
-            }
-        }
     }
 
     /**
-     * Immediately stops continuous RAW capture and lets background worker drain queued frames.
+     * Immediately stops continuous burst capture and lets background worker drain queued frames.
      */
     fun stopUltraFastContinuousCapture() {
         if (!isHoldingContinuousCapture.getAndSet(false)) return
-        continuousCaptureJob?.cancel()
-        continuousCaptureJob = null
         ultraFastShutterEngine.stopContinuousBurst()
     }
 
