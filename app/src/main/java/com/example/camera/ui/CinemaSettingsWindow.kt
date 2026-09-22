@@ -415,6 +415,7 @@ fun CinemaSettingsWindow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 listOf(
+                    CinemaColorProfile.PROCESSED_JPEG to "RAW Photo JPEG",
                     CinemaColorProfile.FLAT_LOG to "Flat Log",
                     CinemaColorProfile.REC_2020 to "Rec.2020 HDR",
                     CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",

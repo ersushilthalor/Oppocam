@@ -85,7 +85,7 @@ class ExampleUnitTest {
 
     @Test
     fun testCinemaColorProfilesExactSet() {
-        val expectedProfiles = setOf("NATIVE", "FLAT_LOG", "REC_2020", "HLG", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
+        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "FLAT_LOG", "REC_2020", "HLG", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
         val actualProfiles = com.example.camera.model.CinemaColorProfile.entries.map { it.name }.toSet()
         assertEquals(expectedProfiles, actualProfiles)
     }

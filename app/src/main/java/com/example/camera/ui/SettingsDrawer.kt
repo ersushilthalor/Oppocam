@@ -5,6 +5,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -739,8 +741,12 @@ fun SettingsDrawer(
                                 title = "Cinema Log Curve",
                                 subtitle = "${cinemaConfig.colorProfile.label} (${cinemaConfig.logBitDepth.label})"
                             ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
                                     listOf(
+                                        CinemaColorProfile.PROCESSED_JPEG,
                                         CinemaColorProfile.NATIVE,
                                         CinemaColorProfile.FLAT_LOG,
                                         CinemaColorProfile.REC_2020,
@@ -749,6 +755,7 @@ fun SettingsDrawer(
                                     ).forEach { profile ->
                                         SamsungSmallChip(
                                             label = when (profile) {
+                                                CinemaColorProfile.PROCESSED_JPEG -> "RAW Photo"
                                                 CinemaColorProfile.NATIVE -> "Native"
                                                 CinemaColorProfile.FLAT_LOG -> "Flat"
                                                 CinemaColorProfile.REC_2020 -> "Rec.2020"

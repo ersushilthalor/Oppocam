@@ -106,6 +106,7 @@ class CinemaEngine(private val context: Context) {
     private var _capabilities = CinemaHardwareCapabilities()
     val capabilities: CinemaHardwareCapabilities get() = _capabilities
 
+    private var cameraCharacteristics: CameraCharacteristics? = null
     private var supportsContrastCurve: Boolean = false
     private var supportsGammaValue: Boolean = false
     private var supportsColorCorrection: Boolean = false
@@ -136,6 +137,7 @@ class CinemaEngine(private val context: Context) {
      * Inspect CameraCharacteristics & MediaCodec encoders to determine genuine hardware capabilities.
      */
     fun onCameraConfigured(chars: CameraCharacteristics, availableVideoResolutions: List<CameraResolution>) {
+        cameraCharacteristics = chars
         val tonemapModes = chars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES) ?: intArrayOf()
         supportsContrastCurve = tonemapModes.contains(CameraCharacteristics.TONEMAP_MODE_CONTRAST_CURVE)
         supportsGammaValue = tonemapModes.contains(CameraCharacteristics.TONEMAP_MODE_GAMMA_VALUE)
@@ -306,6 +308,7 @@ class CinemaEngine(private val context: Context) {
             } else if (supportsGammaValue) {
                 // Adaptive logarithmic gamma fallback for HALs without custom curve support
                 val baseGamma = when (config.colorProfile) {
+                    CinemaColorProfile.PROCESSED_JPEG -> 2.25f
                     CinemaColorProfile.NATIVE -> 2.2f
                     CinemaColorProfile.FLAT_LOG -> 1.55f
                     CinemaColorProfile.HLG -> 1.8f
@@ -329,6 +332,22 @@ class CinemaEngine(private val context: Context) {
                     // Maintain Camera2 ISP in High Quality Color Correction mode with factory-calibrated AWB gains.
                     // This strictly prevents channel imbalance and false color / red / pink tint artifacts in bright highlights!
                     builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+                } else if (config.colorProfile == CinemaColorProfile.PROCESSED_JPEG) {
+                    // Smartphone JPEG photo rendering: natural saturation with accurate calibrated white balance
+                    val transform = generateColorSpaceTransform(
+                        config.colorSpace,
+                        config.colorProfile,
+                        config.saturation,
+                        lutForIsp,
+                        config.washedOut
+                    )
+                    if (supportsTransformMatrix) {
+                        builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                        builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, transform)
+                        builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(1.02f, 1.00f, 1.00f, 1.03f))
+                    } else {
+                        builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+                    }
                 } else if (config.colorProfile == CinemaColorProfile.NATIVE) {
                     // Ultra-natural real-life colors: neutral white gains with zero yellow/warm bias
                     val transform = nativeNaturalEngine.getColorSpaceTransform(config.colorSpace)
@@ -359,7 +378,7 @@ class CinemaEngine(private val context: Context) {
             }
         }
 
-        // 3. Raw Sensor Stream Processing & Sharpness
+        // 3. Raw Sensor Stream Processing & Sharpness (Smartphone-style detail enhancement)
         when (config.sharpness) {
             CinemaSharpness.OFF -> {
                 if (supportsEdgeOff) {
@@ -412,9 +431,19 @@ class CinemaEngine(private val context: Context) {
         builder.set(CaptureRequest.NOISE_REDUCTION_MODE, targetNrMode)
 
         if (config.isRawSensorLogPipeline) {
+            // Full ISP processing on RAW sensor source data:
             builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_HIGH_QUALITY)
-            builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_FAST)
-            builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
+            builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY)
+            val aberrationModes = cameraCharacteristics?.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES) ?: intArrayOf()
+            if (aberrationModes.contains(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)) {
+                builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
+            }
+            val distortionModes = cameraCharacteristics?.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES) ?: intArrayOf()
+            if (distortionModes.contains(CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY)) {
+                builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY)
+            } else if (distortionModes.contains(CaptureRequest.DISTORTION_CORRECTION_MODE_FAST)) {
+                builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_FAST)
+            }
         }
 
         // 4. Real Camera2 EV (Exposure Compensation) with live Exposure slider
@@ -527,7 +556,10 @@ class CinemaEngine(private val context: Context) {
                 y += highlights * 0.15f * weight
             }
 
-            val finalY = y.coerceIn(0f, 1f)
+            var finalY = y.coerceIn(0f, 1f)
+            if (profile == CinemaColorProfile.PROCESSED_JPEG && baseNormalizedX == 0.0f) {
+                finalY = 0.0f
+            }
             val idx = i * 2
 
             // Red channel
@@ -561,6 +593,27 @@ class CinemaEngine(private val context: Context) {
     private fun evaluateLogTransferFunction(profile: CinemaColorProfile, x: Float): Float {
         val inVal = x.coerceIn(0f, 1f)
         return when (profile) {
+            CinemaColorProfile.PROCESSED_JPEG -> {
+                // Smartphone JPEG photo rendering from RAW sensor source:
+                // 1. Deeper controlled inky blacks: Strictly anchored at y=0 when x=0
+                // 2. Rich shadows: parabolic toe transition (x < 0.18) preserving rich shadow texture without milky fog
+                // 3. Punchier midtones: expanded tonal separation around 18% middle-grey with steep dynamic contrast
+                // 4. Highlight roll-off: smooth asymptotic shoulder compression (x > 0.70) rolling smoothly to 0.992,
+                //    preserving fine textures in clouds and highlights instead of abrupt clipping or flat log dullness.
+                if (inVal < 0.18f) {
+                    val t = inVal / 0.18f
+                    0.18f * (t.pow(1.42f))
+                } else if (inVal < 0.70f) {
+                    val t = (inVal - 0.18f) / (0.70f - 0.18f)
+                    val s = t * t * (3f - 2f * t)
+                    val base = 0.18f + (0.74f - 0.18f) * s
+                    (base + 0.025f * kotlin.math.sin(t * Math.PI.toFloat())).coerceIn(0f, 1f)
+                } else {
+                    val t = (inVal - 0.70f) / 0.30f
+                    val shoulder = 1.0f - (1.0f - t).pow(2.2f)
+                    (0.74f + 0.252f * shoulder).coerceIn(0f, 1f)
+                }
+            }
             CinemaColorProfile.NATIVE -> {
                 // Natural standard video rendering: BT.709 OETF with punchy natural contrast, rich inky blacks (y=0 at x=0), and clean highlight roll-off
                 if (inVal < 0.018f) {
@@ -686,6 +739,7 @@ class CinemaEngine(private val context: Context) {
 
         // Apply profile-specific saturation compensation & user saturation
         val profileSatMultiplier = when (profile) {
+            CinemaColorProfile.PROCESSED_JPEG -> 1.16f // Rich natural saturation for smartphone photo rendering
             CinemaColorProfile.NATIVE -> 1.0f
             CinemaColorProfile.HLG -> 1.15f // Balanced natural HLG saturation
             CinemaColorProfile.FLAT_LOG -> 0.88f // Flat desaturated base for pure Log

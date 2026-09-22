@@ -272,9 +272,9 @@ class CameraPreferences(context: Context) {
 
     var cinemaColorProfile: com.example.camera.model.CinemaColorProfile
         get() {
-            val name = prefs.getString("pref_cinema_color_profile", com.example.camera.model.CinemaColorProfile.FLAT_LOG.name)
-                ?: com.example.camera.model.CinemaColorProfile.FLAT_LOG.name
-            return try { com.example.camera.model.CinemaColorProfile.valueOf(name) } catch (e: Exception) { com.example.camera.model.CinemaColorProfile.FLAT_LOG }
+            val name = prefs.getString("pref_cinema_color_profile", com.example.camera.model.CinemaColorProfile.PROCESSED_JPEG.name)
+                ?: com.example.camera.model.CinemaColorProfile.PROCESSED_JPEG.name
+            return try { com.example.camera.model.CinemaColorProfile.valueOf(name) } catch (e: Exception) { com.example.camera.model.CinemaColorProfile.PROCESSED_JPEG }
         }
         set(value) = prefs.edit().putString("pref_cinema_color_profile", value.name).apply()
 

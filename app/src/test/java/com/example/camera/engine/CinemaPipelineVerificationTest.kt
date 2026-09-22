@@ -271,6 +271,29 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
+    fun testProcessedJpegColorProfileSmartphonePhotoRendering() {
+        val jpegConfig = CinemaConfig(
+            colorProfile = CinemaColorProfile.PROCESSED_JPEG,
+            washedOut = 0f
+        )
+        cinemaEngine.updateConfig(jpegConfig)
+        val curve = cinemaEngine.getTonemapCurve()
+        val count = curve.getPointCount(TonemapCurve.CHANNEL_RED)
+
+        // PROCESSED_JPEG inky black anchoring: y must be strictly 0.0 at x = 0.0
+        val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, 0)
+        assertEquals(0.0f, blackPoint.y, 0.001f)
+
+        // Midtone separation check around 50%
+        val midPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, count / 2)
+        assertTrue("Midtone should have punchy contrast", midPoint.y in 0.55f..0.85f)
+
+        // Highlight roll-off check near 100%
+        val highPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, count - 1)
+        assertTrue("Highlight shoulder should smoothly roll off without clipping", highPoint.y in 0.95f..1.0f)
+    }
+
+    @Test
     fun testProRes10BitSoftwareRecorderPipeline() {
         val recorder = CinemaSoftwareRecordingEngine(context)
         val tempDest = File(context.cacheDir, "test_prores_10bit.mp4")

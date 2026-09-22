@@ -540,6 +540,11 @@ fun TopControlBar(
                 }
                 CameraMode.CINEMA -> {
                     val bitLabel = if (cinemaConfig.logBitDepth == LogBitDepth.BIT_10) "10b" else "8b"
+                    val label = if (cinemaConfig.colorProfile == CinemaColorProfile.PROCESSED_JPEG) {
+                        "RAW JPEG"
+                    } else {
+                        "LOG $bitLabel"
+                    }
                     Box(
                         modifier = Modifier
                             .height(34.dp)
@@ -551,7 +556,7 @@ fun TopControlBar(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "LOG $bitLabel",
+                            text = label,
                             color = accentColor,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Bold,

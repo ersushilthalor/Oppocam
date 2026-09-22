@@ -181,6 +181,27 @@ object CinemaColorPipeline {
                 mat
             }
 
+            CinemaColorProfile.PROCESSED_JPEG -> {
+                // Smartphone JPEG Photo Technical Transform:
+                // - Stronger but natural contrast (1.18x around 18% middle-grey pivot 128)
+                // - Deeper controlled inky blacks (pedestal offset -10f)
+                // - Rich natural saturation (1.16x) with faithful skin tones
+                val c = 1.18f
+                val pivot = 128f
+                val pedestalOffset = -10f
+                val t = (1.0f - c) * pivot + pedestalOffset
+                val mat = ColorMatrix(floatArrayOf(
+                    c, 0f, 0f, 0f, t,
+                    0f, c, 0f, 0f, t,
+                    0f, 0f, c, 0f, t,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+                val chroma = ColorMatrix()
+                chroma.setSaturation(1.16f)
+                mat.postConcat(chroma)
+                mat
+            }
+
             CinemaColorProfile.NATIVE -> null
         }
     }
