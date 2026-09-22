@@ -39,6 +39,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.camera.model.*
 import com.example.camera.ui.components.FrostedGlassBox
+import com.example.camera.ui.components.VideoAdjustmentsPanel
+import com.example.camera.ui.components.VideoAdjustmentsViewfinderOverlay
 import com.example.camera.viewmodel.CameraViewModel
 
 @Composable
@@ -129,6 +131,8 @@ fun CameraScreen(
     val rec2020AutoToneParams by viewModel.rec2020AutoToneParams.collectAsStateWithLifecycle()
     val isCinemaSettingsOpen by viewModel.isCinemaSettingsOpen.collectAsStateWithLifecycle()
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
+    val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
+    val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
 
     val flashMode by viewModel.flashMode.collectAsStateWithLifecycle()
     val timerMode by viewModel.timerMode.collectAsStateWithLifecycle()
@@ -246,7 +250,7 @@ fun CameraScreen(
     val isAnyWindowOpen = isPhotoFilterBarOpen || isPortraitStyleBarOpen ||
             isCinemaSettingsOpen || isManualProOpen || isMoreModesOpen ||
             (cameraMode == CameraMode.PORTRAIT && isPortraitSettingsOpen) ||
-            isVideoSettingsPanelOpen || isSettingsOpen || isMediaViewerOpen ||
+            isVideoSettingsPanelOpen || isVideoAdjustmentsOpen || isSettingsOpen || isMediaViewerOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen
 
     LaunchedEffect(isAnyWindowOpen) {
@@ -278,6 +282,7 @@ fun CameraScreen(
                 isLutPreviewEnabled = cinemaConfig.isLutPreviewEnabled,
                 cinemaConfig = cinemaConfig,
                 portraitConfig = portraitConfig,
+                videoAdjustments = videoAdjustments,
                 rec2020AutoToneParams = rec2020AutoToneParams,
                 floatingWindowBlurStrength = floatingWindowAppearance.blurStrength,
                 onSurfaceTextureAvailable = { texture ->
@@ -304,6 +309,14 @@ fun CameraScreen(
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
+        if (cameraMode == CameraMode.VIDEO) {
+            VideoAdjustmentsViewfinderOverlay(
+                adjustments = videoAdjustments,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
         // 1b. Cinema Viewfinder Assist Overlays (Waveform, Peaking, Zebras)
         if (cameraMode == CameraMode.CINEMA) {
@@ -476,6 +489,9 @@ fun CameraScreen(
                     viewModel.setCameraMode(CameraMode.DOLLY_ZOOM)
                 }
             },
+            isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
+            hasActiveVideoAdjustments = !videoAdjustments.isDefault,
+            onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
             onFlashClick = { viewModel.cycleFlashMode() },
             onTimerClick = { viewModel.cycleTimerMode() },
             onGridClick = { viewModel.cycleGridType() },
@@ -591,6 +607,32 @@ fun CameraScreen(
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Serif
                 )
             }
+        }
+
+        // 3d0. Dedicated Video Adjustments Panel (Normal Video Mode, matching reference design)
+        AnimatedVisibility(
+            visible = cameraMode == CameraMode.VIDEO && isVideoAdjustmentsOpen,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 215.dp)
+        ) {
+            VideoAdjustmentsPanel(
+                adjustments = videoAdjustments,
+                onAdjustmentsChange = { updated ->
+                    viewModel.updateVideoAdjustments(updated)
+                },
+                onReset = {
+                    viewModel.resetVideoAdjustments()
+                },
+                onDismiss = {
+                    viewModel.setVideoAdjustmentsOpen(false)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp)
+            )
         }
 
         // 3d. Dedicated Cinema Mode Settings Window (matching reference image)

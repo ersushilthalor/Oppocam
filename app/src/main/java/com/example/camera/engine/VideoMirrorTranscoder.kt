@@ -104,7 +104,10 @@ object VideoMirrorTranscoder {
         lutStripBitmap: Bitmap? = null,
         lutSize: Int = 33,
         lutIntensity: Float = 1.0f,
-        orientationHint: Int? = null
+        orientationHint: Int? = null,
+        vignette: Float = 0f,
+        grain: Float = 0f,
+        softLight: Float = 0f
     ): Boolean {
         if (!inputFile.exists() || inputFile.length() == 0L) {
             Log.e(TAG, "Input file does not exist or is empty")
@@ -307,7 +310,14 @@ object VideoMirrorTranscoder {
                         if (render) {
                             decodedFrameCount++
                             if (eglHelper.awaitNewImage()) {
-                                eglHelper.drawImage(isMirrored = isMirrored, rotation = rotation, colorMatrix = colorMatrix)
+                                eglHelper.drawImage(
+                                    isMirrored = isMirrored,
+                                    rotation = rotation,
+                                    colorMatrix = colorMatrix,
+                                    vignette = vignette,
+                                    grain = grain,
+                                    softLight = softLight
+                                )
                                 eglHelper.setPresentationTime(bufferInfo.presentationTimeUs * 1000L)
                                 eglHelper.swapBuffers()
                                 renderedFrameCount++
@@ -488,6 +498,9 @@ object VideoMirrorTranscoder {
         private var uLutSizeLoc: Int = -1
         private var uLutIntensityLoc: Int = -1
         private var uHas3DLutLoc: Int = -1
+        private var uVignetteLoc: Int = -1
+        private var uGrainLoc: Int = -1
+        private var uSoftLightLoc: Int = -1
         private var aPositionLoc: Int = -1
         private var aTextureCoordLoc: Int = -1
 
@@ -604,6 +617,10 @@ object VideoMirrorTranscoder {
                 uniform vec4 uColorOffset;
                 uniform int uHasColorMatrix;
 
+                uniform float uVignette;
+                uniform float uGrain;
+                uniform float uSoftLight;
+
                 vec3 sample3DLut(sampler2D lutTex, vec3 color, float lutSize) {
                     float maxColor = lutSize - 1.0;
                     vec3 c = clamp(color, 0.0, 1.0) * maxColor;
@@ -633,6 +650,20 @@ object VideoMirrorTranscoder {
                     if (uHas3DLut != 0 && uLutIntensity > 0.001) {
                         vec3 graded = sample3DLut(uLutTexture, curRgb, uLutSize);
                         curRgb = mix(curRgb, graded, uLutIntensity);
+                    }
+                    if (uVignette > 0.001) {
+                        vec2 uv = vTextureCoord - 0.5;
+                        float d = length(uv);
+                        float vFactor = 1.0 - smoothstep(0.38, 0.82, d) * uVignette;
+                        curRgb *= vFactor;
+                    }
+                    if (uGrain > 0.001) {
+                        float noise = (fract(sin(dot(vTextureCoord * 1234.5, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * uGrain * 0.16;
+                        curRgb = clamp(curRgb + noise, 0.0, 1.0);
+                    }
+                    if (uSoftLight > 0.001) {
+                        vec3 softGlow = vec3(0.98, 0.95, 0.90) * uSoftLight * 0.10;
+                        curRgb = clamp(curRgb + softGlow, 0.0, 1.0);
                     }
                     gl_FragColor = vec4(clamp(curRgb, 0.0, 1.0), texColor.a);
                 }
@@ -671,6 +702,9 @@ object VideoMirrorTranscoder {
             uLutSizeLoc = GLES20.glGetUniformLocation(program, "uLutSize")
             uLutIntensityLoc = GLES20.glGetUniformLocation(program, "uLutIntensity")
             uHas3DLutLoc = GLES20.glGetUniformLocation(program, "uHas3DLut")
+            uVignetteLoc = GLES20.glGetUniformLocation(program, "uVignette")
+            uGrainLoc = GLES20.glGetUniformLocation(program, "uGrain")
+            uSoftLightLoc = GLES20.glGetUniformLocation(program, "uSoftLight")
 
             val textures = IntArray(1)
             GLES20.glGenTextures(1, textures, 0)
@@ -753,7 +787,14 @@ object VideoMirrorTranscoder {
             }
         }
 
-        fun drawImage(isMirrored: Boolean, rotation: Int = 0, colorMatrix: FloatArray? = null) {
+        fun drawImage(
+            isMirrored: Boolean,
+            rotation: Int = 0,
+            colorMatrix: FloatArray? = null,
+            vignette: Float = 0f,
+            grain: Float = 0f,
+            softLight: Float = 0f
+        ) {
             makeCurrent()
             GLES20.glViewport(0, 0, width, height)
             GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -772,6 +813,10 @@ object VideoMirrorTranscoder {
 
             GLES20.glUniformMatrix4fv(uMVPMatrixLoc, 1, false, mvpMatrix, 0)
             GLES20.glUniformMatrix4fv(uSTMatrixLoc, 1, false, stMatrix, 0)
+
+            if (uVignetteLoc != -1) GLES20.glUniform1f(uVignetteLoc, (vignette / 100f).coerceIn(0f, 1f))
+            if (uGrainLoc != -1) GLES20.glUniform1f(uGrainLoc, (grain / 100f).coerceIn(0f, 1f))
+            if (uSoftLightLoc != -1) GLES20.glUniform1f(uSoftLightLoc, (softLight / 100f).coerceIn(0f, 1f))
 
             if (colorMatrix != null && colorMatrix.size >= 20) {
                 GLES20.glUniform1i(uHasColorMatrixLoc, 1)

@@ -133,6 +133,9 @@ fun TopControlBar(
     onVideoSettingsClick: () -> Unit = {},
     onToggleMegapixelMode: () -> Unit = {},
     onDollyZoomClick: () -> Unit = {},
+    isVideoAdjustmentsOpen: Boolean = false,
+    hasActiveVideoAdjustments: Boolean = false,
+    onVideoAdjustmentsClick: () -> Unit = {},
     onFlashClick: () -> Unit,
     onTimerClick: () -> Unit,
     onGridClick: () -> Unit,
@@ -779,6 +782,26 @@ fun TopControlBar(
             }
         }
 
+        val videoAdjustmentsButton = @Composable {
+            IconButton(
+                onClick = onVideoAdjustmentsClick,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isVideoAdjustmentsOpen || hasActiveVideoAdjustments) Color(0xFFFFD54F) else null
+                    )
+                    .testTag("video_adjustments_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Tune,
+                    contentDescription = "Video Adjustments",
+                    tint = if (isVideoAdjustmentsOpen || hasActiveVideoAdjustments) Color(0xFFFFD54F) else Color.White,
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
         val isVideoFamily = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA || cameraMode == CameraMode.DOLLY_ZOOM)
 
         // Render Top Controls according to layoutConfig
@@ -812,7 +835,7 @@ fun TopControlBar(
                 settingsButton()
             } else if (cameraMode == CameraMode.VIDEO) {
                 flashButton()
-                filterButton()
+                videoAdjustmentsButton()
                 primaryBadge()
                 secondaryBadge()
                 settingsButton()

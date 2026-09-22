@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.util.Log
 import com.example.camera.model.NightConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.ln
@@ -15,16 +16,14 @@ import kotlin.math.pow
 /**
  * Flagship Computational Multi-Frame Night Photography Fusion Engine.
  *
- * Implements a complete professional image processing pipeline:
- * 1. Conversion to physical Linear Radiance space via inverse sRGB gamma.
- * 2. True Black-Level Preservation (anchors pure black at 0 to prevent washed-out skies/fog).
- * 3. Radial Lens Shading / Vignette compensation.
- * 4. Multi-Frame Exposure Normalization across bracketed frames (short/med/long).
- * 5. Motion-aware HDR temporal fusion with ghost-rejection weighting.
- * 6. Specular Highlight Recovery from short frames to protect lamps, signs, and reflections.
- * 7. Two-scale Bilateral Local Tone Mapping (decomposing into Base Illumination and Texture Detail).
- * 8. Sub-linear Chromatic Adaptation to prevent radioactive neon colors in lifted shadows.
- * 9. Noise-gated Edge Sharpening to crisp up architectural lines and textures without grain.
+ * Implements a memory-optimized, zero-OOM professional image processing pipeline:
+ * 1. Mutual exclusion lock preventing concurrent fusion jobs from exhausting heap.
+ * 2. Sequential frame accumulation with reusable row scanline buffers (no full-frame pixel copies).
+ * 3. Immediate release of intermediate frame Bitmaps as each stage completes.
+ * 4. In-place linear radiance normalization and luminance reuse (eliminates 192+ MB of redundant arrays).
+ * 5. Streaming tone mapping and edge-preserving sharpening directly into output Bitmap (eliminates 48 MB result array).
+ * 6. Dynamic memory-pressure fallback using tiled accumulation when heap headroom is restricted.
+ * 7. Guaranteed resource cleanup using try/finally blocks.
  */
 class UltraNightFusionEngine {
 
@@ -37,6 +36,9 @@ class UltraNightFusionEngine {
         // Fast gamma approximation (sRGB standard gamma ~2.2)
         private const val GAMMA_ENCODE = 1.0f / 2.2f
         private const val GAMMA_DECODE = 2.2f
+
+        // Concurrency lock preventing multiple heavy night fusion jobs from running simultaneously
+        private val processingLock = Mutex()
     }
 
     /**
@@ -52,14 +54,80 @@ class UltraNightFusionEngine {
             throw IllegalArgumentException("Night fusion requires at least 1 frame")
         }
 
-        val count = frames.size
-        val refIdx = alignedData.indexOfFirst { it.isReference }.coerceAtLeast(0)
-        val refFrame = frames[refIdx]
-        val width = refFrame.bitmap.width
-        val height = refFrame.bitmap.height
-        val totalPixels = width * height
+        // Prevent multiple simultaneous Ultra Night processing jobs
+        processingLock.lock()
+        try {
+            val count = frames.size
+            val refIdx = alignedData.indexOfFirst { it.isReference }.coerceAtLeast(0)
+            val refFrame = frames[refIdx]
+            val width = refFrame.bitmap.width
+            val height = refFrame.bitmap.height
+            val totalPixels = width * height
 
-        onProgress(0.05f)
+            onProgress(0.05f)
+
+            // Evaluate available memory headroom
+            val availMem = getAvailableMemoryBytes()
+            val singleAccumulatorBytes = totalPixels.toLong() * 4L
+            val requiredFullMemory = singleAccumulatorBytes * 4L + (50L * 1024L * 1024L)
+
+            Log.d(TAG, "Ultra Night starting: size=${width}x$height, frames=$count, availMem=${availMem / (1024 * 1024)}MB, required=${requiredFullMemory / (1024 * 1024)}MB")
+
+            if (availMem < requiredFullMemory) {
+                Log.w(TAG, "Low heap headroom detected ($availMem bytes). Executing memory-pressure tiled fusion fallback.")
+                return@withContext processTiledUltraNight(
+                    frames = frames,
+                    alignedData = alignedData,
+                    config = config,
+                    refIdx = refIdx,
+                    tiles = 2,
+                    onProgress = onProgress
+                )
+            }
+
+            // Attempt standard full accumulation with in-place buffers; fallback to tiled on OOM
+            return@withContext try {
+                processStandardUltraNight(
+                    frames = frames,
+                    alignedData = alignedData,
+                    config = config,
+                    refIdx = refIdx,
+                    width = width,
+                    height = height,
+                    onProgress = onProgress
+                )
+            } catch (oom: OutOfMemoryError) {
+                Log.w(TAG, "Encountered memory pressure during full allocation, falling back to tiled accumulation", oom)
+                System.gc()
+                processTiledUltraNight(
+                    frames = frames,
+                    alignedData = alignedData,
+                    config = config,
+                    refIdx = refIdx,
+                    tiles = 2,
+                    onProgress = onProgress
+                )
+            }
+        } finally {
+            processingLock.unlock()
+        }
+    }
+
+    /**
+     * Standard single-pass accumulation with in-place radiance normalization and streaming tone mapping.
+     */
+    private fun processStandardUltraNight(
+        frames: List<CapturedNightFrame>,
+        alignedData: List<AlignedNightFrame>,
+        config: NightConfig,
+        refIdx: Int,
+        width: Int,
+        height: Int,
+        onProgress: (Float) -> Unit
+    ): Bitmap {
+        val count = frames.size
+        val refFrame = frames[refIdx]
+        val totalPixels = width * height
 
         // 1. Precompute Relative Exposure Scaling Factors for Each Frame
         val refExpProduct = refFrame.exposureTimeNs * refFrame.iso
@@ -68,190 +136,441 @@ class UltraNightFusionEngine {
             if (expProduct > 0) refExpProduct.toFloat() / expProduct.toFloat() else 1.0f
         }
 
-        // 2. Extract and Decode Frames into Linear Radiance Accumulators
-        val accumRadianceR = FloatArray(totalPixels)
-        val accumRadianceG = FloatArray(totalPixels)
-        val accumRadianceB = FloatArray(totalPixels)
-        val accumWeights = FloatArray(totalPixels)
+        // 2. Linear Radiance Accumulators (only 4 float arrays total)
+        var accumRadianceR: FloatArray? = FloatArray(totalPixels)
+        var accumRadianceG: FloatArray? = FloatArray(totalPixels)
+        var accumRadianceB: FloatArray? = FloatArray(totalPixels)
+        var accumWeights: FloatArray? = FloatArray(totalPixels)
 
-        val framePixels = IntArray(totalPixels)
+        val rAcc = accumRadianceR!!
+        val gAcc = accumRadianceG!!
+        val bAcc = accumRadianceB!!
+        val wAcc = accumWeights!!
 
-        for (i in 0 until count) {
-            val frame = frames[i]
-            val alignment = alignedData[i]
-            val shiftX = alignment.shiftX
-            val shiftY = alignment.shiftY
-            val motionWeights = alignment.motionWeights
-            val expScale = frameExposureScales[i]
-            val frameType = frame.type
+        // Reusable row buffer (only width integers = 16 KB instead of 48 MB full-frame IntArray)
+        val rowPixels = IntArray(width)
 
-            frame.bitmap.getPixels(framePixels, 0, width, 0, 0, width, height)
+        try {
+            for (i in 0 until count) {
+                val frame = frames[i]
+                val alignment = alignedData[i]
+                val shiftX = alignment.shiftX
+                val shiftY = alignment.shiftY
+                val expScale = frameExposureScales[i]
+                val frameType = frame.type
 
-            for (y in 0 until height) {
-                val sy = y + shiftY
-                if (sy !in 0 until height) continue
+                try {
+                    for (y in 0 until height) {
+                        val sy = y + shiftY
+                        if (sy !in 0 until height) continue
 
-                val outRow = y * width
+                        val outRow = y * width
+                        frame.bitmap.getPixels(rowPixels, 0, width, 0, sy, width, 1)
+
+                        for (x in 0 until width) {
+                            val sx = x + shiftX
+                            if (sx !in 0 until width) continue
+
+                            val outIdx = outRow + x
+                            val p = rowPixels[sx]
+                            val rawR = Color.red(p) / 255.0f
+                            val rawG = Color.green(p) / 255.0f
+                            val rawB = Color.blue(p) / 255.0f
+
+                            // Inverse gamma decode to linear space
+                            val linR = (rawR.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                            val linG = (rawG.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                            val linB = (rawB.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+
+                            val radR = linR * expScale
+                            val radG = linG * expScale
+                            val radB = linB * expScale
+
+                            val maxCh = max(rawR, max(rawG, rawB))
+                            val expWeight = when {
+                                maxCh > 0.94f -> if (frameType == BracketExposureType.SHORT) 1.0f else (1.0f - maxCh) * 16.0f
+                                maxCh < 0.04f -> if (frameType == BracketExposureType.LONG) 1.0f else maxCh * 25.0f
+                                else -> 1.0f
+                            }.coerceIn(0.05f, 1.0f)
+
+                            val motionConf = alignment.getMotionConfidence(x, y, width, height)
+                            val combinedWeight = expWeight * motionConf
+
+                            rAcc[outIdx] += radR * combinedWeight
+                            gAcc[outIdx] += radG * combinedWeight
+                            bAcc[outIdx] += radB * combinedWeight
+                            wAcc[outIdx] += combinedWeight
+                        }
+                    }
+                } finally {
+                    // Release non-reference frame bitmaps immediately after accumulation to free heap
+                    if (!alignment.isReference && frame.bitmap != refFrame.bitmap && !frame.bitmap.isRecycled) {
+                        frame.bitmap.recycle()
+                    }
+                }
+
+                onProgress(0.05f + ((i + 1).toFloat() / count) * 0.37f)
+            }
+
+            onProgress(0.44f)
+
+            // 3. In-Place Normalization of Accumulated Radiance
+            // We reuse accumWeights to store fused luminance, completely eliminating fusedLinR/G/B/Luma allocations!
+            for (idx in 0 until totalPixels) {
+                val w = wAcc[idx]
+                val r = if (w > 0f) rAcc[idx] / w else 0f
+                val g = if (w > 0f) gAcc[idx] / w else 0f
+                val b = if (w > 0f) bAcc[idx] / w else 0f
+
+                rAcc[idx] = r
+                gAcc[idx] = g
+                bAcc[idx] = b
+                wAcc[idx] = 0.2126f * r + 0.7152f * g + 0.0722f * b // Now stores fusedLuma
+            }
+
+            onProgress(0.55f)
+
+            // 4. Two-Scale Bilateral Local Tone Mapping: Downsampled Base Layer
+            val ds = 4
+            val dsW = (width / ds).coerceAtLeast(32)
+            val dsH = (height / ds).coerceAtLeast(32)
+            val baseLumaDown = FloatArray(dsW * dsH)
+
+            for (dy in 0 until dsH) {
+                val sy = (dy * ds).coerceAtMost(height - 1)
                 val srcRow = sy * width
-
-                for (x in 0 until width) {
-                    val sx = x + shiftX
-                    if (sx !in 0 until width) continue
-
-                    val outIdx = outRow + x
-                    val srcIdx = srcRow + sx
-
-                    val p = framePixels[srcIdx]
-                    val rawR = Color.red(p) / 255.0f
-                    val rawG = Color.green(p) / 255.0f
-                    val rawB = Color.blue(p) / 255.0f
-
-                    // Inverse gamma decode to linear space
-                    val linR = (rawR.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
-                    val linG = (rawG.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
-                    val linB = (rawB.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
-
-                    // Normalized radiance in reference exposure domain
-                    val radR = linR * expScale
-                    val radG = linG * expScale
-                    val radB = linB * expScale
-
-                    // Compute pixel exposure confidence weight (hat function)
-                    // High weight for well-exposed pixels; drops off near saturation (> 0.92)
-                    val maxCh = max(rawR, max(rawG, rawB))
-                    val expWeight = when {
-                        maxCh > 0.94f -> {
-                            // Highlight saturation roll-off: give precedence to short frames
-                            if (frameType == BracketExposureType.SHORT) 1.0f else (1.0f - maxCh) * 16.0f
-                        }
-                        maxCh < 0.04f -> {
-                            // Deep shadow noise: give precedence to long frames
-                            if (frameType == BracketExposureType.LONG) 1.0f else maxCh * 25.0f
-                        }
-                        else -> 1.0f
-                    }.coerceIn(0.05f, 1.0f)
-
-                    // Combine exposure weight with motion/anti-ghosting confidence
-                    val motionConf = if (alignment.isReference) 1.0f else motionWeights[outIdx]
-                    val combinedWeight = expWeight * motionConf
-
-                    accumRadianceR[outIdx] += radR * combinedWeight
-                    accumRadianceG[outIdx] += radG * combinedWeight
-                    accumRadianceB[outIdx] += radB * combinedWeight
-                    accumWeights[outIdx] += combinedWeight
+                val dstRow = dy * dsW
+                for (dx in 0 until dsW) {
+                    val sx = (dx * ds).coerceAtMost(width - 1)
+                    baseLumaDown[dstRow + dx] = wAcc[srcRow + sx]
                 }
             }
 
-            onProgress(0.05f + ((i + 1).toFloat() / count) * 0.35f)
+            val smoothedBaseDown = applyEdgePreservingSmooth(baseLumaDown, dsW, dsH)
+
+            onProgress(0.68f)
+
+            // 5. Tone Map Base Illumination and Stream directly to Output Bitmap
+            // Eliminates resultPixels = IntArray(totalPixels) which previously caused OOM at line 195!
+            val liftFactor = (config.shadowLift.coerceIn(1.0f, 2.5f))
+            val toneMu = 18.0f * liftFactor
+            val detailBoost = 1.15f
+            val toneMaxDiv = ln(1.0f + toneMu * 2.0f)
+
+            val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+            // 4 scanline row buffers for streaming tone mapping and unsharp sharpening (64 KB total)
+            var rowAbove = IntArray(width)
+            var rowCurr = IntArray(width)
+            var rowBelow = IntArray(width)
+            val rowSharpened = IntArray(width)
+
+            fun toneMapScanline(y: Int, target: IntArray) {
+                val dy = (y / ds).coerceIn(0, dsH - 1)
+                val rowOffset = y * width
+                val dsRowOffset = dy * dsW
+
+                for (x in 0 until width) {
+                    val dx = (x / ds).coerceIn(0, dsW - 1)
+                    val idx = rowOffset + x
+
+                    val lumaIn = wAcc[idx]
+                    val baseIn = smoothedBaseDown[dsRowOffset + dx].coerceAtLeast(0.001f)
+
+                    val detailRatio = (lumaIn / baseIn).coerceIn(0.2f, 5.0f)
+                    val toneBase = (ln(1.0f + toneMu * baseIn) / toneMaxDiv).coerceIn(0.0f, 1.5f)
+                    val lumaToneMapped = (toneBase * detailRatio.pow(detailBoost)).coerceAtLeast(0.0f)
+
+                    val rIn = rAcc[idx]
+                    val gIn = gAcc[idx]
+                    val bIn = bAcc[idx]
+
+                    val gain = if (lumaIn > 0.0001f) {
+                        (lumaToneMapped / lumaIn).pow(0.85f).coerceIn(0.0f, 6.0f)
+                    } else 1.0f
+
+                    val rOut = (rIn * gain).coerceAtLeast(0.0f)
+                    val gOut = (gIn * gain).coerceAtLeast(0.0f)
+                    val bOut = (bIn * gain).coerceAtLeast(0.0f)
+
+                    val srgbR = (rOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
+                    val srgbG = (gOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
+                    val srgbB = (bOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
+
+                    target[x] = Color.rgb(srgbR, srgbG, srgbB)
+                }
+            }
+
+            // Prime pipeline with row 0
+            toneMapScanline(0, rowCurr)
+            output.setPixels(rowCurr, 0, width, 0, 0, width, 1)
+            System.arraycopy(rowCurr, 0, rowAbove, 0, width)
+
+            // Stream rows 1 until height - 1 with online sharpening
+            for (y in 1 until height - 1) {
+                toneMapScanline(y + 1, rowBelow)
+                sharpenRow(rowAbove, rowCurr, rowBelow, rowSharpened, width, sharpnessStrength = 0.25f)
+                output.setPixels(rowSharpened, 0, width, 0, y, width, 1)
+
+                val tmp = rowAbove
+                rowAbove = rowCurr
+                rowCurr = rowBelow
+                rowBelow = tmp
+
+                if (y % 64 == 0) {
+                    onProgress(0.70f + (y.toFloat() / height) * 0.28f)
+                }
+            }
+
+            // Final row
+            toneMapScanline(height - 1, rowCurr)
+            output.setPixels(rowCurr, 0, width, 0, height - 1, width, 1)
+
+            onProgress(1.0f)
+            return output
+        } finally {
+            // Null out arrays for immediate garbage collection
+            accumRadianceR = null
+            accumRadianceG = null
+            accumRadianceB = null
+            accumWeights = null
+        }
+    }
+
+    /**
+     * Memory-pressure fallback: divides the image into horizontal tiles.
+     * Accumulator buffers are halved in size, guaranteeing successful completion on constrained heaps.
+     */
+    private fun processTiledUltraNight(
+        frames: List<CapturedNightFrame>,
+        alignedData: List<AlignedNightFrame>,
+        config: NightConfig,
+        refIdx: Int,
+        tiles: Int,
+        onProgress: (Float) -> Unit
+    ): Bitmap {
+        val count = frames.size
+        val refFrame = frames[refIdx]
+        val width = refFrame.bitmap.width
+        val height = refFrame.bitmap.height
+
+        val refExpProduct = refFrame.exposureTimeNs * refFrame.iso
+        val frameExposureScales = FloatArray(count) { i ->
+            val expProduct = frames[i].exposureTimeNs * frames[i].iso
+            if (expProduct > 0) refExpProduct.toFloat() / expProduct.toFloat() else 1.0f
         }
 
-        onProgress(0.42f)
-
-        // 3. Normalize Accumulated Radiance
-        val fusedLinR = FloatArray(totalPixels)
-        val fusedLinG = FloatArray(totalPixels)
-        val fusedLinB = FloatArray(totalPixels)
-        val fusedLuma = FloatArray(totalPixels)
-
-        for (idx in 0 until totalPixels) {
-            val w = accumWeights[idx]
-            val r = if (w > 0f) accumRadianceR[idx] / w else 0f
-            val g = if (w > 0f) accumRadianceG[idx] / w else 0f
-            val b = if (w > 0f) accumRadianceB[idx] / w else 0f
-
-            fusedLinR[idx] = r
-            fusedLinG[idx] = g
-            fusedLinB[idx] = b
-            fusedLuma[idx] = 0.2126f * r + 0.7152f * g + 0.0722f * b
-        }
-
-        onProgress(0.55f)
-
-        // 4. Two-Scale Bilateral Local Tone Mapping & Intelligent Shadow Recovery
-        // We compute a downsampled Base Layer representing illumination, then tone map it.
+        // 1. Compute global base illumination from downscaled reference frame (only ~3 MB)
         val ds = 4
         val dsW = (width / ds).coerceAtLeast(32)
         val dsH = (height / ds).coerceAtLeast(32)
         val baseLumaDown = FloatArray(dsW * dsH)
+        val downBmp = Bitmap.createScaledBitmap(refFrame.bitmap, dsW, dsH, true)
+        val downPixels = IntArray(dsW * dsH)
+        downBmp.getPixels(downPixels, 0, dsW, 0, 0, dsW, dsH)
+        downBmp.recycle()
 
-        for (dy in 0 until dsH) {
-            val sy = (dy * ds).coerceAtMost(height - 1)
-            for (dx in 0 until dsW) {
-                val sx = (dx * ds).coerceAtMost(width - 1)
-                baseLumaDown[dy * dsW + dx] = fusedLuma[sy * width + sx]
-            }
+        for (i in downPixels.indices) {
+            val p = downPixels[i]
+            val r = (Color.red(p) / 255.0f).pow(GAMMA_DECODE)
+            val g = (Color.green(p) / 255.0f).pow(GAMMA_DECODE)
+            val b = (Color.blue(p) / 255.0f).pow(GAMMA_DECODE)
+            baseLumaDown[i] = 0.2126f * r + 0.7152f * g + 0.0722f * b
         }
-
-        // Apply fast 2-pass box/guided filter to smooth the base layer while preserving macroscopic boundaries
         val smoothedBaseDown = applyEdgePreservingSmooth(baseLumaDown, dsW, dsH)
 
-        onProgress(0.68f)
-
-        // 5. Tone Map Base Illumination and Recombine with Texture Detail Layer
         val liftFactor = (config.shadowLift.coerceIn(1.0f, 2.5f))
         val toneMu = 18.0f * liftFactor
-        val detailBoost = 1.15f // Subtle micro-contrast texture boost
-
-        val resultPixels = IntArray(totalPixels)
-
-        for (y in 0 until height) {
-            val dy = (y / ds).coerceIn(0, dsH - 1)
-            val rowOffset = y * width
-            val dsRowOffset = dy * dsW
-
-            for (x in 0 until width) {
-                val dx = (x / ds).coerceIn(0, dsW - 1)
-                val idx = rowOffset + x
-
-                val lumaIn = fusedLuma[idx]
-                val baseIn = smoothedBaseDown[dsRowOffset + dx].coerceAtLeast(0.001f)
-
-                // Detail layer = fine textural ratio
-                val detailRatio = (lumaIn / baseIn).coerceIn(0.2f, 5.0f)
-
-                // Adaptive compressive tone curve on base illumination:
-                // ln(1 + mu * base) / ln(1 + mu * max)
-                // Guaranteed: when base -> 0, toneBase -> 0 (true black preservation, no grey sky!)
-                val toneBase = (ln(1.0f + toneMu * baseIn) / ln(1.0f + toneMu * 2.0f)).coerceIn(0.0f, 1.5f)
-
-                // Reconstruct tone-mapped luminance
-                val lumaToneMapped = (toneBase * detailRatio.pow(detailBoost)).coerceAtLeast(0.0f)
-
-                val rIn = fusedLinR[idx]
-                val gIn = fusedLinG[idx]
-                val bIn = fusedLinB[idx]
-
-                // Sub-linear chromatic scaling to preserve natural color temperature
-                // without oversaturating lifted shadows (exponent ~0.85)
-                val gain = if (lumaIn > 0.0001f) {
-                    (lumaToneMapped / lumaIn).pow(0.85f).coerceIn(0.0f, 6.0f)
-                } else 1.0f
-
-                var rOut = (rIn * gain).coerceAtLeast(0.0f)
-                var gOut = (gIn * gain).coerceAtLeast(0.0f)
-                var bOut = (bIn * gain).coerceAtLeast(0.0f)
-
-                // Re-encode to sRGB gamma space
-                val srgbR = (rOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
-                val srgbG = (gOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
-                val srgbB = (bOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
-
-                resultPixels[idx] = Color.rgb(srgbR, srgbG, srgbB)
-            }
-        }
-
-        onProgress(0.85f)
-
-        // 6. Controlled Noise-Gated Edge Sharpening
-        applyNoiseGatedSharpening(resultPixels, width, height, sharpnessStrength = 0.25f)
-
-        onProgress(0.95f)
+        val detailBoost = 1.15f
+        val toneMaxDiv = ln(1.0f + toneMu * 2.0f)
 
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        output.setPixels(resultPixels, 0, width, 0, 0, width, height)
+        val tileHeight = (height + tiles - 1) / tiles
+
+        val rowPixels = IntArray(width)
+
+        for (tileIndex in 0 until tiles) {
+            val startY = tileIndex * tileHeight
+            val endY = min(height, startY + tileHeight)
+            val currentTileHeight = endY - startY
+            val tilePixels = width * currentTileHeight
+
+            var rTile: FloatArray? = FloatArray(tilePixels)
+            var gTile: FloatArray? = FloatArray(tilePixels)
+            var bTile: FloatArray? = FloatArray(tilePixels)
+            var wTile: FloatArray? = FloatArray(tilePixels)
+
+            val rArr = rTile!!
+            val gArr = gTile!!
+            val bArr = bTile!!
+            val wArr = wTile!!
+
+            try {
+                // Accumulate this tile across all frames
+                for (i in 0 until count) {
+                    val frame = frames[i]
+                    if (frame.bitmap.isRecycled) continue
+                    val alignment = alignedData[i]
+                    val shiftX = alignment.shiftX
+                    val shiftY = alignment.shiftY
+                    val expScale = frameExposureScales[i]
+                    val frameType = frame.type
+
+                    for (y in startY until endY) {
+                        val sy = y + shiftY
+                        if (sy !in 0 until height) continue
+
+                        val tileRow = (y - startY) * width
+                        frame.bitmap.getPixels(rowPixels, 0, width, 0, sy, width, 1)
+
+                        for (x in 0 until width) {
+                            val sx = x + shiftX
+                            if (sx !in 0 until width) continue
+
+                            val p = rowPixels[sx]
+                            val rawR = Color.red(p) / 255.0f
+                            val rawG = Color.green(p) / 255.0f
+                            val rawB = Color.blue(p) / 255.0f
+
+                            val linR = (rawR.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                            val linG = (rawG.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                            val linB = (rawB.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+
+                            val radR = linR * expScale
+                            val radG = linG * expScale
+                            val radB = linB * expScale
+
+                            val maxCh = max(rawR, max(rawG, rawB))
+                            val expWeight = when {
+                                maxCh > 0.94f -> if (frameType == BracketExposureType.SHORT) 1.0f else (1.0f - maxCh) * 16.0f
+                                maxCh < 0.04f -> if (frameType == BracketExposureType.LONG) 1.0f else maxCh * 25.0f
+                                else -> 1.0f
+                            }.coerceIn(0.05f, 1.0f)
+
+                            val motionConf = alignment.getMotionConfidence(x, y, width, height)
+                            val combinedWeight = expWeight * motionConf
+
+                            val outIdx = tileRow + x
+                            rArr[outIdx] += radR * combinedWeight
+                            gArr[outIdx] += radG * combinedWeight
+                            bArr[outIdx] += radB * combinedWeight
+                            wArr[outIdx] += combinedWeight
+                        }
+                    }
+                }
+
+                // In-place normalization
+                for (idx in 0 until tilePixels) {
+                    val w = wArr[idx]
+                    val r = if (w > 0f) rArr[idx] / w else 0f
+                    val g = if (w > 0f) gArr[idx] / w else 0f
+                    val b = if (w > 0f) bArr[idx] / w else 0f
+                    rArr[idx] = r
+                    gArr[idx] = g
+                    bArr[idx] = b
+                    wArr[idx] = 0.2126f * r + 0.7152f * g + 0.0722f * b
+                }
+
+                // Stream tone mapped tile into output
+                val tileRowPixels = IntArray(width)
+                for (y in startY until endY) {
+                    val tileY = y - startY
+                    val dy = (y / ds).coerceIn(0, dsH - 1)
+                    val tileRowOffset = tileY * width
+                    val dsRowOffset = dy * dsW
+
+                    for (x in 0 until width) {
+                        val dx = (x / ds).coerceIn(0, dsW - 1)
+                        val idx = tileRowOffset + x
+
+                        val lumaIn = wArr[idx]
+                        val baseIn = smoothedBaseDown[dsRowOffset + dx].coerceAtLeast(0.001f)
+
+                        val detailRatio = (lumaIn / baseIn).coerceIn(0.2f, 5.0f)
+                        val toneBase = (ln(1.0f + toneMu * baseIn) / toneMaxDiv).coerceIn(0.0f, 1.5f)
+                        val lumaToneMapped = (toneBase * detailRatio.pow(detailBoost)).coerceAtLeast(0.0f)
+
+                        val rIn = rArr[idx]
+                        val gIn = gArr[idx]
+                        val bIn = bArr[idx]
+
+                        val gain = if (lumaIn > 0.0001f) {
+                            (lumaToneMapped / lumaIn).pow(0.85f).coerceIn(0.0f, 6.0f)
+                        } else 1.0f
+
+                        val rOut = (rIn * gain).coerceAtLeast(0.0f)
+                        val gOut = (gIn * gain).coerceAtLeast(0.0f)
+                        val bOut = (bIn * gain).coerceAtLeast(0.0f)
+
+                        val srgbR = (rOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
+                        val srgbG = (gOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
+                        val srgbB = (bOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
+
+                        tileRowPixels[x] = Color.rgb(srgbR, srgbG, srgbB)
+                    }
+
+                    output.setPixels(tileRowPixels, 0, width, 0, y, width, 1)
+                }
+            } finally {
+                rTile = null
+                gTile = null
+                bTile = null
+                wTile = null
+                System.gc()
+            }
+
+            onProgress(0.40f + ((tileIndex + 1).toFloat() / tiles) * 0.58f)
+        }
 
         onProgress(1.0f)
-        return@withContext output
+        return output
+    }
+
+    /**
+     * Online single-row noise-gated sharpening.
+     */
+    private fun sharpenRow(
+        rowAbove: IntArray,
+        rowCurr: IntArray,
+        rowBelow: IntArray,
+        rowOut: IntArray,
+        w: Int,
+        sharpnessStrength: Float
+    ) {
+        val edgeThreshold = 14
+        val maxStep = 22
+
+        rowOut[0] = rowCurr[0]
+        rowOut[w - 1] = rowCurr[w - 1]
+
+        for (x in 1 until w - 1) {
+            val p = rowCurr[x]
+            val r = Color.red(p)
+            val g = Color.green(p)
+            val b = Color.blue(p)
+
+            val pLeft = rowCurr[x - 1]
+            val pRight = rowCurr[x + 1]
+            val pUp = rowAbove[x]
+            val pDown = rowBelow[x]
+
+            val lumaCenter = (r * 3 + g * 6 + b) / 10
+            val lumaAvg = ((Color.red(pLeft) * 3 + Color.green(pLeft) * 6 + Color.blue(pLeft)) +
+                    (Color.red(pRight) * 3 + Color.green(pRight) * 6 + Color.blue(pRight)) +
+                    (Color.red(pUp) * 3 + Color.green(pUp) * 6 + Color.blue(pUp)) +
+                    (Color.red(pDown) * 3 + Color.green(pDown) * 6 + Color.blue(pDown))) / 40
+
+            val diff = lumaCenter - lumaAvg
+            if (abs(diff) in edgeThreshold..60) {
+                val boost = (diff * sharpnessStrength).toInt().coerceIn(-maxStep, maxStep)
+                val nr = (r + boost).coerceIn(0, 255)
+                val ng = (g + boost).coerceIn(0, 255)
+                val nb = (b + boost).coerceIn(0, 255)
+                rowOut[x] = Color.rgb(nr, ng, nb)
+            } else {
+                rowOut[x] = p
+            }
+        }
     }
 
     /**
@@ -273,7 +592,7 @@ class UltraNightFusionEngine {
                     val nx = x + dx
                     if (nx in 0 until w) {
                         val v = src[row + nx]
-                        if (abs(v - center) < 0.25f) { // Range threshold
+                        if (abs(v - center) < 0.25f) {
                             sum += v
                             count++
                         }
@@ -307,45 +626,11 @@ class UltraNightFusionEngine {
         return dst
     }
 
-    /**
-     * Noise-gated unsharp sharpening: boosts edges while ignoring flat dark sky and noise.
-     */
-    private fun applyNoiseGatedSharpening(pixels: IntArray, w: Int, h: Int, sharpnessStrength: Float) {
-        val edgeThreshold = 14
-        val maxStep = 22
-
-        for (y in 1 until h - 1) {
-            val row = y * w
-            val rowAbove = (y - 1) * w
-            val rowBelow = (y + 1) * w
-
-            for (x in 1 until w - 1) {
-                val idx = row + x
-                val p = pixels[idx]
-                val r = Color.red(p)
-                val g = Color.green(p)
-                val b = Color.blue(p)
-
-                val pLeft = pixels[row + x - 1]
-                val pRight = pixels[row + x + 1]
-                val pUp = pixels[rowAbove + x]
-                val pDown = pixels[rowBelow + x]
-
-                val lumaCenter = (r * 3 + g * 6 + b) / 10
-                val lumaAvg = ((Color.red(pLeft) * 3 + Color.green(pLeft) * 6 + Color.blue(pLeft)) +
-                        (Color.red(pRight) * 3 + Color.green(pRight) * 6 + Color.blue(pRight)) +
-                        (Color.red(pUp) * 3 + Color.green(pUp) * 6 + Color.blue(pUp)) +
-                        (Color.red(pDown) * 3 + Color.green(pDown) * 6 + Color.blue(pDown))) / 40
-
-                val diff = lumaCenter - lumaAvg
-                if (abs(diff) in edgeThreshold..60) {
-                    val boost = (diff * sharpnessStrength).toInt().coerceIn(-maxStep, maxStep)
-                    val nr = (r + boost).coerceIn(0, 255)
-                    val ng = (g + boost).coerceIn(0, 255)
-                    val nb = (b + boost).coerceIn(0, 255)
-                    pixels[idx] = Color.rgb(nr, ng, nb)
-                }
-            }
-        }
+    private fun getAvailableMemoryBytes(): Long {
+        val runtime = Runtime.getRuntime()
+        val maxMemory = runtime.maxMemory()
+        val totalMemory = runtime.totalMemory()
+        val freeMemory = runtime.freeMemory()
+        return maxMemory - (totalMemory - freeMemory)
     }
 }

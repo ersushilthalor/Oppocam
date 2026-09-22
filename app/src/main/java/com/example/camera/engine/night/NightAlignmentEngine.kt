@@ -20,8 +20,22 @@ data class AlignedNightFrame(
     val subpixelDx: Float,
     val subpixelDy: Float,
     val isReference: Boolean,
-    val motionWeights: FloatArray // Per-pixel confidence weight [0.0 = motion/ghost, 1.0 = static background]
-)
+    val motionWeights: FloatArray, // Downscaled confidence weight grid [0.0 = motion, 1.0 = static background]
+    val maskWidth: Int = 0,
+    val maskHeight: Int = 0
+) {
+    fun getMotionConfidence(x: Int, y: Int, fullWidth: Int, fullHeight: Int): Float {
+        if (isReference || motionWeights.isEmpty()) return 1.0f
+        if (maskWidth <= 0 || maskHeight <= 0) {
+            val idx = y * fullWidth + x
+            return if (idx in motionWeights.indices) motionWeights[idx] else 1.0f
+        }
+        val mx = ((x.toLong() * maskWidth) / fullWidth).toInt().coerceIn(0, maskWidth - 1)
+        val my = ((y.toLong() * maskHeight) / fullHeight).toInt().coerceIn(0, maskHeight - 1)
+        val mIdx = my * maskWidth + mx
+        return if (mIdx in motionWeights.indices) motionWeights[mIdx] else 1.0f
+    }
+}
 
 /**
  * Precision Frame Alignment & Anti-Ghosting Engine for Flagship Night Fusion.
@@ -81,15 +95,15 @@ class NightAlignmentEngine {
         val width = refBmp.width
         val height = refBmp.height
 
-        val refPixels = IntArray(width * height)
-        refBmp.getPixels(refPixels, 0, width, 0, 0, width, height)
-
         val results = mutableListOf<AlignedNightFrame>()
+
+        val ds = 4
+        val maskW = (width / ds).coerceAtLeast(16)
+        val maskH = (height / ds).coerceAtLeast(16)
 
         for (i in 0 until count) {
             if (i == referenceIdx) {
                 // Reference frame is perfectly aligned with itself; 100% static confidence
-                val staticWeights = FloatArray(width * height) { 1.0f }
                 results.add(
                     AlignedNightFrame(
                         frameIndex = i,
@@ -98,7 +112,9 @@ class NightAlignmentEngine {
                         subpixelDx = 0f,
                         subpixelDy = 0f,
                         isReference = true,
-                        motionWeights = staticWeights
+                        motionWeights = FloatArray(0),
+                        maskWidth = 0,
+                        maskHeight = 0
                     )
                 )
                 onProgress((i + 1).toFloat() / count)
@@ -116,14 +132,17 @@ class NightAlignmentEngine {
             // 2. Hierarchical Optical Search
             val (shiftX, shiftY) = estimateSubpixelShift(refBmp, targetBmp, seedDx, seedDy)
 
-            // 3. Motion Detection and Soft-Mask Anti-Ghosting Weights
+            // 3. Motion Detection and Soft-Mask Anti-Ghosting Weights (downsampled grid using row buffers)
             val motionWeights = computeMotionRejectionMask(
-                refPixels = refPixels,
+                refBmp = refBmp,
                 targetBmp = targetBmp,
                 shiftX = shiftX,
                 shiftY = shiftY,
                 width = width,
                 height = height,
+                maskW = maskW,
+                maskH = maskH,
+                ds = ds,
                 refExposure = refFrame.exposureTimeNs * refFrame.iso,
                 targetExposure = targetFrame.exposureTimeNs * targetFrame.iso
             )
@@ -136,7 +155,9 @@ class NightAlignmentEngine {
                     subpixelDx = shiftX.toFloat(),
                     subpixelDy = shiftY.toFloat(),
                     isReference = false,
-                    motionWeights = motionWeights
+                    motionWeights = motionWeights,
+                    maskWidth = maskW,
+                    maskHeight = maskH
                 )
             )
 
@@ -262,18 +283,19 @@ class NightAlignmentEngine {
      * caused by exposure bracketing.
      */
     private fun computeMotionRejectionMask(
-        refPixels: IntArray,
+        refBmp: Bitmap,
         targetBmp: Bitmap,
         shiftX: Int,
         shiftY: Int,
         width: Int,
         height: Int,
+        maskW: Int,
+        maskH: Int,
+        ds: Int,
         refExposure: Long,
         targetExposure: Long
     ): FloatArray {
-        val weights = FloatArray(width * height)
-        val targetPixels = IntArray(width * height)
-        targetBmp.getPixels(targetPixels, 0, width, 0, 0, width, height)
+        val weights = FloatArray(maskW * maskH)
 
         // Exposure normalization ratio between target and reference
         val exposureScale = if (targetExposure > 0) {
@@ -282,31 +304,35 @@ class NightAlignmentEngine {
 
         val motionThreshold = 38.0f // Threshold in normalized 0..255 space
 
-        for (y in 0 until height) {
+        // Small row buffers (only width integers = 16 KB instead of 48 MB!)
+        val refRowPixels = IntArray(width)
+        val tgtRowPixels = IntArray(width)
+
+        for (my in 0 until maskH) {
+            val y = (my * ds).coerceAtMost(height - 1)
             val ty = y + shiftY
+            val maskRow = my * maskW
+
             if (ty !in 0 until height) {
                 // Out of frame boundary
-                val rowOffset = y * width
-                for (x in 0 until width) weights[rowOffset + x] = 0.0f
+                for (mx in 0 until maskW) weights[maskRow + mx] = 0.0f
                 continue
             }
 
-            val refRow = y * width
-            val tgtRow = ty * width
+            refBmp.getPixels(refRowPixels, 0, width, 0, y, width, 1)
+            targetBmp.getPixels(tgtRowPixels, 0, width, 0, ty, width, 1)
 
-            for (x in 0 until width) {
+            for (mx in 0 until maskW) {
+                val x = (mx * ds).coerceAtMost(width - 1)
                 val tx = x + shiftX
-                val refIdx = refRow + x
 
                 if (tx !in 0 until width) {
-                    weights[refIdx] = 0.0f
+                    weights[maskRow + mx] = 0.0f
                     continue
                 }
 
-                val tgtIdx = tgtRow + tx
-
-                val pRef = refPixels[refIdx]
-                val pTgt = targetPixels[tgtIdx]
+                val pRef = refRowPixels[x]
+                val pTgt = tgtRowPixels[tx]
 
                 val rRef = Color.red(pRef).toFloat()
                 val gRef = Color.green(pRef).toFloat()
@@ -330,7 +356,7 @@ class NightAlignmentEngine {
                     (exp(-excess / 14.0f)).coerceAtLeast(0.02f)
                 }
 
-                weights[refIdx] = weight.coerceIn(0.0f, 1.0f)
+                weights[maskRow + mx] = weight.coerceIn(0.0f, 1.0f)
             }
         }
 

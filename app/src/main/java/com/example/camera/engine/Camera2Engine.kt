@@ -172,6 +172,7 @@ class Camera2Engine(private val context: Context) {
     var videoFps: Int = 30
     var colorProfile: ColorProfile = ColorProfile.STANDARD
     var isAudioEnabled: Boolean = true
+    var currentVideoAdjustments: com.example.camera.model.VideoAdjustments = com.example.camera.model.VideoAdjustments()
     var currentZoom: Float = 1.0f
     private val _currentZoom = MutableStateFlow(1.0f)
     val currentZoomState: StateFlow<Float> = _currentZoom.asStateFlow()
@@ -4721,12 +4722,19 @@ class Camera2Engine(private val context: Context) {
             )
         } else null
 
+        val normalVideoColorMatrix = if (!isCinema && currentMode == CameraMode.VIDEO) {
+            VideoAdjustmentsPipeline.computeColorMatrix(currentVideoAdjustments)
+        } else null
+
+        val hasNormalAdjustments = (!isCinema && currentMode == CameraMode.VIDEO &&
+                (normalVideoColorMatrix != null || VideoAdjustmentsPipeline.hasSpatialEffects(currentVideoAdjustments)))
+
         val lutSize = if (selectedLut == CinematicLut.CUSTOM && customPath != null) {
             CubeLutParser.getOrLoad(customPath)?.size ?: 33
         } else 33
 
-        val hasColorTransform = (cinemaColorMatrix != null || cinemaLutStripBitmap != null)
-        val needsColorGrade = if (isCinema) (hasColorTransform && isBakeLut) else hasColorTransform
+        val hasColorTransform = (cinemaColorMatrix != null || cinemaLutStripBitmap != null || normalVideoColorMatrix != null)
+        val needsColorGrade = if (isCinema) (hasColorTransform && isBakeLut) else (hasColorTransform || hasNormalAdjustments)
         val needsMirror = isFrontFacing
         val needsExportPipeline = needsColorGrade || needsMirror
 
@@ -4734,15 +4742,23 @@ class Camera2Engine(private val context: Context) {
         val fileToSave: File = if (needsExportPipeline) {
             val targetExport = File(context.cacheDir, "EXPORT_${System.currentTimeMillis()}_${tempFile.name}")
             val success = try {
+                val effectiveColorMatrix = if (isCinema) cinemaColorMatrix?.array else normalVideoColorMatrix?.array
+                val effVignette = if (!isCinema) currentVideoAdjustments.vignette else 0f
+                val effGrain = if (!isCinema) (currentVideoAdjustments.grain + currentVideoAdjustments.textureFilmGrain) else 0f
+                val effSoftLight = if (!isCinema) currentVideoAdjustments.lightFxSoftLight else 0f
+
                 VideoMirrorTranscoder.transcodeVideo(
                     inputFile = tempFile,
                     outputFile = targetExport,
                     isMirrored = needsMirror,
-                    colorMatrix = cinemaColorMatrix?.array,
+                    colorMatrix = effectiveColorMatrix,
                     lutStripBitmap = cinemaLutStripBitmap,
                     lutSize = lutSize,
                     lutIntensity = lutIntensity,
-                    orientationHint = getVideoOrientationHint()
+                    orientationHint = getVideoOrientationHint(),
+                    vignette = effVignette,
+                    grain = effGrain,
+                    softLight = effSoftLight
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Video export transcoding failed", e)

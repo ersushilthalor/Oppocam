@@ -1233,4 +1233,68 @@ class CameraPreferences(context: Context) {
             // ignore
         }
     }
+
+    fun getVideoAdjustments(): com.example.camera.model.VideoAdjustments {
+        return com.example.camera.model.VideoAdjustments(
+            tonality = prefs.getFloat("pref_va_tonality", 0f),
+            saturation = prefs.getFloat("pref_va_saturation", 0f),
+            contrast = prefs.getFloat("pref_va_contrast", 0f),
+            exposure = prefs.getFloat("pref_va_exposure", 0.0f),
+            temperature = prefs.getFloat("pref_va_temperature", 0f),
+            tint = prefs.getFloat("pref_va_tint", 0f),
+            highlights = prefs.getFloat("pref_va_highlights", 0f),
+            shadows = prefs.getFloat("pref_va_shadows", 0f),
+            vignette = prefs.getFloat("pref_va_vignette", 0f),
+            grain = prefs.getFloat("pref_va_grain", 0f),
+            clarity = prefs.getFloat("pref_va_clarity", 0f),
+            sharpness = prefs.getFloat("pref_va_sharpness", 0f),
+            curveBlacks = prefs.getFloat("pref_va_curve_blacks", 0f),
+            curveShadows = prefs.getFloat("pref_va_curve_shadows", 0f),
+            curveMidtones = prefs.getFloat("pref_va_curve_midtones", 0f),
+            curveHighlights = prefs.getFloat("pref_va_curve_highlights", 0f),
+            curveWhites = prefs.getFloat("pref_va_curve_whites", 0f),
+            colorVibrance = prefs.getFloat("pref_va_color_vibrance", 0f),
+            colorBalanceR = prefs.getFloat("pref_va_color_bal_r", 0f),
+            colorBalanceG = prefs.getFloat("pref_va_color_bal_g", 0f),
+            colorBalanceB = prefs.getFloat("pref_va_color_bal_b", 0f),
+            lightFxFlash = prefs.getFloat("pref_va_lfx_flash", 0f),
+            lightFxBloom = prefs.getFloat("pref_va_lfx_bloom", 0f),
+            lightFxSoftLight = prefs.getFloat("pref_va_lfx_soft_light", 0f),
+            textureFilmGrain = prefs.getFloat("pref_va_tex_grain", 0f),
+            textureHalation = prefs.getFloat("pref_va_tex_halation", 0f),
+            textureMicroContrast = prefs.getFloat("pref_va_tex_micro_contrast", 0f)
+        )
+    }
+
+    fun saveVideoAdjustments(va: com.example.camera.model.VideoAdjustments) {
+        prefs.edit()
+            .putFloat("pref_va_tonality", va.tonality)
+            .putFloat("pref_va_saturation", va.saturation)
+            .putFloat("pref_va_contrast", va.contrast)
+            .putFloat("pref_va_exposure", va.exposure)
+            .putFloat("pref_va_temperature", va.temperature)
+            .putFloat("pref_va_tint", va.tint)
+            .putFloat("pref_va_highlights", va.highlights)
+            .putFloat("pref_va_shadows", va.shadows)
+            .putFloat("pref_va_vignette", va.vignette)
+            .putFloat("pref_va_grain", va.grain)
+            .putFloat("pref_va_clarity", va.clarity)
+            .putFloat("pref_va_sharpness", va.sharpness)
+            .putFloat("pref_va_curve_blacks", va.curveBlacks)
+            .putFloat("pref_va_curve_shadows", va.curveShadows)
+            .putFloat("pref_va_curve_midtones", va.curveMidtones)
+            .putFloat("pref_va_curve_highlights", va.curveHighlights)
+            .putFloat("pref_va_curve_whites", va.curveWhites)
+            .putFloat("pref_va_color_vibrance", va.colorVibrance)
+            .putFloat("pref_va_color_bal_r", va.colorBalanceR)
+            .putFloat("pref_va_color_bal_g", va.colorBalanceG)
+            .putFloat("pref_va_color_bal_b", va.colorBalanceB)
+            .putFloat("pref_va_lfx_flash", va.lightFxFlash)
+            .putFloat("pref_va_lfx_bloom", va.lightFxBloom)
+            .putFloat("pref_va_lfx_soft_light", va.lightFxSoftLight)
+            .putFloat("pref_va_tex_grain", va.textureFilmGrain)
+            .putFloat("pref_va_tex_halation", va.textureHalation)
+            .putFloat("pref_va_tex_micro_contrast", va.textureMicroContrast)
+            .apply()
+    }
 }

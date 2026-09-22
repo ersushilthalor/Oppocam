@@ -273,6 +273,53 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isCinemaSettingsOpen.value = !_isCinemaSettingsOpen.value
     }
 
+    // Video Adjustments State (Normal Video Mode)
+    private val _videoAdjustments = MutableStateFlow(preferences.getVideoAdjustments())
+    val videoAdjustments: StateFlow<com.example.camera.model.VideoAdjustments> = _videoAdjustments.asStateFlow()
+
+    private val _isVideoAdjustmentsOpen = MutableStateFlow(false)
+    val isVideoAdjustmentsOpen: StateFlow<Boolean> = _isVideoAdjustmentsOpen.asStateFlow()
+
+    fun setVideoAdjustmentsOpen(isOpen: Boolean) {
+        _isVideoAdjustmentsOpen.value = isOpen
+        if (isOpen) {
+            _isVideoSettingsPanelOpen.value = false
+            _isSettingsOpen.value = false
+            _isManualProOpen.value = false
+        }
+    }
+
+    fun toggleVideoAdjustmentsOpen() {
+        setVideoAdjustmentsOpen(!_isVideoAdjustmentsOpen.value)
+    }
+
+    fun updateVideoAdjustments(adjustments: com.example.camera.model.VideoAdjustments) {
+        val oldExposure = _videoAdjustments.value.exposure
+        _videoAdjustments.value = adjustments
+        preferences.saveVideoAdjustments(adjustments)
+        engine.currentVideoAdjustments = adjustments
+
+        // Hardware camera exposure compensation integration
+        if (adjustments.exposure != oldExposure) {
+            val lens = engine.selectedLens.value
+            val chars = lens?.let { engine.getCharacteristics(it.cameraId) }
+            val step = chars?.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0.333f
+            val compRange = chars?.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            if (compRange != null && step > 0f) {
+                val compIndex = kotlin.math.round(adjustments.exposure / step).toInt().coerceIn(compRange.lower, compRange.upper)
+                engine.exposureCompensationIndex = compIndex
+                engine.updatePreviewSettings()
+            }
+        }
+    }
+
+    fun resetVideoAdjustments() {
+        val def = com.example.camera.model.VideoAdjustments()
+        updateVideoAdjustments(def)
+        engine.exposureCompensationIndex = 0
+        engine.updatePreviewSettings()
+    }
+
     fun updateCinemaConfig(config: CinemaConfig) {
         engine.setCinemaConfig(config)
         preferences.saveCinemaConfig(config)
@@ -558,6 +605,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.restoreInitialVideoResolution(CameraResolution(preferences.videoWidth, preferences.videoHeight))
         engine.setCinemaConfig(preferences.getCinemaConfig())
         engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
+        engine.currentVideoAdjustments = _videoAdjustments.value
 
         // Restore initial mode aspect ratio:
         // - Photo mode: fixed 3:4
@@ -783,6 +831,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
             engine.setPreviewAspectRatio(16f / 9f)
+        }
+
+        if (mode != CameraMode.VIDEO) {
+            _isVideoAdjustmentsOpen.value = false
         }
 
         if (mode == CameraMode.AI_SUBJECT_TRACKING) {

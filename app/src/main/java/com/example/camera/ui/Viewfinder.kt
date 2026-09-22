@@ -82,6 +82,7 @@ fun Viewfinder(
     isLutPreviewEnabled: Boolean = false,
     cinemaConfig: CinemaConfig? = null,
     portraitConfig: PortraitConfig? = null,
+    videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
     rec2020AutoToneParams: com.example.camera.engine.Rec2020AutoToneParams? = null,
     floatingWindowBlurStrength: Float = 24.0f,
     onSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
@@ -272,6 +273,12 @@ fun Viewfinder(
                                     0f, 0f, 0f, 1f, 0f
                                 ))
                                 colorMatrix.postConcat(leicaMat)
+                                hasFilter = true
+                            }
+                        } else if (cameraMode == CameraMode.VIDEO && videoAdjustments != null) {
+                            val adjMat = com.example.camera.engine.VideoAdjustmentsPipeline.computeColorMatrix(videoAdjustments)
+                            if (adjMat != null) {
+                                colorMatrix.postConcat(adjMat)
                                 hasFilter = true
                             }
                         }
