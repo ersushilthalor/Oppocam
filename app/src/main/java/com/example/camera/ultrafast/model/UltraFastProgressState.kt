@@ -8,6 +8,7 @@ import android.net.Uri
 data class UltraFastProgressState(
     val isCapturing: Boolean = false,
     val isProcessing: Boolean = false,
+    val isContinuousHolding: Boolean = false,
     val burstId: String? = null,
     val targetFps: Int = 15,
     val totalFrames: Int = 0,
@@ -23,5 +24,5 @@ data class UltraFastProgressState(
         get() = if (totalFrames > 0) (processedFrames.toFloat() / totalFrames).coerceIn(0f, 1f) else 0f
 
     val isIdle: Boolean
-        get() = !isCapturing && !isProcessing
+        get() = !isCapturing && !isProcessing && !isContinuousHolding
 }

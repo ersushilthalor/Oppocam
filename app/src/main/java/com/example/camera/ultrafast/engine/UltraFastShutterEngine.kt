@@ -57,7 +57,7 @@ class UltraFastShutterEngine(
 ) {
     companion object {
         private const val TAG = "UltraFastShutterEngine"
-        private const val RING_BUFFER_CAPACITY = 40
+        private const val RING_BUFFER_CAPACITY = 60
     }
 
     private val engineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -84,6 +84,8 @@ class UltraFastShutterEngine(
 
     // Active burst state tracking
     private val isBurstInProgress = AtomicBoolean(false)
+    private val isContinuousBurst = AtomicBoolean(false)
+    private val isAcquisitionStopped = AtomicBoolean(false)
     private val acquiredFrameCounter = AtomicInteger(0)
     private val processedFrameCounter = AtomicInteger(0)
     private var currentBurstId: String = ""
@@ -145,6 +147,12 @@ class UltraFastShutterEngine(
             return
         }
 
+        // If acquisition stopped and not in continuous mode, or reached total expected frames
+        if (isAcquisitionStopped.get() && currentBurstTotalFrames > 0 && acquiredFrameCounter.get() >= currentBurstTotalFrames) {
+            image.close()
+            return
+        }
+
         val width = image.width
         val height = image.height
         configureFramePool(width, height)
@@ -184,17 +192,26 @@ class UltraFastShutterEngine(
                 val dropped = ringBuffer.poll()
                 dropped?.let { pool.recycle(it.yuvData) }
                 ringBuffer.offer(fastFrame)
+                processedFrameCounter.incrementAndGet()
                 Log.w(TAG, "Ring buffer capacity reached; oldest frame dropped to maintain real-time sensor loop.")
             }
 
             val acquired = acquiredFrameCounter.get()
+            val isStillCapturing = if (isContinuousBurst.get()) true else (currentBurstTotalFrames <= 0 || acquired < currentBurstTotalFrames)
+
             _progressState.value = _progressState.value.copy(
-                isCapturing = acquired < currentBurstTotalFrames,
+                isCapturing = isStillCapturing,
+                isContinuousHolding = isContinuousBurst.get(),
                 acquiredFrames = acquired,
-                statusText = "Acquired $acquired / $currentBurstTotalFrames real sensor frames"
+                statusText = if (isContinuousBurst.get()) {
+                    "Burst capturing: $acquired frames ($currentBurstFps FPS)"
+                } else {
+                    "Acquired $acquired / $currentBurstTotalFrames real sensor frames"
+                }
             )
 
-            if (acquired >= currentBurstTotalFrames) {
+            if (!isContinuousBurst.get() && currentBurstTotalFrames > 0 && acquired >= currentBurstTotalFrames) {
+                isAcquisitionStopped.set(true)
                 Log.i(TAG, "Completed sensor acquisition for burst $currentBurstId: $acquired frames captured.")
             }
         } catch (t: Throwable) {
@@ -269,21 +286,33 @@ class UltraFastShutterEngine(
             }
 
             val processed = processedFrameCounter.incrementAndGet()
-            val total = frame.totalFrames
+            val total = currentBurstTotalFrames
+            val isAcqDone = isAcquisitionStopped.get()
+            val isDone = isAcqDone && total > 0 && processed >= total
 
             _progressState.value = _progressState.value.copy(
-                isProcessing = processed < total,
+                isProcessing = !isDone,
                 processedFrames = processed,
-                statusText = "Saved $processed / $total full-res JPEGs (${frame.targetFps} FPS)",
+                statusText = if (isDone) {
+                    "Saved $processed JPEGs (${frame.targetFps} FPS)"
+                } else {
+                    "Saved $processed ${if (total > 0) "/ $total" else ""} full-res JPEGs (${frame.targetFps} FPS)"
+                },
                 latestSavedUri = savedUri
             )
 
-            // If this was the last frame in the burst, persist entity and complete
-            if (processed >= total && isBurstInProgress.get()) {
+            // If this was the last frame and sensor acquisition has ended, finish burst
+            if (isDone && isBurstInProgress.get()) {
                 finishBurst(frame.burstId, frame.targetFps, width, height)
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Failed converting and saving frame ${frame.frameIndex}", t)
+            val processed = processedFrameCounter.incrementAndGet()
+            val total = currentBurstTotalFrames
+            val isAcqDone = isAcquisitionStopped.get()
+            if (isAcqDone && total > 0 && processed >= total && isBurstInProgress.get()) {
+                finishBurst(frame.burstId, frame.targetFps, frame.width, frame.height)
+            }
         } finally {
             // Return buffer to pool
             pool?.recycle(frame.yuvData)
@@ -465,6 +494,116 @@ class UltraFastShutterEngine(
     }
 
     /**
+     * Starts continuous burst capture at the selected FPS. Captures frames until stopContinuousBurst() is invoked.
+     */
+    fun startContinuousBurst(
+        burstId: String = UUID.randomUUID().toString(),
+        fps: Int,
+        onComplete: ((Uri?) -> Unit)? = null
+    ) {
+        if (isBurstInProgress.getAndSet(true)) {
+            Log.w(TAG, "Burst already in progress, re-initializing for continuous capture.")
+        }
+
+        currentBurstId = burstId
+        currentBurstTotalFrames = 0
+        currentBurstFps = fps.coerceIn(5, 20)
+        isContinuousBurst.set(true)
+        isAcquisitionStopped.set(false)
+        acquiredFrameCounter.set(0)
+        processedFrameCounter.set(0)
+        burstSavedUris.clear()
+        burstCompletionCallback = onComplete
+
+        _progressState.value = UltraFastProgressState(
+            isCapturing = true,
+            isProcessing = false,
+            isContinuousHolding = true,
+            burstId = burstId,
+            targetFps = currentBurstFps,
+            totalFrames = 0,
+            acquiredFrames = 0,
+            processedFrames = 0,
+            statusText = "Continuous RAW capture active ($currentBurstFps FPS)..."
+        )
+        Log.i(TAG, "Started continuous Ultra Fast Burst $burstId at $fps FPS")
+    }
+
+    /**
+     * Immediately stops sensor acquisition for an active continuous burst.
+     * Queued frames in the buffer continue converting in the background until saved.
+     */
+    fun stopContinuousBurst() {
+        if (!isContinuousBurst.get()) return
+        isContinuousBurst.set(false)
+        isAcquisitionStopped.set(true)
+
+        val total = acquiredFrameCounter.get()
+        currentBurstTotalFrames = total
+        Log.i(TAG, "Stopped continuous burst $currentBurstId: total $total frames acquired from sensor.")
+
+        if (total == 0) {
+            isBurstInProgress.set(false)
+            _progressState.value = UltraFastProgressState()
+            burstCompletionCallback?.invoke(null)
+            burstCompletionCallback = null
+            return
+        }
+
+        val processed = processedFrameCounter.get()
+        val stillProcessing = processed < total
+        _progressState.value = _progressState.value.copy(
+            isCapturing = false,
+            isContinuousHolding = false,
+            isProcessing = stillProcessing,
+            totalFrames = total,
+            statusText = if (stillProcessing) "Converting JPEGs ($processed / $total)..." else "Burst complete ($total photos)"
+        )
+
+        if (!stillProcessing && isBurstInProgress.get()) {
+            val width = poolDimensions?.width ?: 0
+            val height = poolDimensions?.height ?: 0
+            finishBurst(currentBurstId, currentBurstFps, width, height)
+        }
+    }
+
+    /**
+     * Captures a single ultra-fast uncompressed RAW/YUV frame.
+     */
+    fun startSingleCapture(
+        burstId: String = UUID.randomUUID().toString(),
+        fps: Int,
+        onComplete: ((Uri?) -> Unit)? = null
+    ) {
+        if (isBurstInProgress.getAndSet(true)) {
+            Log.w(TAG, "A capture is already active; proceeding with single capture.")
+        }
+
+        currentBurstId = burstId
+        currentBurstTotalFrames = 1
+        currentBurstFps = fps.coerceIn(5, 20)
+        isContinuousBurst.set(false)
+        isAcquisitionStopped.set(false)
+        acquiredFrameCounter.set(0)
+        processedFrameCounter.set(0)
+        burstSavedUris.clear()
+        burstCompletionCallback = onComplete
+
+        _progressState.value = UltraFastProgressState(
+            isCapturing = true,
+            isProcessing = false,
+            isContinuousHolding = false,
+            burstId = burstId,
+            targetFps = currentBurstFps,
+            totalFrames = 1,
+            acquiredFrames = 0,
+            processedFrames = 0,
+            statusText = "Capturing 1 fast sensor frame..."
+        )
+        Log.i(TAG, "Started single Ultra Fast Capture $burstId")
+    }
+
+    /**
      * Initiates a real sensor burst capture using the fastest uncompressed acquisition path.
      */
     fun startBurst(
@@ -473,6 +612,11 @@ class UltraFastShutterEngine(
         frameCount: Int,
         onComplete: (Uri?) -> Unit
     ) {
+        if (frameCount == 1) {
+            startSingleCapture(burstId, fps, onComplete)
+            return
+        }
+
         if (isBurstInProgress.getAndSet(true)) {
             Log.w(TAG, "A burst capture is already active; ignoring trigger.")
             return
@@ -481,6 +625,8 @@ class UltraFastShutterEngine(
         currentBurstId = burstId
         currentBurstTotalFrames = frameCount
         currentBurstFps = fps.coerceIn(5, 20)
+        isContinuousBurst.set(false)
+        isAcquisitionStopped.set(false)
         acquiredFrameCounter.set(0)
         processedFrameCounter.set(0)
         burstSavedUris.clear()
@@ -489,6 +635,7 @@ class UltraFastShutterEngine(
         _progressState.value = UltraFastProgressState(
             isCapturing = true,
             isProcessing = true,
+            isContinuousHolding = false,
             burstId = burstId,
             targetFps = currentBurstFps,
             totalFrames = frameCount,

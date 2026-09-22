@@ -231,6 +231,51 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Burst: $clamped Frames")
     }
 
+    /**
+     * Executes exactly 1 ultra-fast sensor frame on single tap.
+     */
+    fun onFastShutterSingleTap() {
+        if (_cameraMode.value != CameraMode.PHOTO) {
+            onMainActionButtonClick()
+            return
+        }
+        com.example.camera.sound.CameraSoundManager.playShutter()
+        engine.takeUltraFastSinglePhoto(
+            fps = _ultraFastShutterFps.value,
+            onComplete = { uri ->
+                if (uri != null) {
+                    showToast("Saved to DCIM/Camera")
+                } else {
+                    showToast("Capture failed")
+                }
+            }
+        )
+    }
+
+    /**
+     * Starts continuous RAW acquisition when user presses and holds the shutter button.
+     */
+    fun onFastShutterHoldStart() {
+        if (_cameraMode.value != CameraMode.PHOTO) return
+        com.example.camera.sound.CameraSoundManager.playShutter()
+        engine.startUltraFastContinuousCapture(
+            fps = _ultraFastShutterFps.value,
+            onComplete = { coverUri ->
+                if (coverUri != null) {
+                    showToast("Burst saved to DCIM/Camera")
+                }
+            }
+        )
+    }
+
+    /**
+     * Immediately stops continuous RAW acquisition when user releases their finger.
+     */
+    fun onFastShutterHoldEnd() {
+        if (_cameraMode.value != CameraMode.PHOTO) return
+        engine.stopUltraFastContinuousCapture()
+    }
+
     // High-Quality Zoom Engine (Multi-Frame Lanczos-3 & Micro-Detail Recovery)
     private val _isHighQualityZoomEnabled = MutableStateFlow(preferences.getModeHqZoomEnabled(preferences.cameraMode))
     val isHighQualityZoomEnabled: StateFlow<Boolean> = _isHighQualityZoomEnabled.asStateFlow()

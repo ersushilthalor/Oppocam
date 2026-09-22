@@ -44,7 +44,14 @@ import com.example.camera.hdr.ui.HdrComparisonDialog
 import com.example.camera.hdr.ui.HdrGallerySection
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Compare
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.outlined.BurstMode
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableIntStateOf
+import com.example.camera.ultrafast.data.UltraFastBurstRepository
+import com.example.camera.ultrafast.model.UltraFastBurstEntity
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +69,12 @@ fun MediaViewerDialog(
     var isHdrQueueSheetOpen by remember { mutableStateOf(false) }
     var activeComparisonJob by remember { mutableStateOf<HdrVideoJobEntity?>(null) }
 
+    // Fast Shutter Burst Group State
+    val burstRepo = remember { UltraFastBurstRepository(context) }
+    var burstEntity by remember(media.uri) { mutableStateOf<UltraFastBurstEntity?>(null) }
+    var selectedBurstFrameIndex by remember(media.uri) { mutableIntStateOf(0) }
+    var isBurstPlaying by remember { mutableStateOf(false) }
+
     // Check if the current video corresponds to an HDR video
     val matchingHdrJob = remember(media.uri, hdrJobs) {
         hdrJobs.firstOrNull { job ->
@@ -76,12 +89,36 @@ fun MediaViewerDialog(
             val repo = RefocusRepository(context)
             var entity = repo.getRefocusPhoto(media.uri.toString())
             var retries = 0
-            while (entity == null && retries < 8) {
-                kotlinx.coroutines.delay(250)
+            while (entity == null && retries < 4) {
+                kotlinx.coroutines.delay(200)
                 entity = repo.getRefocusPhoto(media.uri.toString())
                 retries++
             }
             refocusEntity = entity
+
+            // Check if part of an Ultra Fast Burst
+            var bEntity = burstRepo.getBurstForUri(media.uri.toString())
+            if (bEntity == null && media.displayName.contains("BURST", ignoreCase = true)) {
+                bEntity = burstRepo.getLatestBurst()
+            }
+            if (bEntity != null) {
+                burstEntity = bEntity
+                val uris = bEntity.getPhotoUris()
+                val idx = uris.indexOf(media.uri.toString())
+                selectedBurstFrameIndex = if (idx >= 0) idx else 0
+            }
+        }
+    }
+
+    // Burst automated playback loop
+    LaunchedEffect(isBurstPlaying, burstEntity) {
+        val entity = burstEntity ?: return@LaunchedEffect
+        val uris = entity.getPhotoUris()
+        if (uris.size <= 1) return@LaunchedEffect
+        val interval = (1000L / entity.fps.coerceIn(5, 20)).coerceAtLeast(40L)
+        while (isBurstPlaying) {
+            kotlinx.coroutines.delay(interval)
+            selectedBurstFrameIndex = (selectedBurstFrameIndex + 1) % uris.size
         }
     }
 
@@ -139,8 +176,16 @@ fun MediaViewerDialog(
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
+                val currentBurstUris = burstEntity?.getPhotoUris() ?: emptyList()
+                val displayUri = if (burstEntity != null && currentBurstUris.isNotEmpty()) {
+                    val frameUriStr = currentBurstUris.getOrNull(selectedBurstFrameIndex) ?: media.uri.toString()
+                    android.net.Uri.parse(frameUriStr)
+                } else {
+                    media.uri
+                }
+
                 AsyncImage(
-                    model = media.uri,
+                    model = displayUri,
                     contentDescription = media.displayName,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize()
@@ -189,6 +234,31 @@ fun MediaViewerDialog(
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                        } else if (burstEntity != null && burstEntity!!.frameCount > 1) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFFFFB300))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.BurstMode,
+                                        contentDescription = null,
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "BURST · ${burstEntity!!.frameCount}",
+                                        color = Color.Black,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Black
+                                    )
+                                }
+                            }
                         } else if (matchingHdrJob != null || media.displayName.contains("HDR")) {
                             Box(
                                 modifier = Modifier
@@ -205,7 +275,7 @@ fun MediaViewerDialog(
                             }
                         }
                         Text(
-                            text = if (refocusEntity != null) "Refocus · ${media.displayName}" else media.displayName,
+                            text = if (refocusEntity != null) "Refocus · ${media.displayName}" else if (burstEntity != null && burstEntity!!.frameCount > 1) "Burst (${burstEntity!!.frameCount} shots)" else media.displayName,
                             color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -257,6 +327,88 @@ fun MediaViewerDialog(
                             contentDescription = "Share",
                             tint = Color.White
                         )
+                    }
+                }
+            }
+
+            // Bottom bar for Stock-Camera style Burst Group browsing & playback
+            val activeBurst = burstEntity
+            if (activeBurst != null && activeBurst.frameCount > 1) {
+                val burstUris = activeBurst.getPhotoUris()
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 28.dp)
+                ) {
+                    FrostedGlassBox(
+                        shape = RoundedCornerShape(28.dp),
+                        elevation = 16.dp,
+                        baseAlpha = 0.85f,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = "Frame ${selectedBurstFrameIndex + 1} of ${activeBurst.frameCount} (${activeBurst.fps} FPS)",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                // Previous frame
+                                IconButton(
+                                    onClick = {
+                                        isBurstPlaying = false
+                                        selectedBurstFrameIndex = if (selectedBurstFrameIndex > 0) selectedBurstFrameIndex - 1 else burstUris.lastIndex
+                                    },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Previous Frame",
+                                        tint = Color.White
+                                    )
+                                }
+
+                                // Play / Pause burst sequence playback
+                                IconButton(
+                                    onClick = { isBurstPlaying = !isBurstPlaying },
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFFB300))
+                                ) {
+                                    Icon(
+                                        imageVector = if (isBurstPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (isBurstPlaying) "Pause Burst" else "Play Burst",
+                                        tint = Color.Black
+                                    )
+                                }
+
+                                // Next frame
+                                IconButton(
+                                    onClick = {
+                                        isBurstPlaying = false
+                                        selectedBurstFrameIndex = (selectedBurstFrameIndex + 1) % burstUris.size
+                                    },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                        contentDescription = "Next Frame",
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

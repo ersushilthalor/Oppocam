@@ -15,6 +15,9 @@ interface UltraFastBurstDao {
     @Query("SELECT * FROM ultra_fast_bursts WHERE coverUri = :uri OR photoUrisJson LIKE '%' || :uri || '%' LIMIT 1")
     suspend fun getBurstForUri(uri: String): UltraFastBurstEntity?
 
+    @Query("SELECT * FROM ultra_fast_bursts ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestBurst(): UltraFastBurstEntity?
+
     @Query("SELECT * FROM ultra_fast_bursts ORDER BY timestamp DESC")
     fun getAllBurstsFlow(): Flow<List<UltraFastBurstEntity>>
 

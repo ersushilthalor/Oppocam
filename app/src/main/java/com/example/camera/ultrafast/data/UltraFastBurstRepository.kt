@@ -25,6 +25,10 @@ class UltraFastBurstRepository(context: Context) {
         dao.getBurstForUri(uri)
     }
 
+    suspend fun getLatestBurst(): UltraFastBurstEntity? = withContext(Dispatchers.IO) {
+        dao.getLatestBurst()
+    }
+
     fun getAllBursts(): Flow<List<UltraFastBurstEntity>> = dao.getAllBurstsFlow()
 
     suspend fun deleteBurst(burstId: String) = withContext(Dispatchers.IO) {

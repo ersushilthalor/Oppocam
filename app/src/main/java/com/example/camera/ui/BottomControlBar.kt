@@ -23,6 +23,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +64,11 @@ fun BottomControlBar(
     activeTimerCountdown: Int?,
     onModeSelected: (CameraMode) -> Unit,
     onShutterClick: () -> Unit,
+    isUltraFastShutterEnabled: Boolean = false,
+    ultraFastFps: Int = 15,
+    onFastShutterSingleTap: () -> Unit = onShutterClick,
+    onFastShutterHoldStart: () -> Unit = {},
+    onFastShutterHoldEnd: () -> Unit = {},
     onFlipCameraClick: () -> Unit,
     onToggleProClick: () -> Unit = {},
     onGalleryClick: () -> Unit,
@@ -227,6 +236,9 @@ fun BottomControlBar(
 
                         // Center: Customizable Shutter Button
                         val shutterSize = layoutConfig.shutterSizeDp.dp
+                        val isFastShutterActive = isUltraFastShutterEnabled && cameraMode == CameraMode.PHOTO
+                        val coroutineScope = rememberCoroutineScope()
+
                         Box(
                             modifier = Modifier
                                 .offset(x = layoutConfig.shutterHorizontalOffsetDp.dp)
@@ -245,7 +257,40 @@ fun BottomControlBar(
                                         ShutterStyle.DSLR_KNURLED -> Modifier.border(4.dp, Color(0xFF555555), CircleShape).padding(2.dp)
                                     }
                                 )
-                                .clickable { onShutterClick() }
+                                .then(
+                                    if (isFastShutterActive) {
+                                        Modifier.pointerInput(isFastShutterActive) {
+                                            awaitPointerEventScope {
+                                                while (true) {
+                                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                                    var holdTriggered = false
+                                                    val holdJob = coroutineScope.launch {
+                                                        delay(180)
+                                                        holdTriggered = true
+                                                        onFastShutterHoldStart()
+                                                    }
+
+                                                    val upOrCancel = waitForUpOrCancellation()
+                                                    holdJob.cancel()
+
+                                                    if (upOrCancel != null) {
+                                                        if (holdTriggered) {
+                                                            onFastShutterHoldEnd()
+                                                        } else {
+                                                            onFastShutterSingleTap()
+                                                        }
+                                                    } else {
+                                                        if (holdTriggered) {
+                                                            onFastShutterHoldEnd()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Modifier.clickable { onShutterClick() }
+                                    }
+                                )
                                 .testTag("main_shutter_button"),
                             contentAlignment = Alignment.Center
                         ) {

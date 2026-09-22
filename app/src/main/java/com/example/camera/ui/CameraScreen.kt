@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import com.example.camera.ui.components.FastShutterLiveCounter
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -372,6 +373,16 @@ fun CameraScreen(
             modifier = Modifier.fillMaxSize()
         )
 
+        // 1g. Fast Shutter Live Frame Counter Overlay (Exact center of Viewfinder)
+        FastShutterLiveCounter(
+            visible = isUltraFastShutterEnabled && (ultraFastProgressState.isContinuousHolding || (ultraFastProgressState.isCapturing && ultraFastProgressState.acquiredFrames > 0) || (ultraFastProgressState.isProcessing && ultraFastProgressState.acquiredFrames > 1)),
+            frameCount = ultraFastProgressState.acquiredFrames,
+            targetFps = ultraFastProgressState.targetFps,
+            isProcessing = ultraFastProgressState.isProcessing,
+            processedCount = ultraFastProgressState.processedFrames,
+            modifier = Modifier.align(Alignment.Center)
+        )
+
         // Adaptive Dual-Exposure HDR Live Indicator (Subtle Pro HUD)
         if (cameraMode == CameraMode.VIDEO) {
             com.example.camera.hdr.ui.HdrLiveIndicator(
@@ -468,9 +479,9 @@ fun CameraScreen(
                     CircularProgressIndicator(
                         progress = {
                             if (ultraFastProgressState.isCapturing) {
-                                ultraFastProgressState.captureProgress
+                                if (ultraFastProgressState.totalFrames > 0) ultraFastProgressState.captureProgress else 0f
                             } else {
-                                ultraFastProgressState.processingProgress
+                                if (ultraFastProgressState.totalFrames > 0) ultraFastProgressState.processingProgress else 0f
                             }
                         },
                         modifier = Modifier.size(16.dp),
@@ -481,9 +492,17 @@ fun CameraScreen(
                     Column {
                         Text(
                             text = if (ultraFastProgressState.isCapturing) {
-                                "Capturing Frame ${ultraFastProgressState.acquiredFrames}/${ultraFastProgressState.totalFrames}"
+                                if (ultraFastProgressState.isContinuousHolding || ultraFastProgressState.totalFrames <= 0) {
+                                    "Capturing Frame ${ultraFastProgressState.acquiredFrames} (${ultraFastProgressState.targetFps} FPS)"
+                                } else {
+                                    "Capturing Frame ${ultraFastProgressState.acquiredFrames}/${ultraFastProgressState.totalFrames}"
+                                }
                             } else {
-                                "Converting JPEGs (${(ultraFastProgressState.processingProgress * 100).toInt()}%)"
+                                if (ultraFastProgressState.totalFrames > 0) {
+                                    "Converting JPEGs (${(ultraFastProgressState.processingProgress * 100).toInt()}%)"
+                                } else {
+                                    "Converting JPEGs (${ultraFastProgressState.processedFrames})..."
+                                }
                             },
                             color = Color.White,
                             fontSize = 12.sp,
@@ -493,7 +512,11 @@ fun CameraScreen(
                             text = if (ultraFastProgressState.isCapturing) {
                                 "${ultraFastProgressState.targetFps} FPS high-speed sensor stream"
                             } else {
-                                "Saved ${ultraFastProgressState.processedFrames}/${ultraFastProgressState.totalFrames} full-res JPEGs"
+                                if (ultraFastProgressState.totalFrames > 0) {
+                                    "Saved ${ultraFastProgressState.processedFrames}/${ultraFastProgressState.totalFrames} full-res JPEGs"
+                                } else {
+                                    "Saved ${ultraFastProgressState.processedFrames} full-res JPEGs"
+                                }
                             },
                             color = Color(0xFFD1D5DB),
                             fontSize = 10.5.sp
@@ -889,6 +912,11 @@ fun CameraScreen(
             activeTimerCountdown = activeTimerCountdown,
             onModeSelected = { viewModel.setCameraMode(it) },
             onShutterClick = { viewModel.onMainActionButtonClick() },
+            isUltraFastShutterEnabled = isUltraFastShutterEnabled,
+            ultraFastFps = ultraFastShutterFps,
+            onFastShutterSingleTap = { viewModel.onFastShutterSingleTap() },
+            onFastShutterHoldStart = { viewModel.onFastShutterHoldStart() },
+            onFastShutterHoldEnd = { viewModel.onFastShutterHoldEnd() },
             onFlipCameraClick = { viewModel.toggleCameraFacing() },
             onGalleryClick = {
                 if (lastCapturedMedia != null) {

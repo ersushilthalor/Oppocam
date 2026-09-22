@@ -3306,6 +3306,243 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    private var continuousCaptureJob: Job? = null
+    private val isHoldingContinuousCapture = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Captures exactly one ultra-fast uncompressed RAW/YUV sensor frame with background conversion.
+     */
+    fun takeUltraFastSinglePhoto(
+        fps: Int = 15,
+        onComplete: (Uri?) -> Unit
+    ) {
+        val camera = cameraDevice ?: run {
+            onComplete(null)
+            return
+        }
+        val session = captureSession ?: run {
+            onComplete(null)
+            return
+        }
+        val readerYuv = imageReaderYuv ?: run {
+            takePhoto(onComplete)
+            return
+        }
+
+        _isCapturing.value = true
+        val burstId = java.util.UUID.randomUUID().toString()
+        val clampedFps = fps.coerceIn(5, 20)
+        val fpsRange = Range(clampedFps, clampedFps)
+
+        try {
+            // Set listener on readerYuv for sensor frame extraction into pool
+            val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
+            readerYuv.setOnImageAvailableListener({ reader ->
+                ultraFastShutterEngine.onSensorImageAvailable(
+                    reader = reader,
+                    sensorOrientation = getCaptureJpegOrientation(),
+                    isFrontFacing = isFront,
+                    saveMirrored = saveSelfieAsPreviewed
+                )
+            }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
+
+            val captureBuilder = try {
+                camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
+            } catch (e: Exception) {
+                camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+            }
+            captureBuilder.addTarget(readerYuv.surface)
+            previewSurface?.let { captureBuilder.addTarget(it) }
+            applyCommonSettings(captureBuilder)
+
+            captureBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+            captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            captureBuilder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+            captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+            captureBuilder.setTag("ULTRA_FAST_SINGLE_$burstId")
+
+            ultraFastShutterEngine.startSingleCapture(
+                burstId = burstId,
+                fps = clampedFps,
+                onComplete = { coverUri ->
+                    _isCapturing.value = false
+                    updateStorageStats()
+                    if (coverUri != null) {
+                        _lastCapturedMedia.value = CapturedMedia(
+                            uri = coverUri,
+                            isVideo = false,
+                            timestamp = System.currentTimeMillis(),
+                            displayName = "IMG_${burstId.take(8)}.jpg"
+                        )
+                    }
+                    onComplete(coverUri)
+                }
+            )
+
+            session.capture(
+                captureBuilder.build(),
+                object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        super.onCaptureFailed(session, request, failure)
+                        Log.w(TAG, "Ultra Fast single frame capture failed: ${failure.reason}")
+                        _isCapturing.value = false
+                        onComplete(null)
+                    }
+                },
+                ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed executing Ultra Fast single capture", t)
+            ultraFastShutterEngine.reset()
+            _isCapturing.value = false
+            takePhoto(onComplete)
+        }
+    }
+
+    /**
+     * Starts continuous RAW capture at selected 5-20 FPS. Holds until stopUltraFastContinuousCapture() is called.
+     * Viewfinder remains completely smooth by streaming to preview surface concurrently with zero stall.
+     */
+    fun startUltraFastContinuousCapture(
+        fps: Int = 15,
+        onComplete: (Uri?) -> Unit
+    ) {
+        val camera = cameraDevice ?: run {
+            onComplete(null)
+            return
+        }
+        val session = captureSession ?: run {
+            onComplete(null)
+            return
+        }
+        val readerYuv = imageReaderYuv ?: run {
+            takePhoto(onComplete)
+            return
+        }
+
+        val clampedFps = fps.coerceIn(5, 20)
+        val intervalMs = 1000L / clampedFps
+        val burstId = java.util.UUID.randomUUID().toString()
+
+        isHoldingContinuousCapture.set(true)
+        _isCapturing.value = true
+
+        val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        readerYuv.setOnImageAvailableListener({ reader ->
+            ultraFastShutterEngine.onSensorImageAvailable(
+                reader = reader,
+                sensorOrientation = getCaptureJpegOrientation(),
+                isFrontFacing = isFront,
+                saveMirrored = saveSelfieAsPreviewed
+            )
+        }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
+
+        ultraFastShutterEngine.startContinuousBurst(
+            burstId = burstId,
+            fps = clampedFps,
+            onComplete = { coverUri ->
+                _isCapturing.value = false
+                updateStorageStats()
+                if (coverUri != null) {
+                    _lastCapturedMedia.value = CapturedMedia(
+                        uri = coverUri,
+                        isVideo = false,
+                        timestamp = System.currentTimeMillis(),
+                        displayName = "BURST_${burstId.take(8)}.jpg"
+                    )
+                }
+                onComplete(coverUri)
+            }
+        )
+
+        continuousCaptureJob?.cancel()
+        continuousCaptureJob = engineScope.launch(Dispatchers.Default) {
+            val fpsRange = Range(clampedFps, clampedFps)
+            var frameIndex = 0
+            val maxContinuousFrames = 100 // Safety bound to prevent runaway capture
+            val inFlightCaptures = java.util.concurrent.atomic.AtomicInteger(0)
+
+            while (isActive && isHoldingContinuousCapture.get() && frameIndex < maxContinuousFrames) {
+                val frameStartTime = System.currentTimeMillis()
+                try {
+                    // Use TEMPLATE_ZERO_SHUTTER_LAG or TEMPLATE_PREVIEW for continuous burst so sensor operates at full native rate
+                    val captureBuilder = try {
+                        camera.createCaptureRequest(CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG)
+                    } catch (e: Exception) {
+                        camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                    }
+                    captureBuilder.addTarget(readerYuv.surface)
+                    previewSurface?.let { captureBuilder.addTarget(it) }
+                    applyCommonSettings(captureBuilder)
+
+                    captureBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+                    captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    captureBuilder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                    captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                    captureBuilder.setTag("ULTRA_FAST_FRAME_${burstId}_$frameIndex")
+
+                    inFlightCaptures.incrementAndGet()
+                    session.capture(
+                        captureBuilder.build(),
+                        object : CameraCaptureSession.CaptureCallback() {
+                            override fun onCaptureCompleted(
+                                session: CameraCaptureSession,
+                                request: CaptureRequest,
+                                result: TotalCaptureResult
+                            ) {
+                                inFlightCaptures.decrementAndGet()
+                            }
+
+                            override fun onCaptureFailed(
+                                session: CameraCaptureSession,
+                                request: CaptureRequest,
+                                failure: CaptureFailure
+                            ) {
+                                inFlightCaptures.decrementAndGet()
+                                Log.w(TAG, "Ultra Fast continuous frame $frameIndex failed: ${failure.reason}")
+                            }
+                        },
+                        ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler
+                    )
+                    frameIndex++
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error triggering continuous frame $frameIndex", e)
+                    break
+                }
+
+                // Precise capture timing control strictly driven by selected 5-20 FPS
+                val elapsed = System.currentTimeMillis() - frameStartTime
+                val delayTime = (intervalMs - elapsed).coerceAtLeast(0L)
+                if (delayTime > 0) {
+                    delay(delayTime)
+                }
+
+                // Backpressure throttle: prevent camera HAL request over-queuing so release stops instantly
+                var backpressureWaits = 0
+                while (isActive && isHoldingContinuousCapture.get() && inFlightCaptures.get() >= 2 && backpressureWaits < 10) {
+                    delay(10)
+                    backpressureWaits++
+                }
+            }
+        }
+    }
+
+    /**
+     * Immediately stops continuous RAW capture and lets background worker drain queued frames.
+     */
+    fun stopUltraFastContinuousCapture() {
+        if (!isHoldingContinuousCapture.getAndSet(false)) return
+        continuousCaptureJob?.cancel()
+        continuousCaptureJob = null
+        ultraFastShutterEngine.stopContinuousBurst()
+    }
+
     /**
      * Executes real sensor burst acquisition using the fastest uncompressed RAW/YUV sensor path.
      * Preserves maximum native resolution, buffering in-memory before asynchronous background JPEG conversion.
@@ -3408,9 +3645,8 @@ class Camera2Engine(private val context: Context) {
      */
     fun takePhoto(onComplete: (Uri?) -> Unit) {
         if (isUltraFastShutterEnabled && currentMode == CameraMode.PHOTO) {
-            takeUltraFastBurst(
+            takeUltraFastSinglePhoto(
                 fps = ultraFastShutterFps,
-                frameCount = ultraFastShutterBurstCount,
                 onComplete = onComplete
             )
             return
