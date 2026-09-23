@@ -476,7 +476,185 @@ class Camera2Engine(private val context: Context) {
                 } catch (t: Throwable) { false }
             } ?: "1"
 
+            // Inspect primary back camera properties for logical multi-camera and baseline focal length
+            val primaryBackChars = getCharacteristics(primaryBackId)
+            val isPrimaryBackLogicalMulti = primaryBackChars?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                ?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) == true
+            val primaryBackZoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                primaryBackChars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            } else null
+            val primaryBackMinZoom = primaryBackZoomRange?.lower ?: 1.0f
+            val primaryBackMaxZoom = primaryBackZoomRange?.upper ?: 10.0f
+            val hasLogicalUltraWide = primaryBackMinZoom < 0.95f
+
+            val primaryFocals = primaryBackChars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: floatArrayOf(4.5f)
+            val primaryApertures = primaryBackChars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf(1.8f)
+            val primarySensorSize = primaryBackChars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val primaryDiag = if (primarySensorSize != null && primarySensorSize.width > 0 && primarySensorSize.height > 0) {
+                kotlin.math.sqrt((primarySensorSize.width * primarySensorSize.width + primarySensorSize.height * primarySensorSize.height).toDouble()).toFloat()
+            } else null
+            val primaryCropFactor = if (primaryDiag != null && primaryDiag > 0f) 43.27f / primaryDiag else 6.0f
+
+            // Find the true Main Wide focal length (typically 23mm-32mm 35mm-equivalent, ~4mm-6.5mm)
+            val primaryMainFocal = primaryFocals.filter { (it * primaryCropFactor) in 21f..36f }
+                .minByOrNull { kotlin.math.abs(it * primaryCropFactor - 26f) }
+                ?: primaryFocals.firstOrNull()
+                ?: 4.5f
+            val primaryMainEq35 = primaryMainFocal * primaryCropFactor
+            val primaryMainFov = if (primarySensorSize != null && primarySensorSize.width > 0 && primaryMainFocal > 0f) {
+                (2.0 * kotlin.math.atan(primarySensorSize.width.toDouble() / (2.0 * primaryMainFocal.toDouble())) * (180.0 / Math.PI)).toFloat()
+            } else 78f
+            val primaryMainAperture = primaryApertures.firstOrNull() ?: 1.8f
+
+            // 1. ALWAYS register the Primary Back 1x Main camera first
+            lenses.add(
+                LensInfo(
+                    cameraId = primaryBackId,
+                    facing = CameraCharacteristics.LENS_FACING_BACK,
+                    lensType = LensType.WIDE,
+                    displayName = "1x Main (${primaryMainFocal}mm f/${primaryMainAperture})",
+                    focalLengthMm = primaryMainFocal,
+                    maxAperture = primaryMainAperture,
+                    isPhysical = true,
+                    isHiddenAux = false,
+                    isZoomPreset = false,
+                    baseZoomRatio = 1.0f,
+                    minZoomRatio = primaryBackMinZoom,
+                    maxZoomRatio = primaryBackMaxZoom,
+                    isLogicalMultiCamera = isPrimaryBackLogicalMulti,
+                    isPrimaryMain = true,
+                    fovDegrees = primaryMainFov,
+                    equivalent35mmFocalMm = primaryMainEq35,
+                    idTypeDescription = if (isPrimaryBackLogicalMulti) "Logical Multi-Cam Main (1x)" else "Primary Main Camera (1x)"
+                )
+            )
+
+            // 2. Android 9+ Physical camera inspection inside primary logical multi-camera
+            var detectedPhysicalUltraWide = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && primaryBackChars != null) {
+                val physicalCameraIds = primaryBackChars.physicalCameraIds
+                for (physId in physicalCameraIds) {
+                    if (!processedPhysicalIds.contains(physId)) {
+                        processedPhysicalIds.add(physId)
+                        try {
+                            val physChars = getCharacteristics(physId) ?: continue
+                            val pFacing = physChars.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_BACK
+                            if (pFacing != CameraCharacteristics.LENS_FACING_BACK) continue
+
+                            val pFocals = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: floatArrayOf(4f)
+                            val pApertures = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf(1.8f)
+                            val pSensor = physChars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                            val pMinFocus = physChars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+
+                            val pFocal = pFocals.firstOrNull() ?: 4f
+                            val pAperture = pApertures.firstOrNull() ?: 1.8f
+                            val pDiag = if (pSensor != null && pSensor.width > 0 && pSensor.height > 0) {
+                                kotlin.math.sqrt((pSensor.width * pSensor.width + pSensor.height * pSensor.height).toDouble()).toFloat()
+                            } else null
+                            val pCrop = if (pDiag != null && pDiag > 0f) 43.27f / pDiag else 6.0f
+                            val pEq35 = pFocal * pCrop
+                            val pFov = if (pSensor != null && pSensor.width > 0 && pFocal > 0) {
+                                (2.0 * kotlin.math.atan(pSensor.width.toDouble() / (2.0 * pFocal.toDouble())) * (180.0 / Math.PI)).toFloat()
+                            } else 0f
+
+                            // Ultra-Wide optical check: 35mm equivalent <= 20mm, physical focal length <= 2.8mm, or FOV >= 95 degrees
+                            val isPUltraWide = (pEq35 in 1.0f..20.0f) || pFocal <= 2.8f || pFov >= 95.0f
+                            val isPTele3x = pEq35 >= 70f || pFocal >= 9.0f
+                            val isPTele2x = pEq35 in 45f..70f || pFocal in 5.8f..9.0f
+                            val isPMacro = pMinFocus > 10f && pFocal < 3.2f
+
+                            val pType = when {
+                                isPUltraWide -> LensType.ULTRAWIDE
+                                isPTele3x -> LensType.TELEPHOTO_3X
+                                isPTele2x -> LensType.TELEPHOTO
+                                isPMacro -> LensType.MACRO
+                                else -> LensType.WIDE
+                            }
+
+                            if (pType == LensType.ULTRAWIDE) {
+                                detectedPhysicalUltraWide = true
+                            }
+
+                            // Calculate true optical zoom ratio relative to primary main wide lens
+                            val opticalRatio = when (pType) {
+                                LensType.ULTRAWIDE -> {
+                                    if (hasLogicalUltraWide) {
+                                        primaryBackMinZoom
+                                    } else if (primaryMainFocal > 0f && pFocal > 0f) {
+                                        ((pFocal / primaryMainFocal * 10f).roundToInt() / 10f).coerceIn(0.4f, 0.8f)
+                                    } else 0.5f
+                                }
+                                LensType.TELEPHOTO -> {
+                                    if (primaryMainFocal > 0f && pFocal > 0f) {
+                                        ((pFocal / primaryMainFocal * 10f).roundToInt() / 10f).coerceAtLeast(1.8f)
+                                    } else 2.0f
+                                }
+                                LensType.TELEPHOTO_3X -> {
+                                    if (primaryMainFocal > 0f && pFocal > 0f) {
+                                        ((pFocal / primaryMainFocal * 10f).roundToInt() / 10f).coerceAtLeast(2.8f)
+                                    } else 3.0f
+                                }
+                                else -> 1.0f
+                            }
+
+                            // If this physical camera is inside the logical multi-camera, use primaryBackId so
+                            // camera capture session and recording pipeline do NOT need to restart when switching lenses
+                            val openableId = primaryBackId
+                            lenses.add(
+                                LensInfo(
+                                    cameraId = openableId,
+                                    facing = CameraCharacteristics.LENS_FACING_BACK,
+                                    lensType = pType,
+                                    displayName = "${opticalRatio}x ${pType.shortLabel} (${pFocal}mm f/${pAperture})",
+                                    focalLengthMm = pFocal,
+                                    maxAperture = pAperture,
+                                    isPhysical = true,
+                                    isHiddenAux = false,
+                                    isZoomPreset = false,
+                                    baseZoomRatio = opticalRatio,
+                                    minZoomRatio = primaryBackMinZoom,
+                                    maxZoomRatio = primaryBackMaxZoom,
+                                    isLogicalMultiCamera = isPrimaryBackLogicalMulti,
+                                    physicalCameraId = physId,
+                                    fovDegrees = pFov,
+                                    equivalent35mmFocalMm = pEq35,
+                                    idTypeDescription = "Logical Multi-Cam Physical $physId"
+                                )
+                            )
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error inspecting physical camera $physId", e)
+                        }
+                    }
+                }
+            }
+
+            // 3. If logical multi-camera supports optical ultra-wide zoom (< 0.95x) but physical IDs were hidden:
+            if (hasLogicalUltraWide && !detectedPhysicalUltraWide) {
+                lenses.add(
+                    LensInfo(
+                        cameraId = primaryBackId,
+                        facing = CameraCharacteristics.LENS_FACING_BACK,
+                        lensType = LensType.ULTRAWIDE,
+                        displayName = "${primaryBackMinZoom}x Ultra Wide",
+                        focalLengthMm = primaryMainFocal * primaryBackMinZoom,
+                        maxAperture = primaryMainAperture,
+                        isPhysical = true,
+                        isHiddenAux = false,
+                        isZoomPreset = false,
+                        baseZoomRatio = primaryBackMinZoom,
+                        minZoomRatio = primaryBackMinZoom,
+                        maxZoomRatio = primaryBackMaxZoom,
+                        isLogicalMultiCamera = isPrimaryBackLogicalMulti,
+                        fovDegrees = 110f,
+                        equivalent35mmFocalMm = primaryMainEq35 * primaryBackMinZoom,
+                        idTypeDescription = "Logical Multi-Cam Optical Ultra-Wide"
+                    )
+                )
+            }
+
+            // 4. Inspect standalone candidate cameras (different Camera IDs, including front & auxiliary)
             for (id in candidateIds) {
+                if (id == primaryBackId) continue // Primary back camera already processed
                 try {
                     val chars = getCharacteristics(id) ?: continue
                     val facing = chars.get(CameraCharacteristics.LENS_FACING) ?: continue
@@ -487,27 +665,22 @@ class Camera2Engine(private val context: Context) {
                     val maxAperture = apertures.firstOrNull() ?: 1.8f
                     val primaryFocalMm = focalLengths.firstOrNull() ?: 4.0f
 
-                    val cropFactor = if (sensorSize != null && sensorSize.width > 0) {
-                        36f / sensorSize.width
-                    } else {
-                        7f
-                    }
+                    val diagMm = if (sensorSize != null && sensorSize.width > 0 && sensorSize.height > 0) {
+                        kotlin.math.sqrt((sensorSize.width * sensorSize.width + sensorSize.height * sensorSize.height).toDouble()).toFloat()
+                    } else null
+                    val cropFactor = if (diagMm != null && diagMm > 0f) 43.27f / diagMm else 6.0f
 
-                    // For each focal length supported by this camera ID
                     for (focalMm in focalLengths) {
                         val eq35mm = focalMm * cropFactor
                         val fovDegrees = if (sensorSize != null && sensorSize.width > 0 && focalMm > 0) {
                             (2.0 * kotlin.math.atan(sensorSize.width.toDouble() / (2.0 * focalMm.toDouble())) * (180.0 / Math.PI)).toFloat()
-                        } else {
-                            0f
-                        }
+                        } else 0f
 
                         val isBack = facing == CameraCharacteristics.LENS_FACING_BACK
-                        val isUltraWide = isBack && ((eq35mm in 1.0f..23.4f) || focalMm <= 2.8f || fovDegrees >= 88.0f)
+                        val isUltraWide = isBack && ((eq35mm in 1.0f..20.0f) || focalMm <= 2.8f || fovDegrees >= 95.0f)
                         val isTele3x = isBack && (eq35mm >= 70f || focalMm >= 9.0f)
                         val isTele2x = isBack && !isTele3x && (eq35mm in 45f..70f || focalMm in 5.9f..9.0f)
                         val isMacro = isBack && minFocus > 10f && focalMm < 3.2f
-                        val isMain = isBack && !isUltraWide && !isTele3x && !isTele2x && !isMacro
 
                         val lensType = when {
                             facing == CameraCharacteristics.LENS_FACING_FRONT -> LensType.FRONT
@@ -519,17 +692,33 @@ class Camera2Engine(private val context: Context) {
                         }
 
                         val isOfficial = officialIds.contains(id)
-                        val idDesc = when {
-                            !isOfficial -> "Hidden Aux ID $id"
-                            else -> "Camera ID $id"
+                        val idDesc = if (!isOfficial) "Hidden Aux ID $id" else "Camera ID $id"
+
+                        val opticalRatio = when (lensType) {
+                            LensType.ULTRAWIDE -> {
+                                if (primaryMainFocal > 0f && focalMm > 0f) {
+                                    ((focalMm / primaryMainFocal * 10f).roundToInt() / 10f).coerceIn(0.4f, 0.8f)
+                                } else 0.5f
+                            }
+                            LensType.TELEPHOTO -> {
+                                if (primaryMainFocal > 0f && focalMm > 0f) {
+                                    ((focalMm / primaryMainFocal * 10f).roundToInt() / 10f).coerceAtLeast(1.8f)
+                                } else 2.0f
+                            }
+                            LensType.TELEPHOTO_3X -> {
+                                if (primaryMainFocal > 0f && focalMm > 0f) {
+                                    ((focalMm / primaryMainFocal * 10f).roundToInt() / 10f).coerceAtLeast(2.8f)
+                                } else 3.0f
+                            }
+                            else -> 1.0f
                         }
 
                         val displayName = when (lensType) {
                             LensType.FRONT -> "Front Selfie (f/${maxAperture})"
-                            LensType.ULTRAWIDE -> "0.5x Ultra Wide (${focalMm}mm f/${maxAperture})"
-                            LensType.WIDE -> "1x Main (${focalMm}mm f/${maxAperture})"
-                            LensType.TELEPHOTO -> "2x Telephoto (${focalMm}mm f/${maxAperture})"
-                            LensType.TELEPHOTO_3X -> "3x Telephoto (${focalMm}mm f/${maxAperture})"
+                            LensType.ULTRAWIDE -> "${opticalRatio}x Ultra Wide (${focalMm}mm f/${maxAperture})"
+                            LensType.WIDE -> "1x Wide (${focalMm}mm f/${maxAperture})"
+                            LensType.TELEPHOTO -> "${opticalRatio}x Telephoto (${focalMm}mm f/${maxAperture})"
+                            LensType.TELEPHOTO_3X -> "${opticalRatio}x Telephoto (${focalMm}mm f/${maxAperture})"
                             LensType.MACRO -> "Macro (${focalMm}mm)"
                         }
 
@@ -544,92 +733,13 @@ class Camera2Engine(private val context: Context) {
                                 isPhysical = true,
                                 isHiddenAux = !isOfficial,
                                 isZoomPreset = false,
-                                baseZoomRatio = when (lensType) {
-                                    LensType.ULTRAWIDE -> 0.5f
-                                    LensType.WIDE -> 1.0f
-                                    LensType.TELEPHOTO -> 2.0f
-                                    LensType.TELEPHOTO_3X -> 3.0f
-                                    LensType.MACRO -> 1.0f
-                                    LensType.FRONT -> 1.0f
-                                },
+                                baseZoomRatio = opticalRatio,
                                 fovDegrees = fovDegrees,
                                 equivalent35mmFocalMm = eq35mm,
                                 idTypeDescription = idDesc
                             )
                         )
                     }
-
-                    // Android 9+ Physical camera inspection inside logical multi-camera
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        val physicalCameraIds = chars.physicalCameraIds
-                        for (physId in physicalCameraIds) {
-                            if (!processedPhysicalIds.contains(physId)) {
-                                processedPhysicalIds.add(physId)
-                                try {
-                                    val physChars = getCharacteristics(physId) ?: continue
-                                    val pFacing = physChars.get(CameraCharacteristics.LENS_FACING) ?: facing
-                                    val pFocals = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: floatArrayOf(4f)
-                                    val pApertures = physChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf(1.8f)
-                                    val pSensor = physChars.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                                    val pMinFocus = physChars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-
-                                    val pFocal = pFocals.firstOrNull() ?: 4f
-                                    val pAperture = pApertures.firstOrNull() ?: 1.8f
-                                    val pCrop = if (pSensor != null && pSensor.width > 0) 36f / pSensor.width else 7f
-                                    val pEq35 = pFocal * pCrop
-                                    val pFov = if (pSensor != null && pSensor.width > 0 && pFocal > 0) {
-                                        (2.0 * kotlin.math.atan(pSensor.width.toDouble() / (2.0 * pFocal.toDouble())) * (180.0 / Math.PI)).toFloat()
-                                    } else 0f
-
-                                    val isPUltraWide = (pEq35 in 1.0f..23.5f) || pFocal <= 2.6f || pFov >= 75.0f
-                                    val isPTele3x = pEq35 >= 70f || pFocal >= 9.0f
-                                    val isPTele2x = pEq35 in 45f..70f || pFocal in 5.8f..9.0f
-                                    val isPMacro = pMinFocus > 10f && pFocal < 3.2f
-
-                                    val pType = when {
-                                        pFacing == CameraCharacteristics.LENS_FACING_FRONT -> LensType.FRONT
-                                        isPUltraWide -> LensType.ULTRAWIDE
-                                        isPTele3x -> LensType.TELEPHOTO_3X
-                                        isPTele2x -> LensType.TELEPHOTO
-                                        isPMacro -> LensType.MACRO
-                                        else -> LensType.WIDE
-                                    }
-
-                                    val openableId = if (candidateIds.contains(physId)) physId else id
-                                    val isHidden = !officialIds.contains(openableId)
-                                    lenses.add(
-                                        LensInfo(
-                                            cameraId = openableId,
-                                            facing = pFacing,
-                                            lensType = pType,
-                                            displayName = "Physical $physId (${pType.shortLabel} · ${pFocal}mm)",
-                                            focalLengthMm = pFocal,
-                                            maxAperture = pAperture,
-                                            isPhysical = true,
-                                            isHiddenAux = isHidden,
-                                            isZoomPreset = false,
-                                            baseZoomRatio = when (pType) {
-                                                LensType.ULTRAWIDE -> 0.5f
-                                                LensType.WIDE -> 1.0f
-                                                LensType.TELEPHOTO -> 2.0f
-                                                LensType.TELEPHOTO_3X -> 3.0f
-                                                LensType.MACRO -> 1.0f
-                                                LensType.FRONT -> 1.0f
-                                            },
-                                            physicalCameraId = physId,
-                                            fovDegrees = pFov,
-                                            equivalent35mmFocalMm = pEq35,
-                                            idTypeDescription = "Physical Multi-Cam ID $physId"
-                                        )
-                                    )
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Error inspecting physical camera $physId", e)
-                                }
-                            }
-                        }
-                    }
-
-
                 } catch (e: Exception) {
                     Log.w(TAG, "Error inspecting camera $id", e)
                 }
@@ -638,27 +748,6 @@ class Camera2Engine(private val context: Context) {
             // Ensure physical back and front cameras have at least a baseline entry if hardware exists:
             val hasBack = lenses.any { it.facing == CameraCharacteristics.LENS_FACING_BACK }
             val hasFront = lenses.any { it.facing == CameraCharacteristics.LENS_FACING_FRONT }
-
-            // Baseline Main Wide (1x) if no back camera detected yet
-            if (!hasBack) {
-                lenses.add(
-                    LensInfo(
-                        cameraId = primaryBackId,
-                        facing = CameraCharacteristics.LENS_FACING_BACK,
-                        lensType = LensType.WIDE,
-                        displayName = "1x Main Camera",
-                        focalLengthMm = 4.2f,
-                        maxAperture = 1.8f,
-                        isPhysical = true,
-                        isHiddenAux = false,
-                        isZoomPreset = false,
-                        baseZoomRatio = 1.0f,
-                        fovDegrees = 78f,
-                        equivalent35mmFocalMm = 24f,
-                        idTypeDescription = "Main Camera (1x)"
-                    )
-                )
-            }
 
             // Baseline Front Selfie Camera if no front camera detected yet
             if (!hasFront) {
@@ -682,14 +771,14 @@ class Camera2Engine(private val context: Context) {
             }
 
             // Clean, de-duplicate and sort lenses intuitively:
-            // 1. Back Ultra-Wide (0.5x)
+            // 1. Back Ultra-Wide (0.5x / optical ratio)
             // 2. Back Main Wide (1x)
             // 3. Back Telephoto (2x / 3x)
             // 4. Back Macro
             // 5. Additional Physical/Aux lenses
             // 6. Front Selfie (1x)
             val sortedLenses = lenses.distinctBy {
-                "${it.cameraId}_${it.lensType.name}_${it.isZoomPreset}_${it.baseZoomRatio}_${it.isPhysical}"
+                "${it.cameraId}_${it.lensType.name}_${it.isPrimaryMain}_${it.baseZoomRatio}_${it.physicalCameraId}"
             }.sortedWith(
                 compareBy<LensInfo> { it.facing }
                     .thenBy {
@@ -703,31 +792,34 @@ class Camera2Engine(private val context: Context) {
                         }
                     }
                     .thenBy { it.baseZoomRatio }
+                    .thenBy { if (it.isPrimaryMain) 0 else 1 }
                     .thenBy { if (it.isPhysical) 0 else 1 }
             )
 
             _availableLenses.value = sortedLenses
 
-            // Maintain current selection or restore user's saved lens across sessions
+            // Selection priority:
+            // 1. Always prioritize the Primary 1x Main camera on launch or reset so 1x NEVER starts on ultra-wide!
             val currentSelected = _selectedLens.value
-            val savedLens = preferences.getLastLens(sortedLenses)
-            val validSelection = sortedLenses.firstOrNull { it.id == currentSelected?.id }
-                ?: savedLens
+            val primaryMainLens = sortedLenses.firstOrNull { it.isPrimaryMain }
                 ?: sortedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
                 ?: sortedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+
+            val validSelection = sortedLenses.firstOrNull { it.id == currentSelected?.id }
+                ?: primaryMainLens
                 ?: sortedLenses.firstOrNull()
 
             _selectedLens.value = validSelection
             if (validSelection != null) {
                 inspectCapabilities(validSelection.cameraId)
-                val savedZoom = preferences.currentZoom
-                if (savedZoom > 0f) {
-                    currentZoom = savedZoom
-                    _currentZoom.value = savedZoom
+                val initialZoom = if (validSelection.isPrimaryMain || validSelection.lensType == LensType.WIDE) {
+                    1.0f
                 } else {
-                    currentZoom = validSelection.baseZoomRatio
-                    _currentZoom.value = validSelection.baseZoomRatio
+                    validSelection.baseZoomRatio
                 }
+                currentZoom = initialZoom
+                _currentZoom.value = initialZoom
+                preferences.currentZoom = initialZoom
                 motorolaSwitchEngine.updatePrimaryLens(validSelection, sortedLenses)
             }
 
@@ -960,10 +1052,13 @@ class Camera2Engine(private val context: Context) {
                 preferences.currentZoom = lens.baseZoomRatio
             }
 
-            // If same camera ID and same facing, update optical zoom/crop dynamically without restarting hardware
-            if (previousLens?.cameraId == lens.cameraId &&
-                previousLens?.facing == lens.facing &&
-                cameraDevice != null) {
+            // If same camera ID and same facing, or both belong to the logical multi-camera,
+            // switch optical stream and zoom dynamically without restarting hardware or capture session
+            val isSameCameraDevice = (previousLens?.cameraId == lens.cameraId && previousLens?.facing == lens.facing) ||
+                    (previousLens?.isLogicalMultiCamera == true && lens.isLogicalMultiCamera && cameraDevice != null)
+
+            if (isSameCameraDevice && cameraDevice != null) {
+                Log.i(TAG, "[IN-SESSION SWITCH] Seamlessly switching lens to ${lens.lensType} (zoom=$currentZoom) within active CameraDevice ${cameraDevice?.id}")
                 updatePreviewSettings()
                 motorolaSwitchEngine.updatePrimaryLens(lens, _availableLenses.value)
                 motorolaSwitchEngine.compositor.switchActiveStream(lens.lensType)
@@ -2423,33 +2518,33 @@ class Camera2Engine(private val context: Context) {
 
         try {
             val chars = getCharacteristics(lens.cameraId) ?: return
-            val isUltraWide = lens.lensType == LensType.ULTRAWIDE || lens.baseZoomRatio < 0.9f
+            val isLogicalMulti = lens.isLogicalMultiCamera ||
+                (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(
+                    CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
+                ) == true)
 
-            // Formula: ultraWideDigitalZoom = requestedZoom / 0.5f
-            // 0.5x = full ultra-wide sensor (1.0x digital zoom)
-            // 0.6x = ultra-wide + 1.2x digital crop
-            // 0.7x = ultra-wide + 1.4x digital crop
-            // 0.8x = ultra-wide + 1.6x digital crop
-            // 0.9x = ultra-wide + 1.8x digital crop
-            // 1.0x = ultra-wide + 2.0x digital crop
-            val targetDigitalZoom = if (isUltraWide) {
-                val base = if (lens.baseZoomRatio > 0.1f) lens.baseZoomRatio else 0.5f
-                (currentZoom / base).coerceAtLeast(1.0f)
-            } else {
-                val baseRatio = if (lens.baseZoomRatio > 0f) lens.baseZoomRatio else 1.0f
-                if (lens.isPhysical && baseRatio > 1.2f) {
-                    (currentZoom / baseRatio).coerceAtLeast(1.0f)
-                } else {
-                    currentZoom.coerceAtLeast(1.0f)
-                }
-            }
-
-            // On Android 11+ (API 30+), CONTROL_ZOOM_RATIO applies ISP digital zoom
+            // On Android 11+ (API 30+), CONTROL_ZOOM_RATIO applies optical multi-camera / ISP continuous zoom
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 if (zoomRange != null) {
-                    val clamped = targetDigitalZoom.coerceIn(zoomRange.lower, zoomRange.upper)
-                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, clamped)
+                    val targetZoomRatio = if (isLogicalMulti) {
+                        // For logical multi-camera, CONTROL_ZOOM_RATIO directly controls continuous zoom across physical lenses
+                        currentZoom.coerceIn(zoomRange.lower, zoomRange.upper)
+                    } else if (lens.lensType == LensType.ULTRAWIDE) {
+                        // Dedicated standalone Ultra-Wide camera sensor:
+                        // Digital crop factor on standalone sensor: currentZoom / baseZoomRatio
+                        val base = if (lens.baseZoomRatio > 0.1f) lens.baseZoomRatio else zoomRange.lower
+                        (currentZoom / base).coerceIn(zoomRange.lower, zoomRange.upper)
+                    } else {
+                        // Main or Telephoto standalone camera:
+                        val base = if (lens.baseZoomRatio > 0.1f) lens.baseZoomRatio else 1.0f
+                        if (lens.isPhysical && base > 1.2f) {
+                            (currentZoom / base).coerceIn(zoomRange.lower, zoomRange.upper)
+                        } else {
+                            currentZoom.coerceIn(zoomRange.lower, zoomRange.upper)
+                        }
+                    }
+                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetZoomRatio)
                     return
                 }
             }
@@ -2457,10 +2552,21 @@ class Camera2Engine(private val context: Context) {
             // Fallback for legacy devices or SCALER_CROP_REGION
             val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
             val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
-            val effectiveZoom = targetDigitalZoom.coerceIn(1.0f, maxZoom)
 
-            val cropW = (sensorRect.width() / effectiveZoom).toInt()
-            val cropH = (sensorRect.height() / effectiveZoom).toInt()
+            val digitalFactor = if (lens.lensType == LensType.ULTRAWIDE) {
+                val base = if (lens.baseZoomRatio > 0.1f) lens.baseZoomRatio else 0.5f
+                (currentZoom / base).coerceIn(1.0f, maxZoom)
+            } else {
+                val base = if (lens.baseZoomRatio > 0.1f) lens.baseZoomRatio else 1.0f
+                if (lens.isPhysical && base > 1.2f) {
+                    (currentZoom / base).coerceIn(1.0f, maxZoom)
+                } else {
+                    currentZoom.coerceIn(1.0f, maxZoom)
+                }
+            }
+
+            val cropW = (sensorRect.width() / digitalFactor).toInt()
+            val cropH = (sensorRect.height() / digitalFactor).toInt()
             val cropX = (sensorRect.width() - cropW) / 2
             val cropY = (sensorRect.height() - cropH) / 2
 
@@ -2489,26 +2595,33 @@ class Camera2Engine(private val context: Context) {
      * Set Zoom (.5x to 10x) with seamless automatic lens switching
      */
     fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
-        val clampedZoom = zoom.coerceIn(0.5f, 10.0f)
+        val currentLens = _selectedLens.value ?: return
+
+        val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+        val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+            ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainWideLens = backLenses.firstOrNull { it.isPrimaryMain }
+            ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+            ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
+            ?: backLenses.firstOrNull()
+
+        val minAllowedZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.4f) ?: 1.0f
+        val clampedZoom = zoom.coerceIn(minAllowedZoom, 10.0f)
         currentZoom = clampedZoom
         _currentZoom.value = clampedZoom
         preferences.currentZoom = clampedZoom
-
-        val currentLens = _selectedLens.value ?: return
 
         // If front selfie camera, apply digital zoom on active stream,
         // or switch to rear lens if user explicitly tapped a rear zoom preset (.5x or 1x)
         if (currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT) {
             if (isPresetTap && (clampedZoom < 0.95f || clampedZoom in 0.95f..1.1f)) {
-                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
                 val backTarget = if (clampedZoom < 0.95f) {
-                    backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+                    ultraWideLens
                 } else {
-                    backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
-                        ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
+                    mainWideLens
                 }
                 if (backTarget != null) {
-                    selectLens(backTarget)
+                    selectLens(backTarget, preserveZoom = false)
                     return
                 }
             }
@@ -2519,22 +2632,20 @@ class Camera2Engine(private val context: Context) {
         // Keep standby camera repeating request synchronized with target zoom
         motorolaSwitchEngine.updateStandbyZoom(clampedZoom)
 
-        val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-        val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-            ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-        val mainWideLens = backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
-            ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
         val isCurrentlyUltraWide = currentLens.lensType == LensType.ULTRAWIDE
 
         // Hysteresis & Continuous Zoom logic:
-        // When using 0.5x Ultra-Wide, use UW for the entire 0.5x -> 1.0x range (0.6x = ~1.2x crop, 0.7x = ~1.4x crop, etc.).
-        // Only switch to Main lens when zoom reaches 1.00x.
-        // When zooming out from Main lens, switch back to Ultra-Wide below 0.97x.
-        // If user explicitly taps a preset (.5x), switch to Ultra-Wide immediately.
+        // When using Ultra-Wide, use UW up until zoom reaches 1.00x, then switch to Main Wide.
+        // When zooming out from Main Wide, switch back to Ultra-Wide below 0.95x.
+        // If user explicitly taps a preset (.5x or 1x):
+        // 1x ALWAYS maps to Main Wide!
+        // 0.5x ALWAYS maps to Ultra-Wide!
         val targetLens: LensInfo? = if (isPresetTap) {
             when {
-                clampedZoom < 0.95f -> ultraWideLens ?: mainWideLens
+                // 1x preset tap: ALWAYS select Main Wide camera!
                 clampedZoom in 0.95f..<2.0f -> mainWideLens
+                // 0.5x preset tap: ALWAYS select Ultra-Wide camera (if available)!
+                clampedZoom < 0.95f -> ultraWideLens ?: mainWideLens
                 clampedZoom >= 3.0f -> {
                     backLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
                         ?: backLenses.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical }
@@ -2549,14 +2660,14 @@ class Camera2Engine(private val context: Context) {
         } else {
             when {
                 isCurrentlyUltraWide -> {
-                    if (clampedZoom >= 1.00f) {
+                    if (clampedZoom >= 1.00f && mainWideLens != null) {
                         mainWideLens
                     } else {
                         ultraWideLens ?: mainWideLens
                     }
                 }
                 else -> {
-                    if (clampedZoom < 0.97f && ultraWideLens != null) {
+                    if (clampedZoom < 0.95f && ultraWideLens != null) {
                         ultraWideLens
                     } else if (clampedZoom >= 3.0f) {
                         backLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
@@ -2576,9 +2687,10 @@ class Camera2Engine(private val context: Context) {
             zoomDebounceJob?.cancel()
             zoomDebounceJob = null
 
-            // Instant seamless lens switch using warm concurrent stream or handover
+            // Instant seamless lens switch using in-session logical switch, warm concurrent stream or handover
             if (isPresetTap) {
-                selectLens(targetLens, preserveZoom = false)
+                val pZoom = if (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE) 1.0f else targetLens.baseZoomRatio
+                selectLens(targetLens, preserveZoom = true, targetZoom = pZoom)
             } else {
                 selectLens(targetLens, preserveZoom = true, targetZoom = clampedZoom)
             }

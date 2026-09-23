@@ -372,7 +372,11 @@ data class LensInfo(
     val physicalCameraId: String? = null,
     val fovDegrees: Float = 0f,
     val equivalent35mmFocalMm: Float = 0f,
-    val idTypeDescription: String = "Logical"
+    val idTypeDescription: String = "Logical",
+    val isLogicalMultiCamera: Boolean = false,
+    val minZoomRatio: Float = 0.5f,
+    val maxZoomRatio: Float = 10.0f,
+    val isPrimaryMain: Boolean = false
 )
 
 enum class LensType(val shortLabel: String, val fullLabel: String) {

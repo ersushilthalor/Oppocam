@@ -830,36 +830,13 @@ fun MasterZoomCapsule(
             }
 
             // Continuous 0.5x - 10.0x Slider
-            val minSliderZoom = if (hasRealUltraWide) 0.5f else 1.0f
+            val ultraWideBaseRatio = displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }?.baseZoomRatio ?: 0.5f
+            val minSliderZoom = if (hasRealUltraWide) ultraWideBaseRatio else 1.0f
             Slider(
                 value = currentZoom.coerceIn(minSliderZoom, 10.0f),
                 onValueChange = { newVal ->
                     val rounded = (newVal * 10f).roundToInt() / 10f
                     onZoomChange(rounded)
-
-                    // Switch available physical lenses smoothly without freezing
-                    if (rounded <= 0.6f && hasRealUltraWide) {
-                        val ultraLens = displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                        if (ultraLens != null && selectedLens?.id != ultraLens.id) {
-                            onLensSelected(ultraLens)
-                        }
-                    } else if (rounded in 0.95f..1.1f) {
-                        val wideLens = displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
-                            ?: displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                        if (wideLens != null && selectedLens?.id != wideLens.id) {
-                            onLensSelected(wideLens)
-                        }
-                    } else if (rounded in 1.9f..2.1f) {
-                        val tele2x = displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical }
-                        if (tele2x != null && selectedLens?.id != tele2x.id) {
-                            onLensSelected(tele2x)
-                        }
-                    } else if (rounded in 2.9f..3.1f) {
-                        val tele3x = displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
-                        if (tele3x != null && selectedLens?.id != tele3x.id) {
-                            onLensSelected(tele3x)
-                        }
-                    }
                 },
                 valueRange = minSliderZoom..10.0f,
                 colors = SliderDefaults.colors(
@@ -995,23 +972,16 @@ fun MasterZoomCapsule(
                         .clickable {
                             if (isActive) {
                                 isSliderOpen = true
+                            } else if (preset == 1.0f) {
+                                onZoomPresetTap(1.0f)
+                            } else if (preset == 0.5f) {
+                                if (hasRealUltraWide) {
+                                    onZoomPresetTap(0.5f)
+                                } else {
+                                    onShowToast("Ultra-Wide lens is not available on this device")
+                                }
                             } else if (targetLens != null) {
                                 onLensSelected(targetLens)
-                            } else if (preset == 1.0f) {
-                                val mainLens = displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
-                                    ?: displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                                if (mainLens != null && selectedLens?.id != mainLens.id) {
-                                    onLensSelected(mainLens)
-                                } else {
-                                    onZoomPresetTap(1.0f)
-                                }
-                            } else if (preset == 0.5f) {
-                                val ultraLens = displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                                if (ultraLens != null) {
-                                    onLensSelected(ultraLens)
-                                } else {
-                                    onShowToast("Real Ultra-Wide lens is not available on this device")
-                                }
                             } else {
                                 if (preset <= capabilities.maxZoom) {
                                     onZoomPresetTap(preset)
