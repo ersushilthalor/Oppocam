@@ -60,6 +60,7 @@ fun BottomControlBar(
     isRecordingVideo: Boolean,
     videoDurationSeconds: Int,
     isCapturing: Boolean,
+    nightCaptureProgress: NightCaptureProgress = NightCaptureProgress(),
     isManualProOpen: Boolean = false,
     lastCapturedMedia: CapturedMedia?,
     activeTimerCountdown: Int?,
@@ -318,21 +319,64 @@ fun BottomControlBar(
                                     )
                                 }
                                 CameraMode.NIGHT -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(shutterSize * 0.8f)
-                                            .scale(buttonScale)
-                                            .clip(CircleShape)
-                                            .background(Color.White)
-                                            .border(3.dp, Color(0xFFFFB300), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
+                                    if (nightCaptureProgress.isCapturing) {
                                         Box(
                                             modifier = Modifier
-                                                .size(shutterSize * 0.25f)
+                                                .size(shutterSize)
+                                                .scale(buttonScale),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            // Progress arc ring around the shutter button
+                                            CircularProgressIndicator(
+                                                progress = { nightCaptureProgress.progress },
+                                                modifier = Modifier.size(shutterSize * 0.96f),
+                                                color = Color(0xFFFFB300),
+                                                trackColor = Color.White.copy(alpha = 0.20f),
+                                                strokeWidth = 3.5.dp
+                                            )
+                                            // Inner core with remaining countdown text or processing spinner
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(shutterSize * 0.70f)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFF1E1E24))
+                                                    .border(1.5.dp, Color(0xFFFFB300).copy(alpha = 0.6f), CircleShape),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                val remSec = nightCaptureProgress.remainingSeconds
+                                                if (remSec > 0.05f) {
+                                                    Text(
+                                                        text = if (remSec >= 1.0f) "${remSec.toInt()}s" else "%.1fs".format(remSec),
+                                                        color = Color(0xFFFFB300),
+                                                        fontSize = 13.sp,
+                                                        fontWeight = FontWeight.ExtraBold
+                                                    )
+                                                } else {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(16.dp),
+                                                        color = Color(0xFFFFB300),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(shutterSize * 0.8f)
+                                                .scale(buttonScale)
                                                 .clip(CircleShape)
-                                                .background(Color(0xFFFFB300))
-                                        )
+                                                .background(Color.White)
+                                                .border(3.dp, Color(0xFFFFB300), CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(shutterSize * 0.25f)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFFFFB300))
+                                            )
+                                        }
                                     }
                                 }
                                 CameraMode.PORTRAIT -> {

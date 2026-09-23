@@ -177,7 +177,6 @@ fun SettingsDrawer(
     onOpenBeforeAfter: () -> Unit = {},
     // Motorola Instant Camera Switching
     instantSwitchState: MotorolaInstantSwitchState = MotorolaInstantSwitchState(),
-    onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit = {},
     onKeepFrontCameraReadyToggle: (Boolean) -> Unit = {},
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit = {},
@@ -1212,17 +1211,6 @@ fun SettingsDrawer(
                                 subtitle = "Dynamically throttle ISP load during prolonged recording",
                                 checked = thermalProtection,
                                 onCheckedChange = onThermalProtectionToggle
-                            )
-
-                            SamsungDivider()
-
-                            // Motorola Instant Camera Switching
-                            SamsungSwitchItem(
-                                icon = Icons.Outlined.Cameraswitch,
-                                title = "Keep Ultra-Wide Sensor Ready",
-                                subtitle = "Background standby stream for instant lens transitions",
-                                checked = instantSwitchState.isKeepUltraWideReady,
-                                onCheckedChange = onKeepUltraWideReadyToggle
                             )
                         }
                     }

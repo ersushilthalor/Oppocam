@@ -32,13 +32,14 @@ class NightSceneAnalyzer {
     companion object {
         private const val TAG = "NightSceneAnalyzer"
 
-        // Safe handheld shutter ceiling when moving/held without tripod (e.g. 1/3 sec = ~333ms)
-        private const val MAX_HANDHELD_SHUTTER_NS = 350_000_000L // 350ms
-        // Tripod shutter ceiling allowed when stationary (up to 4.0 sec, or HAL maximum)
-        private const val MAX_TRIPOD_SHUTTER_NS = 4_000_000_000L // 4000ms
+        // Maximum handheld shutter ceilings dynamically adapted to gyro jitter
+        private const val BASE_HANDHELD_SHUTTER_NS = 500_000_000L // 500ms base handheld
+        private const val MAX_STEADY_HANDHELD_SHUTTER_NS = 1_500_000_000L // 1.5s when steady handheld
+        private const val MAX_TRIPOD_SHUTTER_NS = 10_000_000_000L // 10s maximum hardware limit on tripod
 
         // Gyro stability threshold (radians per second RMS): below this implies steady tripod/surface
         private const val GYRO_STABILITY_THRESHOLD_RAD = 0.018f
+        private const val GYRO_STEADY_HANDHELD_THRESHOLD_RAD = 0.045f
     }
 
     /**
@@ -75,12 +76,10 @@ class NightSceneAnalyzer {
         val lightValue = log2((aperture * aperture) / (exposureSec * isoNormalized))
         val estimatedLux = (2.5 * 2.0.pow(lightValue)).toFloat().coerceAtLeast(0.01f)
 
-        // 4. Evaluate Gyroscope Motion Stability (Handheld vs. Tripod)
-        val isTripod = if (config.tripodDetectionEnabled && gyroEngine != null) {
-            checkGyroscopeStability(gyroEngine)
-        } else {
-            false
-        }
+        // 4. Evaluate Gyroscope Motion Stability (Handheld vs. Steady vs. Tripod)
+        val motionRms = gyroEngine?.getRecentRmsMotion() ?: 0.05f
+        val isTripod = config.tripodDetectionEnabled && motionRms > 0f && motionRms < GYRO_STABILITY_THRESHOLD_RAD
+        val isSteadyHandheld = motionRms > 0f && motionRms < GYRO_STEADY_HANDHELD_THRESHOLD_RAD
 
         // 5. Classify Scene Illumination Level
         val sceneLevel = when {
@@ -89,45 +88,50 @@ class NightSceneAnalyzer {
             else -> SceneIlluminationLevel.VERY_DARK
         }
 
-        // 6. Determine Target Frame Count
+        // 6. Determine Target Frame Count dynamically: avoid unnecessarily long capture when already sufficiently exposed
         val targetFrameCount = if (config.durationSeconds > 0) {
             // User explicitly requested fixed duration (1s..5s)
             val baseFrames = when (config.durationSeconds) {
-                1 -> 4
-                2 -> 6
-                3 -> 8
-                4 -> 10
-                else -> 12
+                1 -> 3
+                2 -> 5
+                3 -> 7
+                4 -> 8
+                else -> 10
             }
             baseFrames.coerceIn(sceneLevel.minFrames, sceneLevel.maxFrames)
         } else {
-            // Intelligent AUTO Mode: select optimal frame count strictly based on scene brightness
-            when (sceneLevel) {
-                SceneIlluminationLevel.BRIGHT_NIGHT -> 5
-                SceneIlluminationLevel.NORMAL_NIGHT -> 7
-                SceneIlluminationLevel.VERY_DARK -> if (isTripod) 10 else 9
+            // Intelligent AUTO Mode: fast capture for sufficiently exposed scenes, deeper burst only when needed
+            when {
+                lightValue >= 2.0 -> 3 // Well-illuminated scene: fast 3-frame burst (under 250ms)
+                lightValue >= 0.5 -> 4 // Bright night / street: 4 frames
+                lightValue >= -1.5 -> 5 // Standard night scene: 5 frames
+                lightValue >= -3.0 -> if (isTripod) 8 else 6 // Dim night: 6 frames handheld, 8 tripod
+                else -> if (isTripod) 10 else 7 // Extreme low-light
             }
         }
 
-        // 7. Determine Maximum Legal Shutter Speed for Long Frames
-        val maxSafeShutterNs = if (isTripod) {
-            // Tripod: exploit maximum exposure time supported by camera HAL
-            min(sensorMaxExpNs, MAX_TRIPOD_SHUTTER_NS)
-        } else {
-            // Handheld: clamp to avoid camera shake blur while utilizing OIS/EIS
-            min(sensorMaxExpNs, MAX_HANDHELD_SHUTTER_NS)
+        // 7. Determine Maximum Practical Shutter Speed supported by device HAL:
+        // Use maximum practical shutter exposure supported by device instead of unnecessarily limiting shutter speed.
+        val maxSafeShutterNs = when {
+            isTripod -> min(sensorMaxExpNs, MAX_TRIPOD_SHUTTER_NS)
+            isSteadyHandheld -> min(sensorMaxExpNs, MAX_STEADY_HANDHELD_SHUTTER_NS)
+            else -> min(sensorMaxExpNs, BASE_HANDHELD_SHUTTER_NS)
         }
 
         // Determine Base Reference Exposure (Medium frame)
-        val baseExposureNs = (previewExposureNs * 1.5).toLong().coerceIn(sensorMinExpNs, maxSafeShutterNs)
+        val baseMultiplier = when {
+            lightValue >= 1.5 -> 1.0 // Scene already sufficiently exposed: don't over-boost shutter
+            lightValue >= 0.0 -> 1.3
+            else -> 1.6
+        }
+        val baseExposureNs = (previewExposureNs * baseMultiplier).toLong().coerceIn(sensorMinExpNs, maxSafeShutterNs)
         val baseIso = previewIso.coerceIn(sensorMinIso, sensorMaxIso)
 
         // 8. Generate Balanced Exposure Bracket Stack:
         // Pattern: SHORT -> MEDIUM -> LONG -> ... -> LONG -> MEDIUM -> SHORT
         val bracketFrames = mutableListOf<NightBracketFrame>()
 
-        // Compute short, medium, and long exposure parameters
-        // Short frame: EV -2.0 (1/4 exposure) to save specular highlights, streetlights, and neon text
+        // Short frame: EV -2.0 to protect specular highlights and neon signs
         val shortExpNs = (baseExposureNs / 4).coerceAtLeast(sensorMinExpNs)
         val shortIso = (baseIso * 0.75f).toInt().coerceIn(sensorMinIso, sensorMaxIso)
 
@@ -135,10 +139,14 @@ class NightSceneAnalyzer {
         val medExpNs = baseExposureNs
         val medIso = baseIso
 
-        // Long frame: EV +1.5 to +2.5 (deep shadow detail)
-        // Expand shutter up to the maximum legal limit supported by the sensor, then boost ISO
-        val targetLongExpNs = min(sensorMaxExpNs, (baseExposureNs * 3.5).toLong()).coerceIn(sensorMinExpNs, maxSafeShutterNs)
-        val remainingGain = (baseExposureNs * 3.5f) / targetLongExpNs.toFloat()
+        // Long frame: EV +1.5 to +2.5 for shadow recovery, expanding shutter to sensor limits
+        val longMultiplier = when {
+            lightValue >= 1.5 -> 1.8f
+            lightValue >= 0.0 -> 2.5f
+            else -> 3.5f
+        }
+        val targetLongExpNs = min(sensorMaxExpNs, (baseExposureNs * longMultiplier).toLong()).coerceIn(sensorMinExpNs, maxSafeShutterNs)
+        val remainingGain = (baseExposureNs * longMultiplier) / targetLongExpNs.toFloat()
         val targetLongIso = (baseIso * remainingGain).toInt().coerceIn(sensorMinIso, sensorMaxIso)
 
         for (i in 0 until targetFrameCount) {

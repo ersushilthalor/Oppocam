@@ -42,7 +42,6 @@ class CameraPreferences(context: Context) {
         private const val KEY_HQ_ZOOM_ENABLED = "pref_hq_zoom_enabled"
         private const val KEY_ZOOM_PROCESSING_QUALITY = "pref_zoom_processing_quality"
         private const val KEY_TRACKING_LENS = "pref_tracking_lens"
-        private const val KEY_KEEP_ULTRAWIDE_READY = "pref_keep_ultrawide_ready"
         private const val KEY_SHOW_ULTRAWIDE_PREVIEW = "pref_show_ultrawide_preview"
         private const val KEY_KEEP_FRONT_READY = "pref_keep_front_ready"
         private const val KEY_SHOW_FRONT_PREVIEW = "pref_show_front_preview"
@@ -79,10 +78,6 @@ class CameraPreferences(context: Context) {
             .putFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, config.blurStrength)
             .apply()
     }
-
-    var isKeepUltraWideReady: Boolean
-        get() = prefs.getBoolean(KEY_KEEP_ULTRAWIDE_READY, true)
-        set(value) = prefs.edit().putBoolean(KEY_KEEP_ULTRAWIDE_READY, value).apply()
 
     var isShowUltraWidePreview: Boolean
         get() = prefs.getBoolean(KEY_SHOW_ULTRAWIDE_PREVIEW, false)

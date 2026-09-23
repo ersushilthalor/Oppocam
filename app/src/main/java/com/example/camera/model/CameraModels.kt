@@ -533,9 +533,8 @@ enum class BackgroundCameraStatus(val label: String, val shortDesc: String) {
 }
 
 data class MotorolaInstantSwitchState(
-    val isKeepUltraWideReady: Boolean = true,
     val isShowUltraWidePreview: Boolean = false,
-    val isKeepFrontCameraReady: Boolean = true,
+    val isKeepFrontCameraReady: Boolean = false,
     val isShowFrontCameraPreview: Boolean = false,
     val ultraWideStatus: BackgroundCameraStatus = BackgroundCameraStatus.OFF,
     val frontStatus: BackgroundCameraStatus = BackgroundCameraStatus.OFF,

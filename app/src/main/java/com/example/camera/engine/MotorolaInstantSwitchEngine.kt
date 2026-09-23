@@ -109,17 +109,12 @@ class MotorolaInstantSwitchEngine(
     // State Flow
     private val _switchState = MutableStateFlow(
         MotorolaInstantSwitchState(
-            isKeepUltraWideReady = preferences.isKeepUltraWideReady,
             isShowUltraWidePreview = preferences.isShowUltraWidePreview,
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
             isMotorolaDevice = isMotorolaDevice,
-            isConcurrentHardwareSupported = true,
-            statusMessage = if (isMotorolaDevice) {
-                "Motorola Dual-Camera Hardware Engine Active"
-            } else {
-                "Instant Camera Switching Ready"
-            }
+            isConcurrentHardwareSupported = false,
+            statusMessage = "Native Camera Switching Ready"
         )
     )
     val switchState: StateFlow<MotorolaInstantSwitchState> = _switchState.asStateFlow()
@@ -230,12 +225,6 @@ class MotorolaInstantSwitchEngine(
     // User Settings Toggles
     // -----------------------------------------------------------------------------------------
 
-    fun setKeepUltraWideReady(enabled: Boolean) {
-        preferences.isKeepUltraWideReady = enabled
-        _switchState.value = _switchState.value.copy(isKeepUltraWideReady = enabled)
-        refreshStandbyCamera()
-    }
-
     fun setShowUltraWidePreview(enabled: Boolean) {
         preferences.isShowUltraWidePreview = enabled
         _switchState.value = _switchState.value.copy(isShowUltraWidePreview = enabled)
@@ -287,157 +276,16 @@ class MotorolaInstantSwitchEngine(
     fun updatePrimaryLens(lens: LensInfo?, allLenses: List<LensInfo>) {
         currentPrimaryLens = lens
         availableLenses = allLenses
-
-        // Check concurrent capability if not already checked
-        val ultraWideLens = allLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-            ?: allLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-
-        if (lens != null && ultraWideLens != null && !hasCheckedConcurrentSupport) {
-            verifyConcurrentSupport(lens.cameraId, ultraWideLens.cameraId)
-        }
-
         refreshStandbyCamera()
     }
 
     @Synchronized
     fun refreshStandbyCamera() {
-        val primary = currentPrimaryLens ?: return
-        val state = _switchState.value
-
-        // Check if concurrent streaming is disabled or unsupported
-        if (!state.isKeepUltraWideReady || !isConcurrentHardwareSupported) {
-            closeBackgroundCamera()
-            _switchState.value = state.copy(
-                ultraWideStatus = if (state.isKeepUltraWideReady) BackgroundCameraStatus.FALLBACK_TURBO else BackgroundCameraStatus.OFF,
-                statusMessage = if (!isConcurrentHardwareSupported) "Turbo Fast Handover Active" else "Standby Disabled"
-            )
-            return
-        }
-
-        val ultraWideLens = availableLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-            ?: availableLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-
-        if (ultraWideLens == null) {
-            closeBackgroundCamera()
-            return
-        }
-
-        // If currently using 1× Main: standby target is Ultra-Wide
-        if (primary.lensType == LensType.WIDE && primary.facing == CameraCharacteristics.LENS_FACING_BACK) {
-            if (standbyCameraDevice != null && activeStandbyLens?.cameraId == ultraWideLens.cameraId) {
-                // Already prepared and running!
-                val previewActive = state.isShowUltraWidePreview
-                compositor.isLittlePreviewEnabled = previewActive
-                _switchState.value = state.copy(
-                    ultraWideStatus = if (previewActive) BackgroundCameraStatus.READY_PREVIEW else BackgroundCameraStatus.READY_QUIET,
-                    activeStandbyLens = LensType.ULTRAWIDE,
-                    statusMessage = "Ultra-Wide Concurrent Stream Active (0ms Instant Switch)"
-                )
-                return
-            }
-            openStandbyCamera(ultraWideLens)
-        } else if (primary.lensType == LensType.ULTRAWIDE) {
-            // When user is on Ultra-Wide, keep Main warm in reverse!
-            val mainLens = availableLenses.firstOrNull {
-                it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset
-            } ?: availableLenses.firstOrNull {
-                it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE
-            }
-            if (mainLens != null) {
-                if (standbyCameraDevice != null && activeStandbyLens?.cameraId == mainLens.cameraId) {
-                    val previewActive = state.isShowUltraWidePreview
-                    compositor.isLittlePreviewEnabled = previewActive
-                    _switchState.value = state.copy(
-                        ultraWideStatus = BackgroundCameraStatus.OFF,
-                        activeStandbyLens = LensType.WIDE,
-                        statusMessage = "Main 1× Standby Ready"
-                    )
-                    return
-                }
-                openStandbyCamera(mainLens)
-            }
-        } else {
-            closeBackgroundCamera()
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun openStandbyCamera(lens: LensInfo) {
-        if (isOpeningStandby.getAndSet(true)) return
-        val mgr = cameraManager ?: run {
-            isOpeningStandby.set(false)
-            return
-        }
-        val handler = backgroundHandler ?: run {
-            isOpeningStandby.set(false)
-            return
-        }
-
+        closeBackgroundCamera()
         _switchState.value = _switchState.value.copy(
-            ultraWideStatus = BackgroundCameraStatus.PREPARING,
-            statusMessage = "Preparing Ultra-Wide concurrently..."
+            ultraWideStatus = BackgroundCameraStatus.OFF,
+            statusMessage = "Native Camera Switching Ready"
         )
-
-        try {
-            mgr.openCamera(lens.cameraId, object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    synchronized(sessionLock) {
-                        isOpeningStandby.set(false)
-                        standbyCameraDevice = camera
-                        activeStandbyLens = lens
-                        Log.d(TAG, "Standby camera opened: ${camera.id}. Creating capture session ahead of time...")
-                        createStandbyCaptureSession(camera, lens)
-                    }
-                }
-
-                override fun onDisconnected(camera: CameraDevice) {
-                    synchronized(sessionLock) {
-                        isOpeningStandby.set(false)
-                        camera.close()
-                        if (standbyCameraDevice == camera) {
-                            standbyCameraDevice = null
-                            activeStandbyLens = null
-                        }
-                    }
-                }
-
-                override fun onError(camera: CameraDevice, error: Int) {
-                    synchronized(sessionLock) {
-                        isOpeningStandby.set(false)
-                        try { camera.close() } catch (ignored: Throwable) {}
-                        if (standbyCameraDevice == camera) {
-                            standbyCameraDevice = null
-                            activeStandbyLens = null
-                        }
-
-                        if (error == ERROR_MAX_CAMERAS_IN_USE ||
-                            error == ERROR_CAMERA_IN_USE ||
-                            error == ERROR_CAMERA_DEVICE) {
-                            Log.i(TAG, "Hardware does not support opening both cameras simultaneously (Error $error). Falling back to Turbo Fast Handover.")
-                            isConcurrentHardwareSupported = false
-                            _switchState.value = _switchState.value.copy(
-                                isConcurrentHardwareSupported = false,
-                                ultraWideStatus = BackgroundCameraStatus.FALLBACK_TURBO,
-                                statusMessage = "Turbo Fast Handover (Concurrent Unsupported by HAL)"
-                            )
-                        } else {
-                            _switchState.value = _switchState.value.copy(
-                                ultraWideStatus = BackgroundCameraStatus.UNAVAILABLE
-                            )
-                        }
-                    }
-                }
-            }, handler)
-        } catch (t: Throwable) {
-            Log.w(TAG, "Failed to open standby camera ${lens.cameraId}", t)
-            isOpeningStandby.set(false)
-            isConcurrentHardwareSupported = false
-            _switchState.value = _switchState.value.copy(
-                isConcurrentHardwareSupported = false,
-                ultraWideStatus = BackgroundCameraStatus.FALLBACK_TURBO,
-                statusMessage = "Turbo Fast Handover Active"
-            )
-        }
     }
 
     /**
@@ -502,128 +350,12 @@ class MotorolaInstantSwitchEngine(
         return Pair(bestJpeg, bestYuv)
     }
 
-    /**
-     * Creates the standby camera capture session ahead of time.
-     * Configures:
-     * - Persistent Surface from compositor (compositor.ultraWideCameraSurface)
-     * - ImageReader for JPEG
-     * - ImageReader for YUV
-     *
-     * This ensures photo capture does NOT require an expensive session rebuild!
-     */
-    private fun createStandbyCaptureSession(camera: CameraDevice, lens: LensInfo) {
-        val handler = backgroundHandler ?: return
-        val previewSurf = if (lens.lensType == LensType.ULTRAWIDE) {
-            compositor.ultraWideCameraSurface
-        } else {
-            compositor.mainCameraSurface
-        } ?: run {
-            Log.w(TAG, "compositor surface for ${lens.lensType} is not ready yet")
-            return
-        }
-
-        // Configure ImageReaders ahead of time using target camera's actual supported resolution
-        try { standbyImageReaderJpeg?.close() } catch (ignored: Throwable) {}
-        try { standbyImageReaderYuv?.close() } catch (ignored: Throwable) {}
-
-        val (bestJpeg, bestYuv) = getOptimalPhotoSizesForLens(lens)
-
-        try {
-            standbyImageReaderJpeg = ImageReader.newInstance(bestJpeg.width, bestJpeg.height, ImageFormat.JPEG, 4)
-            standbyImageReaderYuv = ImageReader.newInstance(bestYuv.width, bestYuv.height, ImageFormat.YUV_420_888, 3)
-            Log.i(TAG, "[UW_PHOTO] Standby ImageReaders created successfully with native resolution: JPEG=${bestJpeg.width}x${bestJpeg.height}, YUV=${bestYuv.width}x${bestYuv.height}")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed creating max native ImageReaders for ${lens.lensType}, attempting fallback to largest supported", e)
-            val chars = try { cameraManager?.getCameraCharacteristics(lens.cameraId) } catch (t: Throwable) { null }
-            val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val fallbackJpeg = map?.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width * it.height } ?: bestJpeg
-            val fallbackYuv = map?.getOutputSizes(ImageFormat.YUV_420_888)?.maxByOrNull { it.width * it.height } ?: bestYuv
-            try {
-                standbyImageReaderJpeg = ImageReader.newInstance(fallbackJpeg.width, fallbackJpeg.height, ImageFormat.JPEG, 4)
-                standbyImageReaderYuv = ImageReader.newInstance(fallbackYuv.width, fallbackYuv.height, ImageFormat.YUV_420_888, 3)
-            } catch (ignored: Throwable) {}
-        }
-
-        val surfaces = mutableListOf<Surface>()
-        surfaces.add(previewSurf)
-        standbyImageReaderJpeg?.surface?.let { surfaces.add(it) }
-        standbyImageReaderYuv?.surface?.let { surfaces.add(it) }
-
-        try {
-            camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    synchronized(sessionLock) {
-                        standbyCaptureSession = session
-                        try {
-                            // Repeating request keeps AE/AF/AWB continuously converged
-                            val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                                addTarget(previewSurf)
-                                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-                            }.build()
-
-                            session.setRepeatingRequest(req, null, handler)
-
-                            val isPreviewOn = _switchState.value.isShowUltraWidePreview
-                            compositor.isLittlePreviewEnabled = isPreviewOn
-
-                            _switchState.value = _switchState.value.copy(
-                                ultraWideStatus = if (isPreviewOn) BackgroundCameraStatus.READY_PREVIEW else BackgroundCameraStatus.READY_QUIET,
-                                activeStandbyLens = LensType.ULTRAWIDE,
-                                switchLatencyEstimateMs = 5,
-                                statusMessage = "Ultra-Wide Concurrent Session Active (0ms Overhead)"
-                            )
-                            Log.i(TAG, "Standby Ultra-Wide session running! 3A converged, ready for 0ms instant display switch.")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error starting standby repeating request", e)
-                        }
-                    }
-                }
-
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Log.w(TAG, "Standby capture session configuration failed")
-                    synchronized(sessionLock) {
-                        standbyCaptureSession = null
-                        _switchState.value = _switchState.value.copy(
-                            ultraWideStatus = BackgroundCameraStatus.FALLBACK_TURBO,
-                            statusMessage = "Fast Handover Active"
-                        )
-                    }
-                }
-            }, handler)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to create standby capture session", t)
-        }
-    }
-
     // -----------------------------------------------------------------------------------------
-    // Instant Lens Switching (Zero Session Rebuild)
+    // Native Lens Switching Support
     // -----------------------------------------------------------------------------------------
 
-    /**
-     * Checks if the target lens is already running concurrently in the standby session.
-     */
-    fun isConcurrentSessionReady(targetLens: LensInfo): Boolean {
-        synchronized(sessionLock) {
-            if (!isConcurrentHardwareSupported) return false
-            val standbyLens = activeStandbyLens ?: return false
-            return standbyCameraDevice != null &&
-                    standbyCaptureSession != null &&
-                    (standbyLens.cameraId == targetLens.cameraId || standbyLens.lensType == targetLens.lensType)
-        }
-    }
+    fun isConcurrentSessionReady(targetLens: LensInfo): Boolean = false
 
-    /**
-     * Performs instant lens switch:
-     * - Returns the warm target CameraDevice, session, and ImageReaders
-     * - Stores the previously active camera as the new standby camera!
-     * - Tells compositor to switch active displayed texture
-     * - ZERO openCamera() calls!
-     * - ZERO createCaptureSession() calls!
-     * - ZERO preview Surface recreation!
-     */
     fun switchConcurrentLens(
         targetLens: LensInfo,
         currentDevice: CameraDevice?,
@@ -632,59 +364,7 @@ class MotorolaInstantSwitchEngine(
         currentYuvReader: ImageReader?,
         currentLens: LensInfo?,
         switchStartNs: Long
-    ): ConcurrentSessionBundle? {
-        synchronized(sessionLock) {
-            val warmDevice = standbyCameraDevice ?: return null
-            val warmSession = standbyCaptureSession ?: return null
-
-            if (targetLens.lensType == LensType.ULTRAWIDE) {
-                Log.i(TAG, "[UW_SWITCH] requested")
-            }
-            Log.i(TAG, "[INSTANT SWITCH] Switching active stream to ${targetLens.lensType} (No session recreation)")
-
-            val result = ConcurrentSessionBundle(
-                cameraDevice = warmDevice,
-                captureSession = warmSession,
-                imageReaderJpeg = standbyImageReaderJpeg,
-                imageReaderYuv = standbyImageReaderYuv,
-                lens = targetLens
-            )
-
-            val jpegW = standbyImageReaderJpeg?.width ?: 0
-            val jpegH = standbyImageReaderJpeg?.height ?: 0
-            val yuvW = standbyImageReaderYuv?.width ?: 0
-            val yuvH = standbyImageReaderYuv?.height ?: 0
-            val mp = (jpegW.toLong() * jpegH.toLong()) / 1_000_000f
-            Log.i(TAG, "[UW_PHOTO] Instant switch handoff to ${targetLens.lensType}: ImageReader JPEG=${jpegW}x${jpegH} (~${mp}MP), YUV=${yuvW}x${yuvH}")
-
-            // Switch displayed texture in compositor
-            compositor.switchActiveStream(targetLens.lensType, switchStartNs)
-
-            // Ensure the target camera repeating request continuously produces frames on its compositor surface
-            ensureSessionRepeatingRequest(warmSession, warmDevice, targetLens)
-
-            // The previously active camera now becomes the warm standby camera in reverse!
-            standbyCameraDevice = currentDevice
-            standbyCaptureSession = currentSession
-            standbyImageReaderJpeg = currentJpegReader
-            standbyImageReaderYuv = currentYuvReader
-            activeStandbyLens = currentLens
-
-            currentPrimaryLens = targetLens
-
-            // Keep the standby camera repeating request continuously running
-            ensureStandbyRepeatingRequest()
-
-            val isPreviewOn = _switchState.value.isShowUltraWidePreview
-            _switchState.value = _switchState.value.copy(
-                activeStandbyLens = currentLens?.lensType,
-                ultraWideStatus = if (isPreviewOn) BackgroundCameraStatus.READY_PREVIEW else BackgroundCameraStatus.READY_QUIET,
-                statusMessage = "Switched to ${targetLens.lensType} instantly"
-            )
-
-            return result
-        }
-    }
+    ): ConcurrentSessionBundle? = null
 
     /**
      * Verify repeating request on the active session so frames continuously flow to the compositor surface.
@@ -715,135 +395,13 @@ class MotorolaInstantSwitchEngine(
         }
     }
 
-    /**
-     * Keep repeating request continuously running on the standby camera so frames continue flowing.
-     */
-    fun ensureStandbyRepeatingRequest() {
-        synchronized(sessionLock) {
-            val session = standbyCaptureSession ?: return
-            val device = standbyCameraDevice ?: return
-            val lens = activeStandbyLens ?: return
-            val handler = backgroundHandler ?: return
-            val previewSurf = if (lens.lensType == LensType.ULTRAWIDE) {
-                compositor.ultraWideCameraSurface
-            } else {
-                compositor.mainCameraSurface
-            } ?: return
-            if (!previewSurf.isValid) return
+    fun ensureStandbyRepeatingRequest() {}
 
-            try {
-                val req = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                    addTarget(previewSurf)
-                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-                }.build()
-                session.setRepeatingRequest(req, null, handler)
-                Log.d(TAG, "Standby repeating request verified running for ${lens.lensType}")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to re-submit standby repeating request for ${lens.lensType}", e)
-            }
-        }
-    }
+    fun updateStandbyZoom(zoom: Float) {}
 
-    /**
-     * Updates the standby camera repeating request with synchronized zoom.
-     * Ensures that when the user switches to the standby camera, it is already
-     * at the exact right crop/zoom without delay or jump.
-     */
-    fun updateStandbyZoom(zoom: Float) {
-        synchronized(sessionLock) {
-            val session = standbyCaptureSession ?: return
-            val device = standbyCameraDevice ?: return
-            val lens = activeStandbyLens ?: return
-            val handler = backgroundHandler ?: return
-            val previewSurf = if (lens.lensType == LensType.ULTRAWIDE) {
-                compositor.ultraWideCameraSurface
-            } else {
-                compositor.mainCameraSurface
-            } ?: return
-            if (!previewSurf.isValid) return
+    fun getStandbyCameraDevice(targetLens: LensInfo): CameraDevice? = null
 
-            try {
-                val isUltraWide = lens.lensType == LensType.ULTRAWIDE || lens.baseZoomRatio < 0.9f
-                val targetDigitalZoom = if (isUltraWide) {
-                    val base = if (lens.baseZoomRatio > 0.1f) lens.baseZoomRatio else 0.5f
-                    (zoom / base).coerceAtLeast(1.0f)
-                } else {
-                    val baseRatio = if (lens.baseZoomRatio > 0f) lens.baseZoomRatio else 1.0f
-                    if (lens.isPhysical && baseRatio > 1.2f) {
-                        (zoom / baseRatio).coerceAtLeast(1.0f)
-                    } else {
-                        zoom.coerceAtLeast(1.0f)
-                    }
-                }
-
-                val req = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                    addTarget(previewSurf)
-                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-
-                    val chars = cameraManager?.getCameraCharacteristics(lens.cameraId)
-                    if (chars != null) {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
-                            if (zoomRange != null) {
-                                val clamped = targetDigitalZoom.coerceIn(zoomRange.lower, zoomRange.upper)
-                                set(CaptureRequest.CONTROL_ZOOM_RATIO, clamped)
-                            }
-                        } else {
-                            val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                            val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
-                            if (sensorRect != null) {
-                                val effectiveZoom = targetDigitalZoom.coerceIn(1.0f, maxZoom)
-                                val cropW = (sensorRect.width() / effectiveZoom).toInt()
-                                val cropH = (sensorRect.height() / effectiveZoom).toInt()
-                                val cropX = (sensorRect.width() - cropW) / 2
-                                val cropY = (sensorRect.height() - cropH) / 2
-                                set(CaptureRequest.SCALER_CROP_REGION, android.graphics.Rect(cropX, cropY, cropX + cropW, cropY + cropH))
-                            }
-                        }
-                    }
-                }.build()
-                session.setRepeatingRequest(req, null, handler)
-            } catch (ignored: Exception) {
-                // Ignore if session is busy or transitioning
-            }
-        }
-    }
-
-    /**
-     * Fallback handover if concurrent streaming is not available or for seamless video recording switch.
-     */
-    fun getStandbyCameraDevice(targetLens: LensInfo): CameraDevice? {
-        synchronized(sessionLock) {
-            val bgDevice = standbyCameraDevice ?: return null
-            if (activeStandbyLens?.cameraId == targetLens.cameraId || activeStandbyLens?.lensType == targetLens.lensType) {
-                return bgDevice
-            }
-            return null
-        }
-    }
-
-    fun handoffBackgroundCamera(targetLens: LensInfo): CameraDevice? {
-        synchronized(sessionLock) {
-            val bgDevice = standbyCameraDevice ?: return null
-            if (activeStandbyLens?.cameraId != targetLens.cameraId && activeStandbyLens?.lensType != targetLens.lensType) return null
-
-            Log.i(TAG, "Handover: Promoting background camera ${bgDevice.id} to primary")
-            try {
-                standbyCaptureSession?.close()
-            } catch (ignored: Throwable) {}
-            standbyCaptureSession = null
-            standbyCameraDevice = null
-            activeStandbyLens = null
-
-            return bgDevice
-        }
-    }
+    fun handoffBackgroundCamera(targetLens: LensInfo): CameraDevice? = null
 
     @Synchronized
     fun closeBackgroundCamera() {

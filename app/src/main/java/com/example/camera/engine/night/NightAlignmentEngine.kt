@@ -4,7 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
@@ -42,10 +45,9 @@ data class AlignedNightFrame(
  *
  * Implements:
  * 1. Automatic reference frame selection based on edge sharpness (Tenengrad variance).
- * 2. Gyro-assisted motion vector seeding to instantly compensate hand-shake angular velocity.
- * 3. Hierarchical pyramidal search (coarse-to-fine) with parabolic sub-pixel interpolation.
- * 4. Local variance motion detection and soft-mask ghost suppression to isolate moving objects
- *    (people, cars, leaves) so they are rendered crisply without ghost trails.
+ * 2. Parallelized frame alignment across CPU cores with gyro-assisted motion seeding.
+ * 3. Exposure-normalized hierarchical optical search to prevent brightness distortion.
+ * 4. Spatial dilation motion rejection mask to completely eliminate ghost trails from moving subjects.
  */
 class NightAlignmentEngine {
 
@@ -82,7 +84,7 @@ class NightAlignmentEngine {
     }
 
     /**
-     * Aligns all burst frames relative to the reference frame and builds anti-ghosting weight maps.
+     * Aligns all burst frames relative to the reference frame in parallel and builds anti-ghosting weight maps.
      */
     suspend fun alignFrames(
         frames: List<CapturedNightFrame>,
@@ -95,16 +97,17 @@ class NightAlignmentEngine {
         val width = refBmp.width
         val height = refBmp.height
 
-        val results = mutableListOf<AlignedNightFrame>()
-
         val ds = 4
         val maskW = (width / ds).coerceAtLeast(16)
         val maskH = (height / ds).coerceAtLeast(16)
 
-        for (i in 0 until count) {
-            if (i == referenceIdx) {
-                // Reference frame is perfectly aligned with itself; 100% static confidence
-                results.add(
+        val completedCount = AtomicInteger(0)
+
+        val deferredResults = (0 until count).map { i ->
+            async {
+                if (i == referenceIdx) {
+                    val completed = completedCount.incrementAndGet()
+                    onProgress(completed.toFloat() / count)
                     AlignedNightFrame(
                         frameIndex = i,
                         shiftX = 0,
@@ -116,55 +119,57 @@ class NightAlignmentEngine {
                         maskWidth = 0,
                         maskHeight = 0
                     )
-                )
-                onProgress((i + 1).toFloat() / count)
-                continue
+                } else {
+                    val targetFrame = frames[i]
+                    val targetBmp = targetFrame.bitmap
+
+                    // 1. Gyro-assisted Seed Estimation
+                    val dtSec = (targetFrame.timestampNanos - refFrame.timestampNanos) / 1_000_000_000f
+                    val seedDx = (-targetFrame.gyroYawVelocity * dtSec * (width * 0.85f)).toInt()
+                    val seedDy = (-targetFrame.gyroPitchVelocity * dtSec * (height * 0.85f)).toInt()
+
+                    val refExposure = refFrame.exposureTimeNs * refFrame.iso
+                    val targetExposure = targetFrame.exposureTimeNs * targetFrame.iso
+
+                    // 2. Exposure-normalized Hierarchical Optical Search
+                    val (shiftX, shiftY) = estimateSubpixelShift(
+                        refBmp, targetBmp, seedDx, seedDy, refExposure, targetExposure
+                    )
+
+                    // 3. Motion Detection and Soft-Mask Anti-Ghosting Weights
+                    val motionWeights = computeMotionRejectionMask(
+                        refBmp = refBmp,
+                        targetBmp = targetBmp,
+                        shiftX = shiftX,
+                        shiftY = shiftY,
+                        width = width,
+                        height = height,
+                        maskW = maskW,
+                        maskH = maskH,
+                        ds = ds,
+                        refExposure = refExposure,
+                        targetExposure = targetExposure
+                    )
+
+                    val completed = completedCount.incrementAndGet()
+                    onProgress(completed.toFloat() / count)
+
+                    AlignedNightFrame(
+                        frameIndex = i,
+                        shiftX = shiftX,
+                        shiftY = shiftY,
+                        subpixelDx = shiftX.toFloat(),
+                        subpixelDy = shiftY.toFloat(),
+                        isReference = false,
+                        motionWeights = motionWeights,
+                        maskWidth = maskW,
+                        maskHeight = maskH
+                    )
+                }
             }
-
-            val targetFrame = frames[i]
-            val targetBmp = targetFrame.bitmap
-
-            // 1. Gyro-assisted Seed Estimation
-            val dtSec = (targetFrame.timestampNanos - refFrame.timestampNanos) / 1_000_000_000f
-            val seedDx = (-targetFrame.gyroYawVelocity * dtSec * (width * 0.85f)).toInt()
-            val seedDy = (-targetFrame.gyroPitchVelocity * dtSec * (height * 0.85f)).toInt()
-
-            // 2. Hierarchical Optical Search
-            val (shiftX, shiftY) = estimateSubpixelShift(refBmp, targetBmp, seedDx, seedDy)
-
-            // 3. Motion Detection and Soft-Mask Anti-Ghosting Weights (downsampled grid using row buffers)
-            val motionWeights = computeMotionRejectionMask(
-                refBmp = refBmp,
-                targetBmp = targetBmp,
-                shiftX = shiftX,
-                shiftY = shiftY,
-                width = width,
-                height = height,
-                maskW = maskW,
-                maskH = maskH,
-                ds = ds,
-                refExposure = refFrame.exposureTimeNs * refFrame.iso,
-                targetExposure = targetFrame.exposureTimeNs * targetFrame.iso
-            )
-
-            results.add(
-                AlignedNightFrame(
-                    frameIndex = i,
-                    shiftX = shiftX,
-                    shiftY = shiftY,
-                    subpixelDx = shiftX.toFloat(),
-                    subpixelDy = shiftY.toFloat(),
-                    isReference = false,
-                    motionWeights = motionWeights,
-                    maskWidth = maskW,
-                    maskHeight = maskH
-                )
-            )
-
-            onProgress((i + 1).toFloat() / count)
         }
 
-        return@withContext results
+        deferredResults.awaitAll()
     }
 
     /**
@@ -202,13 +207,15 @@ class NightAlignmentEngine {
     }
 
     /**
-     * Multi-scale pyramidal shift estimation with sub-pixel peak interpolation.
+     * Multi-scale pyramidal shift estimation with exposure normalization to prevent bracket distortion.
      */
     private fun estimateSubpixelShift(
         ref: Bitmap,
         target: Bitmap,
         seedDx: Int,
-        seedDy: Int
+        seedDy: Int,
+        refExposure: Long,
+        targetExposure: Long
     ): Pair<Int, Int> {
         val sw = (ref.width / PYRAMID_DOWNSCALE).coerceAtLeast(64)
         val sh = (ref.height / PYRAMID_DOWNSCALE).coerceAtLeast(64)
@@ -226,11 +233,16 @@ class NightAlignmentEngine {
         smallRef.recycle()
         smallTarget.recycle()
 
+        val expRatio = if (targetExposure > 0) {
+            (refExposure.toFloat() / targetExposure.toFloat()).coerceIn(0.1f, 10.0f)
+        } else 1.0f
+
         for (i in 0 until sw * sh) {
             val pr = pRef[i]
             refLuma[i] = (Color.red(pr) * 3 + Color.green(pr) * 6 + Color.blue(pr)) / 10
             val pt = pTarget[i]
-            targetLuma[i] = (Color.red(pt) * 3 + Color.green(pt) * 6 + Color.blue(pt)) / 10
+            val rawTLuma = (Color.red(pt) * 3 + Color.green(pt) * 6 + Color.blue(pt)) / 10
+            targetLuma[i] = (rawTLuma * expRatio).toInt().coerceIn(0, 255)
         }
 
         val scaledSeedX = (seedDx / PYRAMID_DOWNSCALE).coerceIn(-12, 12)
@@ -278,9 +290,9 @@ class NightAlignmentEngine {
     }
 
     /**
-     * Motion detection and soft-mask anti-ghosting weight calculation.
+     * Motion detection and soft-mask anti-ghosting weight calculation with spatial dilation.
      * Computes difference in exposure-normalized space to prevent false-positives
-     * caused by exposure bracketing.
+     * caused by exposure bracketing, and drops moving object contribution cleanly to 0.
      */
     private fun computeMotionRejectionMask(
         refBmp: Bitmap,
@@ -295,16 +307,14 @@ class NightAlignmentEngine {
         refExposure: Long,
         targetExposure: Long
     ): FloatArray {
-        val weights = FloatArray(maskW * maskH)
+        val rawWeights = FloatArray(maskW * maskH)
 
-        // Exposure normalization ratio between target and reference
         val exposureScale = if (targetExposure > 0) {
             refExposure.toFloat() / targetExposure.toFloat()
         } else 1.0f
 
-        val motionThreshold = 38.0f // Threshold in normalized 0..255 space
+        val motionThreshold = 32.0f
 
-        // Small row buffers (only width integers = 16 KB instead of 48 MB!)
         val refRowPixels = IntArray(width)
         val tgtRowPixels = IntArray(width)
 
@@ -314,8 +324,7 @@ class NightAlignmentEngine {
             val maskRow = my * maskW
 
             if (ty !in 0 until height) {
-                // Out of frame boundary
-                for (mx in 0 until maskW) weights[maskRow + mx] = 0.0f
+                for (mx in 0 until maskW) rawWeights[maskRow + mx] = 0.0f
                 continue
             }
 
@@ -327,7 +336,7 @@ class NightAlignmentEngine {
                 val tx = x + shiftX
 
                 if (tx !in 0 until width) {
-                    weights[maskRow + mx] = 0.0f
+                    rawWeights[maskRow + mx] = 0.0f
                     continue
                 }
 
@@ -347,19 +356,43 @@ class NightAlignmentEngine {
                 val lumaTgt = 0.299f * rTgt + 0.587f * gTgt + 0.114f * bTgt
                 val diff = abs(lumaRef - lumaTgt)
 
-                // Soft Gaussian-decay confidence weight
+                // Anti-ghosting confidence weight:
+                // If diff exceeds motionThreshold, drop steeply to 0.0f to completely eliminate ghost trails
                 val weight = if (diff < motionThreshold) {
-                    1.0f - (diff / motionThreshold) * 0.35f
+                    1.0f - (diff / motionThreshold) * 0.5f
                 } else {
                     val excess = diff - motionThreshold
-                    // Moving object: rapidly drop weight towards zero
-                    (exp(-excess / 14.0f)).coerceAtLeast(0.02f)
+                    val decay = exp(-excess / 8.0f)
+                    if (decay < 0.05f) 0.0f else decay
                 }
 
-                weights[maskRow + mx] = weight.coerceIn(0.0f, 1.0f)
+                rawWeights[maskRow + mx] = weight.coerceIn(0.0f, 1.0f)
             }
         }
 
-        return weights
+        // Apply 3x3 min filter (dilation of rejection area) to eliminate ghost boundaries around moving subjects
+        val cleanWeights = FloatArray(maskW * maskH)
+        for (my in 0 until maskH) {
+            for (mx in 0 until maskW) {
+                var minW = rawWeights[my * maskW + mx]
+                if (minW > 0.0f) {
+                    for (dy in -1..1) {
+                        val ny = my + dy
+                        if (ny in 0 until maskH) {
+                            for (dx in -1..1) {
+                                val nx = mx + dx
+                                if (nx in 0 until maskW) {
+                                    val neighborW = rawWeights[ny * maskW + nx]
+                                    if (neighborW < minW) minW = neighborW
+                                }
+                            }
+                        }
+                    }
+                }
+                cleanWeights[my * maskW + mx] = minW
+            }
+        }
+
+        return cleanWeights
     }
 }

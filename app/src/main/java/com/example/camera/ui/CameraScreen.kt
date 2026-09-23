@@ -824,6 +824,7 @@ fun CameraScreen(
             isRecordingVideo = isRecordingVideo,
             videoDurationSeconds = videoDurationSeconds,
             isCapturing = isCapturing,
+            nightCaptureProgress = nightProgress,
             lastCapturedMedia = lastCapturedMedia,
             activeTimerCountdown = activeTimerCountdown,
             onModeSelected = { viewModel.setCameraMode(it) },
@@ -984,7 +985,6 @@ fun CameraScreen(
                 viewModel.setBeforeAfterOpen(true)
             },
             instantSwitchState = instantSwitchState,
-            onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
             onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
             onKeepFrontCameraReadyToggle = { viewModel.setKeepFrontCameraReady(it) },
             onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },

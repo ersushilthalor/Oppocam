@@ -1070,99 +1070,12 @@ class Camera2Engine(private val context: Context) {
             // Seamless lens switch during active video recording
             if (_isRecordingVideo.value) {
                 Log.i(TAG, "[RECORDING_SWITCH] Switching active lens during video recording to ${lens.lensType} (Camera ID: ${lens.cameraId})")
-                val warmDevice = motorolaSwitchEngine.handoffBackgroundCamera(lens)
-                    ?: motorolaSwitchEngine.getStandbyCameraDevice(lens)
-                if (warmDevice != null) {
-                    inspectCapabilities(lens.cameraId)
-                    switchWithWarmCamera(warmDevice, lens, switchStartNs)
-                    motorolaSwitchEngine.compositor.switchActiveStream(lens.lensType, switchStartNs)
-                    return
-                }
-                // Target camera device not pre-warmed: seamlessly switch recording pipeline without stopping MediaRecorder
                 inspectCapabilities(lens.cameraId)
                 switchCameraDuringRecording(lens, switchStartNs)
                 return
             }
 
-            // 1. Instant Concurrent Switch if target camera session is already streaming in standby
-            if (motorolaSwitchEngine.isConcurrentSessionReady(lens)) {
-                val bundle = motorolaSwitchEngine.switchConcurrentLens(
-                    targetLens = lens,
-                    currentDevice = cameraDevice,
-                    currentSession = captureSession,
-                    currentJpegReader = imageReaderJpeg,
-                    currentYuvReader = imageReaderYuv,
-                    currentLens = previousLens,
-                    switchStartNs = switchStartNs
-                )
-                if (bundle != null) {
-                    cameraDevice = bundle.cameraDevice
-                    captureSession = bundle.captureSession
-                    imageReaderJpeg = bundle.imageReaderJpeg
-                    imageReaderYuv = bundle.imageReaderYuv
-                    _isCameraReady.value = true
-                    inspectCapabilities(lens.cameraId)
-
-                    val activeJpegW = bundle.imageReaderJpeg?.width ?: 0
-                    val activeJpegH = bundle.imageReaderJpeg?.height ?: 0
-                    val activeYuvW = bundle.imageReaderYuv?.width ?: 0
-                    val activeYuvH = bundle.imageReaderYuv?.height ?: 0
-                    val activeMp = (activeJpegW.toLong() * activeJpegH.toLong()) / 1_000_000f
-                    Log.i(TAG, "[PHOTO_RES] Switched active lens to ${lens.lensType}: ImageReader JPEG=${activeJpegW}x${activeJpegH} (~${activeMp}MP), YUV=${activeYuvW}x${activeYuvH}")
-
-                    val optimalPhotoSize = getOptimalPhotoSizeForLens(lens, lens.cameraId)
-                    if (bundle.imageReaderJpeg == null || (lens.lensType == LensType.ULTRAWIDE && activeJpegW < 2500)) {
-                        Log.i(TAG, "[PHOTO_RES] Updating Ultra-Wide ImageReader to native resolution: ${optimalPhotoSize.width}x${optimalPhotoSize.height}")
-                        setupImageReaders(lens.cameraId)
-                        createCameraCaptureSession()
-                    } else if (activeJpegW > 0 && activeJpegH > 0) {
-                        _selectedPhotoResolution.value = CameraResolution(activeJpegW, activeJpegH, ImageFormat.JPEG)
-                        updatePreviewAspectRatio()
-                    }
-
-                    // Update previewRequestBuilder targeting the compositor surface for the newly active lens
-                    val targetSurf = if (lens.lensType == LensType.ULTRAWIDE) {
-                        motorolaSwitchEngine.compositor.ultraWideCameraSurface
-                    } else {
-                        motorolaSwitchEngine.compositor.mainCameraSurface
-                    } ?: previewSurface
-
-                    if (targetSurf != null && targetSurf.isValid) {
-                        try {
-                            val newBuilder = bundle.cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                                addTarget(targetSurf)
-                                applyCommonSettings(this)
-                            }
-                            previewRequestBuilder = newBuilder
-                            bundle.captureSession.setRepeatingRequest(newBuilder.build(), captureCallback, backgroundHandler)
-                            if (lens.lensType == LensType.ULTRAWIDE) {
-                                Log.i(TAG, "[UW_SWITCH] target session active")
-                            } else {
-                                Log.i(TAG, "[SWITCH] target session active for ${lens.lensType}")
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to submit repeating preview request on target session for ${lens.lensType}", e)
-                        }
-                    }
-
-                    activeSessionLens = lens
-                    isSwitchingLens.set(false)
-                    zoomContinuityController.onNewLensReady(lens)
-
-                    val elapsedMs = (System.nanoTime() - switchStartNs) / 1_000_000L
-                    Log.i(TAG, "[INSTANT CONCURRENT SWITCH] Switched to ${lens.lensType} in ${elapsedMs}ms (0 sessions recreated)")
-                    return
-                }
-            }
-
-            // 2. Fast Handover if target camera was warm in background (non-concurrent HAL):
-            val warmDevice = motorolaSwitchEngine.handoffBackgroundCamera(lens)
-            if (warmDevice != null) {
-                inspectCapabilities(lens.cameraId)
-                switchWithWarmCamera(warmDevice, lens, switchStartNs)
-                return
-            }
-
+            // Native Camera2 switching for physical lenses
             inspectCapabilities(lens.cameraId)
             restartCamera()
         } catch (t: Throwable) {

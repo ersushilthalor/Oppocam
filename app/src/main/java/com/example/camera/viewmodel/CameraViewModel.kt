@@ -441,11 +441,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // --- Motorola Instant Camera Switching ---
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = engine.motorolaSwitchEngine.switchState
 
-    fun setKeepUltraWideReady(enabled: Boolean) {
-        engine.motorolaSwitchEngine.setKeepUltraWideReady(enabled)
-        showToast(if (enabled) "Keep Ultra-Wide Ready: ON" else "Keep Ultra-Wide Ready: OFF")
-    }
-
     fun setShowUltraWidePreview(enabled: Boolean) {
         engine.motorolaSwitchEngine.setShowUltraWidePreview(enabled)
         showToast(if (enabled) "Ultra-Wide Little Preview: ON" else "Ultra-Wide Little Preview: OFF")

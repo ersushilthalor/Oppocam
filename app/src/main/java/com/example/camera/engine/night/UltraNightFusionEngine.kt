@@ -147,8 +147,9 @@ class UltraNightFusionEngine {
         val bAcc = accumRadianceB!!
         val wAcc = accumWeights!!
 
-        // Reusable row buffer (only width integers = 16 KB instead of 48 MB full-frame IntArray)
-        val rowPixels = IntArray(width)
+        // Reusable chunk buffer for 64 scanlines (drastically reduces JNI overhead)
+        val CHUNK_ROWS = 64
+        val chunkPixels = IntArray(width * CHUNK_ROWS)
 
         try {
             for (i in 0 until count) {
@@ -160,47 +161,56 @@ class UltraNightFusionEngine {
                 val frameType = frame.type
 
                 try {
-                    for (y in 0 until height) {
-                        val sy = y + shiftY
-                        if (sy !in 0 until height) continue
+                    var y = 0
+                    while (y < height) {
+                        val chunkH = min(CHUNK_ROWS, height - y)
+                        // Read chunk of rows in a single fast JNI call
+                        frame.bitmap.getPixels(chunkPixels, 0, width, 0, y, width, chunkH)
 
-                        val outRow = y * width
-                        frame.bitmap.getPixels(rowPixels, 0, width, 0, sy, width, 1)
+                        for (cy in 0 until chunkH) {
+                            val currY = y + cy
+                            val sy = currY + shiftY
+                            if (sy !in 0 until height) continue
 
-                        for (x in 0 until width) {
-                            val sx = x + shiftX
-                            if (sx !in 0 until width) continue
+                            val chunkRowOffset = cy * width
+                            val outRow = currY * width
 
-                            val outIdx = outRow + x
-                            val p = rowPixels[sx]
-                            val rawR = Color.red(p) / 255.0f
-                            val rawG = Color.green(p) / 255.0f
-                            val rawB = Color.blue(p) / 255.0f
+                            for (x in 0 until width) {
+                                val sx = x + shiftX
+                                if (sx !in 0 until width) continue
 
-                            // Inverse gamma decode to linear space
-                            val linR = (rawR.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
-                            val linG = (rawG.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
-                            val linB = (rawB.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                                val outIdx = outRow + x
+                                val p = chunkPixels[chunkRowOffset + sx]
+                                val rawR = Color.red(p) / 255.0f
+                                val rawG = Color.green(p) / 255.0f
+                                val rawB = Color.blue(p) / 255.0f
 
-                            val radR = linR * expScale
-                            val radG = linG * expScale
-                            val radB = linB * expScale
+                                // Inverse gamma decode to linear space
+                                val linR = (rawR.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                                val linG = (rawG.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                                val linB = (rawB.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
 
-                            val maxCh = max(rawR, max(rawG, rawB))
-                            val expWeight = when {
-                                maxCh > 0.94f -> if (frameType == BracketExposureType.SHORT) 1.0f else (1.0f - maxCh) * 16.0f
-                                maxCh < 0.04f -> if (frameType == BracketExposureType.LONG) 1.0f else maxCh * 25.0f
-                                else -> 1.0f
-                            }.coerceIn(0.05f, 1.0f)
+                                val radR = linR * expScale
+                                val radG = linG * expScale
+                                val radB = linB * expScale
 
-                            val motionConf = alignment.getMotionConfidence(x, y, width, height)
-                            val combinedWeight = expWeight * motionConf
+                                val maxCh = max(rawR, max(rawG, rawB))
+                                val expWeight = when {
+                                    maxCh > 0.94f -> if (frameType == BracketExposureType.SHORT) 1.0f else (1.0f - maxCh) * 16.0f
+                                    maxCh < 0.04f -> if (frameType == BracketExposureType.LONG) 1.0f else maxCh * 25.0f
+                                    else -> 1.0f
+                                }.coerceIn(0.05f, 1.0f)
 
-                            rAcc[outIdx] += radR * combinedWeight
-                            gAcc[outIdx] += radG * combinedWeight
-                            bAcc[outIdx] += radB * combinedWeight
-                            wAcc[outIdx] += combinedWeight
+                                val motionConf = alignment.getMotionConfidence(x, currY, width, height)
+                                val combinedWeight = expWeight * motionConf
+
+                                rAcc[outIdx] += radR * combinedWeight
+                                gAcc[outIdx] += radG * combinedWeight
+                                bAcc[outIdx] += radB * combinedWeight
+                                wAcc[outIdx] += combinedWeight
+                            }
                         }
+                        y += chunkH
                     }
                 } finally {
                     // Release non-reference frame bitmaps immediately after accumulation to free heap
@@ -251,10 +261,9 @@ class UltraNightFusionEngine {
             onProgress(0.68f)
 
             // 5. Tone Map Base Illumination and Stream directly to Output Bitmap
-            // Eliminates resultPixels = IntArray(totalPixels) which previously caused OOM at line 195!
             val liftFactor = (config.shadowLift.coerceIn(1.0f, 2.5f))
-            val toneMu = 18.0f * liftFactor
-            val detailBoost = 1.15f
+            val toneMu = 16.0f * liftFactor
+            val detailBoost = 1.10f
             val toneMaxDiv = ln(1.0f + toneMu * 2.0f)
 
             val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -277,7 +286,7 @@ class UltraNightFusionEngine {
                     val lumaIn = wAcc[idx]
                     val baseIn = smoothedBaseDown[dsRowOffset + dx].coerceAtLeast(0.001f)
 
-                    val detailRatio = (lumaIn / baseIn).coerceIn(0.2f, 5.0f)
+                    val detailRatio = (lumaIn / baseIn).coerceIn(0.2f, 3.5f)
                     val toneBase = (ln(1.0f + toneMu * baseIn) / toneMaxDiv).coerceIn(0.0f, 1.5f)
                     val lumaToneMapped = (toneBase * detailRatio.pow(detailBoost)).coerceAtLeast(0.0f)
 
@@ -286,12 +295,21 @@ class UltraNightFusionEngine {
                     val bIn = bAcc[idx]
 
                     val gain = if (lumaIn > 0.0001f) {
-                        (lumaToneMapped / lumaIn).pow(0.85f).coerceIn(0.0f, 6.0f)
+                        (lumaToneMapped / lumaIn).pow(0.72f).coerceIn(0.0f, 4.5f)
                     } else 1.0f
 
-                    val rOut = (rIn * gain).coerceAtLeast(0.0f)
-                    val gOut = (gIn * gain).coerceAtLeast(0.0f)
-                    val bOut = (bIn * gain).coerceAtLeast(0.0f)
+                    var rOut = (rIn * gain).coerceAtLeast(0.0f)
+                    var gOut = (gIn * gain).coerceAtLeast(0.0f)
+                    var bOut = (bIn * gain).coerceAtLeast(0.0f)
+
+                    // Suppress chroma noise in deep shadows to keep dark areas clean and natural
+                    if (lumaIn < 0.035f) {
+                        val shadowLuma = 0.2126f * rOut + 0.7152f * gOut + 0.0722f * bOut
+                        val blend = (lumaIn / 0.035f).coerceIn(0.0f, 1.0f)
+                        rOut = shadowLuma * (1.0f - blend) + rOut * blend
+                        gOut = shadowLuma * (1.0f - blend) + gOut * blend
+                        bOut = shadowLuma * (1.0f - blend) + bOut * blend
+                    }
 
                     val srgbR = (rOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
                     val srgbG = (gOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
@@ -306,10 +324,10 @@ class UltraNightFusionEngine {
             output.setPixels(rowCurr, 0, width, 0, 0, width, 1)
             System.arraycopy(rowCurr, 0, rowAbove, 0, width)
 
-            // Stream rows 1 until height - 1 with online sharpening
+            // Stream rows 1 until height - 1 with subtle edge sharpening (no halos or ringing)
             for (y in 1 until height - 1) {
                 toneMapScanline(y + 1, rowBelow)
-                sharpenRow(rowAbove, rowCurr, rowBelow, rowSharpened, width, sharpnessStrength = 0.25f)
+                sharpenRow(rowAbove, rowCurr, rowBelow, rowSharpened, width, sharpnessStrength = 0.12f)
                 output.setPixels(rowSharpened, 0, width, 0, y, width, 1)
 
                 val tmp = rowAbove
@@ -380,14 +398,15 @@ class UltraNightFusionEngine {
         val smoothedBaseDown = applyEdgePreservingSmooth(baseLumaDown, dsW, dsH)
 
         val liftFactor = (config.shadowLift.coerceIn(1.0f, 2.5f))
-        val toneMu = 18.0f * liftFactor
-        val detailBoost = 1.15f
+        val toneMu = 16.0f * liftFactor
+        val detailBoost = 1.10f
         val toneMaxDiv = ln(1.0f + toneMu * 2.0f)
 
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val tileHeight = (height + tiles - 1) / tiles
 
-        val rowPixels = IntArray(width)
+        val CHUNK_ROWS = 64
+        val chunkPixels = IntArray(width * CHUNK_ROWS)
 
         for (tileIndex in 0 until tiles) {
             val startY = tileIndex * tileHeight
@@ -406,7 +425,7 @@ class UltraNightFusionEngine {
             val wArr = wTile!!
 
             try {
-                // Accumulate this tile across all frames
+                // Accumulate this tile across all frames in chunks
                 for (i in 0 until count) {
                     val frame = frames[i]
                     if (frame.bitmap.isRecycled) continue
@@ -416,46 +435,54 @@ class UltraNightFusionEngine {
                     val expScale = frameExposureScales[i]
                     val frameType = frame.type
 
-                    for (y in startY until endY) {
-                        val sy = y + shiftY
-                        if (sy !in 0 until height) continue
+                    var y = startY
+                    while (y < endY) {
+                        val chunkH = min(CHUNK_ROWS, endY - y)
+                        frame.bitmap.getPixels(chunkPixels, 0, width, 0, y, width, chunkH)
 
-                        val tileRow = (y - startY) * width
-                        frame.bitmap.getPixels(rowPixels, 0, width, 0, sy, width, 1)
+                        for (cy in 0 until chunkH) {
+                            val currY = y + cy
+                            val sy = currY + shiftY
+                            if (sy !in 0 until height) continue
 
-                        for (x in 0 until width) {
-                            val sx = x + shiftX
-                            if (sx !in 0 until width) continue
+                            val chunkRowOffset = cy * width
+                            val tileRow = (currY - startY) * width
 
-                            val p = rowPixels[sx]
-                            val rawR = Color.red(p) / 255.0f
-                            val rawG = Color.green(p) / 255.0f
-                            val rawB = Color.blue(p) / 255.0f
+                            for (x in 0 until width) {
+                                val sx = x + shiftX
+                                if (sx !in 0 until width) continue
 
-                            val linR = (rawR.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
-                            val linG = (rawG.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
-                            val linB = (rawB.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                                val p = chunkPixels[chunkRowOffset + sx]
+                                val rawR = Color.red(p) / 255.0f
+                                val rawG = Color.green(p) / 255.0f
+                                val rawB = Color.blue(p) / 255.0f
 
-                            val radR = linR * expScale
-                            val radG = linG * expScale
-                            val radB = linB * expScale
+                                val linR = (rawR.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                                val linG = (rawG.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
+                                val linB = (rawB.pow(GAMMA_DECODE) - SENSOR_BLACK_LEVEL_NORM).coerceAtLeast(0.0f) / (1.0f - SENSOR_BLACK_LEVEL_NORM)
 
-                            val maxCh = max(rawR, max(rawG, rawB))
-                            val expWeight = when {
-                                maxCh > 0.94f -> if (frameType == BracketExposureType.SHORT) 1.0f else (1.0f - maxCh) * 16.0f
-                                maxCh < 0.04f -> if (frameType == BracketExposureType.LONG) 1.0f else maxCh * 25.0f
-                                else -> 1.0f
-                            }.coerceIn(0.05f, 1.0f)
+                                val radR = linR * expScale
+                                val radG = linG * expScale
+                                val radB = linB * expScale
 
-                            val motionConf = alignment.getMotionConfidence(x, y, width, height)
-                            val combinedWeight = expWeight * motionConf
+                                val maxCh = max(rawR, max(rawG, rawB))
+                                val expWeight = when {
+                                    maxCh > 0.94f -> if (frameType == BracketExposureType.SHORT) 1.0f else (1.0f - maxCh) * 16.0f
+                                    maxCh < 0.04f -> if (frameType == BracketExposureType.LONG) 1.0f else maxCh * 25.0f
+                                    else -> 1.0f
+                                }.coerceIn(0.05f, 1.0f)
 
-                            val outIdx = tileRow + x
-                            rArr[outIdx] += radR * combinedWeight
-                            gArr[outIdx] += radG * combinedWeight
-                            bArr[outIdx] += radB * combinedWeight
-                            wArr[outIdx] += combinedWeight
+                                val motionConf = alignment.getMotionConfidence(x, currY, width, height)
+                                val combinedWeight = expWeight * motionConf
+
+                                val outIdx = tileRow + x
+                                rArr[outIdx] += radR * combinedWeight
+                                gArr[outIdx] += radG * combinedWeight
+                                bArr[outIdx] += radB * combinedWeight
+                                wArr[outIdx] += combinedWeight
+                            }
                         }
+                        y += chunkH
                     }
                 }
 
@@ -471,7 +498,7 @@ class UltraNightFusionEngine {
                     wArr[idx] = 0.2126f * r + 0.7152f * g + 0.0722f * b
                 }
 
-                // Stream tone mapped tile into output
+                // Stream tone mapped tile into output with shadow noise suppression
                 val tileRowPixels = IntArray(width)
                 for (y in startY until endY) {
                     val tileY = y - startY
@@ -486,7 +513,7 @@ class UltraNightFusionEngine {
                         val lumaIn = wArr[idx]
                         val baseIn = smoothedBaseDown[dsRowOffset + dx].coerceAtLeast(0.001f)
 
-                        val detailRatio = (lumaIn / baseIn).coerceIn(0.2f, 5.0f)
+                        val detailRatio = (lumaIn / baseIn).coerceIn(0.2f, 3.5f)
                         val toneBase = (ln(1.0f + toneMu * baseIn) / toneMaxDiv).coerceIn(0.0f, 1.5f)
                         val lumaToneMapped = (toneBase * detailRatio.pow(detailBoost)).coerceAtLeast(0.0f)
 
@@ -495,12 +522,20 @@ class UltraNightFusionEngine {
                         val bIn = bArr[idx]
 
                         val gain = if (lumaIn > 0.0001f) {
-                            (lumaToneMapped / lumaIn).pow(0.85f).coerceIn(0.0f, 6.0f)
+                            (lumaToneMapped / lumaIn).pow(0.72f).coerceIn(0.0f, 4.5f)
                         } else 1.0f
 
-                        val rOut = (rIn * gain).coerceAtLeast(0.0f)
-                        val gOut = (gIn * gain).coerceAtLeast(0.0f)
-                        val bOut = (bIn * gain).coerceAtLeast(0.0f)
+                        var rOut = (rIn * gain).coerceAtLeast(0.0f)
+                        var gOut = (gIn * gain).coerceAtLeast(0.0f)
+                        var bOut = (bIn * gain).coerceAtLeast(0.0f)
+
+                        if (lumaIn < 0.035f) {
+                            val shadowLuma = 0.2126f * rOut + 0.7152f * gOut + 0.0722f * bOut
+                            val blend = (lumaIn / 0.035f).coerceIn(0.0f, 1.0f)
+                            rOut = shadowLuma * (1.0f - blend) + rOut * blend
+                            gOut = shadowLuma * (1.0f - blend) + gOut * blend
+                            bOut = shadowLuma * (1.0f - blend) + bOut * blend
+                        }
 
                         val srgbR = (rOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
                         val srgbG = (gOut.pow(GAMMA_ENCODE) * 255.0f).toInt().coerceIn(0, 255)
