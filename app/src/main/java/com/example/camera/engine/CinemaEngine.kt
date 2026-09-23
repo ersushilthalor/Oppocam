@@ -453,8 +453,12 @@ class CinemaEngine(private val context: Context) {
             else -> config.exposure
         }
         val exposureSliderSteps = (effectiveExp * 6f).roundToInt()
-        val totalExposureComp = (config.exposureCompensation + exposureSliderSteps)
-            .coerceIn(aeCompensationRange.lower, aeCompensationRange.upper)
+        val totalExposureComp = if (aeCompensationRange.lower <= aeCompensationRange.upper) {
+            (config.exposureCompensation + exposureSliderSteps)
+                .coerceIn(aeCompensationRange.lower, aeCompensationRange.upper)
+        } else {
+            0
+        }
         builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, totalExposureComp)
 
         // 5. White Balance Mode

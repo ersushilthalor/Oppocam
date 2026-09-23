@@ -98,7 +98,11 @@ class HdrCapturePlanner {
         fun evToIndex(ev: Float): Int {
             if (compStep <= 0f) return 0
             val steps = (ev / compStep).roundToInt()
-            return steps.coerceIn(compRange.lower, compRange.upper)
+            return if (compRange.lower <= compRange.upper) {
+                steps.coerceIn(compRange.lower, compRange.upper)
+            } else {
+                0
+            }
         }
 
         val baseSpec = HdrExposureSpec(FrameRole.REFERENCE_BASE, 0f, 0, true)

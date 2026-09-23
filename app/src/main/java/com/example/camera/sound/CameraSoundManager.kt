@@ -26,9 +26,24 @@ object CameraSoundManager {
     @Volatile private var isBurstSoundLoaded: Boolean = false
 
     private val audioExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "CameraSoundWorker").apply {
+        Thread({
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed setting OS audio thread priority: ${t.message}")
+            }
+            try {
+                runnable.run()
+            } catch (t: Throwable) {
+                Log.e(TAG, "Unhandled exception in CameraSoundWorker", t)
+            }
+        }, "CameraSoundWorker").apply {
             isDaemon = true
-            priority = Process.THREAD_PRIORITY_AUDIO
+            try {
+                priority = Thread.NORM_PRIORITY
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed setting Java thread priority: ${t.message}")
+            }
         }
     }
 
@@ -39,8 +54,8 @@ object CameraSoundManager {
             sound.load(MediaActionSound.START_VIDEO_RECORDING)
             sound.load(MediaActionSound.STOP_VIDEO_RECORDING)
             actionSound = sound
-        } catch (e: Exception) {
-            Log.w(TAG, "MediaActionSound initialization deferred: ${e.message}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "MediaActionSound initialization deferred or unsupported: ${t.message}")
         }
 
         try {
@@ -64,11 +79,19 @@ object CameraSoundManager {
             burstSoundPool = pool
 
             // Try loading system shutter audio; fallback to synthesized crisp mechanical click
-            audioExecutor.execute {
-                loadOrSynthesizeBurstSound(pool)
+            try {
+                audioExecutor.execute {
+                    try {
+                        loadOrSynthesizeBurstSound(pool)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Failed loading/synthesizing burst sound", t)
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed scheduling burst sound load", t)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed initializing burst SoundPool: ${e.message}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed initializing burst SoundPool: ${t.message}")
         }
     }
 
@@ -151,48 +174,65 @@ object CameraSoundManager {
      * Plays rapid machine-gun style shutter click.
      * Completely non-blocking: dispatches to a dedicated background audio thread
      * so camera acquisition and JPEG processing are never slowed down.
+     * Guaranteed fail-safe: sound playback will never crash photo capture.
      */
     fun playBurstShutter() {
-        audioExecutor.execute {
-            try {
-                if (isBurstSoundLoaded && burstSoundId != 0) {
-                    burstSoundPool?.play(burstSoundId, 1.0f, 1.0f, 1, 0, 1.0f)
-                } else {
-                    actionSound?.play(MediaActionSound.SHUTTER_CLICK)
+        try {
+            audioExecutor.execute {
+                try {
+                    if (isBurstSoundLoaded && burstSoundId != 0) {
+                        burstSoundPool?.play(burstSoundId, 1.0f, 1.0f, 1, 0, 1.0f)
+                    } else {
+                        actionSound?.play(MediaActionSound.SHUTTER_CLICK)
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed playing burst shutter sound: ${t.message}")
                 }
-            } catch (t: Throwable) {
-                Log.w(TAG, "Failed playing burst shutter sound: ${t.message}")
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to schedule burst shutter sound: ${t.message}")
         }
     }
 
     fun playShutter() {
-        audioExecutor.execute {
-            try {
-                actionSound?.play(MediaActionSound.SHUTTER_CLICK)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to play shutter sound: ${e.message}")
+        try {
+            audioExecutor.execute {
+                try {
+                    actionSound?.play(MediaActionSound.SHUTTER_CLICK)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to play shutter sound: ${t.message}")
+                }
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to schedule shutter sound: ${t.message}")
         }
     }
 
     fun playStartVideo() {
-        audioExecutor.execute {
-            try {
-                actionSound?.play(MediaActionSound.START_VIDEO_RECORDING)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to play video start sound: ${e.message}")
+        try {
+            audioExecutor.execute {
+                try {
+                    actionSound?.play(MediaActionSound.START_VIDEO_RECORDING)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to play video start sound: ${t.message}")
+                }
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to schedule video start sound: ${t.message}")
         }
     }
 
     fun playStopVideo() {
-        audioExecutor.execute {
-            try {
-                actionSound?.play(MediaActionSound.STOP_VIDEO_RECORDING)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to play video stop sound: ${e.message}")
+        try {
+            audioExecutor.execute {
+                try {
+                    actionSound?.play(MediaActionSound.STOP_VIDEO_RECORDING)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to play video stop sound: ${t.message}")
+                }
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to schedule video stop sound: ${t.message}")
         }
     }
 

@@ -86,8 +86,24 @@ class BurstEngine(
     // Parallel background workers for JPEG encoding and disk I/O
     private val workerCount = minOf(4, maxOf(2, Runtime.getRuntime().availableProcessors()))
     private val backgroundProcessor = Executors.newFixedThreadPool(workerCount) { runnable ->
-        Thread(runnable, "BurstWorker").apply {
-            priority = Process.THREAD_PRIORITY_BACKGROUND
+        Thread({
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed setting OS background thread priority: ${t.message}")
+            }
+            try {
+                runnable.run()
+            } catch (t: Throwable) {
+                Log.e(TAG, "Unhandled exception in BurstWorker", t)
+            }
+        }, "BurstWorker").apply {
+            isDaemon = true
+            try {
+                priority = Thread.NORM_PRIORITY
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed setting Java thread priority: ${t.message}")
+            }
         }
     }
 

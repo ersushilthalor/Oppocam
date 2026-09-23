@@ -408,6 +408,9 @@ data class HardwareCapabilities(
     val supportsColorTransform: Boolean = true,
     val supportsEdgeMode: Boolean = true,
     val supportsNoiseReduction: Boolean = true,
+    val supportsAeLock: Boolean = true,
+    val supportsAwbLock: Boolean = true,
+    val hardwareLevel: Int = 0,
     val minZoom: Float = 1.0f,
     val maxZoom: Float = 8f
 )

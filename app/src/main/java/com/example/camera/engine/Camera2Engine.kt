@@ -842,6 +842,10 @@ class Camera2Engine(private val context: Context) {
             val hasTonemapCurve = tonemapModes.contains(CameraCharacteristics.TONEMAP_MODE_CONTRAST_CURVE) ||
                     tonemapModes.contains(CameraCharacteristics.TONEMAP_MODE_FAST)
 
+            val supportsAeLock = chars.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) ?: true
+            val supportsAwbLock = chars.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) ?: true
+            val hwLevel = chars.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) ?: CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
+
             val hardwareCaps = HardwareCapabilities(
                 supportsManualSensor = hasManualSensor,
                 supportsRaw = hasRaw && rawResolutions.isNotEmpty(),
@@ -863,6 +867,9 @@ class Camera2Engine(private val context: Context) {
                 supportedVideoResolutions = filteredVideoResolutions,
                 supportedFpsRanges = supportedFps,
                 supportsTonemapCurve = hasTonemapCurve,
+                supportsAeLock = supportsAeLock,
+                supportsAwbLock = supportsAwbLock,
+                hardwareLevel = hwLevel,
                 maxZoom = maxZoom
             )
 
@@ -2191,9 +2198,11 @@ class Camera2Engine(private val context: Context) {
             }
             val minEv = caps.minExposureCompensation
             val maxEv = caps.maxExposureCompensation
-            val clampedEv = if (minEv < maxEv) evToApply.coerceIn(minEv, maxEv) else evToApply
+            val clampedEv = if (minEv <= maxEv) evToApply.coerceIn(minEv, maxEv) else 0
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, clampedEv)
-            builder.set(CaptureRequest.CONTROL_AE_LOCK, isAeLocked)
+            if (caps.supportsAeLock) {
+                builder.set(CaptureRequest.CONTROL_AE_LOCK, isAeLocked)
+            }
         }
 
         // Active Tap-to-Expose & Tap-to-Focus Metering Region (preserved across setting adjustments)
@@ -4806,86 +4815,158 @@ class Camera2Engine(private val context: Context) {
                     onError("Hardware recording error (code=$what, extra=$extra)")
                 }
 
-                if (isAudioEnabled) {
-                    try {
-                        mr.setAudioSource(MediaRecorder.AudioSource.MIC)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "AudioSource.MIC not available, continuing without audio", e)
-                    }
-                }
+                val validatedConfig = DeviceCompatibilityManager.getValidatedVideoConfig(
+                    requestedWidth = videoRes.width,
+                    requestedHeight = videoRes.height,
+                    requestedFps = targetFps,
+                    requestedBitrate = bitrate,
+                    preferHevc = (cinemaCodec == CinemaCodec.H265),
+                    prefer10Bit = is10BitRequested
+                )
 
-                mr.setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                fun configureAndPrepare(
+                    encoder: Int,
+                    width: Int,
+                    height: Int,
+                    fps: Int,
+                    rate: Int,
+                    withAudio: Boolean,
+                    is10Bit: Boolean
+                ): Boolean {
+                    return try {
+                        mr.reset()
+                        var audioConfigured = false
+                        if (withAudio) {
+                            try {
+                                mr.setAudioSource(MediaRecorder.AudioSource.MIC)
+                                audioConfigured = true
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "AudioSource.MIC not available: ${t.message}")
+                                audioConfigured = false
+                            }
+                        }
 
-                val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_WRITE)
-                videoRecordingFileDescriptor = pfd
-                mr.setOutputFile(pfd.fileDescriptor)
+                        mr.setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                        mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
 
-                mr.setVideoEncodingBitRate(bitrate)
-                mr.setVideoFrameRate(targetFps)
-                mr.setVideoSize(videoRes.width, videoRes.height)
-
-                val useHevc = (cinemaCodec == CinemaCodec.H265) || is10BitRequested
-                if (useHevc) {
-                    mr.setVideoEncoder(MediaRecorder.VideoEncoder.HEVC)
-                    if (is10BitRequested && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         try {
-                            mr.setVideoEncodingProfileLevel(
-                                MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
-                                MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel51
-                            )
-                        } catch (e: Exception) {
+                            videoRecordingFileDescriptor?.close()
+                        } catch (ignored: Throwable) {}
+
+                        val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_WRITE)
+                        videoRecordingFileDescriptor = pfd
+                        mr.setOutputFile(pfd.fileDescriptor)
+
+                        mr.setVideoEncodingBitRate(rate)
+                        mr.setVideoFrameRate(fps)
+                        mr.setVideoSize(width, height)
+                        mr.setVideoEncoder(encoder)
+
+                        if (is10Bit && encoder == MediaRecorder.VideoEncoder.HEVC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                             try {
                                 mr.setVideoEncodingProfileLevel(
                                     MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
-                                    MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel41
+                                    MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel51
                                 )
-                            } catch (ignored: Exception) {}
+                            } catch (e: Exception) {
+                                try {
+                                    mr.setVideoEncodingProfileLevel(
+                                        MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
+                                        MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel41
+                                    )
+                                } catch (ignored: Exception) {}
+                            }
                         }
-                    }
-                } else {
-                    mr.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                }
 
-                if (isAudioEnabled) {
-                    try {
-                        mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                        mr.setAudioSamplingRate(48000)
-                        mr.setAudioEncodingBitRate(192000)
-                    } catch (ignored: Exception) {}
-                }
-
-                val orientationHint = getVideoOrientationHint()
-                mr.setOrientationHint(orientationHint)
-
-                try {
-                    mr.prepare()
-                } catch (e: Exception) {
-                    Log.w(TAG, "MediaRecorder prepare failed with primary settings, trying fallback", e)
-                    if (useHevc) {
-                        mr.reset()
-                        if (isAudioEnabled) {
-                            try { mr.setAudioSource(MediaRecorder.AudioSource.MIC) } catch (ignored: Exception) {}
-                        }
-                        mr.setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                        mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                        mr.setOutputFile(tempFile.absolutePath)
-                        mr.setVideoEncodingBitRate(minOf(bitrate, 40_000_000))
-                        mr.setVideoFrameRate(targetFps)
-                        mr.setVideoSize(videoRes.width, videoRes.height)
-                        mr.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                        if (isAudioEnabled) {
+                        if (audioConfigured) {
                             try {
                                 mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                                 mr.setAudioSamplingRate(48000)
                                 mr.setAudioEncodingBitRate(192000)
-                            } catch (ignored: Exception) {}
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "AudioEncoder.AAC configuration warning: ${t.message}")
+                            }
                         }
-                        mr.setOrientationHint(orientationHint)
+
+                        mr.setOrientationHint(getVideoOrientationHint())
                         mr.prepare()
-                    } else {
-                        throw e
+                        true
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "MediaRecorder prepare failed (enc=$encoder, ${width}x${height}, audio=$withAudio): ${t.message}")
+                        false
                     }
+                }
+
+                // Tier 1: Validated optimal configuration
+                var prepared = configureAndPrepare(
+                    encoder = validatedConfig.encoder,
+                    width = validatedConfig.width,
+                    height = validatedConfig.height,
+                    fps = validatedConfig.fps,
+                    rate = validatedConfig.bitrate,
+                    withAudio = isAudioEnabled,
+                    is10Bit = validatedConfig.is10Bit
+                )
+
+                // Tier 2: If failed and 10-bit was attempted, downgrade to 8-bit
+                if (!prepared && validatedConfig.is10Bit) {
+                    Log.i(TAG, "Tier 2: Downgrading 10-bit to 8-bit standard encoder")
+                    prepared = configureAndPrepare(
+                        encoder = validatedConfig.encoder,
+                        width = validatedConfig.width,
+                        height = validatedConfig.height,
+                        fps = validatedConfig.fps,
+                        rate = minOf(validatedConfig.bitrate, 40_000_000),
+                        withAudio = isAudioEnabled,
+                        is10Bit = false
+                    )
+                }
+
+                // Tier 3: Fallback to universal H.264
+                if (!prepared && validatedConfig.encoder != MediaRecorder.VideoEncoder.H264) {
+                    Log.i(TAG, "Tier 3: Fallback to universal H.264 encoder")
+                    prepared = configureAndPrepare(
+                        encoder = MediaRecorder.VideoEncoder.H264,
+                        width = validatedConfig.width,
+                        height = validatedConfig.height,
+                        fps = minOf(validatedConfig.fps, 30),
+                        rate = minOf(validatedConfig.bitrate, 30_000_000),
+                        withAudio = isAudioEnabled,
+                        is10Bit = false
+                    )
+                }
+
+                // Tier 4: Fallback to universal H.264 without audio (fixes MIC permission or busy audio HAL)
+                if (!prepared && isAudioEnabled) {
+                    Log.i(TAG, "Tier 4: Fallback to H.264 video-only (bypassing audio hardware)")
+                    prepared = configureAndPrepare(
+                        encoder = MediaRecorder.VideoEncoder.H264,
+                        width = minOf(validatedConfig.width, 1920),
+                        height = minOf(validatedConfig.height, 1080),
+                        fps = 30,
+                        rate = 20_000_000,
+                        withAudio = false,
+                        is10Bit = false
+                    )
+                }
+
+                // Tier 5: Absolute failsafe: standard 720p 30fps H.264
+                if (!prepared) {
+                    Log.i(TAG, "Tier 5: Universal 720p 30fps safe recording profile")
+                    prepared = configureAndPrepare(
+                        encoder = MediaRecorder.VideoEncoder.H264,
+                        width = 1280,
+                        height = 720,
+                        fps = 30,
+                        rate = 12_000_000,
+                        withAudio = false,
+                        is10Bit = false
+                    )
+                }
+
+                if (!prepared) {
+                    onError("Unable to initialize video recorder on this device")
+                    return
                 }
 
                 recorderSurface = mr.surface

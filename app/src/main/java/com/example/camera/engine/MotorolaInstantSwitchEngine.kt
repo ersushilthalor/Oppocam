@@ -188,27 +188,31 @@ class MotorolaInstantSwitchEngine(
                 emptySet()
             }
             Log.d(TAG, "Checking HAL concurrentCameraIds for [$primaryCameraId, $secondaryCameraId]. Available sets: $concurrentSets")
-            val isSupported = concurrentSets.any { set ->
-                set.contains(primaryCameraId) && set.contains(secondaryCameraId)
+            val isSupported = if (concurrentSets.isNotEmpty()) {
+                concurrentSets.any { set ->
+                    set.contains(primaryCameraId) && set.contains(secondaryCameraId)
+                }
+            } else {
+                // If HAL doesn't declare concurrentCameraIds (empty set), device doesn't support concurrent hardware sessions
+                false
             }
-            // Many OEM multi-camera HALs support streaming both rear cameras simultaneously
-            // even if not explicitly exposed in concurrentCameraIds.
-            // Attempt concurrent mode by default and only fall back if openCamera throws ERROR_MAX_CAMERAS_IN_USE.
-            isConcurrentHardwareSupported = true
+            isConcurrentHardwareSupported = isSupported
             hasCheckedConcurrentSupport = true
 
             if (isSupported) {
                 Log.i(TAG, "Hardware concurrent camera support CONFIRMED for [$primaryCameraId, $secondaryCameraId]")
                 updateConcurrentState(true, "Dual-Camera Concurrent Stream Ready")
             } else {
-                Log.i(TAG, "HAL does not explicitly list pair [$primaryCameraId, $secondaryCameraId], attempting direct concurrent stream.")
-                updateConcurrentState(true, "Dual-Camera Stream Ready")
+                Log.i(TAG, "Concurrent streaming not supported for [$primaryCameraId, $secondaryCameraId]. Active fallback: Turbo Fast Handover.")
+                updateConcurrentState(false, "Turbo Fast Handover Active")
             }
-            true
+            isSupported
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to query concurrentCameraIds from CameraManager", t)
-            isConcurrentHardwareSupported = true
-            true
+            Log.w(TAG, "Failed to query concurrentCameraIds from CameraManager, using Turbo fallback", t)
+            isConcurrentHardwareSupported = false
+            hasCheckedConcurrentSupport = true
+            updateConcurrentState(false, "Turbo Fast Handover Active")
+            false
         }
     }
 
