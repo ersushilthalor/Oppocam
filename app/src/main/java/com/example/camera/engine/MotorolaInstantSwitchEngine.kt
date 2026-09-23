@@ -92,6 +92,8 @@ class MotorolaInstantSwitchEngine(
     private var standbyImageReaderJpeg: ImageReader? = null
     private var standbyImageReaderYuv: ImageReader? = null
     private var activeStandbyLens: LensInfo? = null
+    val activeStandbyLensInfo: LensInfo?
+        get() = synchronized(sessionLock) { activeStandbyLens }
 
     // Reverse Standby (when Ultra-Wide is primary, Main is standby)
     private var mainStandbyCameraDevice: CameraDevice? = null

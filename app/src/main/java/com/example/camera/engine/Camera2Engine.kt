@@ -177,6 +177,22 @@ class Camera2Engine(private val context: Context) {
     var currentZoom: Float = 1.0f
     private val _currentZoom = MutableStateFlow(1.0f)
     val currentZoomState: StateFlow<Float> = _currentZoom.asStateFlow()
+    @Volatile
+    var activeSessionLens: LensInfo? = null
+
+    val zoomContinuityController: ZoomContinuityController by lazy {
+        ZoomContinuityController(
+            coroutineScope = engineScope,
+            onApplyZoom = { zoom ->
+                currentZoom = zoom
+                updatePreviewSettings()
+            },
+            onZoomUpdated = { zoom ->
+                _currentZoom.value = zoom
+                preferences.currentZoom = zoom
+            }
+        )
+    }
     var saveSelfieAsPreviewed: Boolean = true
     var viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL
     var selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL
@@ -797,6 +813,8 @@ class Camera2Engine(private val context: Context) {
                 currentZoom = initialZoom
                 _currentZoom.value = initialZoom
                 preferences.currentZoom = initialZoom
+                activeSessionLens = validSelection
+                zoomContinuityController.initialize(validSelection, initialZoom)
                 motorolaSwitchEngine.updatePrimaryLens(validSelection, sortedLenses)
             }
 
@@ -1014,19 +1032,13 @@ class Camera2Engine(private val context: Context) {
 
         try {
             val previousLens = _selectedLens.value
-            _selectedLens.value = lens
+            zoomContinuityController.onLensSwitchStarted(lens)
 
             if (preserveZoom) {
                 val z = targetZoom ?: currentZoom
-                currentZoom = z
-                _currentZoom.value = z
                 preferences.saveLastLens(lens)
-                preferences.currentZoom = z
             } else {
-                currentZoom = lens.baseZoomRatio
-                _currentZoom.value = lens.baseZoomRatio
                 preferences.saveLastLens(lens)
-                preferences.currentZoom = lens.baseZoomRatio
             }
 
             // If same camera ID and same facing, or both belong to the logical multi-camera,
@@ -1035,12 +1047,18 @@ class Camera2Engine(private val context: Context) {
                     (previousLens?.isLogicalMultiCamera == true && lens.isLogicalMultiCamera && cameraDevice != null)
 
             if (isSameCameraDevice && cameraDevice != null) {
+                _selectedLens.value = lens
+                activeSessionLens = lens
+                isSwitchingLens.set(false)
                 Log.i(TAG, "[IN-SESSION SWITCH] Seamlessly switching lens to ${lens.lensType} (zoom=$currentZoom) within active CameraDevice ${cameraDevice?.id}")
+                zoomContinuityController.onNewLensReady(lens)
                 updatePreviewSettings()
                 motorolaSwitchEngine.updatePrimaryLens(lens, _availableLenses.value)
                 motorolaSwitchEngine.compositor.switchActiveStream(lens.lensType)
                 return
             }
+
+            _selectedLens.value = lens
 
             val switchStartNs = System.nanoTime()
 
@@ -1122,6 +1140,10 @@ class Camera2Engine(private val context: Context) {
                         }
                     }
 
+                    activeSessionLens = lens
+                    isSwitchingLens.set(false)
+                    zoomContinuityController.onNewLensReady(lens)
+
                     val elapsedMs = (System.nanoTime() - switchStartNs) / 1_000_000L
                     Log.i(TAG, "[INSTANT CONCURRENT SWITCH] Switched to ${lens.lensType} in ${elapsedMs}ms (0 sessions recreated)")
                     return
@@ -1138,8 +1160,10 @@ class Camera2Engine(private val context: Context) {
 
             inspectCapabilities(lens.cameraId)
             restartCamera()
-        } finally {
+        } catch (t: Throwable) {
             isSwitchingLens.set(false)
+            zoomContinuityController.onSwitchFailed()
+            Log.e(TAG, "Failed to switch lens to ${lens.lensType}", t)
         }
     }
 
@@ -1910,6 +1934,12 @@ class Camera2Engine(private val context: Context) {
                                     session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
                                 }
                                 _isCameraReady.value = true
+                                val configuredLens = _selectedLens.value
+                                if (configuredLens != null) {
+                                    activeSessionLens = configuredLens
+                                    isSwitchingLens.set(false)
+                                    zoomContinuityController.onNewLensReady(configuredLens)
+                                }
                                 Log.i(TAG, "Seamless lens switch during active recording session completed successfully")
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed repeating record request after seamless lens switch", e)
@@ -1918,6 +1948,8 @@ class Camera2Engine(private val context: Context) {
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
                             isConfiguringSession = false
+                            isSwitchingLens.set(false)
+                            zoomContinuityController.onSwitchFailed()
                             Log.e(TAG, "Failed to configure video recording session after lens switch")
                             _isCameraReady.value = false
                         }
@@ -1981,6 +2013,12 @@ class Camera2Engine(private val context: Context) {
                                 }
                                 _isCameraReady.value = true
                                 CameraPerformanceMonitor.start()
+                                val configuredLens = _selectedLens.value
+                                if (configuredLens != null) {
+                                    activeSessionLens = configuredLens
+                                    isSwitchingLens.set(false)
+                                    zoomContinuityController.onNewLensReady(configuredLens)
+                                }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to start repeating preview request", e)
                             }
@@ -1988,6 +2026,8 @@ class Camera2Engine(private val context: Context) {
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
                             isConfiguringSession = false
+                            isSwitchingLens.set(false)
+                            zoomContinuityController.onSwitchFailed()
                             Log.e(TAG, "Camera capture session configuration failed, scheduling recovery")
                             _isCameraReady.value = false
                             backgroundHandler?.postDelayed({
@@ -2037,6 +2077,12 @@ class Camera2Engine(private val context: Context) {
                             }
                             _isCameraReady.value = true
                             CameraPerformanceMonitor.start()
+                            val configuredLens = _selectedLens.value
+                            if (configuredLens != null) {
+                                activeSessionLens = configuredLens
+                                isSwitchingLens.set(false)
+                                zoomContinuityController.onNewLensReady(configuredLens)
+                            }
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to start repeating preview request", e)
                         }
@@ -2044,6 +2090,8 @@ class Camera2Engine(private val context: Context) {
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         isConfiguringSession = false
+                        isSwitchingLens.set(false)
+                        zoomContinuityController.onSwitchFailed()
                         Log.e(TAG, "Camera capture session configuration failed, scheduling recovery")
                         _isCameraReady.value = false
                         backgroundHandler?.postDelayed({
@@ -2483,7 +2531,7 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun applyZoom(builder: CaptureRequest.Builder) {
-        val lens = _selectedLens.value ?: return
+        val lens = activeSessionLens ?: _selectedLens.value ?: return
 
         val hybridConfig = _hybridStabilizationConfig.value
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
@@ -2500,9 +2548,19 @@ class Camera2Engine(private val context: Context) {
                     CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
                 ) == true)
 
+            val effectiveUiZoom = if (zoomContinuityController.isSwitching && zoomContinuityController.pendingLens == lens) {
+                zoomContinuityController.calculateFovEquivalentZoom(
+                    zoomContinuityController.currentDisplayedZoom,
+                    zoomContinuityController.activeLens,
+                    lens
+                )
+            } else {
+                currentZoom
+            }
+
             // Digital Crop calculation calibrated from actual sensor FOV
             val digitalCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
-                uiZoom = currentZoom,
+                uiZoom = effectiveUiZoom,
                 lensBaseRatio = lens.baseZoomRatio,
                 lensType = lens.lensType
             )
@@ -2513,7 +2571,7 @@ class Camera2Engine(private val context: Context) {
                 if (zoomRange != null) {
                     val targetZoomRatio = if (isLogicalMulti && lens.physicalCameraId.isNullOrEmpty() && zoomRange.lower < 0.95f) {
                         // Pure logical multi-camera with HAL handling continuous zoom
-                        currentZoom.coerceIn(zoomRange.lower, zoomRange.upper)
+                        effectiveUiZoom.coerceIn(zoomRange.lower, zoomRange.upper)
                     } else {
                         // Standalone physical camera sensor: apply calibrated digital crop factor
                         digitalCrop.coerceIn(zoomRange.lower, zoomRange.upper)
@@ -2570,9 +2628,9 @@ class Camera2Engine(private val context: Context) {
 
         val minAllowedZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
         val clampedZoom = zoom.coerceIn(minAllowedZoom, 10.0f)
-        currentZoom = clampedZoom
-        _currentZoom.value = clampedZoom
-        preferences.currentZoom = clampedZoom
+
+        // Continuously update user target zoom, velocity and direction
+        zoomContinuityController.onUserZoomInput(clampedZoom, isPresetTap)
 
         // If front selfie camera, apply digital zoom on active stream,
         // or switch to rear lens if user explicitly tapped a rear zoom preset (.5x or 1x)
@@ -2591,9 +2649,6 @@ class Camera2Engine(private val context: Context) {
             updatePreviewSettings()
             return
         }
-
-        // Keep standby camera repeating request synchronized with target zoom
-        motorolaSwitchEngine.updateStandbyZoom(clampedZoom)
 
         // Hysteresis & Continuous Zoom logic:
         val hasUltraWide = ultraWideLens != null
@@ -2616,9 +2671,22 @@ class Camera2Engine(private val context: Context) {
             else -> mainWideLens ?: currentLens
         }
 
-        if (targetLens != currentLens) {
+        // Keep standby camera repeating request synchronized with FOV-equivalent zoom
+        val standbyTarget = motorolaSwitchEngine.activeStandbyLensInfo ?: targetLens
+        val standbyZoom = if (zoomContinuityController.isSwitching) {
+            zoomContinuityController.calculateFovEquivalentZoom(
+                zoomContinuityController.currentDisplayedZoom,
+                currentLens,
+                standbyTarget
+            )
+        } else {
+            clampedZoom
+        }
+        motorolaSwitchEngine.updateStandbyZoom(standbyZoom)
+
+        if (targetLens != currentLens && targetLens != zoomContinuityController.pendingLens) {
             // If already switching lens, don't trigger another reconfiguration; keep streaming digital zoom
-            if (!isSwitchingLens.get()) {
+            if (!isSwitchingLens.get() && !zoomContinuityController.isSwitching) {
                 val isSameCameraDevice = (currentLens.cameraId == targetLens.cameraId && currentLens.facing == targetLens.facing) ||
                     (currentLens.isLogicalMultiCamera && targetLens.isLogicalMultiCamera && cameraDevice != null)
 
@@ -2627,6 +2695,8 @@ class Camera2Engine(private val context: Context) {
                 } else {
                     clampedZoom
                 }
+
+                zoomContinuityController.onLensSwitchStarted(targetLens)
 
                 if (isSameCameraDevice) {
                     // Instant in-session optical switch without session recreation

@@ -1149,8 +1149,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val ultraWideLens = engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
         val minZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
         val clamped = zoom.coerceIn(minZoom, 10.0f)
-        _currentZoom.value = clamped
-        preferences.currentZoom = clamped
         preferences.setModeZoom(_cameraMode.value, clamped)
         engine.setZoom(clamped, isPresetTap)
     }
