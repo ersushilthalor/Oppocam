@@ -203,10 +203,6 @@ fun CameraScreen(
     val isZoomProcessing by viewModel.isZoomProcessing.collectAsStateWithLifecycle()
     val zoomProgress by viewModel.zoomProgress.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
-    val jpegPipelineProfile by viewModel.jpegPipelineProfile.collectAsStateWithLifecycle()
-    val jpegPipelineCapabilities by viewModel.jpegPipelineCapabilities.collectAsStateWithLifecycle()
-    val jpegPipelineVideoEnabled by viewModel.jpegPipelineVideoEnabled.collectAsStateWithLifecycle()
-    val jpegPipelineVideoCodec by viewModel.jpegPipelineVideoCodec.collectAsStateWithLifecycle()
 
     val isUsingRearMainLens = remember(selectedLens, currentZoom) {
         selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
@@ -380,19 +376,6 @@ fun CameraScreen(
             modifier = Modifier.align(Alignment.Center)
         )
 
-        // JPEG Pipeline Video Live Indicator (Photo-style single-frame ISP rendering HUD)
-        if (cameraMode == CameraMode.VIDEO) {
-            com.example.camera.jpegpipeline.JpegPipelineLiveIndicator(
-                isEnabled = jpegPipelineVideoEnabled,
-                isRecording = isRecordingVideo,
-                currentProfile = jpegPipelineProfile,
-                capabilities = jpegPipelineCapabilities,
-                onSelectProfile = { viewModel.setJpegPipelineProfile(it) },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 74.dp, end = 16.dp)
-            )
-        }
 
         // Subtle High-Quality Zoom processing pill (non-blocking indicator)
         if (isZoomProcessing) {
@@ -879,13 +862,6 @@ fun CameraScreen(
                 }
             },
             onMainCameraStabilizationModeSelected = { viewModel.setMainCameraStabilizationMode(it) },
-            // JPEG Pipeline Video
-            jpegPipelineVideoEnabled = jpegPipelineVideoEnabled,
-            jpegPipelineProfile = jpegPipelineProfile,
-            jpegPipelineVideoCodec = jpegPipelineVideoCodec,
-            onJpegPipelineVideoToggle = { viewModel.setJpegPipelineVideoEnabled(it) },
-            onJpegPipelineProfileSelected = { viewModel.setJpegPipelineProfile(it) },
-            onJpegPipelineVideoCodecSelected = { viewModel.setJpegPipelineVideoCodec(it) },
             // Extended Settings States
             videoCodec = videoCodec,
             jpegQuality = jpegQuality,

@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.example.camera.model.*
 import androidx.compose.ui.platform.LocalContext
 import com.example.camera.data.CameraPreferences
-import com.example.camera.jpegpipeline.JpegPipelineProfile
+
 import kotlin.math.roundToInt
 
 /**
@@ -96,13 +96,6 @@ fun SettingsDrawer(
     hybridStabilizationConfig: HybridStabilizationConfig = HybridStabilizationConfig(),
     nightConfig: NightConfig = NightConfig(),
     tapFocusConfig: TapFocusConfig = TapFocusConfig(),
-    // JPEG Pipeline Video State
-    jpegPipelineVideoEnabled: Boolean = true,
-    jpegPipelineProfile: JpegPipelineProfile = JpegPipelineProfile.STANDARD,
-    jpegPipelineVideoCodec: String = "H264",
-    onJpegPipelineVideoToggle: (Boolean) -> Unit = {},
-    onJpegPipelineProfileSelected: (JpegPipelineProfile) -> Unit = {},
-    onJpegPipelineVideoCodecSelected: (String) -> Unit = {},
     // Extended Settings State
     videoCodec: String = "HEVC",
     jpegQuality: Int = 95,
@@ -818,114 +811,7 @@ fun SettingsDrawer(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
-                        SamsungSectionHeader("JPEG PIPELINE VIDEO (PHOTO-STYLE ISP RENDERING)")
-                        SamsungCard {
-                            val context = LocalContext.current
-                            val cameraPrefs = remember { CameraPreferences(context) }
-                            var pipelineEnabled by remember { mutableStateOf(cameraPrefs.jpegPipelineVideoEnabled) }
-                            var selectedProfile by remember { mutableStateOf(cameraPrefs.jpegPipelineProfile) }
-                            var videoCodec by remember { mutableStateOf(cameraPrefs.jpegPipelineVideoCodec) }
 
-                            // 1. JPEG Pipeline Video Master Switch
-                            SamsungSwitchItem(
-                                icon = Icons.Outlined.PhotoCamera,
-                                title = "JPEG Pipeline Video",
-                                subtitle = if (pipelineEnabled) {
-                                    "Active · Finished photo-style ISP rendering straight to video encoder (No RAW / No LOG / No Multi-Frame HDR)"
-                                } else {
-                                    "Standard Video · Default camera HAL stream"
-                                },
-                                checked = pipelineEnabled,
-                                onCheckedChange = { enabled ->
-                                    pipelineEnabled = enabled
-                                    cameraPrefs.jpegPipelineVideoEnabled = enabled
-                                    onJpegPipelineVideoToggle(enabled)
-                                }
-                            )
-
-                            if (pipelineEnabled) {
-                                SamsungDivider()
-
-                                // 2. Rendering Profiles
-                                SamsungRowItem(
-                                    icon = Icons.Outlined.Palette,
-                                    title = "ISP Rendering Profile",
-                                    subtitle = when (selectedProfile) {
-                                        JpegPipelineProfile.IPHONE -> "iPhone Style · Natural color, controlled highlights, realistic contrast, natural skin tones"
-                                        JpegPipelineProfile.SAMSUNG -> "Samsung Style · Stronger detail, punchier color/contrast, controlled highlights & sharpening"
-                                        JpegPipelineProfile.OPPO -> "OPPO Style · Natural warm rendering, smooth highlights, good shadow detail & moderate sharpening"
-                                        JpegPipelineProfile.STANDARD -> "JPEG Pipeline Style · Standard photo ISP rendering with balanced contrast & natural roll-off"
-                                    }
-                                ) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        JpegPipelineProfile.entries.forEach { profile ->
-                                            SamsungSmallChip(
-                                                label = profile.shortLabel,
-                                                isSelected = selectedProfile == profile,
-                                                onClick = {
-                                                    selectedProfile = profile
-                                                    cameraPrefs.jpegPipelineProfile = profile
-                                                    onJpegPipelineProfileSelected(profile)
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-
-                                SamsungDivider()
-
-                                // 3. Video Encoder Codec
-                                SamsungRowItem(
-                                    icon = Icons.Outlined.VideoSettings,
-                                    title = "Hardware Video Codec",
-                                    subtitle = when (videoCodec) {
-                                        "H265" -> "H.265 / HEVC · High compression efficiency, crisp single-frame photo detail"
-                                        else -> "H.264 / AVC · Universal playback compatibility, direct ISP-to-encoder stream"
-                                    }
-                                ) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        listOf("H264" to "H.264", "H265" to "H.265").forEach { (code, label) ->
-                                            SamsungSmallChip(
-                                                label = label,
-                                                isSelected = videoCodec == code,
-                                                onClick = {
-                                                    videoCodec = code
-                                                    cameraPrefs.jpegPipelineVideoCodec = code
-                                                    onJpegPipelineVideoCodecSelected(code)
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-
-                                SamsungDivider()
-
-                                // 4. ISP Hardware Capabilities & HAL Documentation
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                                ) {
-                                    Text(
-                                        text = "Camera2 ISP Pipeline Diagnostics",
-                                        color = Color(0xFF64B5F6),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "• Architecture: Sensor → Camera ISP (photo rendering) → YUV surface → Hardware Video Encoder → MP4\n" +
-                                               "• Processing: Contrast S-Curve, High-Quality Noise Reduction, Edge Detail, Color Correction & Lens Shading\n" +
-                                               "• Strict Zero-Latency: Single-frame processing in hardware ISP, zero computational multi-frame delay\n" +
-                                               "• HAL Protection: If proprietary ISP features are locked by vendor HAL, closest single-frame ISP modes are used without falling back to RAW/LOG.",
-                                        color = Color.White.copy(alpha = 0.7f),
-                                        fontSize = 11.sp,
-                                        lineHeight = 15.sp
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
 

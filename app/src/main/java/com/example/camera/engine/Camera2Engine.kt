@@ -296,12 +296,6 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    // JPEG Pipeline Video Engine (Photo-style single-frame ISP rendering straight to video encoder)
-    val jpegPipelineEngine = com.example.camera.jpegpipeline.JpegPipelineEngine()
-    private val _jpegPipelineProfile = MutableStateFlow(preferences.jpegPipelineProfile)
-    val jpegPipelineProfile: StateFlow<com.example.camera.jpegpipeline.JpegPipelineProfile> = _jpegPipelineProfile.asStateFlow()
-    private val _jpegPipelineCapabilities = MutableStateFlow(com.example.camera.jpegpipeline.JpegPipelineCapabilities())
-    val jpegPipelineCapabilities: StateFlow<com.example.camera.jpegpipeline.JpegPipelineCapabilities> = _jpegPipelineCapabilities.asStateFlow()
 
     init {
         val savedCinema = preferences.getCinemaConfig()
@@ -875,9 +869,7 @@ class Camera2Engine(private val context: Context) {
 
             cinemaEngine.onCameraConfigured(chars, filteredVideoResolutions)
             _cinemaCapabilities.value = cinemaEngine.capabilities
-            _jpegPipelineCapabilities.value = jpegPipelineEngine.detectCapabilities(chars)
 
-            // Default resolutions
             if (_selectedPhotoResolution.value == null || !photoResolutions.contains(_selectedPhotoResolution.value)) {
                 _selectedPhotoResolution.value = photoResolutions.firstOrNull()
             }
@@ -892,18 +884,7 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    fun updateJpegPipelineCapabilities(cameraId: String? = _selectedLens.value?.cameraId) {
-        val chars = cameraId?.let { getCharacteristics(it) }
-        _jpegPipelineCapabilities.value = jpegPipelineEngine.detectCapabilities(chars)
-    }
 
-    fun setJpegPipelineProfile(profile: com.example.camera.jpegpipeline.JpegPipelineProfile) {
-        _jpegPipelineProfile.value = profile
-        preferences.jpegPipelineProfile = profile
-        if (currentMode == CameraMode.VIDEO) {
-            updatePreviewSettings()
-        }
-    }
 
     fun getTargetAspectRatioForMode(mode: CameraMode = currentMode): Float {
         return when (mode) {
@@ -1618,9 +1599,10 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Resolves the optimal high-speed YUV_420_888 resolution for BurstEngine.
-     * Selects up to 1080p/1440p matching the photo aspect ratio for smooth 20 FPS continuous streaming
-     * without camera HAL frame drops or excessive memory footprint.
+     * Resolves the maximum supported native resolution (12MP) for BurstEngine.
+     * Selects camera's maximum supported native YUV_420_888 resolution matching the photo aspect ratio
+     * (up to native binned 12MP, e.g. 4000x3000 or 4032x3024) directly from the camera sensor stream
+     * without any artificial 1080p/1440p cap or low-resolution preview upscaling.
      */
     fun getOptimalBurstYuvSize(lens: LensInfo?, cameraId: String, targetSize: Size): Size {
         val targetId = lens?.physicalCameraId ?: cameraId
@@ -1632,18 +1614,29 @@ class Camera2Engine(private val context: Context) {
         val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: emptyList()
         if (yuvSizes.isEmpty()) {
-            return if (targetSize.width <= 1920 && targetSize.height <= 1440) targetSize else Size(1920, 1080)
+            return targetSize
+        }
+
+        // Direct match with native target photo size if supported
+        if (yuvSizes.contains(targetSize)) {
+            return targetSize
         }
 
         val targetAspect = targetSize.width.toFloat() / targetSize.height.toFloat()
         val aspectMatches = yuvSizes.filter { size ->
             val aspect = size.width.toFloat() / size.height.toFloat()
-            kotlin.math.abs(aspect - targetAspect) < 0.05f && size.width <= 1920 && size.height <= 1440
+            kotlin.math.abs(aspect - targetAspect) < 0.05f
         }
 
-        return aspectMatches.maxByOrNull { it.width.toLong() * it.height.toLong() }
-            ?: yuvSizes.filter { it.width <= 1920 && it.height <= 1440 }.maxByOrNull { it.width.toLong() * it.height.toLong() }
-            ?: Size(1920, 1080)
+        // Target up to 12.5MP maximum native sensor resolution (4000x3000 = 12MP, 4032x3024 = 12.19MP)
+        val max12MpPixels = 12_500_000L
+        val native12MpSizes = aspectMatches.filter { (it.width.toLong() * it.height.toLong()) <= max12MpPixels }
+
+        return native12MpSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: aspectMatches.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: yuvSizes.filter { (it.width.toLong() * it.height.toLong()) <= max12MpPixels }.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: yuvSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: targetSize
     }
 
     private fun setupImageReaders(cameraId: String) {
@@ -2364,15 +2357,6 @@ class Camera2Engine(private val context: Context) {
             cinemaEngine.applyToCaptureRequest(builder)
         }
 
-        // JPEG Pipeline Video ISP Rendering (Normal phone-camera photo-style single-frame rendering straight to encoder)
-        if (currentMode == CameraMode.VIDEO && preferences.jpegPipelineVideoEnabled) {
-            val chars = _selectedLens.value?.let { getCharacteristics(it.cameraId) }
-            jpegPipelineEngine.applyJpegPipelineSettings(
-                builder = builder,
-                profile = _jpegPipelineProfile.value,
-                chars = chars
-            )
-        }
 
         // Digital Zoom / Crop Region
         applyZoom(builder)
@@ -4655,7 +4639,7 @@ class Camera2Engine(private val context: Context) {
                 mr.setVideoFrameRate(targetFps)
                 mr.setVideoSize(videoRes.width, videoRes.height)
 
-                val useHevc = (cinemaCodec == CinemaCodec.H265) || is10BitRequested || (currentMode == CameraMode.VIDEO && preferences.jpegPipelineVideoCodec == "H265")
+                val useHevc = (cinemaCodec == CinemaCodec.H265) || is10BitRequested
                 if (useHevc) {
                     mr.setVideoEncoder(MediaRecorder.VideoEncoder.HEVC)
                     if (is10BitRequested && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

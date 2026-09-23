@@ -627,33 +627,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VideoQualityOption.UHD_4K_30)
 
-    // JPEG Pipeline Video System (Photo-style single-frame ISP rendering straight to video encoder)
-    val jpegPipelineProfile: StateFlow<com.example.camera.jpegpipeline.JpegPipelineProfile> = engine.jpegPipelineProfile
-    val jpegPipelineCapabilities: StateFlow<com.example.camera.jpegpipeline.JpegPipelineCapabilities> = engine.jpegPipelineCapabilities
-    private val _jpegPipelineVideoEnabled = MutableStateFlow(preferences.jpegPipelineVideoEnabled)
-    val jpegPipelineVideoEnabled: StateFlow<Boolean> = _jpegPipelineVideoEnabled.asStateFlow()
-    private val _jpegPipelineVideoCodec = MutableStateFlow(preferences.jpegPipelineVideoCodec)
-    val jpegPipelineVideoCodec: StateFlow<String> = _jpegPipelineVideoCodec.asStateFlow()
-
-    fun setJpegPipelineProfile(profile: com.example.camera.jpegpipeline.JpegPipelineProfile) {
-        engine.setJpegPipelineProfile(profile)
-        showToast("Profile: ${profile.title}")
-    }
-
-    fun setJpegPipelineVideoEnabled(enabled: Boolean) {
-        _jpegPipelineVideoEnabled.value = enabled
-        preferences.jpegPipelineVideoEnabled = enabled
-        if (_cameraMode.value == CameraMode.VIDEO) {
-            engine.updatePreviewSettings()
-        }
-        showToast(if (enabled) "JPEG Pipeline Video Enabled" else "Standard Video Enabled")
-    }
-
-    fun setJpegPipelineVideoCodec(codec: String) {
-        _jpegPipelineVideoCodec.value = codec
-        preferences.jpegPipelineVideoCodec = codec
-        showToast("Video Codec: $codec")
-    }
 
     private var timerJob: Job? = null
     private var focusDismissJob: Job? = null

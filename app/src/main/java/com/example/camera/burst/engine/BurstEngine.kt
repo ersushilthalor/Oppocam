@@ -20,6 +20,7 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import androidx.camera.core.ImageProxy
+import com.example.camera.sound.CameraSoundManager
 import com.example.camera.ultrafast.data.UltraFastBurstRepository
 import com.example.camera.ultrafast.model.UltraFastBurstEntity
 import kotlinx.coroutines.CoroutineScope
@@ -40,7 +41,6 @@ import java.util.Locale
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -48,20 +48,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * Dedicated high-speed continuous Burst Mode engine.
  *
  * Pipeline architecture:
- * Continuous Camera Sensor stream (YUV_420_888)
+ * Continuous Camera Sensor stream (YUV_420_888 at maximum supported native 12MP resolution)
+ *   → Rapid shutter audio trigger (machine-gun style SoundPool)
  *   → FPS-gated frame selection (5–20 FPS)
  *   → Preallocated buffer pool (BurstBufferPool)
  *   → Bounded producer/consumer queue (ArrayBlockingQueue)
  *   → Parallel background JPEG workers (2–4 threads)
- *   → MediaStore DCIM/Camera storage + Room gallery grouping
- *
- * Fully decoupled from preview stream:
- * - Never triggers normal ImageCapture repeatedly.
- * - Viewfinder stays silky smooth at native 30/60 FPS.
- * - ImageReader/ImageProxy buffers closed immediately (< 1ms).
- * - Live capture count updates immediately upon enqueue.
- * - Full queue safely drops newest frame to prevent OOM.
- * - Queue drains completely in background upon shutter release.
+ *   → Standard Google Camera XMP (GCamera:BurstID, BurstPrimary, BurstIndex) + Exif subsecond tags
+ *   → MediaStore DCIM/Camera storage recognition as native Google Photos Burst stack
  */
 class BurstEngine(
     private val context: Context,
@@ -69,8 +63,9 @@ class BurstEngine(
 ) {
     companion object {
         private const val TAG = "BurstEngine"
-        private const val QUEUE_CAPACITY = 32
-        private const val MAX_POOL_CAPACITY = 30
+        private const val QUEUE_CAPACITY = 20
+        private const val MAX_POOL_CAPACITY = 16
+        private val XMP_HEADER = "http://ns.adobe.com/xap/1.0/\u0000".toByteArray(Charsets.UTF_8)
     }
 
     private val engineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -88,7 +83,7 @@ class BurstEngine(
     // Bounded producer/consumer queue
     private val frameQueue = ArrayBlockingQueue<BurstFrame>(QUEUE_CAPACITY)
 
-    // Parallel background workers for JPEG encoding and disk I/O (2 to 4 cores)
+    // Parallel background workers for JPEG encoding and disk I/O
     private val workerCount = minOf(4, maxOf(2, Runtime.getRuntime().availableProcessors()))
     private val backgroundProcessor = Executors.newFixedThreadPool(workerCount) { runnable ->
         Thread(runnable, "BurstWorker").apply {
@@ -110,6 +105,7 @@ class BurstEngine(
     private val processedFrameCounter = AtomicInteger(0)
 
     @Volatile private var activeBurstSessionId: String = ""
+    @Volatile private var sessionDateString: String = ""
     @Volatile private var activeFps: Int = 15
     @Volatile private var activeWidth: Int = 0
     @Volatile private var activeHeight: Int = 0
@@ -121,7 +117,6 @@ class BurstEngine(
     private var burstCompletionCallback: ((Uri?) -> Unit)? = null
 
     init {
-        // Start consumer workers; they will block in zero-CPU wait state on frameQueue.take()
         startConsumerWorkers()
     }
 
@@ -146,7 +141,6 @@ class BurstEngine(
             backgroundProcessor.execute {
                 while (!Thread.currentThread().isInterrupted) {
                     try {
-                        // Blocks thread in deep wait state with 0% CPU and 0 wakeups until an item arrives
                         val frame = frameQueue.take()
                         processQueuedFrame(frame)
                     } catch (e: InterruptedException) {
@@ -164,7 +158,7 @@ class BurstEngine(
         if (poolDimensions?.width != width || poolDimensions?.height != height || bufferPool == null) {
             poolDimensions = Size(width, height)
             bufferPool = BurstBufferPool(yuvByteSize, maxPoolCapacity = MAX_POOL_CAPACITY)
-            Log.i(TAG, "Configured Burst buffer pool: ${width}x$height ($yuvByteSize bytes/frame)")
+            Log.i(TAG, "Configured native Burst buffer pool: ${width}x$height ($yuvByteSize bytes/frame)")
         }
     }
 
@@ -178,6 +172,7 @@ class BurstEngine(
         onComplete: (Uri?) -> Unit
     ) {
         activeBurstSessionId = burstId
+        sessionDateString = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         activeFps = fps.coerceIn(5, 20)
         burstCompletionCallback = onComplete
         savedUrisMap.clear()
@@ -191,7 +186,7 @@ class BurstEngine(
         _liveCaptureCount.value = 0
         _isProcessingQueue.value = false
 
-        Log.i(TAG, "Burst capture session started: id=$burstId, targetFps=$activeFps")
+        Log.i(TAG, "Burst capture session started: id=$burstId, date=$sessionDateString, targetFps=$activeFps")
     }
 
     /**
@@ -220,8 +215,9 @@ class BurstEngine(
 
     /**
      * Producer: Camera2 ImageReader continuous stream callback.
-     * Acquires real sensor frame, gates by target FPS, copies into preallocated buffer,
-     * closes camera image in < 1ms, updates live counter and offers to bounded queue.
+     * Acquires real sensor frame at maximum native resolution (12MP), gates by target FPS,
+     * copies into preallocated buffer, closes camera image immediately (< 1ms),
+     * fires non-blocking burst shutter audio, updates live counter and offers to bounded queue.
      */
     fun onSensorImageAvailable(
         reader: ImageReader,
@@ -263,14 +259,19 @@ class BurstEngine(
             pool = bufferPool
         }
 
-        val pooledBuffer = pool?.acquire() ?: ByteArray(expectedSize)
+        val pooledBuffer = pool?.acquire()
+        if (pooledBuffer == null) {
+            Log.w(TAG, "Buffer pool starved or low memory; dropping sensor frame to prevent stutter")
+            image.close()
+            return
+        }
 
         // Copy planar YUV data to pooled buffer
         val success = extractNv21FromImage(image, pooledBuffer, width, height)
         image.close() // Close ImageReader buffer immediately (< 1ms)
 
         if (!success) {
-            pool?.recycle(pooledBuffer)
+            pool.recycle(pooledBuffer)
             return
         }
 
@@ -290,19 +291,20 @@ class BurstEngine(
             targetFps = activeFps
         )
 
-        // Offer to bounded queue; safely drop newest frame if queue is full to avoid OOM
+        // Offer to bounded queue; safely drop frame if queue is full to avoid OOM
         val enqueued = frameQueue.offer(burstFrame)
         if (enqueued) {
             _liveCaptureCount.value = frameIdx
+            // Trigger rapid continuous machine-gun shutter audio for every captured frame
+            CameraSoundManager.playBurstShutter()
         } else {
             Log.w(TAG, "Consumer queue full ($QUEUE_CAPACITY). Dropping frame $frameIdx to prevent OOM")
-            pool?.recycle(pooledBuffer)
+            pool.recycle(pooledBuffer)
         }
     }
 
     /**
      * Producer: CameraX ImageAnalysis continuous stream callback.
-     * Supports CameraX pipelines with the exact same architecture.
      */
     fun onImageProxyAvailable(
         imageProxy: ImageProxy,
@@ -330,20 +332,23 @@ class BurstEngine(
         activeWidth = width
         activeHeight = height
 
-        val expectedSize = width * height * 3 / 2
         var pool = bufferPool
         if (pool == null || poolDimensions?.width != width || poolDimensions?.height != height) {
             configureBufferPool(width, height)
             pool = bufferPool
         }
 
-        val pooledBuffer = pool?.acquire() ?: ByteArray(expectedSize)
+        val pooledBuffer = pool?.acquire()
+        if (pooledBuffer == null) {
+            imageProxy.close()
+            return
+        }
 
         val success = extractNv21FromImageProxy(imageProxy, pooledBuffer, width, height)
-        imageProxy.close() // Close ImageProxy immediately
+        imageProxy.close()
 
         if (!success) {
-            pool?.recycle(pooledBuffer)
+            pool.recycle(pooledBuffer)
             return
         }
 
@@ -366,32 +371,35 @@ class BurstEngine(
         val enqueued = frameQueue.offer(burstFrame)
         if (enqueued) {
             _liveCaptureCount.value = frameIdx
+            CameraSoundManager.playBurstShutter()
         } else {
             Log.w(TAG, "Consumer queue full ($QUEUE_CAPACITY). Dropping frame $frameIdx to prevent OOM")
-            pool?.recycle(pooledBuffer)
+            pool.recycle(pooledBuffer)
         }
     }
 
     /**
      * Consumer: Background worker processing frame from bounded queue.
-     * Converts NV21 to JPEG, returns pooled buffer, saves to MediaStore, writes EXIF,
-     * updates Room entity progressively, and finishes session once drained.
+     * Converts NV21 to native JPEG, injects Google Camera XMP packet (GCamera:BurstID, BurstPrimary, BurstIndex)
+     * so Google Photos recognizes all frames as an individual stacked burst group, saves to MediaStore,
+     * writes EXIF timestamps, updates Room entity progressively, and finishes session once drained.
      */
     private fun processQueuedFrame(frame: BurstFrame) {
         _isProcessingQueue.value = true
         try {
             val yuvImage = YuvImage(frame.yuvData, ImageFormat.NV21, frame.width, frame.height, null)
-            val jpegStream = ByteArrayOutputStream(frame.yuvData.size / 4)
+            val jpegStream = ByteArrayOutputStream(maxOf(1024 * 1024, frame.width * frame.height / 3))
             yuvImage.compressToJpeg(Rect(0, 0, frame.width, frame.height), 95, jpegStream)
 
             // Immediately recycle YUV byte array back to pool
             bufferPool?.recycle(frame.yuvData)
 
-            val jpegBytes = jpegStream.toByteArray()
+            val rawJpegBytes = jpegStream.toByteArray()
             val uri = saveJpegToStorage(
-                jpegBytes = jpegBytes,
+                jpegBytes = rawJpegBytes,
                 burstId = frame.burstSessionId,
                 frameIndex = frame.frameIndex,
+                frameTimestampMs = frame.timestampMs,
                 orientation = frame.sensorOrientation,
                 isFront = frame.isFrontFacing,
                 saveMirrored = frame.saveMirrored,
@@ -477,19 +485,76 @@ class BurstEngine(
         }
     }
 
+    /**
+     * Embeds Google Camera XMP metadata into the JPEG bytes.
+     * Google Photos checks the http://ns.google.com/photos/1.0/camera/ namespace for:
+     * - GCamera:BurstID (UUID linking all photos in the burst)
+     * - GCamera:BurstPrimary (1 for the primary cover photo, 0 otherwise)
+     * - GCamera:BurstIndex (0-based frame index)
+     */
+    private fun embedXmpInJpeg(jpegBytes: ByteArray, xmpXml: String): ByteArray {
+        if (jpegBytes.size < 4 || jpegBytes[0] != 0xFF.toByte() || jpegBytes[1] != 0xD8.toByte()) {
+            return jpegBytes
+        }
+        val xmpPayload = xmpXml.toByteArray(Charsets.UTF_8)
+        val segmentLength = 2 + XMP_HEADER.size + xmpPayload.size
+        if (segmentLength > 65535) {
+            return jpegBytes
+        }
+
+        // Insert position: right after SOI (offset 2) or after existing Exif APP1
+        var insertPos = 2
+        if (jpegBytes.size > 6 && jpegBytes[2] == 0xFF.toByte() && jpegBytes[3] == 0xE1.toByte()) {
+            val exifLen = ((jpegBytes[4].toInt() and 0xFF) shl 8) or (jpegBytes[5].toInt() and 0xFF)
+            val afterExif = 4 + exifLen
+            if (afterExif in 6 until jpegBytes.size) {
+                insertPos = afterExif
+            }
+        }
+
+        val out = ByteArrayOutputStream(jpegBytes.size + segmentLength + 2)
+        out.write(jpegBytes, 0, insertPos)
+
+        // Write XMP APP1 Marker
+        out.write(0xFF)
+        out.write(0xE1)
+        out.write((segmentLength shr 8) and 0xFF)
+        out.write(segmentLength and 0xFF)
+        out.write(XMP_HEADER)
+        out.write(xmpPayload)
+
+        out.write(jpegBytes, insertPos, jpegBytes.size - insertPos)
+        return out.toByteArray()
+    }
+
     private fun saveJpegToStorage(
         jpegBytes: ByteArray,
         burstId: String,
         frameIndex: Int,
+        frameTimestampMs: Long,
         orientation: Int,
         isFront: Boolean,
         saveMirrored: Boolean,
         width: Int,
         height: Int
     ): Uri? {
-        val fileName = "BURST_${burstId.take(8)}_${String.format(Locale.US, "%04d", frameIndex)}.jpg"
+        val isPrimary = (frameIndex == 1)
+        val burstIndex = frameIndex - 1
+        val dateBase = sessionDateString.ifEmpty {
+            SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(frameTimestampMs))
+        }
 
-        val finalBytes: ByteArray = if (isFront && saveMirrored && orientation != 0) {
+        // Google Camera & Google Photos standard burst naming format:
+        // Cover: IMG_YYYYMMDD_HHMMSS_BURST000_COVER.jpg
+        // Consecutive: IMG_YYYYMMDD_HHMMSS_BURST001.jpg
+        val seqStr = String.format(Locale.US, "%03d", burstIndex)
+        val fileName = if (isPrimary) {
+            "IMG_${dateBase}_BURST${seqStr}_COVER.jpg"
+        } else {
+            "IMG_${dateBase}_BURST${seqStr}.jpg"
+        }
+
+        val rotatedBytes: ByteArray = if (isFront && saveMirrored && orientation != 0) {
             try {
                 val original = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
                 if (original != null) {
@@ -508,6 +573,14 @@ class BurstEngine(
                 jpegBytes
             }
         } else jpegBytes
+
+        // Embed standard Google Camera XMP packet so Google Photos stacks the photos as a single Burst group
+        val xmpXml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 5.1.0-jc003"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GCamera="http://ns.google.com/photos/1.0/camera/" GCamera:BurstID="$burstId" GCamera:BurstPrimary="${if (isPrimary) "1" else "0"}" GCamera:BurstIndex="$burstIndex" /></rdf:RDF></x:xmpmeta>"""
+        val finalBytes = embedXmpInJpeg(rotatedBytes, xmpXml)
+
+        val exifDateFormat = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+        val exifDateStr = exifDateFormat.format(Date(frameTimestampMs))
+        val subSecStr = String.format(Locale.US, "%03d", frameTimestampMs % 1000)
 
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val contentValues = ContentValues().apply {
@@ -535,6 +608,10 @@ class BurstEngine(
                             else -> ExifInterface.ORIENTATION_NORMAL
                         }
                         exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                        exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDateStr)
+                        exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subSecStr)
+                        exif.setAttribute(ExifInterface.TAG_USER_COMMENT, "BurstID=$burstId;BurstIndex=$burstIndex;BurstPrimary=${if (isPrimary) 1 else 0}")
+                        exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Burst photo")
                         exif.saveAttributes()
                     }
                 } catch (ignored: Exception) {}
@@ -561,6 +638,10 @@ class BurstEngine(
                     else -> ExifInterface.ORIENTATION_NORMAL
                 }
                 exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDateStr)
+                exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subSecStr)
+                exif.setAttribute(ExifInterface.TAG_USER_COMMENT, "BurstID=$burstId;BurstIndex=$burstIndex;BurstPrimary=${if (isPrimary) 1 else 0}")
+                exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Burst photo")
                 exif.saveAttributes()
             } catch (ignored: Exception) {}
 

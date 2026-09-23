@@ -1341,25 +1341,4 @@ class CameraPreferences(context: Context) {
             .putFloat("pref_va_tex_micro_contrast", va.textureMicroContrast)
             .apply()
     }
-
-    // --- JPEG Pipeline Video Preferences ---
-
-    var jpegPipelineVideoEnabled: Boolean
-        get() = prefs.getBoolean("pref_jpeg_pipeline_video_enabled", true)
-        set(value) = prefs.edit().putBoolean("pref_jpeg_pipeline_video_enabled", value).apply()
-
-    var jpegPipelineProfile: com.example.camera.jpegpipeline.JpegPipelineProfile
-        get() {
-            val name = prefs.getString("pref_jpeg_pipeline_profile", com.example.camera.jpegpipeline.JpegPipelineProfile.STANDARD.name)
-            return try {
-                com.example.camera.jpegpipeline.JpegPipelineProfile.valueOf(name ?: com.example.camera.jpegpipeline.JpegPipelineProfile.STANDARD.name)
-            } catch (e: Exception) {
-                com.example.camera.jpegpipeline.JpegPipelineProfile.STANDARD
-            }
-        }
-        set(value) = prefs.edit().putString("pref_jpeg_pipeline_profile", value.name).apply()
-
-    var jpegPipelineVideoCodec: String
-        get() = prefs.getString("pref_jpeg_pipeline_video_codec", "H264") ?: "H264"
-        set(value) = prefs.edit().putString("pref_jpeg_pipeline_video_codec", value).apply()
 }
