@@ -272,6 +272,12 @@ fun CameraScreen(
                 .background(Color.Black)
                 .testTag("camera_main_screen")
         ) {
+            val hasRealUltraWide = remember(displayedLenses) {
+                displayedLenses.any { it.lensType == LensType.ULTRAWIDE && it.isPhysical } || displayedLenses.any { it.baseZoomRatio < 0.9f }
+            }
+            val minViewfinderZoom = if (hasRealUltraWide) 0.5f else 1.0f
+            val maxViewfinderZoom = kotlin.math.max(capabilities.maxZoom, 10.0f)
+
             // 1. Viewfinder layer preserving exact aspect ratio without distortion
             Viewfinder(
                 aspectRatio = previewAspectRatio,
@@ -292,29 +298,46 @@ fun CameraScreen(
                 rec2020AutoToneParams = rec2020AutoToneParams,
                 floatingWindowBlurStrength = floatingWindowAppearance.blurStrength,
                 onSurfaceTextureAvailable = { texture ->
-                viewModel.engine.setPreviewSurfaceTexture(texture)
-            },
-            onSurfaceTextureSizeChanged = { texture, width, height ->
-                viewModel.engine.onViewfinderSurfaceSizeChanged(texture, width, height)
-            },
-            onTapToFocus = { point, normX, normY ->
-                viewModel.onTapToFocus(point, normX, normY)
-            },
-            onZoomChange = { zoom ->
-                viewModel.setZoom(zoom, isPresetTap = false)
-            },
-            onExposureCompensationChange = { ev ->
-                viewModel.setExposureCompensation(ev)
-            },
-            onToggleLock = {
-                viewModel.toggleAeAfLock()
-            },
-            currentExposureCompensation = exposureCompensation,
-            onFrameLuminanceStats = { stats ->
-                viewModel.engine.onFrameLuminanceStats(stats)
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+                    viewModel.engine.setPreviewSurfaceTexture(texture)
+                },
+                onSurfaceTextureSizeChanged = { texture, width, height ->
+                    viewModel.engine.onViewfinderSurfaceSizeChanged(texture, width, height)
+                },
+                onTapToFocus = { point, normX, normY ->
+                    viewModel.onTapToFocus(point, normX, normY)
+                },
+                onZoomChange = { zoom ->
+                    viewModel.setZoom(zoom, isPresetTap = false)
+                },
+                currentZoom = currentZoom,
+                minZoom = minViewfinderZoom,
+                maxZoom = maxViewfinderZoom,
+                onZoomPresetTap = { preset ->
+                    viewModel.setZoom(preset, isPresetTap = true)
+                    if (preset == 0.5f) {
+                        val ultraLens = displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+                        if (ultraLens != null) viewModel.selectLens(ultraLens)
+                    } else if (preset == 1.0f) {
+                        val mainLens = displayedLenses.firstOrNull { it.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
+                            ?: displayedLenses.firstOrNull { it.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK }
+                        if (mainLens != null) viewModel.selectLens(mainLens)
+                    } else if (preset in 2.0f..3.0f) {
+                        val tele = displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
+                        if (tele != null) viewModel.selectLens(tele)
+                    }
+                },
+                onExposureCompensationChange = { ev ->
+                    viewModel.setExposureCompensation(ev)
+                },
+                onToggleLock = {
+                    viewModel.toggleAeAfLock()
+                },
+                currentExposureCompensation = exposureCompensation,
+                onFrameLuminanceStats = { stats ->
+                    viewModel.engine.onFrameLuminanceStats(stats)
+                },
+                modifier = Modifier.fillMaxSize()
+            )
 
         // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
         if (cameraMode == CameraMode.VIDEO) {

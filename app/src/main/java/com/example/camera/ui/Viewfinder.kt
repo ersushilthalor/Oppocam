@@ -59,12 +59,14 @@ import com.example.camera.model.GridType
 import com.example.camera.model.LogBitDepth
 import com.example.camera.model.PhotoFilter
 import com.example.camera.model.PortraitConfig
+import com.example.camera.ui.components.HalfCircleZoomSlider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 @Composable
 fun Viewfinder(
@@ -89,16 +91,36 @@ fun Viewfinder(
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
     onTapToFocus: (Offset, Float, Float) -> Unit,
     onZoomChange: (Float) -> Unit,
+    currentZoom: Float = 1.0f,
+    minZoom: Float = 0.5f,
+    maxZoom: Float = 10.0f,
+    onZoomPresetTap: (Float) -> Unit = {},
     onExposureCompensationChange: (Int) -> Unit = {},
     onToggleLock: () -> Unit = {},
     currentExposureCompensation: Int = 0,
     onFrameLuminanceStats: ((com.example.camera.engine.FrameLuminanceStats) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var currentScale by remember { mutableFloatStateOf(1.0f) }
-    var isZoomBarVisible by remember { mutableStateOf(false) }
+    var currentScale by remember(currentZoom) { mutableFloatStateOf(currentZoom) }
+    var isZoomSliderVisible by remember { mutableStateOf(false) }
     var zoomHideJob by remember { mutableStateOf<Job?>(null) }
     val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(currentZoom) {
+        currentScale = currentZoom
+    }
+
+    fun triggerZoomSlider(newScale: Float) {
+        val rounded = (newScale * 10f).roundToInt() / 10f
+        currentScale = rounded
+        onZoomChange(rounded)
+        isZoomSliderVisible = true
+        zoomHideJob?.cancel()
+        zoomHideJob = coroutineScope.launch {
+            delay(2000L) // Auto-hide after 2s of inactivity
+            isZoomSliderVisible = false
+        }
+    }
 
     BoxWithConstraints(
         modifier = modifier
@@ -134,27 +156,22 @@ fun Viewfinder(
             Box(
                 modifier = Modifier
                     .size(width = targetWidth, height = targetHeight)
-                    .pointerInput(Unit) {
+                    .pointerInput(minZoom, maxZoom) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             var changed = false
+                            var updated = currentScale
                             if (zoom != 1f) {
-                                currentScale = (currentScale * zoom).coerceIn(0.5f, 10.0f)
+                                updated = (updated * zoom).coerceIn(minZoom, maxZoom)
                                 changed = true
                             }
                             // Horizontal swipe: Right to Left (pan.x < 0) zooms in; Left to Right (pan.x > 0) zooms out
-                            if (abs(pan.x) > abs(pan.y) && abs(pan.x) > 1.5f) {
-                                val zoomDelta = -pan.x / 140f
-                                currentScale = (currentScale + zoomDelta).coerceIn(0.5f, 10.0f)
+                            if (abs(pan.x) > abs(pan.y) * 1.15f && abs(pan.x) > 1.5f) {
+                                val factor = 1.0f - (pan.x / 260f)
+                                updated = (updated * factor).coerceIn(minZoom, maxZoom)
                                 changed = true
                             }
                             if (changed) {
-                                onZoomChange(currentScale)
-                                isZoomBarVisible = true
-                                zoomHideJob?.cancel()
-                                zoomHideJob = coroutineScope.launch {
-                                    delay(1000)
-                                    isZoomBarVisible = false
-                                }
+                                triggerZoomSlider(updated)
                             }
                         }
                     }
@@ -395,52 +412,34 @@ fun Viewfinder(
                     }
                 }
 
-                // Minimal Zoom Bar HUD overlay (auto-hides after 1s of inactivity)
-                AnimatedVisibility(
-                    visible = isZoomBarVisible,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
+                // Flagship Gesture-based Half-Circle Arc Zoom Slider
+                HalfCircleZoomSlider(
+                    visible = isZoomSliderVisible,
+                    currentZoom = currentScale,
+                    minZoom = minZoom,
+                    maxZoom = maxZoom,
+                    onZoomChange = { newZoom ->
+                        triggerZoomSlider(newZoom)
+                    },
+                    onZoomPresetTap = { preset ->
+                        triggerZoomSlider(preset)
+                        onZoomPresetTap(preset)
+                    },
+                    onInteraction = {
+                        zoomHideJob?.cancel()
+                        isZoomSliderVisible = true
+                    },
+                    onInteractionEnd = {
+                        zoomHideJob?.cancel()
+                        zoomHideJob = coroutineScope.launch {
+                            delay(2000L)
+                            isZoomSliderVisible = false
+                        }
+                    },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 76.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = Color(0xDD111827),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                        modifier = Modifier.testTag("viewfinder_minimal_zoom_bar")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = String.format(java.util.Locale.US, "%.1f×", currentScale),
-                                color = Color(0xFFFFD54F),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            // Sleek minimal slider track indicator
-                            Box(
-                                modifier = Modifier
-                                    .width(80.dp)
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(Color.White.copy(alpha = 0.25f))
-                            ) {
-                                val normProgress = ((currentScale - 0.5f) / (10.0f - 0.5f)).coerceIn(0f, 1f)
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .fillMaxWidth(normProgress)
-                                        .clip(RoundedCornerShape(2.dp))
-                                        .background(Color(0xFFFFD54F))
-                                )
-                            }
-                        }
-                    }
-                }
+                        .padding(bottom = 60.dp)
+                )
             }
         }
     }
