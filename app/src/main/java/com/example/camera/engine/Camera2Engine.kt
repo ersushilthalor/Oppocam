@@ -302,6 +302,14 @@ class Camera2Engine(private val context: Context) {
         val savedCinema = preferences.getCinemaConfig()
         cinemaEngine.updateConfig(savedCinema)
         _cinemaConfig.value = savedCinema
+
+        engineScope.launch {
+            rec2020AutoToneParams.collect { toneParams ->
+                if (currentMode == CameraMode.CINEMA) {
+                    motorolaSwitchEngine.compositor.setCinemaConfig(_cinemaConfig.value, toneParams)
+                }
+            }
+        }
     }
 
     /**
@@ -1194,6 +1202,11 @@ class Camera2Engine(private val context: Context) {
             stopVideoRecording()
         }
         currentMode = mode
+        if (mode == CameraMode.CINEMA) {
+            motorolaSwitchEngine.compositor.setCinemaConfig(_cinemaConfig.value, rec2020AutoToneParams.value)
+        } else {
+            motorolaSwitchEngine.compositor.setCinemaConfig(null, null)
+        }
         updatePreviewAspectRatio()
 
         val isVideoMode = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA ||
@@ -1328,6 +1341,7 @@ class Camera2Engine(private val context: Context) {
         cinemaEngine.config = newConfig
         _cinemaConfig.value = newConfig
         if (currentMode == CameraMode.CINEMA) {
+            motorolaSwitchEngine.compositor.setCinemaConfig(newConfig, rec2020AutoToneParams.value)
             updatePreviewAspectRatio()
             updatePreviewSettings()
         }
@@ -4806,7 +4820,7 @@ class Camera2Engine(private val context: Context) {
                 }
             }
             val bitrate = baseBitrate
-            val isSoftwareCinema = isCinema && (cinemaCodec == CinemaCodec.PRORES || cinemaCodec == CinemaCodec.VP9)
+            val isSoftwareCinema = isCinema
 
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val prefix = if (isCinema) "CINEMA_" else "VID_"
@@ -4845,6 +4859,12 @@ class Camera2Engine(private val context: Context) {
                     bitDepth = if (is10BitRequested || cinemaCodec == CinemaCodec.PRORES) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
                     isAudioEnabled = isAudioEnabled,
                     orientationHint = getVideoOrientationHint()
+                )
+                // Attach MediaCodec encoder Surface to OpenGL compositor so every frame receives real-time 3D LUT processing
+                motorolaSwitchEngine.compositor.setEncoderSurface(
+                    recorderSurface,
+                    videoRes.width,
+                    videoRes.height
                 )
             } else {
                 @Suppress("DEPRECATION")
@@ -5026,7 +5046,9 @@ class Camera2Engine(private val context: Context) {
                 try {
                     val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                         addTarget(previewSurf)
-                        addTarget(recorderSurface)
+                        if (!isCinema) {
+                            addTarget(recorderSurface)
+                        }
                         applyCommonSettings(this)
                         set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
                         if (matchedFpsRange != null) {
@@ -5068,7 +5090,7 @@ class Camera2Engine(private val context: Context) {
                     createRecordingCaptureSession(
                         camera = camera,
                         previewSurface = previewSurf,
-                        recorderSurface = recorderSurface,
+                        recorderSurface = if (isCinema) previewSurf else recorderSurface,
                         is10Bit = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES),
                         callback = sessionCallback
                     )
@@ -5116,6 +5138,9 @@ class Camera2Engine(private val context: Context) {
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         val wasSoftwareCinema = isSoftwareCinemaRecording
         isSoftwareCinemaRecording = false
+
+        // Detach MediaCodec encoder surface from compositor immediately
+        motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
 
         // Dispatch stop and resource cleanup to background IO so UI thread never freezes
         engineScope.launch(Dispatchers.IO) {
@@ -5266,7 +5291,9 @@ class Camera2Engine(private val context: Context) {
         } else 33
 
         val hasColorTransform = (cinemaColorMatrix != null || cinemaLutStripBitmap != null || normalVideoColorMatrix != null)
-        val needsColorGrade = if (isCinema) (hasColorTransform && isBakeLut) else (hasColorTransform || hasNormalAdjustments)
+        // Cinema mode frames are processed in real-time by the GPU 3D LUT pipeline before reaching MediaCodec.
+        // Therefore, offline color grading is not needed for Cinema mode.
+        val needsColorGrade = if (isCinema) false else (hasColorTransform || hasNormalAdjustments)
         val needsMirror = isFrontFacing
         val needsExportPipeline = needsColorGrade || needsMirror
 

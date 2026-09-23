@@ -237,15 +237,10 @@ fun Viewfinder(
                         val colorMatrix = android.graphics.ColorMatrix()
                         var hasFilter = false
 
-                        if (cameraMode == CameraMode.CINEMA && cinemaConfig != null) {
-                            val cinemaMatrix = com.example.camera.engine.CinemaColorPipeline.computeCinemaColorMatrix(
-                                config = cinemaConfig,
-                                rec2020Params = rec2020AutoToneParams
-                            )
-                            if (cinemaMatrix != null) {
-                                colorMatrix.postConcat(cinemaMatrix)
-                                hasFilter = true
-                            }
+                        if (cameraMode == CameraMode.CINEMA) {
+                            // Cinema mode renders the authentic 3D LUT and color grading directly
+                            // on the GPU in CameraStreamCompositor. No UI-layer ColorMatrix RenderEffect is applied.
+                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                         } else if (cameraMode == CameraMode.PHOTO && activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
                             val filterMat = activePhotoFilter.toAndroidColorMatrix()
                             if (filterMat != null) {

@@ -1,17 +1,23 @@
 package com.example.camera.engine
 
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
 import android.opengl.EGLDisplay
+import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import com.example.camera.data.CubeLutParser
+import com.example.camera.model.CinemaConfig
+import com.example.camera.model.CinematicLut
 import com.example.camera.model.LensType
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -133,6 +139,30 @@ class CameraStreamCompositor {
     private var aTexCoordLoc: Int = 0
     private var uTexMatrixLoc: Int = 0
     private var uSamplerLoc: Int = 0
+
+    // Cinema 3D LUT & Color Matrix Uniforms
+    private var uLutTextureLoc: Int = 0
+    private var uLutSizeLoc: Int = 0
+    private var uLutIntensityLoc: Int = 0
+    private var uHas3DLutLoc: Int = 0
+    private var uColorMatrixLoc: Int = 0
+    private var uColorOffsetLoc: Int = 0
+    private var uHasColorMatrixLoc: Int = 0
+
+    // Cinema GPU Pipeline State
+    private var lutTextureId: Int = 0
+    private var lutSize: Int = 33
+    private var lutIntensity: Float = 0f
+    private var has3DLut: Boolean = false
+    private val glColorMatrix = FloatArray(16)
+    private val glColorOffset = FloatArray(4)
+    private var hasColorMatrix: Boolean = false
+
+    // MediaCodec Encoder Output Surface for real-time 3D LUT recording
+    private var encoderTargetSurface: Surface? = null
+    private var encoderEglSurface: EGLSurface? = null
+    private var encoderWidth: Int = 1920
+    private var encoderHeight: Int = 1080
 
     // Quad Buffers
     private val vertexBuffer: FloatBuffer
@@ -257,8 +287,53 @@ class CameraStreamCompositor {
             precision mediump float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
+
+            // 3D LUT
+            uniform sampler2D uLutTexture;
+            uniform float uLutSize;
+            uniform float uLutIntensity;
+            uniform int uHas3DLut;
+
+            // Color matrix (CST + primary grade)
+            uniform mat4 uColorMatrix;
+            uniform vec4 uColorOffset;
+            uniform int uHasColorMatrix;
+
+            vec3 sample3DLut(sampler2D lutTex, vec3 color, float lutSize) {
+                float maxColor = lutSize - 1.0;
+                vec3 c = clamp(color, 0.0, 1.0) * maxColor;
+                float b = c.b;
+                float b0 = floor(b);
+                float b1 = min(b0 + 1.0, maxColor);
+                float frac = b - b0;
+
+                float totalWidth = lutSize * lutSize;
+                float u0 = (b0 * lutSize + c.r + 0.5) / totalWidth;
+                float v0 = (c.g + 0.5) / lutSize;
+
+                float u1 = (b1 * lutSize + c.r + 0.5) / totalWidth;
+                float v1 = (c.g + 0.5) / lutSize;
+
+                vec3 sample0 = texture2D(lutTex, vec2(u0, v0)).rgb;
+                vec3 sample1 = texture2D(lutTex, vec2(u1, v1)).rgb;
+                return mix(sample0, sample1, frac);
+            }
+
             void main() {
-                gl_FragColor = texture2D(sTexture, vTextureCoord);
+                vec4 texColor = texture2D(sTexture, vTextureCoord);
+                vec3 curRgb = texColor.rgb;
+
+                if (uHasColorMatrix != 0) {
+                    vec3 transformed = mat3(uColorMatrix) * curRgb + uColorOffset.rgb;
+                    curRgb = clamp(transformed, 0.0, 1.0);
+                }
+
+                if (uHas3DLut != 0 && uLutIntensity > 0.001) {
+                    vec3 graded = sample3DLut(uLutTexture, curRgb, uLutSize);
+                    curRgb = mix(curRgb, graded, uLutIntensity);
+                }
+
+                gl_FragColor = vec4(clamp(curRgb, 0.0, 1.0), texColor.a);
             }
         """.trimIndent()
 
@@ -280,6 +355,15 @@ class CameraStreamCompositor {
         aTexCoordLoc = GLES20.glGetAttribLocation(programId, "aTextureCoord")
         uTexMatrixLoc = GLES20.glGetUniformLocation(programId, "uTexMatrix")
         uSamplerLoc = GLES20.glGetUniformLocation(programId, "sTexture")
+
+        uLutTextureLoc = GLES20.glGetUniformLocation(programId, "uLutTexture")
+        uLutSizeLoc = GLES20.glGetUniformLocation(programId, "uLutSize")
+        uLutIntensityLoc = GLES20.glGetUniformLocation(programId, "uLutIntensity")
+        uHas3DLutLoc = GLES20.glGetUniformLocation(programId, "uHas3DLut")
+
+        uColorMatrixLoc = GLES20.glGetUniformLocation(programId, "uColorMatrix")
+        uColorOffsetLoc = GLES20.glGetUniformLocation(programId, "uColorOffset")
+        uHasColorMatrixLoc = GLES20.glGetUniformLocation(programId, "uHasColorMatrix")
 
         // Create OES external textures
         val textures = IntArray(2)
@@ -646,6 +730,25 @@ class CameraStreamCompositor {
                 val seq = ultraWideFrameSequence.get()
                 Log.d(TAG, "[UW_RENDER] frameSequence=$seq")
             }
+
+            // 3b. Render active stream with EXACT SAME 3D LUT and color grading to MediaCodec Encoder EGL Surface (if recording)
+            val encSurf = encoderEglSurface
+            if (encSurf != null && targetTexId != 0) {
+                EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
+                GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
+
+                // Render camera stream without preview center crop directly onto the encoder surface
+                drawQuad(targetTexId, targetTexMatrix)
+
+                val frameTimestampNs = if (currentActive == LensType.ULTRAWIDE) {
+                    lastUltraWideTimestampNs.get()
+                } else {
+                    lastMainTimestampNs.get()
+                }
+                val ptsNs = if (frameTimestampNs > 0) frameTimestampNs else System.nanoTime()
+                EGLExt.eglPresentationTimeANDROID(display, encSurf, ptsNs)
+                EGL14.eglSwapBuffers(display, encSurf)
+            }
         }
 
         // 4. Render standby stream to Little Preview EGL Surface (if visible)
@@ -692,6 +795,25 @@ class CameraStreamCompositor {
 
         GLES20.glUniformMatrix4fv(uTexMatrixLoc, 1, false, texMatrix, 0)
 
+        if (hasColorMatrix) {
+            GLES20.glUniform1i(uHasColorMatrixLoc, 1)
+            GLES20.glUniformMatrix4fv(uColorMatrixLoc, 1, false, glColorMatrix, 0)
+            GLES20.glUniform4fv(uColorOffsetLoc, 1, glColorOffset, 0)
+        } else {
+            GLES20.glUniform1i(uHasColorMatrixLoc, 0)
+        }
+
+        if (has3DLut && lutTextureId != 0 && lutIntensity > 0.001f) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTextureId)
+            GLES20.glUniform1i(uLutTextureLoc, 1)
+            GLES20.glUniform1f(uLutSizeLoc, lutSize.toFloat())
+            GLES20.glUniform1f(uLutIntensityLoc, lutIntensity)
+            GLES20.glUniform1i(uHas3DLutLoc, 1)
+        } else {
+            GLES20.glUniform1i(uHas3DLutLoc, 0)
+        }
+
         GLES20.glEnableVertexAttribArray(aPositionLoc)
         GLES20.glVertexAttribPointer(aPositionLoc, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
 
@@ -702,11 +824,134 @@ class CameraStreamCompositor {
 
         GLES20.glDisableVertexAttribArray(aPositionLoc)
         GLES20.glDisableVertexAttribArray(aTexCoordLoc)
+
+        if (has3DLut && lutTextureId != 0) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+        }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+    }
+
+    /**
+     * Updates Cinema 3D LUT and ColorMatrix parameters on the GL rendering thread.
+     * Both preview and recorded video will receive this exact GPU processing in real time.
+     */
+    fun setCinemaConfig(config: CinemaConfig?, rec2020Params: Rec2020AutoToneParams?) {
+        glHandler?.post {
+            if (config != null && config.selectedLut != CinematicLut.NONE) {
+                val (stripBmp, size) = if (config.selectedLut == CinematicLut.CUSTOM && !config.customLutPath.isNullOrBlank()) {
+                    val parsed = CubeLutParser.getOrLoad(config.customLutPath)
+                    Pair(parsed?.to2DStripBitmap(), parsed?.size ?: 33)
+                } else {
+                    Pair(CubeLutParser.generate3DStripBitmapForPreset(config.selectedLut, 33), 33)
+                }
+
+                if (stripBmp != null && !stripBmp.isRecycled) {
+                    if (lutTextureId == 0) {
+                        val textures = IntArray(1)
+                        GLES20.glGenTextures(1, textures, 0)
+                        lutTextureId = textures[0]
+                    }
+                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTextureId)
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                    GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, stripBmp, 0)
+                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+
+                    lutSize = size
+                    lutIntensity = config.lutIntensity.coerceIn(0f, 1f)
+                    has3DLut = true
+                } else {
+                    has3DLut = false
+                }
+            } else {
+                has3DLut = false
+            }
+
+            if (config != null) {
+                val colorMatrix = CinemaColorPipeline.computeCinemaColorMatrix(
+                    config = config,
+                    rec2020Params = rec2020Params,
+                    includeCreativeLut = false
+                )
+                if (colorMatrix != null) {
+                    val arr = colorMatrix.array
+                    // Row-major 4x5 to column-major 4x4
+                    glColorMatrix[0] = arr[0];  glColorMatrix[1] = arr[5];  glColorMatrix[2] = arr[10]; glColorMatrix[3] = 0f
+                    glColorMatrix[4] = arr[1];  glColorMatrix[5] = arr[6];  glColorMatrix[6] = arr[11]; glColorMatrix[7] = 0f
+                    glColorMatrix[8] = arr[2];  glColorMatrix[9] = arr[7];  glColorMatrix[10] = arr[12]; glColorMatrix[11] = 0f
+                    glColorMatrix[12] = 0f;     glColorMatrix[13] = 0f;     glColorMatrix[14] = 0f;      glColorMatrix[15] = 1f
+
+                    glColorOffset[0] = arr[4] / 255.0f
+                    glColorOffset[1] = arr[9] / 255.0f
+                    glColorOffset[2] = arr[14] / 255.0f
+                    glColorOffset[3] = arr[19] / 255.0f
+                    hasColorMatrix = true
+                } else {
+                    hasColorMatrix = false
+                }
+            } else {
+                hasColorMatrix = false
+            }
+
+            triggerRender()
+        }
+    }
+
+    /**
+     * Attaches or detaches a MediaCodec encoder Surface for real-time GPU recording.
+     * When attached, every frame rendered to the preview will also be drawn to the encoder Surface.
+     */
+    fun setEncoderSurface(surface: Surface?, width: Int, height: Int) {
+        glHandler?.post {
+            val display = eglDisplay
+            val ctx = eglContext
+            val pbuf = dummyPbuffer
+            val oldEnc = encoderEglSurface
+
+            if (oldEnc != null && display != null && ctx != null && pbuf != null) {
+                try {
+                    EGL14.eglMakeCurrent(display, pbuf, pbuf, ctx)
+                    EGL14.eglDestroySurface(display, oldEnc)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error destroying old encoder EGL surface", e)
+                }
+                encoderEglSurface = null
+            }
+
+            encoderTargetSurface = surface
+            encoderWidth = if (width > 0) width else 1920
+            encoderHeight = if (height > 0) height else 1080
+
+            if (surface != null && surface.isValid && display != null && eglConfig != null) {
+                val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
+                try {
+                    encoderEglSurface = EGL14.eglCreateWindowSurface(display, eglConfig, surface, surfaceAttribs, 0)
+                    Log.i(TAG, "Encoder EGL Surface attached ($encoderWidth x $encoderHeight)")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to create encoder EGL window surface", e)
+                }
+            }
+        }
     }
 
     fun release() {
         glHandler?.post {
             try {
+                val encSurf = encoderEglSurface
+                val display = eglDisplay
+                if (encSurf != null && display != null) {
+                    EGL14.eglDestroySurface(display, encSurf)
+                    encoderEglSurface = null
+                }
+                if (lutTextureId != 0) {
+                    GLES20.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
+                    lutTextureId = 0
+                }
+
                 mainCameraSurface?.release()
                 mainCameraSurface = null
                 mainCameraSurfaceTexture?.release()
@@ -717,7 +962,6 @@ class CameraStreamCompositor {
                 ultraWideCameraSurfaceTexture?.release()
                 ultraWideCameraSurfaceTexture = null
 
-                val display = eglDisplay
                 val ctx = eglContext
                 val mainSurf = mainEglSurface
                 val littleSurf = littleEglSurface

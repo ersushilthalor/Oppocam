@@ -291,6 +291,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                     MediaFormat.MIMETYPE_VIDEO_AVC
                 }
             }
+            codec == CinemaCodec.H264 -> {
+                MediaFormat.MIMETYPE_VIDEO_AVC
+            }
             codec == CinemaCodec.PRORES -> {
                 // ProRes 422 10-bit mastering: Verified HEVC Main10 or VP9 Profile 2 10-bit
                 if (has10BitEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
@@ -303,7 +306,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                     MediaFormat.MIMETYPE_VIDEO_AVC
                 }
             }
-            else -> {
+            codec == CinemaCodec.H265 -> {
                 if (is10BitMode && has10BitEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
                     MediaFormat.MIMETYPE_VIDEO_HEVC
                 } else if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
@@ -311,6 +314,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 } else {
                     MediaFormat.MIMETYPE_VIDEO_AVC
                 }
+            }
+            else -> {
+                MediaFormat.MIMETYPE_VIDEO_AVC
             }
         }
 
