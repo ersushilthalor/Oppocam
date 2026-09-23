@@ -1673,7 +1673,7 @@ class Camera2Engine(private val context: Context) {
                 targetSize.width,
                 targetSize.height,
                 ImageFormat.JPEG,
-                4
+                6
             )
             val mp = (targetSize.width.toLong() * targetSize.height.toLong()) / 1_000_000f
             Log.i(TAG, "[PHOTO_RES] Recreated ImageReader for ${activeLens?.lensType} (cameraId=$cameraId): JPEG=${targetSize.width}x${targetSize.height} (~${mp}MP)")
@@ -1681,7 +1681,7 @@ class Camera2Engine(private val context: Context) {
             Log.e(TAG, "Failed to create ImageReader with ${targetSize.width}x${targetSize.height}, falling back to largest supported", t)
             val fallback = caps.supportedPhotoResolutions.firstOrNull() ?: CameraResolution(1920, 1080)
             try {
-                imageReaderJpeg = ImageReader.newInstance(fallback.width, fallback.height, ImageFormat.JPEG, 4)
+                imageReaderJpeg = ImageReader.newInstance(fallback.width, fallback.height, ImageFormat.JPEG, 6)
             } catch (t2: Throwable) {
                 Log.e(TAG, "Failed fallback ImageReader", t2)
             }
@@ -3685,7 +3685,8 @@ class Camera2Engine(private val context: Context) {
             } else {
                 // Multi-frame computational HDR bracket capture path (2-frame or 3-frame)
                 val requests = ArrayList<CaptureRequest>()
-                for (spec in hdrPlan.specs) {
+                for (idx in hdrPlan.specs.indices) {
+                    val spec = hdrPlan.specs[idx]
                     val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                     builder.addTarget(readerJpeg.surface)
                     if (isRaw && spec.isReference) {
@@ -3699,6 +3700,7 @@ class Camera2Engine(private val context: Context) {
                         builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, spec.aeCompIndex)
                     }
                     builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    builder.setTag(idx)
                     requests.add(builder.build())
                 }
 
@@ -3707,10 +3709,56 @@ class Camera2Engine(private val context: Context) {
                 val receivedCount = java.util.concurrent.atomic.AtomicInteger(0)
                 val isProcessingStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
+                // Cache per-frame hardware metadata from TotalCaptureResult
+                val hardwareResultsByTimestamp = java.util.concurrent.ConcurrentHashMap<Long, TotalCaptureResult>()
+                val hardwareResultsByIndex = java.util.concurrent.ConcurrentHashMap<Int, TotalCaptureResult>()
+                val pendingImages = java.util.Collections.synchronizedList(ArrayList<Pair<Int, Pair<Long, ByteArray>>>())
+
+                fun syncAndCreateFrame(idx: Int, ts: Long, bytes: ByteArray): com.example.camera.engine.hdr.HdrInputFrame {
+                    val spec = hdrPlan.specs.getOrNull(idx) ?: hdrPlan.specs[0]
+                    val result = hardwareResultsByTimestamp[ts] ?: hardwareResultsByIndex[idx]
+
+                    val actualExpTime = result?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                        ?: lastCaptureResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                        ?: 33_333_333L
+
+                    val actualIso = result?.get(CaptureResult.SENSOR_SENSITIVITY)
+                        ?: lastCaptureResult?.get(CaptureResult.SENSOR_SENSITIVITY)
+                        ?: 100
+
+                    val actualAeComp = result?.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION)
+                        ?: spec.aeCompIndex
+
+                    return com.example.camera.engine.hdr.HdrInputFrame(
+                        jpegBytes = bytes,
+                        role = spec.role,
+                        evOffset = spec.evOffset,
+                        exposureTimeNs = actualExpTime,
+                        iso = actualIso,
+                        timestampNs = ts,
+                        gyroYawSpeed = gyroStabilizationEngine.latestYawSpeed,
+                        gyroPitchSpeed = gyroStabilizationEngine.latestPitchSpeed,
+                        gyroRollSpeed = gyroStabilizationEngine.latestRollSpeed,
+                        actualAeCompensation = actualAeComp
+                    )
+                }
+
                 fun triggerHdrProcessing() {
                     if (isProcessingStarted.compareAndSet(false, true)) {
-                        // Viewfinder unblocks immediately!
+                        // Viewfinder unblocks immediately upon final burst frame arrival!
                         _isCapturing.value = false
+
+                        // Finalize any pending frames with latest hardware results
+                        synchronized(pendingImages) {
+                            for ((pIdx, pData) in pendingImages) {
+                                val alreadyAdded = capturedFrames.any { it.timestampNs == pData.first }
+                                if (!alreadyAdded) {
+                                    val frame = syncAndCreateFrame(pIdx, pData.first, pData.second)
+                                    capturedFrames.add(frame)
+                                }
+                            }
+                            pendingImages.clear()
+                        }
 
                         val framesToProcess = synchronized(capturedFrames) { ArrayList(capturedFrames) }
                         engineScope.launch(Dispatchers.Default) {
@@ -3750,18 +3798,7 @@ class Camera2Engine(private val context: Context) {
                         image.close()
 
                         val idx = receivedCount.getAndIncrement()
-                        val spec = hdrPlan.specs.getOrNull(idx) ?: hdrPlan.specs[0]
-                        val frame = com.example.camera.engine.hdr.HdrInputFrame(
-                            jpegBytes = bytes,
-                            role = spec.role,
-                            evOffset = spec.evOffset,
-                            exposureTimeNs = lastCaptureResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 33_333_333L,
-                            iso = lastCaptureResult?.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100,
-                            timestampNs = ts,
-                            gyroYawSpeed = gyroStabilizationEngine.latestYawSpeed,
-                            gyroPitchSpeed = gyroStabilizationEngine.latestPitchSpeed,
-                            gyroRollSpeed = gyroStabilizationEngine.latestRollSpeed
-                        )
+                        val frame = syncAndCreateFrame(idx, ts, bytes)
                         capturedFrames.add(frame)
 
                         if (capturedFrames.size >= expectedCount) {
@@ -3793,7 +3830,7 @@ class Camera2Engine(private val context: Context) {
                     }, backgroundHandler)
                 }
 
-                // Failsafe timeout: in case HAL drops a frame, trigger processing after 2500ms
+                // Failsafe timeout: in case HAL drops a frame, trigger processing after 2000ms
                 backgroundHandler?.postDelayed({
                     if (capturedFrames.isNotEmpty() && !isProcessingStarted.get()) {
                         Log.w(TAG, "HDR burst timeout: processing ${capturedFrames.size}/$expectedCount frames")
@@ -3803,7 +3840,7 @@ class Camera2Engine(private val context: Context) {
                         _isCapturing.value = false
                         onComplete(null)
                     }
-                }, 2500L)
+                }, 2000L)
 
                 session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
                     override fun onCaptureCompleted(
@@ -3811,7 +3848,15 @@ class Camera2Engine(private val context: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult
                     ) {
-                        Log.d(TAG, "Photo HDR burst frame completed")
+                        val ts = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                        if (ts != null) {
+                            hardwareResultsByTimestamp[ts] = result
+                        }
+                        val tag = request.tag as? Int
+                        if (tag != null) {
+                            hardwareResultsByIndex[tag] = result
+                        }
+                        Log.d(TAG, "Photo HDR burst frame completed: tag=$tag, ts=$ts, exp=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}ns, iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)}")
                     }
                     override fun onCaptureFailed(
                         session: CameraCaptureSession,

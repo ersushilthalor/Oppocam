@@ -3,7 +3,6 @@ package com.example.camera.engine.hdr
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.TotalCaptureResult
 import android.media.ExifInterface
@@ -12,40 +11,43 @@ import com.example.camera.engine.FrameLuminanceStats
 import com.example.camera.engine.GyroStabilizationEngine
 import com.example.camera.model.FlashMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
-import kotlin.math.roundToInt
 
 /**
  * Flagship Computational Photo HDR Engine for Oppocam.
+ * Completely reworked for high speed, zero corruption, and true multi-frame smartphone HDR quality:
  *
- * Replaces simple single-frame JPEG capture with an automatic, adaptive multi-frame HDR pipeline
- * inspired by modern flagship computational photography:
- *
- * Sensor Bracket
- * -> Short-exposure highlight frame (-1.7 EV)
- * -> Normal-exposure reference base frame (0.0 EV)
- * -> Optional shadow-detail frame (+1.4 EV)
- * -> Sub-pixel motion-aware alignment
- * -> Ghost / motion suppression
- * -> Linearized scene radiance reconstruction
- * -> Highlight recovery (clouds, sky, specular lights)
- * -> Shadow recovery (true black point preservation)
- * -> Edge-aware local tone mapping (anti-halo protection)
- * -> Flagship color rendering (skin-tone protection & highlight desaturation)
- * -> Adaptive detail & anti-halo edge-aware sharpening
- * -> Full native-resolution JPEG encoding (quality 96-98)
+ * 1. Full-frame continuous coordinate alignment:
+ *    Replaced the bug-prone 256-row band sampling with seamless coordinate mapping.
+ *    Eliminated repeated blocks, seam banding, and boundary clamping corruption completely.
+ * 2. Hardware-calibrated Exposure Normalization:
+ *    Uses actual per-frame ISO and sensor exposure time to compute physical radiance scaling.
+ * 3. Parallel Multi-Core Architecture:
+ *    Secondary frame decoding, luminance extraction, and alignment run concurrently in coroutines.
+ *    Full-resolution pixel fusion is distributed across available CPU cores in parallel slices.
+ * 4. High-Performance Math & Fast Lookups:
+ *    4096-entry Linear-to-sRGB LUT eliminates millions of expensive pow() calls.
+ * 5. Edge-Aware Local Tone Mapping with Bilinear Illumination:
+ *    Prevents halos, stepping, and artificial cartoon HDR while preserving deep black anchors.
+ * 6. Conservative Ghost Suppression:
+ *    Moving areas smoothly fall back 100% to the pristine base frame.
  */
 class PhotoHdrEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "PhotoHdrEngine"
-        private const val BAND_HEIGHT = 256 // Process in 256-row bands for minimal RAM footprint
+        private const val LUMA_MAP_W = 64
+        private const val LUMA_MAP_H = 48
     }
 
     val planner = HdrCapturePlanner()
@@ -59,7 +61,7 @@ class PhotoHdrEngine(private val context: Context) {
     val detailProcessor = HdrDetailProcessor()
 
     /**
-     * Determines the optimal capture strategy based on live sensor, scene histogram, and gyro state.
+     * Determines optimal capture strategy based on live sensor, scene histogram, and gyro state.
      */
     fun planCapture(
         chars: CameraCharacteristics?,
@@ -70,6 +72,18 @@ class PhotoHdrEngine(private val context: Context) {
     ): HdrCapturePlan {
         return planner.planCapture(chars, lastResult, flashMode, stats, gyroEngine)
     }
+
+    /**
+     * Helper data holder for an aligned secondary frame.
+     */
+    private data class AlignedSecondaryFrame(
+        val bitmap: Bitmap,
+        val alignment: HdrAlignmentResult,
+        val motionMask: HdrMotionMask,
+        val exposureRatio: Float,
+        val role: FrameRole,
+        val evOffset: Float
+    )
 
     /**
      * Asynchronously processes captured bracket frames into a final high-dynamic-range native-resolution JPEG.
@@ -96,9 +110,9 @@ class PhotoHdrEngine(private val context: Context) {
         }
 
         try {
-            Log.i(TAG, "Starting Flagship Computational HDR Pipeline: ${frames.size} frames, plan=${plan.bracketType}")
+            Log.i(TAG, "Starting High-Speed Computational HDR Pipeline: ${frames.size} frames, plan=${plan.bracketType}")
 
-            // 2. Decode Reference Base Bitmap
+            // 2. Decode Reference Base Bitmap (mutable for in-place final output)
             val decodeOptions = BitmapFactory.Options().apply {
                 inMutable = true
                 inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -112,230 +126,211 @@ class PhotoHdrEngine(private val context: Context) {
             // 3. Extract downscaled reference luminance for alignment & motion detection
             val refLuma = aligner.extractDownscaledLuminance(baseBmp, HdrFrameAligner.ALIGN_GRID_WIDTH, HdrFrameAligner.ALIGN_GRID_HEIGHT)
 
+            // Extract downscaled local illumination map for Edge-Aware Tone Mapping
+            val localBaseLumaMap = aligner.extractDownscaledLuminance(baseBmp, LUMA_MAP_W, LUMA_MAP_H)
+
             // Locate secondary frames
             val shortFrame = frames.firstOrNull { it.role == FrameRole.SHORT_HIGHLIGHT }
             val longFrame = frames.firstOrNull { it.role == FrameRole.LONG_SHADOW }
 
-            // 4. Align and compute motion masks for secondary frames
-            var shortBmp: Bitmap? = null
-            var shortAlignment = HdrAlignmentResult(0f, 0f, 0f, false)
-            var shortMotionMask: HdrMotionMask? = null
-
-            if (shortFrame != null) {
-                try {
-                    val bmp = BitmapFactory.decodeByteArray(shortFrame.jpegBytes, 0, shortFrame.jpegBytes.size, decodeOptions)
-                    if (bmp != null) {
-                        shortBmp = bmp
-                        val dtSec = ((shortFrame.timestampNs - baseFrame.timestampNs).toFloat() / 1_000_000_000f).coerceIn(-0.2f, 0.2f)
-                        shortAlignment = aligner.alignFrames(
-                            refBitmap = baseBmp,
-                            targetBitmap = bmp,
-                            dtSec = dtSec,
-                            targetGyroYawSpeed = shortFrame.gyroYawSpeed,
-                            targetGyroPitchSpeed = shortFrame.gyroPitchSpeed
-                        )
-
-                        val shortLuma = aligner.extractDownscaledLuminance(bmp, HdrMotionDetector.MASK_GRID_WIDTH, HdrMotionDetector.MASK_GRID_HEIGHT)
-                        shortMotionMask = motionDetector.detectMotion(
-                            refLuma = refLuma,
-                            targetLuma = shortLuma,
-                            targetEvOffset = shortFrame.evOffset,
-                            alignment = shortAlignment
-                        )
-                        Log.d(TAG, "Short frame aligned: dx=${shortAlignment.shiftX}, dy=${shortAlignment.shiftY}, conf=${shortAlignment.confidence}")
-                    }
-                } catch (t: Throwable) {
-                    Log.w(TAG, "Failed to decode/align short frame, proceeding without it", t)
-                    shortBmp?.recycle()
-                    shortBmp = null
+            // 4. Decode and Align secondary frames concurrently in worker coroutines
+            val alignedFrames = coroutineScope {
+                val shortDeferred = async(Dispatchers.Default) {
+                    processSecondaryFrame(shortFrame, baseFrame, refLuma, width, height, decodeOptions)
                 }
+                val longDeferred = async(Dispatchers.Default) {
+                    processSecondaryFrame(longFrame, baseFrame, refLuma, width, height, decodeOptions)
+                }
+                listOfNotNull(shortDeferred.await(), longDeferred.await())
             }
 
-            var longBmp: Bitmap? = null
-            var longAlignment = HdrAlignmentResult(0f, 0f, 0f, false)
-            var longMotionMask: HdrMotionMask? = null
+            val shortAligned = alignedFrames.firstOrNull { it.role == FrameRole.SHORT_HIGHLIGHT }
+            val longAligned = alignedFrames.firstOrNull { it.role == FrameRole.LONG_SHADOW }
 
-            if (longFrame != null) {
-                try {
-                    val bmp = BitmapFactory.decodeByteArray(longFrame.jpegBytes, 0, longFrame.jpegBytes.size, decodeOptions)
-                    if (bmp != null) {
-                        longBmp = bmp
-                        val dtSec = ((longFrame.timestampNs - baseFrame.timestampNs).toFloat() / 1_000_000_000f).coerceIn(-0.2f, 0.2f)
-                        longAlignment = aligner.alignFrames(
-                            refBitmap = baseBmp,
-                            targetBitmap = bmp,
-                            dtSec = dtSec,
-                            targetGyroYawSpeed = longFrame.gyroYawSpeed,
-                            targetGyroPitchSpeed = longFrame.gyroPitchSpeed
-                        )
-
-                        val longLuma = aligner.extractDownscaledLuminance(bmp, HdrMotionDetector.MASK_GRID_WIDTH, HdrMotionDetector.MASK_GRID_HEIGHT)
-                        longMotionMask = motionDetector.detectMotion(
-                            refLuma = refLuma,
-                            targetLuma = longLuma,
-                            targetEvOffset = longFrame.evOffset,
-                            alignment = longAlignment
-                        )
-                        Log.d(TAG, "Long frame aligned: dx=${longAlignment.shiftX}, dy=${longAlignment.shiftY}, conf=${longAlignment.confidence}")
-                    }
-                } catch (t: Throwable) {
-                    Log.w(TAG, "Failed to decode/align long frame, proceeding without it", t)
-                    longBmp?.recycle()
-                    longBmp = null
-                }
+            // If no secondary frames could be aligned, return pristine base frame
+            if (shortAligned == null && longAligned == null) {
+                Log.w(TAG, "No secondary frames successfully aligned, returning base frame")
+                val resultBytes = baseFrame.jpegBytes
+                baseBmp.recycle()
+                return@withContext resultBytes
             }
 
-            // 5. Compute downscaled local illumination map for Edge-Aware Tone Mapping (guarantees anti-halo processing)
-            val lumaMapW = 64
-            val lumaMapH = 48
-            val localBaseLumaMap = aligner.extractDownscaledLuminance(baseBmp, lumaMapW, lumaMapH)
+            // 5. Multi-Core Parallel Full-Frame Fusion
+            // Slice the frame vertically across available CPU cores
+            val numCores = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+            val sliceHeight = (height + numCores - 1) / numCores
 
-            // 6. Memory-Aware Banded Fusion & Tone Mapping
-            // Process row bands into baseBmp in-place to avoid allocating an extra full-res bitmap
-            val bandPixelsBase = IntArray(width * BAND_HEIGHT)
-            val bandPixelsShort = if (shortBmp != null) IntArray(width * BAND_HEIGHT) else null
-            val bandPixelsLong = if (longBmp != null) IntArray(width * BAND_HEIGHT) else null
+            // Compute maximum displacement margin for safe secondary pixel sampling
+            val maxShortDisp = if (shortAligned != null) {
+                (max(abs(shortAligned.alignment.shiftX), abs(shortAligned.alignment.shiftY)) + 32).toInt()
+            } else 0
+            val maxLongDisp = if (longAligned != null) {
+                (max(abs(longAligned.alignment.shiftX), abs(longAligned.alignment.shiftY)) + 32).toInt()
+            } else 0
+            val maxSafetyMargin = max(maxShortDisp, maxLongDisp).coerceIn(16, 128)
 
-            val fusedRgb = FloatArray(3)
-            val neighborLumas = FloatArray(4)
+            coroutineScope {
+                val jobs = (0 until numCores).map { sliceIndex ->
+                    async(Dispatchers.Default) {
+                        val sliceStartY = sliceIndex * sliceHeight
+                        val sliceEndY = min(height, (sliceIndex + 1) * sliceHeight)
+                        val curSliceH = sliceEndY - sliceStartY
+                        if (curSliceH <= 0) return@async
 
-            val shortShiftX = shortAlignment.shiftX.roundToInt()
-            val shortShiftY = shortAlignment.shiftY.roundToInt()
-            val longShiftX = longAlignment.shiftX.roundToInt()
-            val longShiftY = longAlignment.shiftY.roundToInt()
+                        val baseSlicePixels = IntArray(width * curSliceH)
+                        baseBmp.getPixels(baseSlicePixels, 0, width, 0, sliceStartY, width, curSliceH)
 
-            var totalMotionPixels = 0L
+                        // Secondary frames: fetch bounding range with safety margin
+                        val secStartY = (sliceStartY - maxSafetyMargin).coerceAtLeast(0)
+                        val secEndY = (sliceEndY + maxSafetyMargin).coerceAtMost(height)
+                        val secH = secEndY - secStartY
 
-            for (bandStartRow in 0 until height step BAND_HEIGHT) {
-                val currentBandH = min(BAND_HEIGHT, height - bandStartRow)
-                val bandPixelCount = width * currentBandH
+                        val shortSlicePixels = if (shortAligned != null && secH > 0) {
+                            val buf = IntArray(width * secH)
+                            shortAligned.bitmap.getPixels(buf, 0, width, 0, secStartY, width, secH)
+                            buf
+                        } else null
 
-                // Read base pixels for this band
-                baseBmp.getPixels(bandPixelsBase, 0, width, 0, bandStartRow, width, currentBandH)
+                        val longSlicePixels = if (longAligned != null && secH > 0) {
+                            val buf = IntArray(width * secH)
+                            longAligned.bitmap.getPixels(buf, 0, width, 0, secStartY, width, secH)
+                            buf
+                        } else null
 
-                // Read aligned secondary frame pixels if available
-                if (shortBmp != null && bandPixelsShort != null) {
-                    shortBmp.getPixels(bandPixelsShort, 0, width, 0, bandStartRow, width, currentBandH)
-                }
-                if (longBmp != null && bandPixelsLong != null) {
-                    longBmp.getPixels(bandPixelsLong, 0, width, 0, bandStartRow, width, currentBandH)
-                }
+                        val fusedRgb = FloatArray(3)
+                        val neighborLumas = FloatArray(4)
 
-                for (row in 0 until currentBandH) {
-                    val y = bandStartRow + row
-                    val normY = y.toFloat() / (height - 1).toFloat()
-                    val lumaMapY = (normY * (lumaMapH - 1)).toInt().coerceIn(0, lumaMapH - 1)
+                        for (localY in 0 until curSliceH) {
+                            val y = sliceStartY + localY
+                            val normY = y.toFloat() / (height - 1).toFloat()
+                            val rowOffset = localY * width
 
-                    val rowOffset = row * width
+                            for (x in 0 until width) {
+                                val normX = x.toFloat() / (width - 1).toFloat()
 
-                    for (x in 0 until width) {
-                        val normX = x.toFloat() / (width - 1).toFloat()
-                        val lumaMapX = (normX * (lumaMapW - 1)).toInt().coerceIn(0, lumaMapW - 1)
-                        val localIllumination = localBaseLumaMap[lumaMapY * lumaMapW + lumaMapX]
+                                // Smooth bilinear interpolation of local base illumination
+                                val localIllumination = sampleBilinearLuma(localBaseLumaMap, LUMA_MAP_W, LUMA_MAP_H, normX, normY)
 
-                        val baseC = bandPixelsBase[rowOffset + x]
-                        val baseR = (baseC shr 16) and 0xFF
-                        val baseG = (baseC shr 8) and 0xFF
-                        val baseB = baseC and 0xFF
+                                val baseC = baseSlicePixels[rowOffset + x]
+                                val baseR = (baseC shr 16) and 0xFF
+                                val baseG = (baseC shr 8) and 0xFF
+                                val baseB = baseC and 0xFF
 
-                        // Sample motion mask for moving object suppression
-                        val motionConf = shortMotionMask?.sampleBilinear(normX, normY)
-                            ?: longMotionMask?.sampleBilinear(normX, normY)
-                            ?: 0f
+                                // 1. Sample Short Exposure Pixel & Motion
+                                var sR: Int? = null
+                                var sG: Int? = null
+                                var sB: Int? = null
+                                var shortMotion = 0f
 
-                        if (motionConf > 0.4f) {
-                            totalMotionPixels++
+                                if (shortAligned != null && shortSlicePixels != null) {
+                                    val (dispX, dispY) = shortAligned.alignment.getTotalDisplacement(normX, normY)
+                                    val tx = (x - dispX).toInt()
+                                    val ty = (y - dispY).toInt()
+
+                                    if (tx in 0 until width && ty in secStartY until secEndY) {
+                                        val secIdx = (ty - secStartY) * width + tx
+                                        val sc = shortSlicePixels[secIdx]
+                                        sR = (sc shr 16) and 0xFF
+                                        sG = (sc shr 8) and 0xFF
+                                        sB = sc and 0xFF
+                                        shortMotion = shortAligned.motionMask.sampleBilinear(normX, normY)
+                                    } else {
+                                        // Outside secondary frame boundary -> treat as motion fallback to base frame
+                                        shortMotion = 1.0f
+                                    }
+                                }
+
+                                // 2. Sample Long Exposure Pixel & Motion
+                                var lR: Int? = null
+                                var lG: Int? = null
+                                var lB: Int? = null
+                                var longMotion = 0f
+
+                                if (longAligned != null && longSlicePixels != null) {
+                                    val (dispX, dispY) = longAligned.alignment.getTotalDisplacement(normX, normY)
+                                    val tx = (x - dispX).toInt()
+                                    val ty = (y - dispY).toInt()
+
+                                    if (tx in 0 until width && ty in secStartY until secEndY) {
+                                        val secIdx = (ty - secStartY) * width + tx
+                                        val lc = longSlicePixels[secIdx]
+                                        lR = (lc shr 16) and 0xFF
+                                        lG = (lc shr 8) and 0xFF
+                                        lB = lc and 0xFF
+                                        longMotion = longAligned.motionMask.sampleBilinear(normX, normY)
+                                    } else {
+                                        longMotion = 1.0f
+                                    }
+                                }
+
+                                val combinedMotion = max(shortMotion, longMotion)
+
+                                // A. Linear Radiance Fusion with exact physical exposure ratios
+                                radianceFusion.fusePixelLinear(
+                                    baseR = baseR, baseG = baseG, baseB = baseB,
+                                    shortR = sR, shortG = sG, shortB = sB,
+                                    shortEvOffset = shortAligned?.evOffset ?: -1.7f,
+                                    longR = lR, longG = lG, longB = lB,
+                                    longEvOffset = longAligned?.evOffset ?: 1.4f,
+                                    motionConfidence = combinedMotion,
+                                    outRgb = fusedRgb,
+                                    shortExposureRatio = shortAligned?.exposureRatio,
+                                    longExposureRatio = longAligned?.exposureRatio
+                                )
+
+                                // B. Highlight Recovery
+                                highlightRecovery.recoverHighlights(fusedRgb, sR, sG, sB)
+
+                                // C. Shadow Recovery
+                                shadowRecovery.recoverShadows(fusedRgb, 1.15f)
+
+                                // D. Edge-Aware Local Tone Mapping
+                                toneMapper.toneMapPixel(fusedRgb, localIllumination)
+
+                                // E. Flagship Natural Color Rendering
+                                colorRenderer.renderColor(fusedRgb)
+
+                                // F. Adaptive Detail Sharpening
+                                if (x in 1 until (width - 1) && localY in 1 until (curSliceH - 1)) {
+                                    neighborLumas[0] = ((baseSlicePixels[rowOffset - width + x] shr 8) and 0xFF) * (1f / 255f) // North
+                                    neighborLumas[1] = ((baseSlicePixels[rowOffset + width + x] shr 8) and 0xFF) * (1f / 255f) // South
+                                    neighborLumas[2] = ((baseSlicePixels[rowOffset + x + 1] shr 8) and 0xFF) * (1f / 255f)     // East
+                                    neighborLumas[3] = ((baseSlicePixels[rowOffset + x - 1] shr 8) and 0xFF) * (1f / 255f)     // West
+                                    detailProcessor.processDetail(fusedRgb, neighborLumas, baseFrame.iso)
+                                }
+
+                                // Fast Gamma Conversion via LUT (zero pow() overhead!)
+                                val outR = HdrRadianceFusion.linearToSrgbByte(fusedRgb[0])
+                                val outG = HdrRadianceFusion.linearToSrgbByte(fusedRgb[1])
+                                val outB = HdrRadianceFusion.linearToSrgbByte(fusedRgb[2])
+
+                                baseSlicePixels[rowOffset + x] = (0xFF shl 24) or (outR shl 16) or (outG shl 8) or outB
+                            }
                         }
 
-                        // Secondary pixel sampling with sub-pixel alignment offset
-                        var sR: Int? = null
-                        var sG: Int? = null
-                        var sB: Int? = null
-                        if (shortBmp != null && bandPixelsShort != null) {
-                            val sx = (x - shortShiftX).coerceIn(0, width - 1)
-                            val syInBand = (row - shortShiftY).coerceIn(0, currentBandH - 1)
-                            val c = bandPixelsShort[syInBand * width + sx]
-                            sR = (c shr 16) and 0xFF
-                            sG = (c shr 8) and 0xFF
-                            sB = c and 0xFF
-                        }
-
-                        var lR: Int? = null
-                        var lG: Int? = null
-                        var lB: Int? = null
-                        if (longBmp != null && bandPixelsLong != null) {
-                            val lx = (x - longShiftX).coerceIn(0, width - 1)
-                            val lyInBand = (row - longShiftY).coerceIn(0, currentBandH - 1)
-                            val c = bandPixelsLong[lyInBand * width + lx]
-                            lR = (c shr 16) and 0xFF
-                            lG = (c shr 8) and 0xFF
-                            lB = c and 0xFF
-                        }
-
-                        // A. Linear Radiance Fusion
-                        radianceFusion.fusePixelLinear(
-                            baseR = baseR, baseG = baseG, baseB = baseB,
-                            shortR = sR, shortG = sG, shortB = sB,
-                            shortEvOffset = shortFrame?.evOffset ?: -1.7f,
-                            longR = lR, longG = lG, longB = lB,
-                            longEvOffset = longFrame?.evOffset ?: 1.4f,
-                            motionConfidence = motionConf,
-                            outRgb = fusedRgb
-                        )
-
-                        // B. Highlight Recovery (Clouds, skies, bright windows)
-                        highlightRecovery.recoverHighlights(fusedRgb, sR, sG, sB)
-
-                        // C. Shadow Recovery (Deep black anchor, mid-shadow texture)
-                        shadowRecovery.recoverShadows(fusedRgb, 1.15f)
-
-                        // D. Edge-Aware Local Tone Mapping
-                        toneMapper.toneMapPixel(fusedRgb, localIllumination)
-
-                        // E. Natural Color Rendering (Skin-tone protection & highlight desaturation)
-                        colorRenderer.renderColor(fusedRgb)
-
-                        // F. Adaptive Anti-Halo Detail Processing
-                        if (x in 1 until (width - 1) && row in 1 until (currentBandH - 1)) {
-                            // Extract fast neighbor luminances
-                            neighborLumas[0] = ((bandPixelsBase[rowOffset - width + x] shr 8) and 0xFF) / 255f // North
-                            neighborLumas[1] = ((bandPixelsBase[rowOffset + width + x] shr 8) and 0xFF) / 255f // South
-                            neighborLumas[2] = ((bandPixelsBase[rowOffset + x + 1] shr 8) and 0xFF) / 255f     // East
-                            neighborLumas[3] = ((bandPixelsBase[rowOffset + x - 1] shr 8) and 0xFF) / 255f     // West
-                            detailProcessor.processDetail(fusedRgb, neighborLumas, baseFrame.iso)
-                        }
-
-                        // Convert linear back to sRGB (gamma 1/2.2) and pack into ARGB
-                        val invGamma = 1.0f / 2.2f
-                        val outR = (fusedRgb[0].pow(invGamma) * 255f).roundToInt().coerceIn(0, 255)
-                        val outG = (fusedRgb[1].pow(invGamma) * 255f).roundToInt().coerceIn(0, 255)
-                        val outB = (fusedRgb[2].pow(invGamma) * 255f).roundToInt().coerceIn(0, 255)
-
-                        bandPixelsBase[rowOffset + x] = (0xFF shl 24) or (outR shl 16) or (outG shl 8) or outB
+                        // Write fused slice back into baseBmp
+                        baseBmp.setPixels(baseSlicePixels, 0, width, 0, sliceStartY, width, curSliceH)
                     }
                 }
-
-                // Write band back into baseBmp
-                baseBmp.setPixels(bandPixelsBase, 0, width, 0, bandStartRow, width, currentBandH)
+                jobs.awaitAll()
             }
 
-            // Recycle secondary bitmaps immediately to release heap
-            shortBmp?.recycle()
-            longBmp?.recycle()
+            // Recycle secondary bitmaps immediately to release heap memory
+            shortAligned?.bitmap?.recycle()
+            longAligned?.bitmap?.recycle()
 
-            // 7. Encode final fused native-resolution JPEG
+            // 6. Encode final fused native-resolution JPEG
             val outStream = ByteArrayOutputStream()
             val quality = jpegQuality.coerceIn(95, 98)
             baseBmp.compress(Bitmap.CompressFormat.JPEG, quality, outStream)
             val fusedBytes = outStream.toByteArray()
             baseBmp.recycle()
 
-            // 8. Copy EXIF metadata from reference frame to ensure full device/orientation fidelity
+            // 7. Copy EXIF metadata from reference frame to ensure full device/orientation fidelity
             val finalJpeg = copyExifMetadata(baseFrame.jpegBytes, fusedBytes)
 
             val elapsed = System.currentTimeMillis() - startTime
-            val motionRatio = totalMotionPixels.toFloat() / (width.toLong() * height.toLong()).toFloat()
-            Log.i(TAG, "Computational HDR complete in ${elapsed}ms: ${width}x${height}px, motionRatio=${String.format("%.3f", motionRatio)}, outputSize=${finalJpeg.size / 1024}KB")
+            Log.i(TAG, "Ultra HDR complete in ${elapsed}ms: ${width}x${height}px, outputSize=${finalJpeg.size / 1024}KB")
 
             return@withContext finalJpeg
 
@@ -343,6 +338,91 @@ class PhotoHdrEngine(private val context: Context) {
             Log.e(TAG, "Critical failure during HDR processing, invoking fail-safe to base frame", t)
             return@withContext baseFrame.jpegBytes
         }
+    }
+
+    /**
+     * Processes, aligns, and builds motion mask for a secondary bracket frame in worker coroutines.
+     */
+    private fun processSecondaryFrame(
+        frame: HdrInputFrame?,
+        baseFrame: HdrInputFrame,
+        refLuma: FloatArray,
+        width: Int,
+        height: Int,
+        decodeOptions: BitmapFactory.Options
+    ): AlignedSecondaryFrame? {
+        if (frame == null) return null
+        return try {
+            val bmp = BitmapFactory.decodeByteArray(frame.jpegBytes, 0, frame.jpegBytes.size, decodeOptions)
+                ?: return null
+
+            val dtSec = ((frame.timestampNs - baseFrame.timestampNs).toFloat() / 1_000_000_000f).coerceIn(-0.3f, 0.3f)
+            val targetLuma = aligner.extractDownscaledLuminance(bmp, HdrFrameAligner.ALIGN_GRID_WIDTH, HdrFrameAligner.ALIGN_GRID_HEIGHT)
+
+            val alignment = aligner.alignLuminanceMaps(
+                refLuma = refLuma,
+                targetLuma = targetLuma,
+                fullW = width,
+                fullH = height,
+                dtSec = dtSec,
+                targetGyroYawSpeed = frame.gyroYawSpeed,
+                targetGyroPitchSpeed = frame.gyroPitchSpeed
+            )
+
+            // Exact physical exposure ratio: baseExposureProduct / targetExposureProduct
+            val expRatio = if (frame.exposureProduct > 0 && baseFrame.exposureProduct > 0) {
+                (baseFrame.exposureProduct / frame.exposureProduct).toFloat().coerceIn(0.06f, 16.0f)
+            } else {
+                2.0f.pow(-frame.evOffset)
+            }
+
+            val motionMask = motionDetector.detectMotion(
+                refLuma = refLuma,
+                targetLuma = targetLuma,
+                targetEvOffset = frame.evOffset,
+                alignment = alignment,
+                fullW = width,
+                fullH = height,
+                exposureScaleRatio = expRatio
+            )
+
+            AlignedSecondaryFrame(
+                bitmap = bmp,
+                alignment = alignment,
+                motionMask = motionMask,
+                exposureRatio = expRatio,
+                role = frame.role,
+                evOffset = frame.evOffset
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to align secondary frame ${frame.role}", t)
+            null
+        }
+    }
+
+    /**
+     * Smoothly samples downscaled luminance map using bilinear interpolation to prevent blocky tone-mapping.
+     */
+    private fun sampleBilinearLuma(map: FloatArray, mapW: Int, mapH: Int, normX: Float, normY: Float): Float {
+        val px = (normX * (mapW - 1)).coerceIn(0f, (mapW - 1).toFloat())
+        val py = (normY * (mapH - 1)).coerceIn(0f, (mapH - 1).toFloat())
+
+        val x0 = px.toInt()
+        val y0 = py.toInt()
+        val x1 = (x0 + 1).coerceAtMost(mapW - 1)
+        val y1 = (y0 + 1).coerceAtMost(mapH - 1)
+
+        val fx = px - x0
+        val fy = py - y0
+
+        val v00 = map[y0 * mapW + x0]
+        val v10 = map[y0 * mapW + x1]
+        val v01 = map[y1 * mapW + x0]
+        val v11 = map[y1 * mapW + x1]
+
+        val top = v00 * (1f - fx) + v10 * fx
+        val bottom = v01 * (1f - fx) + v11 * fx
+        return top * (1f - fy) + bottom * fy
     }
 
     /**

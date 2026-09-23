@@ -7,26 +7,30 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Robust Multi-Frame Alignment Engine for Flagship Computational HDR.
+ * Robust Hierarchical Multi-Frame Global + Local Alignment Engine for Flagship Computational HDR.
  *
  * Responsibilities:
- * 1. Reference frame: Base (0 EV) exposure is the geometric reference anchor.
- * 2. Uses Gyroscope angular velocity to seed initial translation prior (dx_gyro, dy_gyro).
- * 3. Downsamples luminance to an efficient multi-scale grid (e.g. 256x192) to execute
- *    coarse-to-fine 2D cross-correlation / Minimum Absolute Difference (MAD) search.
- * 4. Refines integer translation with sub-pixel quadratic peak fitting for 0.1px precision.
- * 5. Validates cross-correlation confidence to safeguard against false matches in blank scenes.
+ * 1. Global alignment: Uses gyroscope angular velocity prior + multi-scale 2D cross-correlation
+ *    on downscaled luminance grids (e.g. 256x192) to determine coarse global shift with 0.1px sub-pixel refinement.
+ * 2. Full-frame coordinate scaling: Accurately maps displacement using the ACTUAL frame dimensions (fullW, fullH).
+ * 3. Local mesh alignment: Evaluates 8x6 patch displacement vectors across the frame to account for
+ *    handheld camera rotation, optical distortion, and local parallax without introducing block artifacts or seams.
+ * 4. Zero black blocks / seams: Continuous coordinate mapping ensures edge pixels gracefully blend.
  */
 class HdrFrameAligner {
 
     companion object {
         const val ALIGN_GRID_WIDTH = 256
         const val ALIGN_GRID_HEIGHT = 192
-        private const val SEARCH_RADIUS = 10 // +/- 10 pixels on downscaled grid = +/- 100-200px on full-res
+        private const val SEARCH_RADIUS = 12 // +/- 12 pixels on downscaled grid
+        private const val MESH_COLS = 8
+        private const val MESH_ROWS = 6
+        private const val LOCAL_SEARCH_RADIUS = 4 // +/- 4 pixels local search around global shift
     }
 
     /**
      * Estimates sub-pixel translation alignment between target frame and reference base frame.
+     * Uses actual input resolution from refBitmap.
      */
     fun alignFrames(
         refBitmap: Bitmap,
@@ -45,15 +49,36 @@ class HdrFrameAligner {
         val refLuma = extractDownscaledLuminance(refBitmap, ALIGN_GRID_WIDTH, ALIGN_GRID_HEIGHT)
         val targetLuma = extractDownscaledLuminance(targetBitmap, ALIGN_GRID_WIDTH, ALIGN_GRID_HEIGHT)
 
-        // 2. Gyro seed displacement prior
-        // Yaw rotates around vertical axis -> shifts horizontal X
-        // Pitch rotates around horizontal axis -> shifts vertical Y
+        return alignLuminanceMaps(
+            refLuma = refLuma,
+            targetLuma = targetLuma,
+            fullW = fullW,
+            fullH = fullH,
+            dtSec = dtSec,
+            targetGyroYawSpeed = targetGyroYawSpeed,
+            targetGyroPitchSpeed = targetGyroPitchSpeed
+        )
+    }
+
+    /**
+     * Aligns two pre-extracted downscaled luminance maps with global + local mesh alignment.
+     */
+    fun alignLuminanceMaps(
+        refLuma: FloatArray,
+        targetLuma: FloatArray,
+        fullW: Int,
+        fullH: Int,
+        dtSec: Float,
+        targetGyroYawSpeed: Float,
+        targetGyroPitchSpeed: Float
+    ): HdrAlignmentResult {
+        // 1. Gyro seed displacement prior
         val seedX = (-targetGyroYawSpeed * dtSec * ALIGN_GRID_WIDTH * 0.85f).roundToInt()
             .coerceIn(-SEARCH_RADIUS / 2, SEARCH_RADIUS / 2)
         val seedY = (-targetGyroPitchSpeed * dtSec * ALIGN_GRID_HEIGHT * 0.85f).roundToInt()
             .coerceIn(-SEARCH_RADIUS / 2, SEARCH_RADIUS / 2)
 
-        // 3. Minimum Absolute Difference (MAD) 2D Grid Search
+        // 2. Minimum Absolute Difference (MAD) 2D Grid Search for Global Alignment
         var minMad = Float.MAX_VALUE
         var bestDx = seedX
         var bestDy = seedY
@@ -62,7 +87,6 @@ class HdrFrameAligner {
         val activeW = ALIGN_GRID_WIDTH - 2 * border
         val activeH = ALIGN_GRID_HEIGHT - 2 * border
 
-        // Record cost surface around the best peak for sub-pixel quadratic interpolation
         val costGrid = Array(2 * SEARCH_RADIUS + 1) { FloatArray(2 * SEARCH_RADIUS + 1) { Float.MAX_VALUE } }
 
         for (dy in -SEARCH_RADIUS..SEARCH_RADIUS) {
@@ -76,7 +100,7 @@ class HdrFrameAligner {
                 var sumDiff = 0f
                 var count = 0
 
-                // Step by 2 for speed on downscaled grid
+                // Step by 2 on the downscaled grid for blazing fast search
                 for (y in border until (border + activeH) step 2) {
                     val ty = y + candidateY
                     if (ty !in 0 until ALIGN_GRID_HEIGHT) continue
@@ -106,7 +130,7 @@ class HdrFrameAligner {
             }
         }
 
-        // 4. Sub-pixel Refinement (Parabolic Peak Interpolation)
+        // 3. Sub-pixel Refinement via Parabolic Peak Interpolation
         var subDx = 0f
         var subDy = 0f
 
@@ -134,31 +158,96 @@ class HdrFrameAligner {
         val refinedDx = bestDx + subDx
         val refinedDy = bestDy + subDy
 
-        // 5. Scale to full resolution
+        // 4. Correct X/Y alignment scaling using the ACTUAL input resolution!
         val scaleX = fullW.toFloat() / ALIGN_GRID_WIDTH.toFloat()
         val scaleY = fullH.toFloat() / ALIGN_GRID_HEIGHT.toFloat()
 
-        val fullShiftX = refinedDx * scaleX
-        val fullShiftY = refinedDy * scaleY
+        val fullGlobalShiftX = refinedDx * scaleX
+        val fullGlobalShiftY = refinedDy * scaleY
 
-        // Compute alignment confidence
+        // 5. Build Local Mesh Alignment (8x6 grid) for handheld rotation/perspective
+        val meshDx = FloatArray(MESH_COLS * MESH_ROWS)
+        val meshDy = FloatArray(MESH_COLS * MESH_ROWS)
+
+        val tileW = ALIGN_GRID_WIDTH / MESH_COLS
+        val tileH = ALIGN_GRID_HEIGHT / MESH_ROWS
+
+        for (row in 0 until MESH_ROWS) {
+            val centerY = (row * tileH) + tileH / 2
+            for (col in 0 until MESH_COLS) {
+                val centerX = (col * tileW) + tileW / 2
+                val meshIdx = row * MESH_COLS + col
+
+                // Search local delta around best global integer shift
+                var bestLocalDx = 0
+                var bestLocalDy = 0
+                var minLocalMad = Float.MAX_VALUE
+
+                val patchRadius = min(tileW, tileH) / 3
+
+                for (ldy in -LOCAL_SEARCH_RADIUS..LOCAL_SEARCH_RADIUS) {
+                    val candY = bestDy + ldy
+                    for (ldx in -LOCAL_SEARCH_RADIUS..LOCAL_SEARCH_RADIUS) {
+                        val candX = bestDx + ldx
+
+                        var pDiff = 0f
+                        var pCount = 0
+
+                        for (py in -patchRadius..patchRadius step 2) {
+                            val ry = centerY + py
+                            val ty = ry + candY
+                            if (ry !in 0 until ALIGN_GRID_HEIGHT || ty !in 0 until ALIGN_GRID_HEIGHT) continue
+
+                            val refRow = ry * ALIGN_GRID_WIDTH
+                            val tgtRow = ty * ALIGN_GRID_WIDTH
+
+                            for (px in -patchRadius..patchRadius step 2) {
+                                val rx = centerX + px
+                                val tx = rx + candX
+                                if (rx !in 0 until ALIGN_GRID_WIDTH || tx !in 0 until ALIGN_GRID_WIDTH) continue
+
+                                pDiff += abs(refLuma[refRow + rx] - targetLuma[tgtRow + tx])
+                                pCount++
+                            }
+                        }
+
+                        if (pCount > 8) {
+                            val localMad = pDiff / pCount
+                            if (localMad < minLocalMad) {
+                                minLocalMad = localMad
+                                bestLocalDx = ldx
+                                bestLocalDy = ldy
+                            }
+                        }
+                    }
+                }
+
+                // Convert local delta to full-res pixels
+                meshDx[meshIdx] = bestLocalDx.toFloat() * scaleX
+                meshDy[meshIdx] = bestLocalDy.toFloat() * scaleY
+            }
+        }
+
+        val localMesh = HdrLocalMesh(MESH_COLS, MESH_ROWS, meshDx, meshDy)
+
         val zeroShiftMad = costGrid[SEARCH_RADIUS][SEARCH_RADIUS]
         val confidence = if (zeroShiftMad > 1e-4f) {
             ((zeroShiftMad - minMad) / zeroShiftMad).coerceIn(0f, 1f)
         } else {
-            0.5f
+            0.6f
         }
 
         return HdrAlignmentResult(
-            shiftX = fullShiftX,
-            shiftY = fullShiftY,
+            shiftX = fullGlobalShiftX,
+            shiftY = fullGlobalShiftY,
             confidence = confidence,
-            isAligned = true
+            isAligned = true,
+            localMesh = localMesh
         )
     }
 
     /**
-     * Fast downscaled luminance extraction into a pre-allocated FloatArray (0.0 .. 1.0).
+     * Fast downscaled luminance extraction into a FloatArray (0.0 .. 1.0).
      */
     fun extractDownscaledLuminance(bitmap: Bitmap, targetW: Int, targetH: Int): FloatArray {
         val luma = FloatArray(targetW * targetH)
@@ -173,11 +262,10 @@ class HdrFrameAligner {
 
         for (i in pixels.indices) {
             val c = pixels[i]
-            val r = ((c shr 16) and 0xFF) / 255f
-            val g = ((c shr 8) and 0xFF) / 255f
-            val b = (c and 0xFF) / 255f
-            // Standard Rec.709 perceived luminance
-            luma[i] = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            val r = ((c shr 16) and 0xFF) * (0.2126f / 255f)
+            val g = ((c shr 8) and 0xFF) * (0.7152f / 255f)
+            val b = (c and 0xFF) * (0.0722f / 255f)
+            luma[i] = r + g + b
         }
 
         if (scaled != bitmap) {

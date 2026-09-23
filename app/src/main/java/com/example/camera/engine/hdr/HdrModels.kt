@@ -1,7 +1,5 @@
 package com.example.camera.engine.hdr
 
-import android.graphics.Bitmap
-
 /**
  * Role of each exposure in the computational HDR bracket.
  */
@@ -68,7 +66,7 @@ data class HdrCapturePlan(
 )
 
 /**
- * Raw captured image container with exposure metadata and gyro motion state.
+ * Raw captured image container with exact per-frame hardware sensor exposure metadata and gyro motion state.
  */
 data class HdrInputFrame(
     val jpegBytes: ByteArray,
@@ -79,21 +77,97 @@ data class HdrInputFrame(
     val timestampNs: Long,
     val gyroYawSpeed: Float = 0f,
     val gyroPitchSpeed: Float = 0f,
-    val gyroRollSpeed: Float = 0f
-)
+    val gyroRollSpeed: Float = 0f,
+    val actualAeCompensation: Int = 0
+) {
+    /**
+     * Physical sensor exposure product (ISO * exposure time in nanoseconds).
+     * Used for exact radiance normalization rather than relying on nominal EV assumptions.
+     */
+    val exposureProduct: Double
+        get() = (iso.coerceAtLeast(1).toDouble() * exposureTimeNs.coerceAtLeast(1000L).toDouble())
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as HdrInputFrame
+        return timestampNs == other.timestampNs && role == other.role
+    }
+
+    override fun hashCode(): Int {
+        var result = timestampNs.hashCode()
+        result = 31 * result + role.hashCode()
+        return result
+    }
+}
 
 /**
- * Global and sub-pixel alignment result for secondary frames against the base reference frame.
+ * 2D Local alignment mesh providing dense patch-level translation vectors across the frame.
+ * Captures handheld micro-rotation, lens perspective warp, and local parallax without tearing.
+ */
+class HdrLocalMesh(
+    val cols: Int,
+    val rows: Int,
+    private val dxGrid: FloatArray,
+    private val dyGrid: FloatArray
+) {
+    /**
+     * Samples dense interpolated local offset delta (dx, dy) at normalized coordinates [0.0 .. 1.0].
+     */
+    fun getLocalOffset(normX: Float, normY: Float): Pair<Float, Float> {
+        val px = (normX * (cols - 1)).coerceIn(0f, (cols - 1).toFloat())
+        val py = (normY * (rows - 1)).coerceIn(0f, (rows - 1).toFloat())
+
+        val x0 = px.toInt()
+        val y0 = py.toInt()
+        val x1 = (x0 + 1).coerceAtMost(cols - 1)
+        val y1 = (y0 + 1).coerceAtMost(rows - 1)
+
+        val fx = px - x0
+        val fy = py - y0
+
+        val idx00 = y0 * cols + x0
+        val idx10 = y0 * cols + x1
+        val idx01 = y1 * cols + x0
+        val idx11 = y1 * cols + x1
+
+        val dxTop = dxGrid[idx00] * (1f - fx) + dxGrid[idx10] * fx
+        val dxBottom = dxGrid[idx01] * (1f - fx) + dxGrid[idx11] * fx
+        val dx = dxTop * (1f - fy) + dxBottom * fy
+
+        val dyTop = dyGrid[idx00] * (1f - fx) + dyGrid[idx10] * fx
+        val dyBottom = dyGrid[idx01] * (1f - fx) + dyGrid[idx11] * fx
+        val dy = dyTop * (1f - fy) + dyBottom * fy
+
+        return Pair(dx, dy)
+    }
+}
+
+/**
+ * Global and local alignment result for secondary frames against the base reference frame.
  */
 data class HdrAlignmentResult(
     val shiftX: Float,
     val shiftY: Float,
     val confidence: Float,
-    val isAligned: Boolean = true
-)
+    val isAligned: Boolean = true,
+    val localMesh: HdrLocalMesh? = null
+) {
+    /**
+     * Evaluates total displacement (global shift + local mesh) at normalized coordinate (normX, normY)
+     * in full-resolution image pixels.
+     */
+    fun getTotalDisplacement(normX: Float, normY: Float): Pair<Float, Float> {
+        if (localMesh == null) {
+            return Pair(shiftX, shiftY)
+        }
+        val (localDx, localDy) = localMesh.getLocalOffset(normX, normY)
+        return Pair(shiftX + localDx, shiftY + localDy)
+    }
+}
 
 /**
- * Spatially varying motion confidence mask [0.0 = static, 1.0 = high motion].
+ * Spatially varying continuous motion confidence mask [0.0 = static scene, 1.0 = moving subject].
  */
 class HdrMotionMask(
     val width: Int,

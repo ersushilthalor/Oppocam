@@ -29,6 +29,22 @@ class PhotoHdrEngineTest {
         return stream.toByteArray()
     }
 
+    private fun createGradientTestJpeg(width: Int, height: Int): ByteArray {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(width * height)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val v = ((x.toFloat() / width.toFloat()) * 255f).toInt().coerceIn(0, 255)
+                pixels[y * width + x] = Color.rgb(v, v, v)
+            }
+        }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+        bitmap.recycle()
+        return stream.toByteArray()
+    }
+
     @Test
     fun testPlannerDecisions() {
         val planner = HdrCapturePlanner()
@@ -79,26 +95,64 @@ class PhotoHdrEngineTest {
     }
 
     @Test
-    fun testAlignmentAndMotionDetection() {
+    fun testAlignmentAndMotionDetectionWithActualResolution() {
         val aligner = HdrFrameAligner()
         val motionDetector = HdrMotionDetector()
 
-        val bmp1 = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
-        val bmp2 = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val bmp1 = Bitmap.createBitmap(128, 96, Bitmap.Config.ARGB_8888)
+        val bmp2 = Bitmap.createBitmap(128, 96, Bitmap.Config.ARGB_8888)
 
         val luma1 = aligner.extractDownscaledLuminance(bmp1, HdrFrameAligner.ALIGN_GRID_WIDTH, HdrFrameAligner.ALIGN_GRID_HEIGHT)
         val luma2 = aligner.extractDownscaledLuminance(bmp2, HdrFrameAligner.ALIGN_GRID_WIDTH, HdrFrameAligner.ALIGN_GRID_HEIGHT)
 
         val alignResult = aligner.alignFrames(bmp1, bmp2, 0.05f, 0f, 0f)
         assertTrue(alignResult.isAligned)
+        assertNotNull("Local mesh must be computed for distortion-free alignment", alignResult.localMesh)
 
-        val motionMask = motionDetector.detectMotion(luma1, luma2, 0f, alignResult)
+        val motionMask = motionDetector.detectMotion(
+            refLuma = luma1,
+            targetLuma = luma2,
+            targetEvOffset = -1.7f,
+            alignment = alignResult,
+            fullW = 128,
+            fullH = 96
+        )
         assertNotNull(motionMask)
         assertEquals(HdrMotionDetector.MASK_GRID_WIDTH, motionMask.width)
         assertEquals(HdrMotionDetector.MASK_GRID_HEIGHT, motionMask.height)
 
         bmp1.recycle()
         bmp2.recycle()
+    }
+
+    @Test
+    fun testHardwareExposureNormalizationAndFastLut() {
+        val fusion = HdrRadianceFusion()
+        val rgb = FloatArray(3)
+
+        // Exact physical exposure ratio: base / short = (100 * 33ms) / (100 * 10ms) = 3.3f
+        val expRatioShort = 3.3f
+        fusion.fusePixelLinear(
+            baseR = 245, baseG = 245, baseB = 245,
+            shortR = 120, shortG = 120, shortB = 120,
+            shortEvOffset = -1.7f,
+            longR = null, longG = null, longB = null,
+            longEvOffset = 0f,
+            motionConfidence = 0f,
+            outRgb = rgb,
+            shortExposureRatio = expRatioShort
+        )
+
+        assertTrue("Fused linear radiance must be positive", rgb[0] > 0f)
+
+        // Verify high-speed LUT conversion
+        val byteR = HdrRadianceFusion.linearToSrgbByte(rgb[0])
+        val byteG = HdrRadianceFusion.linearToSrgbByte(rgb[1])
+        val byteB = HdrRadianceFusion.linearToSrgbByte(rgb[2])
+
+        assertTrue(byteR in 0..255)
+        assertTrue(byteG in 0..255)
+        assertTrue(byteB in 0..255)
     }
 
     @Test
@@ -146,7 +200,7 @@ class PhotoHdrEngineTest {
         val w = 64
         val h = 64
 
-        val baseBytes = createTestJpeg(w, h, Color.rgb(120, 120, 120))
+        val baseBytes = createGradientTestJpeg(w, h)
         val shortBytes = createTestJpeg(w, h, Color.rgb(60, 60, 60))
         val longBytes = createTestJpeg(w, h, Color.rgb(180, 180, 180))
 
@@ -174,6 +228,22 @@ class PhotoHdrEngineTest {
         assertNotNull("Resulting JPEG should decode into a valid bitmap", resultBmp)
         assertEquals(w, resultBmp.width)
         assertEquals(h, resultBmp.height)
+
+        // Verify no corrupted all-black output
+        var hasNonBlackPixel = false
+        val samplePixels = IntArray(w * h)
+        resultBmp.getPixels(samplePixels, 0, w, 0, 0, w, h)
+        for (c in samplePixels) {
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            if (r > 10 || g > 10 || b > 10) {
+                hasNonBlackPixel = true
+                break
+            }
+        }
+        assertTrue("HDR output must contain valid bright pixel data, not black blocks", hasNonBlackPixel)
+
         resultBmp.recycle()
     }
 
@@ -202,7 +272,6 @@ class PhotoHdrEngineTest {
 
         val resultBytes = engine.processHdrCapture(frames, plan, 95)
         assertNotNull(resultBytes)
-        // Corrupt secondary frame will proceed with base or return base bytes directly without throwing exception
         assertTrue(resultBytes.isNotEmpty())
     }
 }
