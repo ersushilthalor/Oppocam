@@ -766,18 +766,17 @@ class MotorolaInstantSwitchEngine(
             if (!previewSurf.isValid) return
 
             try {
-                val isUltraWide = lens.lensType == LensType.ULTRAWIDE || lens.baseZoomRatio < 0.9f
-                val targetDigitalZoom = if (isUltraWide) {
-                    val base = if (lens.baseZoomRatio > 0.1f) lens.baseZoomRatio else 0.5f
-                    (zoom / base).coerceAtLeast(1.0f)
-                } else {
-                    val baseRatio = if (lens.baseZoomRatio > 0f) lens.baseZoomRatio else 1.0f
-                    if (lens.isPhysical && baseRatio > 1.2f) {
-                        (zoom / baseRatio).coerceAtLeast(1.0f)
-                    } else {
-                        zoom.coerceAtLeast(1.0f)
-                    }
-                }
+                val digitalCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                    uiZoom = zoom,
+                    lensBaseRatio = lens.baseZoomRatio,
+                    lensType = lens.lensType
+                )
+
+                val chars = cameraManager?.getCameraCharacteristics(lens.cameraId)
+                val isLogicalMulti = lens.isLogicalMultiCamera ||
+                    (chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(
+                        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
+                    ) == true)
 
                 val req = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                     addTarget(previewSurf)
@@ -786,21 +785,26 @@ class MotorolaInstantSwitchEngine(
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                     set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
 
-                    val chars = cameraManager?.getCameraCharacteristics(lens.cameraId)
                     if (chars != null) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                             val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                             if (zoomRange != null) {
-                                val clamped = targetDigitalZoom.coerceIn(zoomRange.lower, zoomRange.upper)
-                                set(CaptureRequest.CONTROL_ZOOM_RATIO, clamped)
+                                val targetZoomRatio = if (isLogicalMulti && lens.physicalCameraId.isNullOrEmpty() && zoomRange.lower < 0.95f) {
+                                    // Pure logical multi-camera with HAL handling continuous zoom
+                                    zoom.coerceIn(zoomRange.lower, zoomRange.upper)
+                                } else {
+                                    // Standalone physical camera sensor: apply calibrated digital crop factor
+                                    digitalCrop.coerceIn(zoomRange.lower, zoomRange.upper)
+                                }
+                                set(CaptureRequest.CONTROL_ZOOM_RATIO, targetZoomRatio)
                             }
                         } else {
                             val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
                             val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
                             if (sensorRect != null) {
-                                val effectiveZoom = targetDigitalZoom.coerceIn(1.0f, maxZoom)
-                                val cropW = (sensorRect.width() / effectiveZoom).toInt()
-                                val cropH = (sensorRect.height() / effectiveZoom).toInt()
+                                val factor = digitalCrop.coerceIn(1.0f, maxZoom)
+                                val cropW = (sensorRect.width() / factor).toInt().coerceAtLeast(1)
+                                val cropH = (sensorRect.height() / factor).toInt().coerceAtLeast(1)
                                 val cropX = (sensorRect.width() - cropW) / 2
                                 val cropY = (sensorRect.height() - cropH) / 2
                                 set(CaptureRequest.SCALER_CROP_REGION, android.graphics.Rect(cropX, cropY, cropX + cropW, cropY + cropH))

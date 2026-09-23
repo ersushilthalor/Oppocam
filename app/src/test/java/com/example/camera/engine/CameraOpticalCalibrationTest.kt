@@ -179,4 +179,37 @@ class CameraOpticalCalibrationTest {
         )
         assertEquals(LensType.ULTRAWIDE, lensFor05x)
     }
+
+    @Test
+    fun testUltraWideToMainTransitionFovContinuity() {
+        // Main camera: 7.0mm sensor width, 5.5mm focal length
+        val mainFov = CameraOpticalCalibration.calculateHorizontalFovDegrees(7.0f, 5.5f) // ~64.9°
+
+        // Ultra-Wide camera: 4.0mm sensor width, 1.8mm focal length
+        val uwFov = CameraOpticalCalibration.calculateHorizontalFovDegrees(4.0f, 1.8f) // ~96.0°
+
+        val uwRatio = CameraOpticalCalibration.calculateCalibratedOpticalRatio(
+            lensFocalLengthMm = 1.8f,
+            lensSensorWidthMm = 4.0f,
+            mainFocalLengthMm = 5.5f,
+            mainSensorWidthMm = 7.0f,
+            lensType = LensType.ULTRAWIDE
+        )
+
+        // At UI zoom 1.0x on Ultra-Wide:
+        val uwCropAt1x = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, uwRatio, LensType.ULTRAWIDE)
+        val uwEffectiveFovAt1x = CameraOpticalCalibration.calculateEffectiveFovDegrees(uwFov, uwCropAt1x)
+
+        // On Main camera at 1.0x:
+        val mainCropAt1x = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.WIDE)
+        val mainEffectiveFovAt1x = CameraOpticalCalibration.calculateEffectiveFovDegrees(mainFov, mainCropAt1x)
+
+        // The effective FOVs must match almost identically (delta < 0.5 degrees)
+        assertEquals(
+            "Ultra-Wide at 1.0x zoom must match Main 1.0x FOV without visible jump",
+            mainEffectiveFovAt1x,
+            uwEffectiveFovAt1x,
+            0.5f
+        )
+    }
 }

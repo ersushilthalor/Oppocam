@@ -750,21 +750,25 @@ fun MasterZoomCapsule(
     modifier: Modifier = Modifier
 ) {
     val isFrontCamera = selectedLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-    val hasRealUltraWide = remember(displayedLenses) {
-        displayedLenses.any { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+    val ultraWideLens = remember(displayedLenses) {
+        displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+            ?: displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
     }
-    val presets = remember(isFrontCamera, hasRealUltraWide) {
+    val hasRealUltraWide = ultraWideLens != null
+    val uwBaseRatio = ultraWideLens?.baseZoomRatio ?: 0.5f
+
+    val presets = remember(isFrontCamera, hasRealUltraWide, uwBaseRatio) {
         if (isFrontCamera) {
-            if (hasRealUltraWide) listOf(0.5f, 1.0f) else listOf(1.0f)
+            if (hasRealUltraWide) listOf(uwBaseRatio, 1.0f) else listOf(1.0f)
         } else {
-            if (hasRealUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+            if (hasRealUltraWide) listOf(uwBaseRatio, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
         }
     }
 
     var isSliderOpen by remember { mutableStateOf(false) }
 
     val minZoom = if (hasRealUltraWide) {
-        displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }?.baseZoomRatio ?: 0.5f
+        uwBaseRatio
     } else {
         1.0f
     }
@@ -817,13 +821,14 @@ fun MasterZoomCapsule(
                 val isExactMatch = (currentZoom - preset).absoluteValue < 0.2f
                 val isActive = isExactMatch || isClosest
 
-                val label = when (preset) {
-                    0.5f -> "0.5"
-                    1.0f -> "1x"
-                    2.0f -> "2"
-                    3.0f -> "3"
-                    5.0f -> "5"
-                    10.0f -> "10"
+                val isUwPreset = hasRealUltraWide && kotlin.math.abs(preset - uwBaseRatio) < 0.05f
+                val label = when {
+                    isUwPreset -> if (kotlin.math.abs(uwBaseRatio - 0.5f) < 0.02f) "0.5" else "%.1f".format(uwBaseRatio)
+                    preset == 1.0f -> "1x"
+                    preset == 2.0f -> "2"
+                    preset == 3.0f -> "3"
+                    preset == 5.0f -> "5"
+                    preset == 10.0f -> "10"
                     else -> "${preset}x"
                 }
 
@@ -834,18 +839,18 @@ fun MasterZoomCapsule(
                 }
 
                 // Physical lens mapping (Real hardware lenses only)
-                val targetLens = when (preset) {
-                    0.5f -> displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                    1.0f -> displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && it.isPhysical && !it.isZoomPreset }
+                val targetLens = when {
+                    isUwPreset -> ultraWideLens
+                    preset == 1.0f -> displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && it.isPhysical && !it.isZoomPreset }
                         ?: displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
                         ?: displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                    2.0f -> displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
+                    preset == 2.0f -> displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
                         ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X }
-                    3.0f -> displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
+                    preset == 3.0f -> displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
                         ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X }
                         ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical }
-                    5.0f -> displayedLenses.firstOrNull { it.isPhysical && (it.baseZoomRatio in 4.5f..5.5f || it.equivalent35mmFocalMm in 110f..140f) }
-                    10.0f -> displayedLenses.firstOrNull { it.isPhysical && (it.baseZoomRatio in 9.0f..11.0f || it.equivalent35mmFocalMm >= 220f) }
+                    preset == 5.0f -> displayedLenses.firstOrNull { it.isPhysical && (it.baseZoomRatio in 4.5f..5.5f || it.equivalent35mmFocalMm in 110f..140f) }
+                    preset == 10.0f -> displayedLenses.firstOrNull { it.isPhysical && (it.baseZoomRatio in 9.0f..11.0f || it.equivalent35mmFocalMm >= 220f) }
                     else -> null
                 }
 
@@ -864,9 +869,9 @@ fun MasterZoomCapsule(
                                 isSliderOpen = true
                             } else if (preset == 1.0f) {
                                 onZoomPresetTap(1.0f)
-                            } else if (preset == 0.5f) {
+                            } else if (isUwPreset) {
                                 if (hasRealUltraWide) {
-                                    onZoomPresetTap(0.5f)
+                                    onZoomPresetTap(uwBaseRatio)
                                 } else {
                                     onShowToast("Ultra-Wide lens is not available on this device")
                                 }
