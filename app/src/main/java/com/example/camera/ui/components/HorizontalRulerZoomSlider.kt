@@ -81,20 +81,27 @@ fun HorizontalRulerZoomSlider(
     val safeMinZoom = minZoom.coerceAtLeast(0.3f)
     val safeMaxZoom = maxZoom.coerceAtLeast(safeMinZoom + 1.0f)
 
+    val currentZoomState = rememberUpdatedState(currentZoom)
+    val onZoomChangeState = rememberUpdatedState(onZoomChange)
+    val safeMinZoomState = rememberUpdatedState(safeMinZoom)
+    val safeMaxZoomState = rememberUpdatedState(safeMaxZoom)
+
     // Logarithmic zoom mapping for natural lens and digital zoom distribution
-    fun zoomToNormalized(zoom: Float): Float {
-        val logMin = ln(safeMinZoom.toDouble())
-        val logMax = ln(safeMaxZoom.toDouble())
-        val logZ = ln(zoom.coerceIn(safeMinZoom, safeMaxZoom).toDouble())
+    fun zoomToNormalized(zoom: Float, minZ: Float, maxZ: Float): Float {
+        val logMin = ln(minZ.toDouble())
+        val logMax = ln(maxZ.toDouble())
+        val logZ = ln(zoom.coerceIn(minZ, maxZ).toDouble())
         return ((logZ - logMin) / (logMax - logMin)).toFloat().coerceIn(0f, 1f)
     }
 
-    fun normalizedToZoom(t: Float): Float {
-        val logMin = ln(safeMinZoom.toDouble())
-        val logMax = ln(safeMaxZoom.toDouble())
+    fun normalizedToZoom(t: Float, minZ: Float, maxZ: Float): Float {
+        val logMin = ln(minZ.toDouble())
+        val logMax = ln(maxZ.toDouble())
         val logZ = logMin + t.coerceIn(0f, 1f) * (logMax - logMin)
         val rawZoom = exp(logZ).toFloat()
-        return (rawZoom * 10f).roundToInt() / 10f
+        // Maintain continuous Float precision (0.01x) without crude 0.1x gesture stepping
+        val highPrecision = (rawZoom * 100f).roundToInt() / 100f
+        return highPrecision.coerceIn(minZ, maxZ)
     }
 
     val density = LocalDensity.current
@@ -102,6 +109,10 @@ fun HorizontalRulerZoomSlider(
     val tickSpacingDp = 7.dp
     val tickSpacingPx = with(density) { tickSpacingDp.toPx() }
     val totalRulerWidthPx = totalTicks * tickSpacingPx
+    // High-sensitivity drag travel: comfortable single-stroke span across the full zoom range
+    val dragTravelDistancePx = with(density) { 260.dp.toPx() }
+
+    var accumulatedNorm by remember { mutableFloatStateOf(0f) }
 
     Column(
         modifier = modifier
@@ -110,7 +121,7 @@ fun HorizontalRulerZoomSlider(
             .testTag("horizontal_ruler_zoom_slider"),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 1. Live Zoom Indicator (e.g. "5.0 x" in golden yellow matching reference screenshot)
+        // 1. Live Zoom Indicator (formatted to 1 decimal place e.g. "5.0 x")
         Text(
             text = "%.1f x".format(currentZoom),
             color = Color(0xFFFFD54F),
@@ -142,33 +153,39 @@ fun HorizontalRulerZoomSlider(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .pointerInput(currentZoom, safeMinZoom, safeMaxZoom) {
+                        .pointerInput(Unit) {
                             detectTapGestures { tapOffset ->
                                 restartAutoHideTimer()
+                                val minZ = safeMinZoomState.value
+                                val maxZ = safeMaxZoomState.value
                                 val centerX = size.width / 2f
                                 val deltaX = tapOffset.x - centerX
-                                val deltaNorm = deltaX / totalRulerWidthPx
-                                val currentNorm = zoomToNormalized(currentZoom)
-                                val newNorm = (currentNorm + deltaNorm).coerceIn(0f, 1f)
-                                val newZoom = normalizedToZoom(newNorm)
-                                onZoomChange(newZoom)
+                                val currentNorm = zoomToNormalized(currentZoomState.value, minZ, maxZ)
+                                val newNorm = (currentNorm + deltaX / dragTravelDistancePx).coerceIn(0f, 1f)
+                                val newZoom = normalizedToZoom(newNorm, minZ, maxZ)
+                                onZoomChangeState.value(newZoom)
                             }
                         }
-                        .pointerInput(currentZoom, safeMinZoom, safeMaxZoom) {
+                        .pointerInput(Unit) {
                             detectDragGestures(
                                 onDragStart = {
                                     restartAutoHideTimer()
+                                    val minZ = safeMinZoomState.value
+                                    val maxZ = safeMaxZoomState.value
+                                    accumulatedNorm = zoomToNormalized(currentZoomState.value, minZ, maxZ)
                                 },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
                                     restartAutoHideTimer()
-                                    // Dragging left (negative) zooms in; dragging right (positive) zooms out
-                                    val deltaNorm = -dragAmount.x / (totalRulerWidthPx * 0.65f)
-                                    val currentNorm = zoomToNormalized(currentZoom)
-                                    val newNorm = (currentNorm + deltaNorm).coerceIn(0f, 1f)
-                                    val newZoom = normalizedToZoom(newNorm)
-                                    if (newZoom != currentZoom) {
-                                        onZoomChange(newZoom)
+                                    val minZ = safeMinZoomState.value
+                                    val maxZ = safeMaxZoomState.value
+                                    // Swipe right → left (dragAmount.x < 0) zooms in
+                                    // Swipe left → right (dragAmount.x > 0) zooms out
+                                    val deltaNorm = -dragAmount.x / dragTravelDistancePx
+                                    accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
+                                    val newZoom = normalizedToZoom(accumulatedNorm, minZ, maxZ)
+                                    if (abs(newZoom - currentZoomState.value) >= 0.005f) {
+                                        onZoomChangeState.value(newZoom)
                                     }
                                 },
                                 onDragEnd = {
@@ -185,7 +202,7 @@ fun HorizontalRulerZoomSlider(
                         val centerX = size.width / 2f
                         val centerY = size.height / 2f
 
-                        val currentNorm = zoomToNormalized(currentZoom)
+                        val currentNorm = zoomToNormalized(currentZoom, safeMinZoom, safeMaxZoom)
                         val currentScrollPx = currentNorm * totalRulerWidthPx
 
                         // Draw moving ticks

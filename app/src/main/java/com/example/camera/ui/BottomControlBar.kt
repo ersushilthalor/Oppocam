@@ -770,6 +770,11 @@ fun MasterZoomCapsule(
     }
     val maxZoom = capabilities.maxZoom.coerceAtLeast(10.0f)
 
+    val currentZoomState = rememberUpdatedState(currentZoom)
+    val onZoomChangeState = rememberUpdatedState(onZoomChange)
+    val minZoomState = rememberUpdatedState(minZoom)
+    val maxZoomState = rememberUpdatedState(maxZoom)
+
     if (isSliderOpen) {
         HorizontalRulerZoomSlider(
             currentZoom = currentZoom,
@@ -785,7 +790,7 @@ fun MasterZoomCapsule(
                 .clip(RoundedCornerShape(22.dp))
                 .background(Color(0xD9141418))
                 .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(22.dp))
-                .pointerInput(currentZoom, minZoom, maxZoom) {
+                .pointerInput(Unit) {
                     detectHorizontalDragGestures(
                         onDragStart = {
                             isSliderOpen = true
@@ -793,10 +798,10 @@ fun MasterZoomCapsule(
                         onHorizontalDrag = { change, dragAmount ->
                             change.consume()
                             isSliderOpen = true
-                            val sensitivity = 0.025f
-                            val newZoom = (currentZoom - dragAmount * sensitivity).coerceIn(minZoom, maxZoom)
-                            val rounded = (newZoom * 10).roundToInt() / 10f
-                            onZoomChange(rounded)
+                            val sensitivity = 0.035f
+                            val newZoom = (currentZoomState.value - dragAmount * sensitivity).coerceIn(minZoomState.value, maxZoomState.value)
+                            val highPrecision = (newZoom * 100f).roundToInt() / 100f
+                            onZoomChangeState.value(highPrecision)
                         }
                     )
                 }
