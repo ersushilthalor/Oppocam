@@ -167,6 +167,16 @@ class CameraStreamCompositor {
     private var encoderWidth: Int = 1920
     private var encoderHeight: Int = 1080
 
+    // Monotonic Recording Presentation Timestamp (PTS) Timeline State:
+    // Guarantees monotonic, continuous timestamps across lens switches and eliminates
+    // discontinuities caused by non-shared hardware camera timestamp domains.
+    @Volatile private var recordingFps: Int = 30
+    @Volatile private var recordingStartNs: Long = 0L
+    @Volatile private var isRecordingToEncoder: Boolean = false
+    private var lastEncodedPtsNs: Long = -1L
+    private var lastActiveCameraTimestampNs: Long = 0L
+    private var lastEncodedLens: LensType? = null
+
     // Computational Video Pipeline State
     @Volatile var activeComputationalPipeline: ComputationalVideoPipeline = ComputationalVideoPipeline.DEFAULT
         private set
@@ -789,6 +799,18 @@ class CameraStreamCompositor {
             }
         }
 
+        val activeCameraTimestamp = if (currentActive == LensType.ULTRAWIDE) {
+            lastUltraWideTimestampNs.get()
+        } else {
+            lastMainTimestampNs.get()
+        }
+
+        val timestampChanged = (activeCameraTimestamp != lastActiveCameraTimestampNs && activeCameraTimestamp > 0L)
+        val isFreshActiveFrame = when (currentActive) {
+            LensType.ULTRAWIDE -> (newUltraWideFrame || timestampChanged || (lastEncodedLens != LensType.ULTRAWIDE && hasValidUltraWideTexture))
+            else -> (newMainFrame || timestampChanged || (lastEncodedLens != LensType.WIDE && hasValidMainTexture))
+        }
+
         val isComputationalActive = (activeComputationalPipeline != ComputationalVideoPipeline.DEFAULT)
 
         if (isComputationalActive && targetTexId != 0) {
@@ -848,97 +870,89 @@ class CameraStreamCompositor {
                 EGL14.eglSwapBuffers(display, mainSurf)
             }
 
-            // 3. Third pass: blit to MediaCodec Encoder EGL Surface (if recording)
+            // 3. Third pass: blit to MediaCodec Encoder EGL Surface (if recording and fresh active frame)
             val encSurf = encoderEglSurface
-            if (encSurf != null) {
+            if (encSurf != null && isFreshActiveFrame) {
                 EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
                 GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
                 drawBlitQuad(computedTexId, identityMatrix)
 
-                val frameTimestampNs = if (currentActive == LensType.ULTRAWIDE) {
-                    lastUltraWideTimestampNs.get()
-                } else {
-                    lastMainTimestampNs.get()
-                }
-                val ptsNs = if (frameTimestampNs > 0) frameTimestampNs else System.nanoTime()
+                val ptsNs = computeNextEncoderPtsNs(currentActive, activeCameraTimestamp)
                 EGLExt.eglPresentationTimeANDROID(display, encSurf, ptsNs)
                 EGL14.eglSwapBuffers(display, encSurf)
             }
 
             // Advance ping-pong index
             historyPingPongIndex = 1 - historyPingPongIndex
-        } else if (mainSurf != null && targetTexId != 0) {
-            EGL14.eglMakeCurrent(display, mainSurf, mainSurf, ctx)
-            val surfWidthArr = IntArray(1)
-            val surfHeightArr = IntArray(1)
-            EGL14.eglQuerySurface(display, mainSurf, EGL14.EGL_WIDTH, surfWidthArr, 0)
-            EGL14.eglQuerySurface(display, mainSurf, EGL14.EGL_HEIGHT, surfHeightArr, 0)
-            val dstW = if (surfWidthArr[0] > 0) surfWidthArr[0] else mainWidth
-            val dstH = if (surfHeightArr[0] > 0) surfHeightArr[0] else mainHeight
-            GLES20.glViewport(0, 0, dstW, dstH)
+        } else if (targetTexId != 0) {
+            if (mainSurf != null) {
+                EGL14.eglMakeCurrent(display, mainSurf, mainSurf, ctx)
+                val surfWidthArr = IntArray(1)
+                val surfHeightArr = IntArray(1)
+                EGL14.eglQuerySurface(display, mainSurf, EGL14.EGL_WIDTH, surfWidthArr, 0)
+                EGL14.eglQuerySurface(display, mainSurf, EGL14.EGL_HEIGHT, surfHeightArr, 0)
+                val dstW = if (surfWidthArr[0] > 0) surfWidthArr[0] else mainWidth
+                val dstH = if (surfHeightArr[0] > 0) surfHeightArr[0] else mainHeight
+                GLES20.glViewport(0, 0, dstW, dstH)
 
-            // Source camera buffer aspect ratio in portrait orientation:
-            // Camera sensors are natively landscape (e.g. 1920x1080 for 16:9, or 1440x1080 for 4:3).
-            // In a portrait viewfinder, sensor width maps to height and sensor height maps to width.
-            val camLong = max(cameraBufferWidth, cameraBufferHeight).toFloat()
-            val camShort = min(cameraBufferWidth, cameraBufferHeight).toFloat()
-            val srcAspect = if (camShort > 0f) camLong / camShort else (16f / 9f)
+                // Source camera buffer aspect ratio in portrait orientation:
+                // Camera sensors are natively landscape (e.g. 1920x1080 for 16:9, or 1440x1080 for 4:3).
+                // In a portrait viewfinder, sensor width maps to height and sensor height maps to width.
+                val camLong = max(cameraBufferWidth, cameraBufferHeight).toFloat()
+                val camShort = min(cameraBufferWidth, cameraBufferHeight).toFloat()
+                val srcAspect = if (camShort > 0f) camLong / camShort else (16f / 9f)
 
-            // Destination viewfinder aspect ratio in portrait orientation:
-            val dstLong = max(dstW, dstH).toFloat()
-            val dstShort = min(dstW, dstH).toFloat()
-            val dstAspect = if (dstShort > 0f) dstLong / dstShort else (16f / 9f)
+                // Destination viewfinder aspect ratio in portrait orientation:
+                val dstLong = max(dstW, dstH).toFloat()
+                val dstShort = min(dstW, dstH).toFloat()
+                val dstAspect = if (dstShort > 0f) dstLong / dstShort else (16f / 9f)
 
-            var scaleX = 1.0f
-            var scaleY = 1.0f
-            if (kotlin.math.abs(dstAspect - srcAspect) >= 0.01f) {
-                if (dstAspect > srcAspect) {
-                    // Destination is taller/narrower than source (e.g. 9:16 dest vs 3:4 source).
-                    // Preserve true height and center-crop width without stretching.
-                    scaleX = srcAspect / dstAspect
-                    scaleY = 1.0f
+                var scaleX = 1.0f
+                var scaleY = 1.0f
+                if (kotlin.math.abs(dstAspect - srcAspect) >= 0.01f) {
+                    if (dstAspect > srcAspect) {
+                        // Destination is taller/narrower than source (e.g. 9:16 dest vs 3:4 source).
+                        // Preserve true height and center-crop width without stretching.
+                        scaleX = srcAspect / dstAspect
+                        scaleY = 1.0f
+                    } else {
+                        // Destination is wider/shorter than source (e.g. 3:4 dest vs 16:9 source).
+                        // Preserve true width and center-crop height without stretching.
+                        scaleX = 1.0f
+                        scaleY = dstAspect / srcAspect
+                    }
+                }
+
+                val finalTexMatrix = FloatArray(16)
+                if (scaleX == 1.0f && scaleY == 1.0f) {
+                    System.arraycopy(targetTexMatrix, 0, finalTexMatrix, 0, 16)
                 } else {
-                    // Destination is wider/shorter than source (e.g. 3:4 dest vs 16:9 source).
-                    // Preserve true width and center-crop height without stretching.
-                    scaleX = 1.0f
-                    scaleY = dstAspect / srcAspect
+                    val cropMatrix = FloatArray(16)
+                    android.opengl.Matrix.setIdentityM(cropMatrix, 0)
+                    android.opengl.Matrix.translateM(cropMatrix, 0, 0.5f, 0.5f, 0.0f)
+                    android.opengl.Matrix.scaleM(cropMatrix, 0, scaleX, scaleY, 1.0f)
+                    android.opengl.Matrix.translateM(cropMatrix, 0, -0.5f, -0.5f, 0.0f)
+                    android.opengl.Matrix.multiplyMM(finalTexMatrix, 0, targetTexMatrix, 0, cropMatrix, 0)
+                }
+
+                drawQuad(targetTexId, finalTexMatrix)
+                EGL14.eglSwapBuffers(display, mainSurf)
+                if (targetTexId == ultraWideTexId) {
+                    val seq = ultraWideFrameSequence.get()
+                    Log.d(TAG, "[UW_RENDER] frameSequence=$seq")
                 }
             }
 
-            val finalTexMatrix = FloatArray(16)
-            if (scaleX == 1.0f && scaleY == 1.0f) {
-                System.arraycopy(targetTexMatrix, 0, finalTexMatrix, 0, 16)
-            } else {
-                val cropMatrix = FloatArray(16)
-                android.opengl.Matrix.setIdentityM(cropMatrix, 0)
-                android.opengl.Matrix.translateM(cropMatrix, 0, 0.5f, 0.5f, 0.0f)
-                android.opengl.Matrix.scaleM(cropMatrix, 0, scaleX, scaleY, 1.0f)
-                android.opengl.Matrix.translateM(cropMatrix, 0, -0.5f, -0.5f, 0.0f)
-                android.opengl.Matrix.multiplyMM(finalTexMatrix, 0, targetTexMatrix, 0, cropMatrix, 0)
-            }
-
-            drawQuad(targetTexId, finalTexMatrix)
-            EGL14.eglSwapBuffers(display, mainSurf)
-            if (targetTexId == ultraWideTexId) {
-                val seq = ultraWideFrameSequence.get()
-                Log.d(TAG, "[UW_RENDER] frameSequence=$seq")
-            }
-
-            // 3b. Render active stream with EXACT SAME 3D LUT and color grading to MediaCodec Encoder EGL Surface (if recording)
+            // 3b. Render active stream with EXACT SAME 3D LUT and color grading to MediaCodec Encoder EGL Surface (if recording and fresh active frame)
             val encSurf = encoderEglSurface
-            if (encSurf != null && targetTexId != 0) {
+            if (encSurf != null && isFreshActiveFrame) {
                 EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
                 GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
 
                 // Render camera stream without preview center crop directly onto the encoder surface
                 drawQuad(targetTexId, targetTexMatrix)
 
-                val frameTimestampNs = if (currentActive == LensType.ULTRAWIDE) {
-                    lastUltraWideTimestampNs.get()
-                } else {
-                    lastMainTimestampNs.get()
-                }
-                val ptsNs = if (frameTimestampNs > 0) frameTimestampNs else System.nanoTime()
+                val ptsNs = computeNextEncoderPtsNs(currentActive, activeCameraTimestamp)
                 EGLExt.eglPresentationTimeANDROID(display, encSurf, ptsNs)
                 EGL14.eglSwapBuffers(display, encSurf)
             }
@@ -1095,12 +1109,55 @@ class CameraStreamCompositor {
     }
 
     /**
+     * Resets recording timestamp state cleanly for a new recording timeline.
+     */
+    fun resetRecordingTimestamps(fps: Int = 30) {
+        recordingFps = if (fps in 15..120) fps else 30
+        recordingStartNs = 0L
+        isRecordingToEncoder = false
+        lastEncodedPtsNs = -1L
+        lastActiveCameraTimestampNs = 0L
+        lastEncodedLens = null
+    }
+
+    /**
+     * Computes the next strictly monotonic encoder PTS on the continuous recording timeline:
+     * ptsNs = System.nanoTime() - recordingStartNs
+     *
+     * Paces frames to match configured recordingFps and guarantees strict monotonicity
+     * without PTS discontinuities across Main <-> UltraWide lens switches.
+     */
+    private fun computeNextEncoderPtsNs(currentActive: LensType, activeCamTimestamp: Long): Long {
+        val nowNs = System.nanoTime()
+        if (recordingStartNs <= 0L) {
+            recordingStartNs = nowNs
+        }
+
+        var ptsNs = nowNs - recordingStartNs
+        if (ptsNs < 0L) ptsNs = 0L
+
+        val expectedFrameIntervalNs = 1_000_000_000L / recordingFps.toLong()
+        val minPacingStepNs = maxOf(1_000_000L, expectedFrameIntervalNs / 10L)
+
+        if (lastEncodedPtsNs >= 0L && ptsNs <= lastEncodedPtsNs) {
+            ptsNs = lastEncodedPtsNs + minPacingStepNs
+        }
+
+        lastEncodedPtsNs = ptsNs
+        lastActiveCameraTimestampNs = activeCamTimestamp
+        lastEncodedLens = currentActive
+
+        return ptsNs
+    }
+
+    /**
      * Attaches or detaches a MediaCodec encoder Surface for real-time GPU recording.
      * When attached, every frame rendered to the preview will also be drawn to the encoder Surface.
+     * Creates a new monotonic recording timeline relative to System.nanoTime().
      */
-    fun setEncoderSurface(surface: Surface?, width: Int, height: Int) {
+    fun setEncoderSurface(surface: Surface?, width: Int, height: Int, fps: Int = 30) {
         glHandler?.post {
-            setEncoderSurfaceInternal(surface, width, height)
+            setEncoderSurfaceInternal(surface, width, height, fps)
         }
     }
 
@@ -1109,9 +1166,15 @@ class CameraStreamCompositor {
      * Returns true if the EGL window surface was successfully created, false otherwise.
      * Enables automatic fail-safe fallback to standard direct recording if GPU encoder surface creation fails.
      */
-    fun attachEncoderSurface(surface: Surface?, width: Int, height: Int, timeoutMs: Long = 400L): Boolean {
+    fun attachEncoderSurface(
+        surface: Surface?,
+        width: Int,
+        height: Int,
+        timeoutMs: Long = 400L,
+        fps: Int = 30
+    ): Boolean {
         if (surface == null || !surface.isValid) {
-            setEncoderSurface(null, 0, 0)
+            setEncoderSurface(null, 0, 0, fps)
             return false
         }
         val latch = java.util.concurrent.CountDownLatch(1)
@@ -1123,7 +1186,7 @@ class CameraStreamCompositor {
         }
         handler.post {
             try {
-                setEncoderSurfaceInternal(surface, width, height)
+                setEncoderSurfaceInternal(surface, width, height, fps)
                 success = (encoderEglSurface != null && encoderEglSurface != EGL14.EGL_NO_SURFACE)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed in attachEncoderSurface", e)
@@ -1143,7 +1206,7 @@ class CameraStreamCompositor {
         return success
     }
 
-    private fun setEncoderSurfaceInternal(surface: Surface?, width: Int, height: Int) {
+    private fun setEncoderSurfaceInternal(surface: Surface?, width: Int, height: Int, fps: Int = 30) {
         val display = eglDisplay
         val ctx = eglContext
         val pbuf = dummyPbuffer
@@ -1159,6 +1222,9 @@ class CameraStreamCompositor {
             encoderEglSurface = null
         }
 
+        // Cleanly reset recording timestamp state on every new recording or when detaching
+        resetRecordingTimestamps(fps)
+
         encoderTargetSurface = surface
         encoderWidth = if (width > 0) width else 1920
         encoderHeight = if (height > 0) height else 1080
@@ -1169,15 +1235,21 @@ class CameraStreamCompositor {
                 val created = EGL14.eglCreateWindowSurface(display, eglConfig, surface, surfaceAttribs, 0)
                 if (created != null && created != EGL14.EGL_NO_SURFACE) {
                     encoderEglSurface = created
-                    Log.i(TAG, "Encoder EGL Surface attached ($encoderWidth x $encoderHeight)")
+                    isRecordingToEncoder = true
+                    recordingStartNs = System.nanoTime()
+                    Log.i(TAG, "Encoder EGL Surface attached ($encoderWidth x $encoderHeight @ ${recordingFps}fps, recordingStartNs=$recordingStartNs)")
                 } else {
                     Log.e(TAG, "eglCreateWindowSurface returned EGL_NO_SURFACE for encoder")
                     encoderEglSurface = null
+                    isRecordingToEncoder = false
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create encoder EGL window surface", e)
                 encoderEglSurface = null
+                isRecordingToEncoder = false
             }
+        } else {
+            isRecordingToEncoder = false
         }
     }
 
@@ -1375,6 +1447,7 @@ class CameraStreamCompositor {
                     EGL14.eglDestroySurface(display, encSurf)
                     encoderEglSurface = null
                 }
+                resetRecordingTimestamps()
                 if (lutTextureId != 0) {
                     GLES20.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
                     lutTextureId = 0

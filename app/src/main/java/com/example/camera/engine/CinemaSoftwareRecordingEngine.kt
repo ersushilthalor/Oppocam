@@ -74,9 +74,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
     // Timestamps
     private var baseVideoPtsUs = -1L
-    private var lastVideoPtsUs = 0L
+    private var lastVideoPtsUs = -1L
     private var baseAudioPtsUs = -1L
-    private var lastAudioPtsUs = 0L
+    private var lastAudioPtsUs = -1L
 
     /**
      * Initializes and starts a software-based Cinema recording session.
@@ -100,9 +100,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         isStopping.set(false)
 
         baseVideoPtsUs = -1L
-        lastVideoPtsUs = 0L
+        lastVideoPtsUs = -1L
         baseAudioPtsUs = -1L
-        lastAudioPtsUs = 0L
+        lastAudioPtsUs = -1L
 
         videoTrackIndex = -1
         audioTrackIndex = -1
@@ -616,11 +616,17 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                             synchronized(muxerLock) {
                                 // Normalize presentation timestamps
                                 if (baseVideoPtsUs < 0) {
-                                    baseVideoPtsUs = bufferInfo.presentationTimeUs
+                                    // If incoming PTS is already on a zero-based recording timeline (e.g. from compositor),
+                                    // preserve it (base = 0) so it does not conflict with the compositor timeline or drift A/V sync.
+                                    baseVideoPtsUs = if (bufferInfo.presentationTimeUs in 0L..60_000_000L) {
+                                        0L
+                                    } else {
+                                        bufferInfo.presentationTimeUs
+                                    }
                                 }
                                 var ptsUs = bufferInfo.presentationTimeUs - baseVideoPtsUs
                                 if (ptsUs < 0) ptsUs = 0
-                                if (ptsUs <= lastVideoPtsUs && lastVideoPtsUs > 0) {
+                                if (lastVideoPtsUs >= 0L && ptsUs <= lastVideoPtsUs) {
                                     ptsUs = lastVideoPtsUs + 1000L
                                 }
                                 bufferInfo.presentationTimeUs = ptsUs
@@ -837,11 +843,15 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                         if (encodedBuffer != null) {
                             synchronized(muxerLock) {
                                 if (baseAudioPtsUs < 0) {
-                                    baseAudioPtsUs = bufferInfo.presentationTimeUs
+                                    baseAudioPtsUs = if (bufferInfo.presentationTimeUs in 0L..60_000_000L) {
+                                        0L
+                                    } else {
+                                        bufferInfo.presentationTimeUs
+                                    }
                                 }
                                 var ptsUs = bufferInfo.presentationTimeUs - baseAudioPtsUs
                                 if (ptsUs < 0) ptsUs = 0
-                                if (ptsUs <= lastAudioPtsUs && lastAudioPtsUs > 0) {
+                                if (lastAudioPtsUs >= 0L && ptsUs <= lastAudioPtsUs) {
                                     ptsUs = lastAudioPtsUs + 500L
                                 }
                                 bufferInfo.presentationTimeUs = ptsUs

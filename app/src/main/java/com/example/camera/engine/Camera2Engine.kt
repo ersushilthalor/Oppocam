@@ -4955,7 +4955,8 @@ class Camera2Engine(private val context: Context) {
                 motorolaSwitchEngine.compositor.setEncoderSurface(
                     recorderSurface,
                     videoRes.width,
-                    videoRes.height
+                    videoRes.height,
+                    fps = targetFps
                 )
             } else {
                 @Suppress("DEPRECATION")
@@ -5132,7 +5133,8 @@ class Camera2Engine(private val context: Context) {
                     compSuccess = motorolaSwitchEngine.compositor.attachEncoderSurface(
                         recorderSurface,
                         videoRes.width,
-                        videoRes.height
+                        videoRes.height,
+                        fps = targetFps
                     )
                     if (compSuccess) {
                         Log.i(TAG, "Computational GPU video encoder surface attached successfully (${videoRes.width}x${videoRes.height})")
