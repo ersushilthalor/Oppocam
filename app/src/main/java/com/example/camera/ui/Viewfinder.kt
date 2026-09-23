@@ -59,7 +59,6 @@ import com.example.camera.model.GridType
 import com.example.camera.model.LogBitDepth
 import com.example.camera.model.PhotoFilter
 import com.example.camera.model.PortraitConfig
-import com.example.camera.ui.components.HalfCircleZoomSlider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -102,24 +101,9 @@ fun Viewfinder(
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember(currentZoom) { mutableFloatStateOf(currentZoom) }
-    var isZoomSliderVisible by remember { mutableStateOf(false) }
-    var zoomHideJob by remember { mutableStateOf<Job?>(null) }
-    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(currentZoom) {
         currentScale = currentZoom
-    }
-
-    fun triggerZoomSlider(newScale: Float) {
-        val rounded = (newScale * 10f).roundToInt() / 10f
-        currentScale = rounded
-        onZoomChange(rounded)
-        isZoomSliderVisible = true
-        zoomHideJob?.cancel()
-        zoomHideJob = coroutineScope.launch {
-            delay(2000L) // Auto-hide after 2s of inactivity
-            isZoomSliderVisible = false
-        }
     }
 
     BoxWithConstraints(
@@ -164,14 +148,15 @@ fun Viewfinder(
                                 updated = (updated * zoom).coerceIn(minZoom, maxZoom)
                                 changed = true
                             }
-                            // Horizontal swipe: Right to Left (pan.x < 0) zooms in; Left to Right (pan.x > 0) zooms out
                             if (abs(pan.x) > abs(pan.y) * 1.15f && abs(pan.x) > 1.5f) {
                                 val factor = 1.0f - (pan.x / 260f)
                                 updated = (updated * factor).coerceIn(minZoom, maxZoom)
                                 changed = true
                             }
                             if (changed) {
-                                triggerZoomSlider(updated)
+                                val rounded = (updated * 10f).roundToInt() / 10f
+                                currentScale = rounded
+                                onZoomChange(rounded)
                             }
                         }
                     }
@@ -411,35 +396,6 @@ fun Viewfinder(
                         )
                     }
                 }
-
-                // Flagship Gesture-based Half-Circle Arc Zoom Slider
-                HalfCircleZoomSlider(
-                    visible = isZoomSliderVisible,
-                    currentZoom = currentScale,
-                    minZoom = minZoom,
-                    maxZoom = maxZoom,
-                    onZoomChange = { newZoom ->
-                        triggerZoomSlider(newZoom)
-                    },
-                    onZoomPresetTap = { preset ->
-                        triggerZoomSlider(preset)
-                        onZoomPresetTap(preset)
-                    },
-                    onInteraction = {
-                        zoomHideJob?.cancel()
-                        isZoomSliderVisible = true
-                    },
-                    onInteractionEnd = {
-                        zoomHideJob?.cancel()
-                        zoomHideJob = coroutineScope.launch {
-                            delay(2000L)
-                            isZoomSliderVisible = false
-                        }
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 60.dp)
-                )
             }
         }
     }

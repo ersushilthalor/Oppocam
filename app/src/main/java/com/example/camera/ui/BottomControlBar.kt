@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.camera.model.*
+import com.example.camera.ui.components.HorizontalRulerZoomSlider
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
@@ -760,164 +761,48 @@ fun MasterZoomCapsule(
         }
     }
 
-    var isDragging by remember { mutableStateOf(false) }
     var isSliderOpen by remember { mutableStateOf(false) }
 
-    if (isSliderOpen) {
-        Column(
-            modifier = modifier
-                .widthIn(min = 280.dp, max = 340.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xF2121316))
-                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(24.dp))
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-                .testTag("smooth_zoom_slider_container"),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            // Header: Live zoom badge + lens descriptor + close button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF26210A))
-                            .border(1.dp, Color(0xFFFFD54F), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "%.1fx".format(currentZoom),
-                            color = Color(0xFFFFD54F),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    val lensName = when {
-                        currentZoom < 0.95f -> "Ultra-Wide"
-                        currentZoom in 0.95f..1.8f -> "Wide (1x)"
-                        currentZoom in 1.8f..2.5f -> "2x Tele"
-                        currentZoom in 2.5f..4.5f -> "3x Tele"
-                        currentZoom in 4.5f..8.0f -> "5x Tele"
-                        else -> "10x SuperZoom"
-                    }
-                    Text(
-                        text = lensName,
-                        color = Color(0xFFE5E7EB),
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                IconButton(
-                    onClick = { isSliderOpen = false },
-                    modifier = Modifier.size(26.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Close,
-                        contentDescription = "Close Zoom Slider",
-                        tint = Color.White.copy(alpha = 0.75f),
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-
-            // Continuous 0.5x - 10.0x Slider
-            val ultraWideBaseRatio = displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }?.baseZoomRatio ?: 0.5f
-            val minSliderZoom = if (hasRealUltraWide) ultraWideBaseRatio else 1.0f
-            Slider(
-                value = currentZoom.coerceIn(minSliderZoom, 10.0f),
-                onValueChange = { newVal ->
-                    val rounded = (newVal * 10f).roundToInt() / 10f
-                    onZoomChange(rounded)
-                },
-                valueRange = minSliderZoom..10.0f,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFFFFD54F),
-                    activeTrackColor = Color(0xFFFFD54F),
-                    inactiveTrackColor = Color.White.copy(alpha = 0.22f)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(30.dp)
-                    .testTag("zoom_smooth_slider")
-            )
-
-            // Preset Quick-Jump Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                presets.forEach { preset ->
-                    val isMatch = (currentZoom - preset).absoluteValue < 0.25f
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isMatch) Color(0xFF26210A) else Color(0x2EFFFFFF))
-                            .border(
-                                width = if (isMatch) 1.dp else 0.dp,
-                                color = if (isMatch) Color(0xFFFFD54F) else Color.Transparent,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .clickable {
-                                onZoomPresetTap(preset)
-                                if (preset == 0.5f) {
-                                    val ultraLens = displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                                    if (ultraLens != null) onLensSelected(ultraLens)
-                                } else if (preset == 1.0f) {
-                                    val mainLens = displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
-                                        ?: displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                                    if (mainLens != null) onLensSelected(mainLens)
-                                } else if (preset in 2.0f..3.0f) {
-                                    val tele = displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
-                                    if (tele != null) onLensSelected(tele)
-                                }
-                            }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (preset == 0.5f) ".5" else if (preset == 1.0f) "1x" else "${preset.toInt()}",
-                            color = if (isMatch) Color(0xFFFFD54F) else Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = if (isMatch) FontWeight.Bold else FontWeight.Medium
-                        )
-                    }
-                }
-            }
-        }
+    val minZoom = if (hasRealUltraWide) {
+        displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }?.baseZoomRatio ?: 0.5f
     } else {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
-            .background(Color(0xD9141418))
-            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(22.dp))
-            .pointerInput(currentZoom, hasRealUltraWide) {
-                detectHorizontalDragGestures(
-                    onDragStart = { isDragging = true },
-                    onDragEnd = { isDragging = false },
-                    onDragCancel = { isDragging = false },
-                    onHorizontalDrag = { change, dragAmount ->
-                        change.consume()
-                        val sensitivity = 0.022f
-                        val minAllowableZoom = if (hasRealUltraWide) 0.5f else 1.0f
-                        val newZoom = (currentZoom + dragAmount * sensitivity).coerceIn(minAllowableZoom, 10.0f)
-                        val rounded = (newZoom * 10).roundToInt() / 10f
-                        onZoomChange(rounded)
-                    }
-                )
-            }
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        contentAlignment = Alignment.Center
-    ) {
+        1.0f
+    }
+    val maxZoom = capabilities.maxZoom.coerceAtLeast(10.0f)
+
+    if (isSliderOpen) {
+        HorizontalRulerZoomSlider(
+            currentZoom = currentZoom,
+            minZoom = minZoom,
+            maxZoom = maxZoom,
+            onZoomChange = onZoomChange,
+            onClose = { isSliderOpen = false },
+            modifier = modifier
+        )
+    } else {
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(22.dp))
+                .background(Color(0xD9141418))
+                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(22.dp))
+                .pointerInput(currentZoom, minZoom, maxZoom) {
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            isSliderOpen = true
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            isSliderOpen = true
+                            val sensitivity = 0.025f
+                            val newZoom = (currentZoom - dragAmount * sensitivity).coerceIn(minZoom, maxZoom)
+                            val rounded = (newZoom * 10).roundToInt() / 10f
+                            onZoomChange(rounded)
+                        }
+                    )
+                }
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            contentAlignment = Alignment.Center
+        ) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -925,7 +810,7 @@ fun MasterZoomCapsule(
             presets.forEach { preset ->
                 val isClosest = presets.minByOrNull { (it - currentZoom).absoluteValue } == preset
                 val isExactMatch = (currentZoom - preset).absoluteValue < 0.2f
-                val isActive = isExactMatch || (isClosest && !isDragging)
+                val isActive = isExactMatch || isClosest
 
                 val label = when (preset) {
                     0.5f -> "0.5"
