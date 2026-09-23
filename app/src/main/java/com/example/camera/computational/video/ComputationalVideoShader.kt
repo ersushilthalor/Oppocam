@@ -78,33 +78,11 @@ object ComputationalVideoShader {
 
             // Fast path for Default / Stock mode: pure pass-through of ISP video stream
             if (uPipelineMode == 0) {
-                gl_FragColor = curSample;
+                gl_FragColor = vec4(curRgb, 1.0);
                 return;
             }
 
-            // 1. Temporal Multi-Frame & Motion Detection
-            vec3 tempColor = curRgb;
-            if (uHasPrevFrame != 0 && uTemporalDenoise > 0.01) {
-                vec3 prevRgb = texture2D(sPrevTexture, vTextureCoord).rgb;
-                float curLum = dot(curRgb, vec3(0.299, 0.587, 0.114));
-                float prevLum = dot(prevRgb, vec3(0.299, 0.587, 0.114));
-
-                // Color and luminance motion metric
-                float motion = abs(curLum - prevLum) + length(curRgb - prevRgb) * 0.4;
-                float motionFactor = clamp(motion / max(uMotionThreshold, 0.01), 0.0, 1.0);
-
-                // Blend in static regions, drop blend in high-motion regions to avoid ghosting
-                float blendWeight = (1.0 - motionFactor) * uTemporalDenoise;
-                blendWeight = clamp(blendWeight, 0.0, 0.82);
-                tempColor = mix(curRgb, prevRgb, blendWeight);
-
-                // Anti-flicker temporal exposure stabilization
-                if (uTemporalFlickerDamping > 0.01) {
-                    tempColor = mix(tempColor, prevRgb, uTemporalFlickerDamping * (1.0 - motionFactor) * 0.25);
-                }
-            }
-
-            // 2. Spatial Sampling for Detail, Local Contrast, and Chroma Denoise
+            // 1. Spatial Sampling for Detail, Local Contrast, Chroma Denoise & History Clamping
             vec2 tx = uTexelSize;
             vec3 cTop    = texture2D(sTexture, vTextureCoord + vec2(0.0,  tx.y)).rgb;
             vec3 cBottom = texture2D(sTexture, vTextureCoord + vec2(0.0, -tx.y)).rgb;
@@ -116,25 +94,71 @@ object ComputationalVideoShader {
             float lumBottom = dot(cBottom, vec3(0.299, 0.587, 0.114));
             float lumLeft   = dot(cLeft, vec3(0.299, 0.587, 0.114));
             float lumRight  = dot(cRight, vec3(0.299, 0.587, 0.114));
-            float lumCenter = dot(tempColor, vec3(0.299, 0.587, 0.114));
+            float lumCenter = dot(curRgb, vec3(0.299, 0.587, 0.114));
             float blurLum   = dot(blurColor, vec3(0.299, 0.587, 0.114));
 
-            // Laplacian 2nd derivative edge response
+            // Local neighborhood bounding box (Color / History AABB Clamping to prevent runaway feedback & trailing)
+            vec3 curMin = min(curRgb, min(min(cTop, cBottom), min(cLeft, cRight)));
+            vec3 curMax = max(curRgb, max(max(cTop, cBottom), max(cLeft, cRight)));
+            vec3 boxMargin = max(curMax - curMin, vec3(0.025)) * 0.45;
+            vec3 clampMin = max(curMin - boxMargin, vec3(0.0));
+            vec3 clampMax = min(curMax + boxMargin, vec3(1.0));
+
+            // 2. Temporal Multi-Frame & Robust Motion Confidence Rejection
+            vec3 tempColor = curRgb;
+            if (uHasPrevFrame != 0 && uTemporalDenoise > 0.01) {
+                vec3 rawPrevRgb = texture2D(sPrevTexture, vTextureCoord).rgb;
+                // Clamp history buffer to current local color bounding box to prevent runaway feedback & trailing
+                vec3 prevRgb = clamp(rawPrevRgb, clampMin, clampMax);
+
+                float prevLum = dot(prevRgb, vec3(0.299, 0.587, 0.114));
+
+                // Multi-metric motion detection (Luminance + per-channel color + local variance)
+                vec3 colorDiff = abs(curRgb - prevRgb);
+                float maxDiff = max(colorDiff.r, max(colorDiff.g, colorDiff.b));
+                float lumDiff = abs(lumCenter - prevLum);
+                float rawMotion = max(maxDiff, lumDiff * 1.4);
+
+                // Motion confidence with aggressive non-linear cutoff:
+                // Drops rapidly to 0 under any perceptible motion to eliminate double edges and vertical streaks
+                float threshold = max(uMotionThreshold, 0.012);
+                float normMotion = clamp(rawMotion / threshold, 0.0, 1.0);
+                float motionConfidence = 1.0 - smoothstep(0.12, 0.65, normMotion);
+                motionConfidence = motionConfidence * motionConfidence; // Quadratic suppression
+
+                // Conservative maximum blend weight in static scenes (capped at 0.50 to prevent accumulation)
+                float maxBlend = min(uTemporalDenoise * 0.60, 0.50);
+                float blendWeight = motionConfidence * maxBlend;
+
+                tempColor = mix(curRgb, prevRgb, blendWeight);
+
+                // Anti-flicker temporal exposure stabilization (strictly active only in confirmed static scenes)
+                if (uTemporalFlickerDamping > 0.01 && motionConfidence > 0.75) {
+                    float flickerWeight = uTemporalFlickerDamping * (motionConfidence - 0.75) * 0.4;
+                    tempColor = mix(tempColor, prevRgb, flickerWeight);
+                }
+            }
+
+            // Update lumCenter with temporally filtered color for subsequent stages
+            lumCenter = dot(tempColor, vec3(0.299, 0.587, 0.114));
+
+            // 3. Laplacian 2nd derivative edge response & Edge-Aware Sharpening
             float laplacian = 4.0 * lumCenter - (lumTop + lumBottom + lumLeft + lumRight);
             float edgeMag = abs(laplacian);
 
-            // 3. Chroma Denoise: Clean chromatic noise specks in flat/dark regions
+            // Chroma Denoise: Clean chromatic noise specks in flat/dark regions
             if (uChromaDenoise > 0.01) {
                 float chromaMask = clamp(1.0 - edgeMag * 10.0, 0.0, 1.0) * uChromaDenoise;
                 vec3 cleanChroma = vec3(lumCenter) + (blurColor - vec3(blurLum));
                 tempColor = mix(tempColor, cleanChroma, chromaMask * 0.65);
             }
 
-            // 4. Edge-Aware Adaptive Sharpening: Attenuate in flat noise and at extreme halos
+            // Edge-Aware Adaptive Sharpening with halo suppression and delta clamping
             vec3 sharpColor = tempColor;
             if (uEdgeSharpening > 0.01) {
-                float sharpWeight = clamp(edgeMag * 8.0, 0.0, 1.0) * clamp(1.0 - edgeMag * 3.0, 0.0, 1.0);
-                sharpColor = tempColor + vec3(laplacian) * (uEdgeSharpening * sharpWeight);
+                float sharpWeight = clamp(edgeMag * 6.0, 0.0, 1.0) * clamp(1.0 - edgeMag * 3.0, 0.0, 1.0);
+                float sharpDelta = clamp(laplacian * (uEdgeSharpening * sharpWeight), -0.12, 0.12);
+                sharpColor = clamp(tempColor + vec3(sharpDelta), 0.0, 1.0);
             }
 
             // 5. Dynamic Range, Highlight Recovery & Shadow Recovery

@@ -1,7 +1,6 @@
 package com.example.camera.engine
 
 import android.util.SizeF
-import com.example.camera.model.LensInfo
 import com.example.camera.model.LensType
 import kotlin.math.*
 
@@ -33,32 +32,6 @@ object CameraOpticalCalibration {
     fun calculateVerticalFovDegrees(sensorHeightMm: Float, focalLengthMm: Float): Float {
         if (sensorHeightMm <= 0f || focalLengthMm <= 0f) return 0f
         return (2.0 * atan(sensorHeightMm.toDouble() / (2.0 * focalLengthMm.toDouble())) * (180.0 / Math.PI)).toFloat()
-    }
-
-    /**
-     * Calculates effective Field of View in degrees after applying digital crop.
-     * tan(effectiveFov / 2) = tan(baseFov / 2) / digitalCrop
-     */
-    fun calculateEffectiveFovDegrees(baseFovDegrees: Float, digitalCrop: Float): Float {
-        if (baseFovDegrees <= 0f || digitalCrop <= 0f) return baseFovDegrees
-        val halfRad = Math.toRadians(baseFovDegrees.toDouble() / 2.0)
-        val tanHalf = tan(halfRad) / digitalCrop.toDouble()
-        return (2.0 * atan(tanHalf) * (180.0 / Math.PI)).toFloat()
-    }
-
-    /**
-     * Returns effective FOV in degrees for a given lens at the specified UI zoom.
-     */
-    fun getEffectiveFov(lens: LensInfo, uiZoom: Float): Float {
-        val baseFov = if (lens.fovDegrees > 0f) lens.fovDegrees else when (lens.lensType) {
-            LensType.ULTRAWIDE -> 110f
-            LensType.WIDE -> 68f
-            LensType.TELEPHOTO -> 34f
-            LensType.TELEPHOTO_3X -> 24f
-            else -> 68f
-        }
-        val crop = calculateRequiredDigitalCrop(uiZoom, lens.baseZoomRatio, lens.lensType)
-        return calculateEffectiveFovDegrees(baseFov, crop)
     }
 
     /**

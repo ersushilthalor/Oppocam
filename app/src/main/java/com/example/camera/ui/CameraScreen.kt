@@ -314,6 +314,17 @@ fun CameraScreen(
                 maxZoom = maxViewfinderZoom,
                 onZoomPresetTap = { preset ->
                     viewModel.setZoom(preset, isPresetTap = true)
+                    if (preset == 0.5f) {
+                        val ultraLens = displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+                        if (ultraLens != null) viewModel.selectLens(ultraLens)
+                    } else if (preset == 1.0f) {
+                        val mainLens = displayedLenses.firstOrNull { it.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
+                            ?: displayedLenses.firstOrNull { it.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK }
+                        if (mainLens != null) viewModel.selectLens(mainLens)
+                    } else if (preset in 2.0f..3.0f) {
+                        val tele = displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
+                        if (tele != null) viewModel.selectLens(tele)
+                    }
                 },
                 onExposureCompensationChange = { ev ->
                     viewModel.setExposureCompensation(ev)

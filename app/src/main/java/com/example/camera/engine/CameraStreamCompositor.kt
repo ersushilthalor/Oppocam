@@ -168,12 +168,14 @@ class CameraStreamCompositor {
     private var encoderHeight: Int = 1080
 
     // Monotonic Recording Presentation Timestamp (PTS) Timeline State:
-    // Guarantees monotonic, continuous timestamps across lens switches and eliminates
-    // discontinuities caused by non-shared hardware camera timestamp domains.
+    // Tracks SurfaceTexture hardware camera timestamps, normalizes the recording timeline
+    // to 0 on the first accepted frame, guarantees strict monotonicity, and bridges Main <-> UltraWide
+    // lens switches seamlessly without PTS discontinuities.
     @Volatile private var recordingFps: Int = 30
-    @Volatile private var recordingStartNs: Long = 0L
-    @Volatile private var isRecordingToEncoder: Boolean = false
+    private val isRecordingToEncoder = AtomicBoolean(false)
     private var lastEncodedPtsNs: Long = -1L
+    private var baseTimelinePtsNs: Long = 0L
+    private var lastLensCameraTimestampNs: Long = 0L
     private var lastActiveCameraTimestampNs: Long = 0L
     private var lastEncodedLens: LensType? = null
 
@@ -399,7 +401,7 @@ class CameraStreamCompositor {
                     curRgb = mix(curRgb, graded, uLutIntensity);
                 }
 
-                gl_FragColor = vec4(clamp(curRgb, 0.0, 1.0), texColor.a);
+                gl_FragColor = vec4(clamp(curRgb, 0.0, 1.0), 1.0);
             }
         """.trimIndent()
 
@@ -430,6 +432,13 @@ class CameraStreamCompositor {
         uColorMatrixLoc = GLES20.glGetUniformLocation(programId, "uColorMatrix")
         uColorOffsetLoc = GLES20.glGetUniformLocation(programId, "uColorOffset")
         uHasColorMatrixLoc = GLES20.glGetUniformLocation(programId, "uHasColorMatrix")
+
+        // Bind default sampler texture units so external OES and 2D samplers never collide on unit 0
+        GLES20.glUseProgram(programId)
+        GLES20.glUniform1i(uSamplerLoc, 0)
+        GLES20.glUniform1i(uLutTextureLoc, 1)
+        GLES20.glUniform1i(uHas3DLutLoc, 0)
+        GLES20.glUniform1i(uHasColorMatrixLoc, 0)
 
         // Create OES external textures
         val textures = IntArray(2)
@@ -872,7 +881,7 @@ class CameraStreamCompositor {
 
             // 3. Third pass: blit to MediaCodec Encoder EGL Surface (if recording and fresh active frame)
             val encSurf = encoderEglSurface
-            if (encSurf != null && isFreshActiveFrame) {
+            if (encSurf != null && isRecordingToEncoder.get() && isFreshActiveFrame) {
                 EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
                 GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
                 drawBlitQuad(computedTexId, identityMatrix)
@@ -945,7 +954,7 @@ class CameraStreamCompositor {
 
             // 3b. Render active stream with EXACT SAME 3D LUT and color grading to MediaCodec Encoder EGL Surface (if recording and fresh active frame)
             val encSurf = encoderEglSurface
-            if (encSurf != null && isFreshActiveFrame) {
+            if (encSurf != null && isRecordingToEncoder.get() && isFreshActiveFrame) {
                 EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
                 GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
 
@@ -999,6 +1008,7 @@ class CameraStreamCompositor {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glUniform1i(uSamplerLoc, 0)
+        GLES20.glUniform1i(uLutTextureLoc, 1)
 
         GLES20.glUniformMatrix4fv(uTexMatrixLoc, 1, false, texMatrix, 0)
 
@@ -1113,47 +1123,105 @@ class CameraStreamCompositor {
      */
     fun resetRecordingTimestamps(fps: Int = 30) {
         recordingFps = if (fps in 15..120) fps else 30
-        recordingStartNs = 0L
-        isRecordingToEncoder = false
         lastEncodedPtsNs = -1L
+        baseTimelinePtsNs = 0L
+        lastLensCameraTimestampNs = 0L
         lastActiveCameraTimestampNs = 0L
         lastEncodedLens = null
+        isRecordingToEncoder.set(false)
     }
 
     /**
      * Computes the next strictly monotonic encoder PTS on the continuous recording timeline:
-     * ptsNs = System.nanoTime() - recordingStartNs
-     *
-     * Paces frames to match configured recordingFps and guarantees strict monotonicity
-     * without PTS discontinuities across Main <-> UltraWide lens switches.
+     * Derives timing directly from SurfaceTexture camera frame timestamps,
+     * normalizes the first frame to 0, paces frames to avoid jitter,
+     * and seamlessly bridges Main <-> UltraWide lens switches without timeline discontinuities.
      */
     private fun computeNextEncoderPtsNs(currentActive: LensType, activeCamTimestamp: Long): Long {
-        val nowNs = System.nanoTime()
-        if (recordingStartNs <= 0L) {
-            recordingStartNs = nowNs
-        }
-
-        var ptsNs = nowNs - recordingStartNs
-        if (ptsNs < 0L) ptsNs = 0L
-
+        val currentFrameTs = if (activeCamTimestamp > 0L) activeCamTimestamp else System.nanoTime()
         val expectedFrameIntervalNs = 1_000_000_000L / recordingFps.toLong()
         val minPacingStepNs = maxOf(1_000_000L, expectedFrameIntervalNs / 10L)
 
-        if (lastEncodedPtsNs >= 0L && ptsNs <= lastEncodedPtsNs) {
-            ptsNs = lastEncodedPtsNs + minPacingStepNs
+        val ptsNs: Long
+        if (lastEncodedPtsNs < 0L) {
+            // First accepted frame of recording: normalize timeline to 0
+            ptsNs = 0L
+            baseTimelinePtsNs = 0L
+            lastLensCameraTimestampNs = currentFrameTs
+            lastEncodedLens = currentActive
+        } else if (currentActive != lastEncodedLens) {
+            // Lens switch (Main <-> UltraWide):
+            // Seamlessly bridge timeline without discontinuities or clock jumps
+            val bridgeStep = expectedFrameIntervalNs
+            ptsNs = lastEncodedPtsNs + bridgeStep
+            baseTimelinePtsNs = ptsNs
+            lastLensCameraTimestampNs = currentFrameTs
+            lastEncodedLens = currentActive
+            Log.i(TAG, "[PTS_LENS_SWITCH] Switched to $currentActive, bridged PTS at ${ptsNs}ns (+${bridgeStep}ns)")
+        } else if (lastLensCameraTimestampNs <= 0L) {
+            // Resumed after pause: bridge timeline smoothly
+            ptsNs = lastEncodedPtsNs + expectedFrameIntervalNs
+            lastLensCameraTimestampNs = currentFrameTs
+        } else {
+            // Normal frame on current lens:
+            val deltaNs = currentFrameTs - lastLensCameraTimestampNs
+            val stepNs = if (deltaNs <= 0L) {
+                // Duplicate timestamp or clock skew: enforce strict monotonicity
+                minPacingStepNs
+            } else if (deltaNs > 500_000_000L) {
+                // Large gap / dropped frames / hitch: clamp to prevent sudden multi-second leap
+                expectedFrameIntervalNs * 2L
+            } else {
+                deltaNs
+            }
+            ptsNs = lastEncodedPtsNs + stepNs
+            lastLensCameraTimestampNs = currentFrameTs
         }
 
         lastEncodedPtsNs = ptsNs
-        lastActiveCameraTimestampNs = activeCamTimestamp
-        lastEncodedLens = currentActive
-
+        lastActiveCameraTimestampNs = currentFrameTs
         return ptsNs
     }
 
     /**
+     * Starts submitting frames to the encoder surface.
+     * Must be called ONLY after MediaRecorder.start() has successfully executed,
+     * ensuring MediaRecorder never receives frames before its encoder pipeline is ready.
+     */
+    fun startEncoding() {
+        glHandler?.post {
+            isRecordingToEncoder.set(true)
+            Log.i(TAG, "Compositor encoder output activated (recordingFps=$recordingFps)")
+        }
+    }
+
+    /**
+     * Stops submitting frames to the encoder surface immediately.
+     * Guarantees MediaRecorder stop/reset never encounters active frame submissions.
+     */
+    fun stopEncoding() {
+        isRecordingToEncoder.set(false)
+        glHandler?.post {
+            isRecordingToEncoder.set(false)
+            lastEncodedPtsNs = -1L
+            Log.i(TAG, "Compositor encoder output stopped")
+        }
+    }
+
+    fun pauseEncoding() {
+        isRecordingToEncoder.set(false)
+    }
+
+    fun resumeEncoding() {
+        glHandler?.post {
+            lastLensCameraTimestampNs = 0L
+            isRecordingToEncoder.set(true)
+        }
+    }
+
+    /**
      * Attaches or detaches a MediaCodec encoder Surface for real-time GPU recording.
-     * When attached, every frame rendered to the preview will also be drawn to the encoder Surface.
-     * Creates a new monotonic recording timeline relative to System.nanoTime().
+     * When attached, frames rendered will be drawn to the encoder Surface after startEncoding() is called.
      */
     fun setEncoderSurface(surface: Surface?, width: Int, height: Int, fps: Int = 30) {
         glHandler?.post {
@@ -1235,21 +1303,20 @@ class CameraStreamCompositor {
                 val created = EGL14.eglCreateWindowSurface(display, eglConfig, surface, surfaceAttribs, 0)
                 if (created != null && created != EGL14.EGL_NO_SURFACE) {
                     encoderEglSurface = created
-                    isRecordingToEncoder = true
-                    recordingStartNs = System.nanoTime()
-                    Log.i(TAG, "Encoder EGL Surface attached ($encoderWidth x $encoderHeight @ ${recordingFps}fps, recordingStartNs=$recordingStartNs)")
+                    // Leaves isRecordingToEncoder as false until startEncoding() is explicitly called
+                    Log.i(TAG, "Encoder EGL Surface attached ($encoderWidth x $encoderHeight @ ${recordingFps}fps)")
                 } else {
                     Log.e(TAG, "eglCreateWindowSurface returned EGL_NO_SURFACE for encoder")
                     encoderEglSurface = null
-                    isRecordingToEncoder = false
+                    isRecordingToEncoder.set(false)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create encoder EGL window surface", e)
                 encoderEglSurface = null
-                isRecordingToEncoder = false
+                isRecordingToEncoder.set(false)
             }
         } else {
-            isRecordingToEncoder = false
+            isRecordingToEncoder.set(false)
         }
     }
 
@@ -1263,8 +1330,17 @@ class CameraStreamCompositor {
             activeComputationalPipeline = pipeline
             activePerformanceTier = tier
             activeComputationalProfile = ComputationalVideoProfile.forPipeline(pipeline, tier)
+
+            // Reset temporal history across pipeline changes
+            hasValidHistoryFrame = false
+
+            if (pipeline == ComputationalVideoPipeline.DEFAULT) {
+                // When switching to STD/Default, properly detach encoder surface and release computational FBOs
+                setEncoderSurfaceInternal(null, 0, 0)
+                releaseComputationalFbos()
+            }
+
             if (changed) {
-                hasValidHistoryFrame = false
                 triggerRender()
             }
         }

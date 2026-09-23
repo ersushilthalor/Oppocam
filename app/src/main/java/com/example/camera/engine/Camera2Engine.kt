@@ -269,10 +269,15 @@ class Camera2Engine(private val context: Context) {
     val computationalVideoPipeline: StateFlow<ComputationalVideoPipeline> = _computationalVideoPipeline.asStateFlow()
 
     fun setComputationalVideoPipeline(pipeline: ComputationalVideoPipeline, tier: Int = 0) {
+        val previousPipeline = _computationalVideoPipeline.value
         _computationalVideoPipeline.value = pipeline
         preferences.computationalVideoPipeline = pipeline
         motorolaSwitchEngine.compositor.setComputationalVideoPipeline(pipeline, tier)
-        Log.i(TAG, "Computational video pipeline set to ${pipeline.displayName} (tier=$tier)")
+        if (pipeline == ComputationalVideoPipeline.DEFAULT) {
+            motorolaSwitchEngine.compositor.stopEncoding()
+            motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
+        }
+        Log.i(TAG, "Computational video pipeline set to ${pipeline.displayName} (tier=$tier, was=${previousPipeline.displayName})")
     }
 
     val ultraRes50MStacker = UltraRes50MStacker(context)
@@ -1032,7 +1037,6 @@ class Camera2Engine(private val context: Context) {
 
         try {
             val previousLens = _selectedLens.value
-            logUwSwitchBefore(previousLens, lens)
             zoomContinuityController.onLensSwitchStarted(lens)
 
             if (preserveZoom) {
@@ -1056,7 +1060,6 @@ class Camera2Engine(private val context: Context) {
                 updatePreviewSettings()
                 motorolaSwitchEngine.updatePrimaryLens(lens, _availableLenses.value)
                 motorolaSwitchEngine.compositor.switchActiveStream(lens.lensType)
-                logUwSwitchAfter(previousLens, lens)
                 return
             }
 
@@ -1073,13 +1076,11 @@ class Camera2Engine(private val context: Context) {
                     inspectCapabilities(lens.cameraId)
                     switchWithWarmCamera(warmDevice, lens, switchStartNs)
                     motorolaSwitchEngine.compositor.switchActiveStream(lens.lensType, switchStartNs)
-                    logUwSwitchAfter(previousLens, lens)
                     return
                 }
                 // Target camera device not pre-warmed: seamlessly switch recording pipeline without stopping MediaRecorder
                 inspectCapabilities(lens.cameraId)
                 switchCameraDuringRecording(lens, switchStartNs)
-                logUwSwitchAfter(previousLens, lens)
                 return
             }
 
@@ -1100,7 +1101,6 @@ class Camera2Engine(private val context: Context) {
                     imageReaderJpeg = bundle.imageReaderJpeg
                     imageReaderYuv = bundle.imageReaderYuv
                     _isCameraReady.value = true
-                    activeSessionLens = lens
                     inspectCapabilities(lens.cameraId)
 
                     val activeJpegW = bundle.imageReaderJpeg?.width ?: 0
@@ -1145,9 +1145,9 @@ class Camera2Engine(private val context: Context) {
                         }
                     }
 
+                    activeSessionLens = lens
                     isSwitchingLens.set(false)
                     zoomContinuityController.onNewLensReady(lens)
-                    logUwSwitchAfter(previousLens, lens)
 
                     val elapsedMs = (System.nanoTime() - switchStartNs) / 1_000_000L
                     Log.i(TAG, "[INSTANT CONCURRENT SWITCH] Switched to ${lens.lensType} in ${elapsedMs}ms (0 sessions recreated)")
@@ -1169,38 +1169,6 @@ class Camera2Engine(private val context: Context) {
             isSwitchingLens.set(false)
             zoomContinuityController.onSwitchFailed()
             Log.e(TAG, "Failed to switch lens to ${lens.lensType}", t)
-        }
-    }
-
-    private fun logUwSwitchBefore(fromLens: LensInfo?, toLens: LensInfo) {
-        val isUwMainTransition = (fromLens?.lensType == LensType.ULTRAWIDE && toLens.lensType == LensType.WIDE) ||
-                                 (fromLens?.lensType == LensType.WIDE && toLens.lensType == LensType.ULTRAWIDE)
-        if (isUwMainTransition && fromLens != null) {
-            val beforeCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
-                uiZoom = currentZoom,
-                lensBaseRatio = fromLens.baseZoomRatio,
-                lensType = fromLens.lensType
-            )
-            val beforeFov = CameraOpticalCalibration.getEffectiveFov(fromLens, currentZoom)
-            Log.i(TAG, "[UW_SWITCH_DEBUG] [BEFORE SWITCH] mode=$currentMode, UI zoom=%.2fx, activeLens=%s, baseOpticalRatio=%.2fx, calculatedCrop=%.2fx, effectiveFov=%.1f°".format(
-                currentZoom, fromLens.lensType, fromLens.baseZoomRatio, beforeCrop, beforeFov
-            ))
-        }
-    }
-
-    private fun logUwSwitchAfter(fromLens: LensInfo?, toLens: LensInfo) {
-        val isUwMainTransition = (fromLens?.lensType == LensType.ULTRAWIDE && toLens.lensType == LensType.WIDE) ||
-                                 (fromLens?.lensType == LensType.WIDE && toLens.lensType == LensType.ULTRAWIDE)
-        if (isUwMainTransition) {
-            val afterCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
-                uiZoom = currentZoom,
-                lensBaseRatio = toLens.baseZoomRatio,
-                lensType = toLens.lensType
-            )
-            val afterFov = CameraOpticalCalibration.getEffectiveFov(toLens, currentZoom)
-            Log.i(TAG, "[UW_SWITCH_DEBUG] [AFTER SWITCH] mode=$currentMode, UI zoom=%.2fx, activeLens=%s, baseOpticalRatio=%.2fx, calculatedCrop=%.2fx, effectiveFov=%.1f°".format(
-                currentZoom, toLens.lensType, toLens.baseZoomRatio, afterCrop, afterFov
-            ))
         }
     }
 
@@ -2119,7 +2087,6 @@ class Camera2Engine(private val context: Context) {
                                 activeSessionLens = configuredLens
                                 isSwitchingLens.set(false)
                                 zoomContinuityController.onNewLensReady(configuredLens)
-                                motorolaSwitchEngine.updatePrimaryLens(configuredLens, _availableLenses.value)
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to start repeating preview request", e)
@@ -4883,6 +4850,9 @@ class Camera2Engine(private val context: Context) {
         videoTimerJob?.cancel()
         activeRecordingSurface = null
 
+        motorolaSwitchEngine.compositor.stopEncoding()
+        motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
+
         try {
             cinemaSoftwareRecorder.stopRecording()
         } catch (ignored: Throwable) {}
@@ -5250,6 +5220,10 @@ class Camera2Engine(private val context: Context) {
                         Log.w(TAG, "Computational GPU encoding could not initialize; falling back to direct Camera2 -> MediaRecorder")
                         motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
                     }
+                } else {
+                    // STD / Default pipeline: clean passthrough, ensure no compositor encoder surface is attached
+                    motorolaSwitchEngine.compositor.stopEncoding()
+                    motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
                 }
                 activeRecordingSurface = recorderSurface
                 val isCompPipelineActive = compSuccess
@@ -5287,6 +5261,9 @@ class Camera2Engine(private val context: Context) {
                                     if (!isSoftwareCinema) {
                                         mediaRecorder?.start()
                                     }
+                                    if (isCompPipelineActive) {
+                                        motorolaSwitchEngine.compositor.startEncoding()
+                                    }
                                     _isRecordingVideo.value = true
                                     isStartingRecording.set(false)
                                     startVideoTimer()
@@ -5300,6 +5277,7 @@ class Camera2Engine(private val context: Context) {
                                 Log.e(TAG, "[RECORDING_SESSION] Video capture session configuration failed (compActive=$isCompPipelineActive)")
                                 if (isCompPipelineActive) {
                                     Log.w(TAG, "Retrying recording session with standard direct pipeline fallback...")
+                                    motorolaSwitchEngine.compositor.stopEncoding()
                                     motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
                                     try {
                                         val fallbackRecordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
@@ -5396,7 +5374,8 @@ class Camera2Engine(private val context: Context) {
         val wasSoftwareCinema = isSoftwareCinemaRecording
         isSoftwareCinemaRecording = false
 
-        // Detach MediaCodec encoder surface from compositor immediately
+        // Stop compositor encoding immediately and detach MediaCodec encoder surface from compositor
+        motorolaSwitchEngine.compositor.stopEncoding()
         motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
 
         // Dispatch stop and resource cleanup to background IO so UI thread never freezes

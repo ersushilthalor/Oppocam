@@ -14,44 +14,68 @@ import java.util.concurrent.TimeUnit
 class ComputationalRecordingTimestampTest {
 
     /**
-     * Helper simulation of the monotonic timeline PTS generator used in CameraStreamCompositor.
+     * Helper simulation of the camera timestamp driven PTS generator used in CameraStreamCompositor.
      */
     private class SimulatedTimelineGenerator(private val fps: Int) {
-        var recordingStartNs: Long = 0L
+        var recordingFps: Int = fps
         var lastEncodedPtsNs: Long = -1L
+        var baseTimelinePtsNs: Long = 0L
+        var lastLensCameraTimestampNs: Long = 0L
         var lastActiveCameraTimestampNs: Long = 0L
         var lastEncodedLens: LensType? = null
 
-        fun start(nowNs: Long) {
-            recordingStartNs = nowNs
+        fun start(fps: Int = 30) {
+            recordingFps = fps
             lastEncodedPtsNs = -1L
+            baseTimelinePtsNs = 0L
+            lastLensCameraTimestampNs = 0L
             lastActiveCameraTimestampNs = 0L
             lastEncodedLens = null
         }
 
         fun computeNextEncoderPts(
-            nowNs: Long,
             currentActive: LensType,
             activeCamTimestamp: Long
         ): Long {
-            if (recordingStartNs <= 0L) {
-                recordingStartNs = nowNs
-            }
-
-            var ptsNs = nowNs - recordingStartNs
-            if (ptsNs < 0L) ptsNs = 0L
-
-            val expectedFrameIntervalNs = 1_000_000_000L / fps.toLong()
+            val currentFrameTs = if (activeCamTimestamp > 0L) activeCamTimestamp else System.nanoTime()
+            val expectedFrameIntervalNs = 1_000_000_000L / recordingFps.toLong()
             val minPacingStepNs = maxOf(1_000_000L, expectedFrameIntervalNs / 10L)
 
-            if (lastEncodedPtsNs >= 0L && ptsNs <= lastEncodedPtsNs) {
-                ptsNs = lastEncodedPtsNs + minPacingStepNs
+            val ptsNs: Long
+            if (lastEncodedPtsNs < 0L) {
+                // First accepted frame of recording: normalize timeline to 0
+                ptsNs = 0L
+                baseTimelinePtsNs = 0L
+                lastLensCameraTimestampNs = currentFrameTs
+                lastEncodedLens = currentActive
+            } else if (currentActive != lastEncodedLens) {
+                // Lens switch (Main <-> UltraWide):
+                // Seamlessly bridge timeline without discontinuities or clock jumps
+                val bridgeStep = expectedFrameIntervalNs
+                ptsNs = lastEncodedPtsNs + bridgeStep
+                baseTimelinePtsNs = ptsNs
+                lastLensCameraTimestampNs = currentFrameTs
+                lastEncodedLens = currentActive
+            } else if (lastLensCameraTimestampNs <= 0L) {
+                // Resumed after pause: bridge timeline smoothly
+                ptsNs = lastEncodedPtsNs + expectedFrameIntervalNs
+                lastLensCameraTimestampNs = currentFrameTs
+            } else {
+                // Normal frame on current lens:
+                val deltaNs = currentFrameTs - lastLensCameraTimestampNs
+                val stepNs = if (deltaNs <= 0L) {
+                    minPacingStepNs
+                } else if (deltaNs > 500_000_000L) {
+                    expectedFrameIntervalNs * 2L
+                } else {
+                    deltaNs
+                }
+                ptsNs = lastEncodedPtsNs + stepNs
+                lastLensCameraTimestampNs = currentFrameTs
             }
 
             lastEncodedPtsNs = ptsNs
-            lastActiveCameraTimestampNs = activeCamTimestamp
-            lastEncodedLens = currentActive
-
+            lastActiveCameraTimestampNs = currentFrameTs
             return ptsNs
         }
     }
@@ -65,8 +89,7 @@ class ComputationalRecordingTimestampTest {
     @Test
     fun testLensSwitchingProducesNoPtsDiscontinuity() {
         val generator = SimulatedTimelineGenerator(fps = 30)
-        val recordingStartNs = 1_000_000_000L
-        generator.start(recordingStartNs)
+        generator.start(30)
 
         val frameIntervalNs = TimeUnit.SECONDS.toNanos(1) / 30 // ~33.33ms
 
@@ -75,26 +98,26 @@ class ComputationalRecordingTimestampTest {
         // UltraWide camera driver timestamp starting at completely different epoch (e.g. 50,000s boottime)
         var uwDriverTimestampNs = 50_000_000_000_000L
 
-        var simulatedNowNs = recordingStartNs
         val generatedPtsList = mutableListOf<Long>()
 
         // 1. Record 60 frames on MAIN lens (~2 seconds)
         for (i in 0 until 60) {
-            simulatedNowNs += frameIntervalNs
-            mainDriverTimestampNs += frameIntervalNs
-            val pts = generator.computeNextEncoderPts(simulatedNowNs, LensType.WIDE, mainDriverTimestampNs)
+            val pts = generator.computeNextEncoderPts(LensType.WIDE, mainDriverTimestampNs)
             generatedPtsList.add(pts)
+            mainDriverTimestampNs += frameIntervalNs
         }
+
+        // First frame must be exactly 0
+        assertEquals("First frame must be normalized to 0", 0L, generatedPtsList.first())
 
         val lastMainPts = generatedPtsList.last()
 
         // 2. Switch to ULTRAWIDE lens and record 60 frames (~2 seconds)
         // Notice: uwDriverTimestampNs is ~50,000 seconds away from mainDriverTimestampNs!
         for (i in 0 until 60) {
-            simulatedNowNs += frameIntervalNs
-            uwDriverTimestampNs += frameIntervalNs
-            val pts = generator.computeNextEncoderPts(simulatedNowNs, LensType.ULTRAWIDE, uwDriverTimestampNs)
+            val pts = generator.computeNextEncoderPts(LensType.ULTRAWIDE, uwDriverTimestampNs)
             generatedPtsList.add(pts)
+            uwDriverTimestampNs += frameIntervalNs
         }
 
         val firstUwPts = generatedPtsList[60]
@@ -111,10 +134,9 @@ class ComputationalRecordingTimestampTest {
         // 3. Switch BACK to MAIN lens and record 60 frames (~2 seconds)
         val beforeSwitchBackPts = generatedPtsList.last()
         for (i in 0 until 60) {
-            simulatedNowNs += frameIntervalNs
-            mainDriverTimestampNs += frameIntervalNs
-            val pts = generator.computeNextEncoderPts(simulatedNowNs, LensType.WIDE, mainDriverTimestampNs)
+            val pts = generator.computeNextEncoderPts(LensType.WIDE, mainDriverTimestampNs)
             generatedPtsList.add(pts)
+            mainDriverTimestampNs += frameIntervalNs
         }
         val firstMainSwitchBackPts = generatedPtsList[120]
         val deltaSwitchBackNs = firstMainSwitchBackPts - beforeSwitchBackPts
@@ -139,19 +161,16 @@ class ComputationalRecordingTimestampTest {
     @Test
     fun testSixSecondRecordingProducesSixSecondDuration() {
         val generator = SimulatedTimelineGenerator(fps = 30)
-        val recordingStartNs = System.nanoTime()
-        generator.start(recordingStartNs)
+        generator.start(30)
 
         val frameIntervalNs = 1_000_000_000L / 30L
         val totalFrames = 180 // 6 seconds at 30 FPS
-        var currentClockNs = recordingStartNs
         var finalPtsNs = 0L
 
         var activeLens = LensType.WIDE
         var rawDriverNs = 200_000_000_000L
 
         for (frame in 0 until totalFrames) {
-            currentClockNs += frameIntervalNs
             // Simulate switching lenses every 60 frames (2 seconds)
             if (frame == 60) {
                 activeLens = LensType.ULTRAWIDE
@@ -159,17 +178,16 @@ class ComputationalRecordingTimestampTest {
             } else if (frame == 120) {
                 activeLens = LensType.WIDE
                 rawDriverNs = 204_000_000_000L
-            } else {
-                rawDriverNs += frameIntervalNs
             }
 
-            finalPtsNs = generator.computeNextEncoderPts(currentClockNs, activeLens, rawDriverNs)
+            finalPtsNs = generator.computeNextEncoderPts(activeLens, rawDriverNs)
+            rawDriverNs += frameIntervalNs
         }
 
         val durationSeconds = finalPtsNs.toDouble() / 1_000_000_000.0
         assertEquals(
-            "Duration of 180 frames at 30fps must be exactly 6.0 seconds",
-            6.0,
+            "Duration of 180 frames at 30fps must be approximately 6.0 seconds",
+            (179.0 * frameIntervalNs) / 1_000_000_000.0,
             durationSeconds,
             0.05
         )
@@ -181,15 +199,16 @@ class ComputationalRecordingTimestampTest {
     @Test
     fun testStrictMonotonicityUnderZeroOrBackwardClockJitter() {
         val generator = SimulatedTimelineGenerator(fps = 30)
-        val startNs = 5_000_000_000L
-        generator.start(startNs)
+        generator.start(30)
 
+        val baseTs = 100_000_000_000L
         // Multiple frames arriving with zero or slightly jittered clock advance
-        val pts1 = generator.computeNextEncoderPts(startNs + 10_000_000L, LensType.WIDE, 100L)
-        val pts2 = generator.computeNextEncoderPts(startNs + 10_000_000L, LensType.WIDE, 101L) // same nowNs!
-        val pts3 = generator.computeNextEncoderPts(startNs + 9_000_000L, LensType.WIDE, 102L)  // backward clock jitter!
-        val pts4 = generator.computeNextEncoderPts(startNs + 40_000_000L, LensType.WIDE, 103L)
+        val pts1 = generator.computeNextEncoderPts(LensType.WIDE, baseTs)
+        val pts2 = generator.computeNextEncoderPts(LensType.WIDE, baseTs) // duplicate timestamp!
+        val pts3 = generator.computeNextEncoderPts(LensType.WIDE, baseTs - 5_000_000L) // backward clock jitter!
+        val pts4 = generator.computeNextEncoderPts(LensType.WIDE, baseTs + 33_333_333L)
 
+        assertEquals("First frame normalized to 0", 0L, pts1)
         assertTrue("pts2 must be strictly greater than pts1", pts2 > pts1)
         assertTrue("pts3 must be strictly greater than pts2 despite backward clock jitter", pts3 > pts2)
         assertTrue("pts4 must be strictly greater than pts3", pts4 > pts3)
