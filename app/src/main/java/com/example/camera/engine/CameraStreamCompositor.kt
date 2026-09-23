@@ -1100,33 +1100,83 @@ class CameraStreamCompositor {
      */
     fun setEncoderSurface(surface: Surface?, width: Int, height: Int) {
         glHandler?.post {
-            val display = eglDisplay
-            val ctx = eglContext
-            val pbuf = dummyPbuffer
-            val oldEnc = encoderEglSurface
+            setEncoderSurfaceInternal(surface, width, height)
+        }
+    }
 
-            if (oldEnc != null && display != null && ctx != null && pbuf != null) {
-                try {
-                    EGL14.eglMakeCurrent(display, pbuf, pbuf, ctx)
-                    EGL14.eglDestroySurface(display, oldEnc)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error destroying old encoder EGL surface", e)
-                }
-                encoderEglSurface = null
+    /**
+     * Attaches MediaCodec encoder Surface synchronously with verification.
+     * Returns true if the EGL window surface was successfully created, false otherwise.
+     * Enables automatic fail-safe fallback to standard direct recording if GPU encoder surface creation fails.
+     */
+    fun attachEncoderSurface(surface: Surface?, width: Int, height: Int, timeoutMs: Long = 400L): Boolean {
+        if (surface == null || !surface.isValid) {
+            setEncoderSurface(null, 0, 0)
+            return false
+        }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var success = false
+        val handler = glHandler
+        if (handler == null) {
+            Log.e(TAG, "Cannot attach encoder surface: GL handler is null")
+            return false
+        }
+        handler.post {
+            try {
+                setEncoderSurfaceInternal(surface, width, height)
+                success = (encoderEglSurface != null && encoderEglSurface != EGL14.EGL_NO_SURFACE)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed in attachEncoderSurface", e)
+                success = false
+            } finally {
+                latch.countDown()
             }
+        }
+        try {
+            val completed = latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!completed) {
+                Log.w(TAG, "attachEncoderSurface timed out after ${timeoutMs}ms")
+            }
+        } catch (e: InterruptedException) {
+            Log.w(TAG, "Interrupted while waiting for attachEncoderSurface", e)
+        }
+        return success
+    }
 
-            encoderTargetSurface = surface
-            encoderWidth = if (width > 0) width else 1920
-            encoderHeight = if (height > 0) height else 1080
+    private fun setEncoderSurfaceInternal(surface: Surface?, width: Int, height: Int) {
+        val display = eglDisplay
+        val ctx = eglContext
+        val pbuf = dummyPbuffer
+        val oldEnc = encoderEglSurface
 
-            if (surface != null && surface.isValid && display != null && eglConfig != null) {
-                val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
-                try {
-                    encoderEglSurface = EGL14.eglCreateWindowSurface(display, eglConfig, surface, surfaceAttribs, 0)
+        if (oldEnc != null && display != null && ctx != null && pbuf != null) {
+            try {
+                EGL14.eglMakeCurrent(display, pbuf, pbuf, ctx)
+                EGL14.eglDestroySurface(display, oldEnc)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error destroying old encoder EGL surface", e)
+            }
+            encoderEglSurface = null
+        }
+
+        encoderTargetSurface = surface
+        encoderWidth = if (width > 0) width else 1920
+        encoderHeight = if (height > 0) height else 1080
+
+        if (surface != null && surface.isValid && display != null && eglConfig != null) {
+            val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
+            try {
+                val created = EGL14.eglCreateWindowSurface(display, eglConfig, surface, surfaceAttribs, 0)
+                if (created != null && created != EGL14.EGL_NO_SURFACE) {
+                    encoderEglSurface = created
                     Log.i(TAG, "Encoder EGL Surface attached ($encoderWidth x $encoderHeight)")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to create encoder EGL window surface", e)
+                } else {
+                    Log.e(TAG, "eglCreateWindowSurface returned EGL_NO_SURFACE for encoder")
+                    encoderEglSurface = null
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create encoder EGL window surface", e)
+                encoderEglSurface = null
             }
         }
     }

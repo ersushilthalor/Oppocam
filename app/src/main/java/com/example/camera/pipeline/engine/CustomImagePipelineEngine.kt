@@ -113,6 +113,10 @@ class CustomImagePipelineEngine(private val context: Context) {
 
         val outPixels = IntArray(width * height)
 
+        // Select colorimetry: HD/UHD resolutions (>= 720p) strictly use ITU-R BT.709
+        // This eliminates magenta/purple casts caused by BT.601 green-channel underestimation
+        val isHd = width >= 1280 || height >= 720
+
         for (y in 0 until height) {
             val yOffset = y * yRowStride
             val uvOffset = (y shr 1) * uvRowStride
@@ -125,10 +129,21 @@ class CustomImagePipelineEngine(private val context: Context) {
                 val uVal = (uBuffer.get(uvIndex).toInt() and 0xFF) - 128
                 val vVal = (vBuffer.get(uvIndex).toInt() and 0xFF) - 128
 
-                // ITU-R BT.601 YUV to sRGB standard matrix
-                var r = (yVal + 1.402f * vVal).toInt()
-                var g = (yVal - 0.344136f * uVal - 0.714136f * vVal).toInt()
-                var b = (yVal + 1.772f * uVal).toInt()
+                var r: Int
+                var g: Int
+                var b: Int
+
+                if (isHd) {
+                    // ITU-R BT.709 Color Space (HD/UHD camera streams)
+                    r = (yVal + 1.5748f * vVal).toInt()
+                    g = (yVal - 0.1873f * uVal - 0.4681f * vVal).toInt()
+                    b = (yVal + 1.8556f * uVal).toInt()
+                } else {
+                    // ITU-R BT.601 (SD legacy)
+                    r = (yVal + 1.402f * vVal).toInt()
+                    g = (yVal - 0.344136f * uVal - 0.714136f * vVal).toInt()
+                    b = (yVal + 1.772f * uVal).toInt()
+                }
 
                 r = r.coerceIn(0, 255)
                 g = g.coerceIn(0, 255)

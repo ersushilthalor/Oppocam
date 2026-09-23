@@ -1,39 +1,37 @@
 package com.example.camera.engine.hdr
 
-import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
- * Flagship Linear Radiance Reconstruction & Fusion Engine.
+ * Natural Smartphone-Style Computational HDR Fusion Engine.
  *
- * Responsibilities:
- * 1. Strict linearized image space processing: converts gamma-encoded sRGB into linear physical scene radiance.
- * 2. Normalizes scene dynamic range using the ACTUAL hardware exposure product
- *    (ISO * exposure time) for each frame, ensuring exact physical radiance alignment.
- * 3. Incorporates motion confidence mask: guarantees zero ghosting by smoothly falling back to
- *    the reference frame on moving subjects.
- * 4. Merges highlight radiance from the short exposure and shadow SNR from the long exposure
- *    without producing edge halos, seams, or artificial steps.
- * 5. Pre-computed high-resolution LUTs for both sRGB-to-Linear and Linear-to-sRGB transformations,
- *    eliminating expensive pow() invocations on multi-megapixel frames.
+ * Designed specifically for ISP-processed camera frames:
+ * 1. Reference Frame Preservation: The base frame (0 EV) defines the natural scene exposure,
+ *    white balance, skin tones, and tone curve. Midtones are preserved with 100% fidelity.
+ * 2. Conservative Highlight Recovery: The short exposure frame (-EV) is ONLY blended into
+ *    regions where the base frame approaches or enters clipping (highlights > 82% luminance).
+ *    Instead of physical radiance multiplication (which causes color ratio explosions, purple fringes,
+ *    and black edge artifacts), it seamlessly maps unclipped short-frame detail and chromaticity.
+ * 3. Conservative Shadow Noise Reduction: Long exposure (+EV) is gently applied only in deep shadows
+ *    (luminance < 18%) when static, without lifting the black point.
+ * 4. Border Safety Margin: Edge feathering smoothly tapers secondary frame weights to 0 at image boundaries,
+ *    completely eliminating edge tearing, purple borders, and black margins.
  */
 class HdrRadianceFusion {
 
     companion object {
-        // Pre-computed sRGB-to-Linear conversion LUT (256 entries) for zero-latency linear color math
-        val SRGB_TO_LINEAR_LUT = FloatArray(256) { i ->
-            val norm = i / 255.0f
-            norm.pow(2.2f)
+        // Fast smoothstep interpolation
+        fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+            val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+            return t * t * (3f - 2f * t)
         }
 
-        // Fast high-precision Linear-to-sRGB LUT (4096 steps) eliminating millions of pow(1/2.2) calls
         private const val LUT_SIZE = 4095
         val LINEAR_TO_SRGB_BYTE_LUT = IntArray(LUT_SIZE + 1) { i ->
             val norm = i.toFloat() / LUT_SIZE.toFloat()
-            (norm.pow(1.0f / 2.2f) * 255.0f).roundToInt().coerceIn(0, 255)
+            (norm * 255.0f).roundToInt().coerceIn(0, 255)
         }
 
         @JvmStatic
@@ -41,26 +39,13 @@ class HdrRadianceFusion {
             val idx = (linearVal.coerceIn(0f, 1f) * LUT_SIZE).roundToInt()
             return LINEAR_TO_SRGB_BYTE_LUT[idx]
         }
-
-        // Fast smoothstep interpolation
-        fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
-            val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
-            return t * t * (3f - 2f * t)
-        }
     }
 
     /**
-     * Fuses linear radiance for a single pixel across the bracket.
+     * Fuses an ISP-processed pixel conservatively.
+     * Preserves natural ISP white balance, exposure, and tone curve.
      *
-     * @param baseR, baseG, baseB Base frame color (0..255)
-     * @param shortR, shortG, shortB Aligned short frame color (0..255) or null if 1-frame/no-short
-     * @param shortEvOffset EV offset of short frame (e.g. -1.7f)
-     * @param longR, longG, longB Aligned long frame color (0..255) or null if 2-frame/no-long
-     * @param longEvOffset EV offset of long frame (e.g. +1.4f)
-     * @param motionConfidence Motion score [0.0 = static, 1.0 = moving]
-     * @param outRgb FloatArray(3) receiving linear fused RGB radiance
-     * @param shortExposureRatio Actual exposure ratio (baseExposureProduct / shortExposureProduct) if available
-     * @param longExposureRatio Actual exposure ratio (baseExposureProduct / longExposureProduct) if available
+     * @param edgeFeather Spatial feathering [0.0 at frame border, 1.0 inside safe margin]
      */
     fun fusePixelLinear(
         baseR: Int, baseG: Int, baseB: Int,
@@ -71,70 +56,69 @@ class HdrRadianceFusion {
         motionConfidence: Float,
         outRgb: FloatArray,
         shortExposureRatio: Float? = null,
-        longExposureRatio: Float? = null
+        longExposureRatio: Float? = null,
+        edgeFeather: Float = 1.0f
     ) {
-        val linBaseR = SRGB_TO_LINEAR_LUT[baseR.coerceIn(0, 255)]
-        val linBaseG = SRGB_TO_LINEAR_LUT[baseG.coerceIn(0, 255)]
-        val linBaseB = SRGB_TO_LINEAR_LUT[baseB.coerceIn(0, 255)]
-        val baseLuma = 0.2126f * linBaseR + 0.7152f * linBaseG + 0.0722f * linBaseB
+        val bR = baseR.coerceIn(0, 255) / 255.0f
+        val bG = baseG.coerceIn(0, 255) / 255.0f
+        val bB = baseB.coerceIn(0, 255) / 255.0f
+        val baseLuma = 0.2126f * bR + 0.7152f * bG + 0.0722f * bB
+        val maxChannel = max(bR, max(bG, bB))
 
-        // Base frame midtone weighting curve: peaks around 0.45, rolls off softly
-        val baseWeight = exp(-((baseLuma - 0.45f) * (baseLuma - 0.45f)) / 0.18f)
+        // Default: 100% pristine reference frame
+        var finalR = bR
+        var finalG = bG
+        var finalB = bB
 
-        var totalWeight = baseWeight
-        var fusedR = linBaseR * baseWeight
-        var fusedG = linBaseG * baseWeight
-        var fusedB = linBaseB * baseWeight
+        val staticFactor = (1.0f - motionConfidence).coerceIn(0f, 1f) * edgeFeather.coerceIn(0f, 1f)
 
-        // Ghost suppression: moving regions fall back smoothly to the reference base frame
-        val staticWeightMultiplier = (1.0f - motionConfidence).coerceIn(0f, 1f)
+        // 1. Conservative Highlight Recovery from Short Exposure
+        // ONLY active where base frame is near or in saturation (maxChannel > 0.82)
+        if (shortR != null && shortG != null && shortB != null && staticFactor > 0.15f && maxChannel > 0.82f) {
+            val sR = shortR.coerceIn(0, 255) / 255.0f
+            val sG = shortG.coerceIn(0, 255) / 255.0f
+            val sB = shortB.coerceIn(0, 255) / 255.0f
+            val shortLuma = 0.2126f * sR + 0.7152f * sG + 0.0722f * sB
 
-        // 1. Fuse Short Exposure (Highlight Recovery)
-        if (shortR != null && shortG != null && shortB != null) {
-            val linShortR = SRGB_TO_LINEAR_LUT[shortR.coerceIn(0, 255)]
-            val linShortG = SRGB_TO_LINEAR_LUT[shortG.coerceIn(0, 255)]
-            val linShortB = SRGB_TO_LINEAR_LUT[shortB.coerceIn(0, 255)]
+            // Blend weight ramps up smoothly as base frame approaches clipping (0.82 -> 0.98)
+            val highlightBlend = smoothstep(0.82f, 0.98f, maxChannel) * staticFactor
 
-            // Radiance scale: exact physical exposure ratio or calibrated 2^(-evOffset)
-            val radianceScale = shortExposureRatio ?: 2.0f.pow(-shortEvOffset)
-            val radShortR = linShortR * radianceScale
-            val radShortG = linShortG * radianceScale
-            val radShortB = linShortB * radianceScale
+            if (highlightBlend > 0.01f) {
+                // Short frame highlight normalization:
+                // Rather than multiplying by 4x or 8x (which destroys color balance and causes purple fringing),
+                // scale the unclipped short frame detail so its knee smoothly connects with the base threshold.
+                // This recovers cloud textures and sky blue without purple halos or tone mismatch.
+                val kneeScale = 0.82f / max(0.20f, shortLuma)
+                val targetR = (sR * kneeScale).coerceIn(0f, 1f)
+                val targetG = (sG * kneeScale).coerceIn(0f, 1f)
+                val targetB = (sB * kneeScale).coerceIn(0f, 1f)
 
-            // Short weight: active where base frame is near or above saturation (baseLuma > 0.50)
-            val highlightBlend = smoothstep(0.50f, 0.90f, baseLuma)
-            val shortWeight = highlightBlend * 2.5f * (0.35f + 0.65f * staticWeightMultiplier)
-
-            fusedR += radShortR * shortWeight
-            fusedG += radShortG * shortWeight
-            fusedB += radShortB * shortWeight
-            totalWeight += shortWeight
+                // Blend chromaticity & detail smoothly into the clipped highlight
+                finalR = bR * (1.0f - highlightBlend) + targetR * highlightBlend
+                finalG = bG * (1.0f - highlightBlend) + targetG * highlightBlend
+                finalB = bB * (1.0f - highlightBlend) + targetB * highlightBlend
+            }
         }
 
-        // 2. Fuse Long Exposure (Shadow Detail & Noise Reduction)
-        if (longR != null && longG != null && longB != null && staticWeightMultiplier > 0.1f) {
-            val linLongR = SRGB_TO_LINEAR_LUT[longR.coerceIn(0, 255)]
-            val linLongG = SRGB_TO_LINEAR_LUT[longG.coerceIn(0, 255)]
-            val linLongB = SRGB_TO_LINEAR_LUT[longB.coerceIn(0, 255)]
+        // 2. Conservative Shadow Noise Reduction from Long Exposure
+        // ONLY active in deep shadows (baseLuma < 0.18) on strictly static pixels
+        if (longR != null && longG != null && longB != null && staticFactor > 0.35f && baseLuma in 0.02f..0.18f) {
+            val lR = longR.coerceIn(0, 255) / 255.0f
+            val lG = longG.coerceIn(0, 255) / 255.0f
+            val lB = longB.coerceIn(0, 255) / 255.0f
 
-            val radianceScale = longExposureRatio ?: 2.0f.pow(-longEvOffset)
-            val radLongR = linLongR * radianceScale
-            val radLongG = linLongG * radianceScale
-            val radLongB = linLongB * radianceScale
-
-            // Long weight: active in deep shadows (baseLuma < 0.28) and strictly suppressed on motion
-            val shadowBlend = 1.0f - smoothstep(0.04f, 0.28f, baseLuma)
-            val longWeight = shadowBlend * 1.8f * staticWeightMultiplier
-
-            fusedR += radLongR * longWeight
-            fusedG += radLongG * longWeight
-            fusedB += radLongB * longWeight
-            totalWeight += longWeight
+            // Shadow weight: gentle blend (up to 25%) to suppress shadow noise without lifting black level
+            val shadowBlend = (1.0f - smoothstep(0.02f, 0.18f, baseLuma)) * 0.25f * staticFactor
+            if (shadowBlend > 0.01f) {
+                finalR = finalR * (1.0f - shadowBlend) + (lR * 0.5f).coerceIn(0f, 1f) * shadowBlend
+                finalG = finalG * (1.0f - shadowBlend) + (lG * 0.5f).coerceIn(0f, 1f) * shadowBlend
+                finalB = finalB * (1.0f - shadowBlend) + (lB * 0.5f).coerceIn(0f, 1f) * shadowBlend
+            }
         }
 
-        val invTotalWeight = if (totalWeight > 1e-6f) 1.0f / totalWeight else 1.0f
-        outRgb[0] = fusedR * invTotalWeight
-        outRgb[1] = fusedG * invTotalWeight
-        outRgb[2] = fusedB * invTotalWeight
+        outRgb[0] = finalR.coerceIn(0f, 1f)
+        outRgb[1] = finalG.coerceIn(0f, 1f)
+        outRgb[2] = finalB.coerceIn(0f, 1f)
     }
 }
+

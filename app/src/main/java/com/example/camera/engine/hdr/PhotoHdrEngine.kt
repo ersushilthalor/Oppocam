@@ -22,6 +22,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
  * Flagship Computational Photo HDR Engine for Oppocam.
@@ -147,11 +148,16 @@ class PhotoHdrEngine(private val context: Context) {
             val shortAligned = alignedFrames.firstOrNull { it.role == FrameRole.SHORT_HIGHLIGHT }
             val longAligned = alignedFrames.firstOrNull { it.role == FrameRole.LONG_SHADOW }
 
-            // If no secondary frames could be aligned, return pristine base frame
-            if (shortAligned == null && longAligned == null) {
-                Log.w(TAG, "No secondary frames successfully aligned, returning base frame")
+            val isShortUsable = shortAligned != null && shortAligned.alignment.isAligned && shortAligned.alignment.confidence >= 0.65f
+            val isLongUsable = longAligned != null && longAligned.alignment.isAligned && longAligned.alignment.confidence >= 0.70f
+
+            // If HDR alignment confidence is poor, automatically fall back to the reference base frame
+            if (!isShortUsable && !isLongUsable) {
+                Log.i(TAG, "HDR alignment confidence is below threshold; falling back to pristine reference frame")
                 val resultBytes = baseFrame.jpegBytes
                 baseBmp.recycle()
+                shortAligned?.bitmap?.recycle()
+                longAligned?.bitmap?.recycle()
                 return@withContext resultBytes
             }
 
@@ -161,10 +167,10 @@ class PhotoHdrEngine(private val context: Context) {
             val sliceHeight = (height + numCores - 1) / numCores
 
             // Compute maximum displacement margin for safe secondary pixel sampling
-            val maxShortDisp = if (shortAligned != null) {
+            val maxShortDisp = if (isShortUsable && shortAligned != null) {
                 (max(abs(shortAligned.alignment.shiftX), abs(shortAligned.alignment.shiftY)) + 32).toInt()
             } else 0
-            val maxLongDisp = if (longAligned != null) {
+            val maxLongDisp = if (isLongUsable && longAligned != null) {
                 (max(abs(longAligned.alignment.shiftX), abs(longAligned.alignment.shiftY)) + 32).toInt()
             } else 0
             val maxSafetyMargin = max(maxShortDisp, maxLongDisp).coerceIn(16, 128)
@@ -185,13 +191,13 @@ class PhotoHdrEngine(private val context: Context) {
                         val secEndY = (sliceEndY + maxSafetyMargin).coerceAtMost(height)
                         val secH = secEndY - secStartY
 
-                        val shortSlicePixels = if (shortAligned != null && secH > 0) {
+                        val shortSlicePixels = if (isShortUsable && shortAligned != null && secH > 0) {
                             val buf = IntArray(width * secH)
                             shortAligned.bitmap.getPixels(buf, 0, width, 0, secStartY, width, secH)
                             buf
                         } else null
 
-                        val longSlicePixels = if (longAligned != null && secH > 0) {
+                        val longSlicePixels = if (isLongUsable && longAligned != null && secH > 0) {
                             val buf = IntArray(width * secH)
                             longAligned.bitmap.getPixels(buf, 0, width, 0, secStartY, width, secH)
                             buf
@@ -208,9 +214,6 @@ class PhotoHdrEngine(private val context: Context) {
                             for (x in 0 until width) {
                                 val normX = x.toFloat() / (width - 1).toFloat()
 
-                                // Smooth bilinear interpolation of local base illumination
-                                val localIllumination = sampleBilinearLuma(localBaseLumaMap, LUMA_MAP_W, LUMA_MAP_H, normX, normY)
-
                                 val baseC = baseSlicePixels[rowOffset + x]
                                 val baseR = (baseC shr 16) and 0xFF
                                 val baseG = (baseC shr 8) and 0xFF
@@ -222,7 +225,7 @@ class PhotoHdrEngine(private val context: Context) {
                                 var sB: Int? = null
                                 var shortMotion = 0f
 
-                                if (shortAligned != null && shortSlicePixels != null) {
+                                if (isShortUsable && shortAligned != null && shortSlicePixels != null) {
                                     val (dispX, dispY) = shortAligned.alignment.getTotalDisplacement(normX, normY)
                                     val tx = (x - dispX).toInt()
                                     val ty = (y - dispY).toInt()
@@ -235,7 +238,7 @@ class PhotoHdrEngine(private val context: Context) {
                                         sB = sc and 0xFF
                                         shortMotion = shortAligned.motionMask.sampleBilinear(normX, normY)
                                     } else {
-                                        // Outside secondary frame boundary -> treat as motion fallback to base frame
+                                        // Outside secondary frame boundary -> fallback to base frame
                                         shortMotion = 1.0f
                                     }
                                 }
@@ -246,7 +249,7 @@ class PhotoHdrEngine(private val context: Context) {
                                 var lB: Int? = null
                                 var longMotion = 0f
 
-                                if (longAligned != null && longSlicePixels != null) {
+                                if (isLongUsable && longAligned != null && longSlicePixels != null) {
                                     val (dispX, dispY) = longAligned.alignment.getTotalDisplacement(normX, normY)
                                     val tx = (x - dispX).toInt()
                                     val ty = (y - dispY).toInt()
@@ -265,7 +268,11 @@ class PhotoHdrEngine(private val context: Context) {
 
                                 val combinedMotion = max(shortMotion, longMotion)
 
-                                // A. Linear Radiance Fusion with exact physical exposure ratios
+                                // Spatial edge feathering to guarantee zero border tearing or purple/black edge bands
+                                val edgeDist = min(x, min(width - 1 - x, min(y, height - 1 - y)))
+                                val edgeFeather = (edgeDist.toFloat() / 48f).coerceIn(0f, 1f)
+
+                                // A. Conservative Natural Fusion on ISP-processed frames
                                 radianceFusion.fusePixelLinear(
                                     baseR = baseR, baseG = baseG, baseB = baseB,
                                     shortR = sR, shortG = sG, shortB = sB,
@@ -275,34 +282,25 @@ class PhotoHdrEngine(private val context: Context) {
                                     motionConfidence = combinedMotion,
                                     outRgb = fusedRgb,
                                     shortExposureRatio = shortAligned?.exposureRatio,
-                                    longExposureRatio = longAligned?.exposureRatio
+                                    longExposureRatio = longAligned?.exposureRatio,
+                                    edgeFeather = edgeFeather
                                 )
 
-                                // B. Highlight Recovery
-                                highlightRecovery.recoverHighlights(fusedRgb, sR, sG, sB)
-
-                                // C. Shadow Recovery
-                                shadowRecovery.recoverShadows(fusedRgb, 1.15f)
-
-                                // D. Edge-Aware Local Tone Mapping
-                                toneMapper.toneMapPixel(fusedRgb, localIllumination)
-
-                                // E. Flagship Natural Color Rendering
+                                // B. Skin tone protection and natural highlight roll-off
                                 colorRenderer.renderColor(fusedRgb)
 
-                                // F. Adaptive Detail Sharpening
-                                if (x in 1 until (width - 1) && localY in 1 until (curSliceH - 1)) {
-                                    neighborLumas[0] = ((baseSlicePixels[rowOffset - width + x] shr 8) and 0xFF) * (1f / 255f) // North
-                                    neighborLumas[1] = ((baseSlicePixels[rowOffset + width + x] shr 8) and 0xFF) * (1f / 255f) // South
-                                    neighborLumas[2] = ((baseSlicePixels[rowOffset + x + 1] shr 8) and 0xFF) * (1f / 255f)     // East
-                                    neighborLumas[3] = ((baseSlicePixels[rowOffset + x - 1] shr 8) and 0xFF) * (1f / 255f)     // West
+                                // C. Subtle micro-detail preservation (never crunchy or haloed)
+                                if (x in 2 until (width - 2) && localY in 2 until (curSliceH - 2)) {
+                                    neighborLumas[0] = ((baseSlicePixels[rowOffset - width + x] shr 8) and 0xFF) * (1f / 255f)
+                                    neighborLumas[1] = ((baseSlicePixels[rowOffset + width + x] shr 8) and 0xFF) * (1f / 255f)
+                                    neighborLumas[2] = ((baseSlicePixels[rowOffset + x + 1] shr 8) and 0xFF) * (1f / 255f)
+                                    neighborLumas[3] = ((baseSlicePixels[rowOffset + x - 1] shr 8) and 0xFF) * (1f / 255f)
                                     detailProcessor.processDetail(fusedRgb, neighborLumas, baseFrame.iso)
                                 }
 
-                                // Fast Gamma Conversion via LUT (zero pow() overhead!)
-                                val outR = HdrRadianceFusion.linearToSrgbByte(fusedRgb[0])
-                                val outG = HdrRadianceFusion.linearToSrgbByte(fusedRgb[1])
-                                val outB = HdrRadianceFusion.linearToSrgbByte(fusedRgb[2])
+                                val outR = (fusedRgb[0] * 255f).roundToInt().coerceIn(0, 255)
+                                val outG = (fusedRgb[1] * 255f).roundToInt().coerceIn(0, 255)
+                                val outB = (fusedRgb[2] * 255f).roundToInt().coerceIn(0, 255)
 
                                 baseSlicePixels[rowOffset + x] = (0xFF shl 24) or (outR shl 16) or (outG shl 8) or outB
                             }

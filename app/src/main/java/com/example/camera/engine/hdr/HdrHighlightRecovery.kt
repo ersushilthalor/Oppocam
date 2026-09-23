@@ -40,9 +40,9 @@ class HdrHighlightRecovery {
 
         // 1. Chromaticity Reconstruction from Short Exposure
         if (shortR != null && shortG != null && shortB != null && luma >= CLIPPING_THRESHOLD) {
-            val linShortR = HdrRadianceFusion.SRGB_TO_LINEAR_LUT[shortR.coerceIn(0, 255)]
-            val linShortG = HdrRadianceFusion.SRGB_TO_LINEAR_LUT[shortG.coerceIn(0, 255)]
-            val linShortB = HdrRadianceFusion.SRGB_TO_LINEAR_LUT[shortB.coerceIn(0, 255)]
+            val linShortR = shortR.coerceIn(0, 255) / 255.0f
+            val linShortG = shortG.coerceIn(0, 255) / 255.0f
+            val linShortB = shortB.coerceIn(0, 255) / 255.0f
             val shortLuma = 0.2126f * linShortR + 0.7152f * linShortG + 0.0722f * linShortB
 
             if (shortLuma > 1e-4f) {

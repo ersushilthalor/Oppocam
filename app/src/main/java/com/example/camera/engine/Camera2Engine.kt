@@ -1809,12 +1809,15 @@ class Camera2Engine(private val context: Context) {
         // Seamless lens switch during active video recording (Front, Back, Ultra-Wide)
         val isRecording = _isRecordingVideo.value
         val recSurface = activeRecordingSurface
-        if (isRecording && recSurface != null && recSurface.isValid) {
+        val isCompActive = (_computationalVideoPipeline.value != ComputationalVideoPipeline.DEFAULT)
+        if (isRecording && ((recSurface != null && recSurface.isValid) || isCompActive)) {
             try {
                 val template = CameraDevice.TEMPLATE_RECORD
                 previewRequestBuilder = camera.createCaptureRequest(template).apply {
                     addTarget(previewSurf)
-                    addTarget(recSurface)
+                    if (!isCompActive && recSurface != null && recSurface.isValid) {
+                        addTarget(recSurface)
+                    }
                     applyCommonSettings(this)
                     set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
                 }
@@ -1823,7 +1826,7 @@ class Camera2Engine(private val context: Context) {
                 createRecordingCaptureSession(
                     camera = camera,
                     previewSurface = previewSurf,
-                    recorderSurface = recSurface,
+                    recorderSurface = if (isCompActive) null else recSurface,
                     is10Bit = is10BitMode,
                     callback = object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
@@ -4633,13 +4636,14 @@ class Camera2Engine(private val context: Context) {
     private fun createRecordingCaptureSession(
         camera: CameraDevice,
         previewSurface: Surface,
-        recorderSurface: Surface,
+        recorderSurface: Surface?,
         is10Bit: Boolean,
         callback: CameraCaptureSession.StateCallback
     ) {
         val executor = Executor { command -> backgroundHandler?.post(command) ?: command.run() }
+        val hasSeparateRecorder = (recorderSurface != null && recorderSurface.isValid && recorderSurface != previewSurface)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && is10Bit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && is10Bit && hasSeparateRecorder) {
             try {
                 val chars = getCharacteristics(camera.id)
                 val dynamicProfiles = chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
@@ -4652,7 +4656,7 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 if (targetProfile != null) {
-                    val recorderConfig = OutputConfiguration(recorderSurface).apply {
+                    val recorderConfig = OutputConfiguration(recorderSurface!!).apply {
                         dynamicRangeProfile = targetProfile
                     }
                     val previewConfig = OutputConfiguration(previewSurface)
@@ -4671,23 +4675,34 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
+        val outputConfigs = if (hasSeparateRecorder) {
+            listOf(OutputConfiguration(previewSurface), OutputConfiguration(recorderSurface!!))
+        } else {
+            listOf(OutputConfiguration(previewSurface))
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
-                    listOf(OutputConfiguration(previewSurface), OutputConfiguration(recorderSurface)),
+                    outputConfigs,
                     executor,
                     callback
                 )
                 camera.createCaptureSession(sessionConfig)
                 return
             } catch (e: Exception) {
-                Log.w(TAG, "Failed SessionConfiguration for standard recording, falling back to createCaptureSession", e)
+                Log.w(TAG, "Failed SessionConfiguration for recording, falling back to createCaptureSession", e)
             }
         }
 
         @Suppress("DEPRECATION")
-        camera.createCaptureSession(listOf(previewSurface, recorderSurface), callback, backgroundHandler)
+        val surfaces = if (hasSeparateRecorder) {
+            listOf(previewSurface, recorderSurface!!)
+        } else {
+            listOf(previewSurface)
+        }
+        camera.createCaptureSession(surfaces, callback, backgroundHandler)
     }
 
     /**
@@ -5052,78 +5067,126 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 recorderSurface = mr.surface
+            }
+                var compSuccess = false
                 if (_computationalVideoPipeline.value != ComputationalVideoPipeline.DEFAULT) {
-                    motorolaSwitchEngine.compositor.setEncoderSurface(
+                    compSuccess = motorolaSwitchEngine.compositor.attachEncoderSurface(
                         recorderSurface,
                         videoRes.width,
                         videoRes.height
                     )
-                }
-            }
-
-            activeRecordingSurface = recorderSurface
-            val isCompPipelineActive = (_computationalVideoPipeline.value != ComputationalVideoPipeline.DEFAULT)
-
-            // Seamless Camera2 session transition on camera backgroundHandler:
-            // Do NOT close or abort currentSession beforehand; CameraDevice.createCaptureSession
-            // automatically transitions sessions while keeping preview buffers alive.
-            backgroundHandler?.post {
-                try {
-                    val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                        addTarget(previewSurf)
-                        if (!isCinema && !isCompPipelineActive) {
-                            addTarget(recorderSurface)
-                        }
-                        applyCommonSettings(this)
-                        set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
-                        if (matchedFpsRange != null) {
-                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
-                        }
-                        if (isVideoStabilizationEnabled) {
-                            val eisModes = chars?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
-                            if (eisModes.contains(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
-                                set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)
-                            }
-                        }
+                    if (compSuccess) {
+                        Log.i(TAG, "Computational GPU video encoder surface attached successfully (${videoRes.width}x${videoRes.height})")
+                    } else {
+                        Log.w(TAG, "Computational GPU encoding could not initialize; falling back to direct Camera2 -> MediaRecorder")
+                        motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
                     }
-                    previewRequestBuilder = recordBuilder
+                }
+                activeRecordingSurface = recorderSurface
+                val isCompPipelineActive = compSuccess
 
-                    val sessionCallback = object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) {
-                            Log.i(TAG, "[RECORDING_SESSION] Video recording session configured")
-                            captureSession = session
-                            try {
-                                session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
-                                if (!isSoftwareCinema) {
-                                    mediaRecorder?.start()
+                // Seamless Camera2 session transition on camera backgroundHandler:
+                // When computational video is active, Camera2 outputs ONLY to previewSurface.
+                // The compositor owns and renders processed frames directly into the encoder surface.
+                backgroundHandler?.post {
+                    try {
+                        val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                            addTarget(previewSurf)
+                            if (!isCinema && !isCompPipelineActive) {
+                                addTarget(recorderSurface)
+                            }
+                            applyCommonSettings(this)
+                            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                            if (matchedFpsRange != null) {
+                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
+                            }
+                            if (isVideoStabilizationEnabled) {
+                                val eisModes = chars?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
+                                if (eisModes.contains(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
+                                    set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)
                                 }
-                                _isRecordingVideo.value = true
-                                isStartingRecording.set(false)
-                                startVideoTimer()
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed starting repeating request or recorder", e)
-                                cleanupFailedRecording(onError, "Failed to start recording: ${e.message}")
+                            }
+                        }
+                        previewRequestBuilder = recordBuilder
+
+                        val sessionCallback = object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                Log.i(TAG, "[RECORDING_SESSION] Video recording session configured (compActive=$isCompPipelineActive)")
+                                captureSession = session
+                                try {
+                                    session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
+                                    if (!isSoftwareCinema) {
+                                        mediaRecorder?.start()
+                                    }
+                                    _isRecordingVideo.value = true
+                                    isStartingRecording.set(false)
+                                    startVideoTimer()
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed starting repeating request or recorder", e)
+                                    cleanupFailedRecording(onError, "Failed to start recording: ${e.message}")
+                                }
+                            }
+
+                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                Log.e(TAG, "[RECORDING_SESSION] Video capture session configuration failed (compActive=$isCompPipelineActive)")
+                                if (isCompPipelineActive) {
+                                    Log.w(TAG, "Retrying recording session with standard direct pipeline fallback...")
+                                    motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
+                                    try {
+                                        val fallbackRecordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                            addTarget(previewSurf)
+                                            addTarget(recorderSurface)
+                                            applyCommonSettings(this)
+                                            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                        }
+                                        previewRequestBuilder = fallbackRecordBuilder
+                                        val fallbackCallback = object : CameraCaptureSession.StateCallback() {
+                                            override fun onConfigured(fallbackSession: CameraCaptureSession) {
+                                                captureSession = fallbackSession
+                                                try {
+                                                    fallbackSession.setRepeatingRequest(fallbackRecordBuilder.build(), captureCallback, backgroundHandler)
+                                                    if (!isSoftwareCinema) {
+                                                        mediaRecorder?.start()
+                                                    }
+                                                    _isRecordingVideo.value = true
+                                                    isStartingRecording.set(false)
+                                                    startVideoTimer()
+                                                } catch (e: Exception) {
+                                                    cleanupFailedRecording(onError, "Failed to start direct fallback recording: ${e.message}")
+                                                }
+                                            }
+                                            override fun onConfigureFailed(s: CameraCaptureSession) {
+                                                cleanupFailedRecording(onError, "Camera hardware failed to configure video capture session")
+                                            }
+                                        }
+                                        createRecordingCaptureSession(
+                                            camera = camera,
+                                            previewSurface = previewSurf,
+                                            recorderSurface = recorderSurface,
+                                            is10Bit = false,
+                                            callback = fallbackCallback
+                                        )
+                                        return
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Direct fallback attempt failed", e)
+                                    }
+                                }
+                                cleanupFailedRecording(onError, "Camera hardware failed to configure video capture session")
                             }
                         }
 
-                        override fun onConfigureFailed(session: CameraCaptureSession) {
-                            Log.e(TAG, "[RECORDING_SESSION] Video capture session configuration failed")
-                            cleanupFailedRecording(onError, "Camera hardware failed to configure video capture session")
-                        }
+                        createRecordingCaptureSession(
+                            camera = camera,
+                            previewSurface = previewSurf,
+                            recorderSurface = if (isCinema || isCompPipelineActive) null else recorderSurface,
+                            is10Bit = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES),
+                            callback = sessionCallback
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to create recording capture session", e)
+                        cleanupFailedRecording(onError, "Failed to initialize recording session: ${e.message}")
                     }
-
-                    createRecordingCaptureSession(
-                        camera = camera,
-                        previewSurface = previewSurf,
-                        recorderSurface = if (isCinema) previewSurf else recorderSurface,
-                        is10Bit = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES),
-                        callback = sessionCallback
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to create recording capture session", e)
-                    cleanupFailedRecording(onError, "Failed to initialize recording session: ${e.message}")
                 }
-            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize video recording", e)

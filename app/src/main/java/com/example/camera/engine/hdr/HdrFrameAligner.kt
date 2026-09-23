@@ -122,7 +122,15 @@ class HdrFrameAligner {
                 val avgMad = if (count > 0) sumDiff / count else Float.MAX_VALUE
                 costGrid[candidateY + SEARCH_RADIUS][candidateX + SEARCH_RADIUS] = avgMad
 
-                if (avgMad < minMad) {
+                val isBetter = if (avgMad < minMad - 1e-5f) {
+                    true
+                } else if (abs(avgMad - minMad) <= 1e-5f) {
+                    (abs(candidateX - seedX) + abs(candidateY - seedY)) < (abs(bestDx - seedX) + abs(bestDy - seedY))
+                } else {
+                    false
+                }
+
+                if (isBetter) {
                     minMad = avgMad
                     bestDx = candidateX
                     bestDy = candidateY
@@ -213,7 +221,14 @@ class HdrFrameAligner {
 
                         if (pCount > 8) {
                             val localMad = pDiff / pCount
-                            if (localMad < minLocalMad) {
+                            val isLocalBetter = if (localMad < minLocalMad - 1e-5f) {
+                                true
+                            } else if (abs(localMad - minLocalMad) <= 1e-5f) {
+                                (abs(ldx) + abs(ldy)) < (abs(bestLocalDx) + abs(bestLocalDy))
+                            } else {
+                                false
+                            }
+                            if (isLocalBetter) {
                                 minLocalMad = localMad
                                 bestLocalDx = ldx
                                 bestLocalDy = ldy
@@ -231,17 +246,26 @@ class HdrFrameAligner {
         val localMesh = HdrLocalMesh(MESH_COLS, MESH_ROWS, meshDx, meshDy)
 
         val zeroShiftMad = costGrid[SEARCH_RADIUS][SEARCH_RADIUS]
-        val confidence = if (zeroShiftMad > 1e-4f) {
-            ((zeroShiftMad - minMad) / zeroShiftMad).coerceIn(0f, 1f)
+        val isWithinSearchBounds = (kotlin.math.abs(bestDx) <= SEARCH_RADIUS) && (kotlin.math.abs(bestDy) <= SEARCH_RADIUS)
+        val isMatchQualityAcceptable = (minMad < 0.20f)
+
+        val confidence = if (!isWithinSearchBounds || !isMatchQualityAcceptable) {
+            0.0f
+        } else if (zeroShiftMad > 1e-4f) {
+            val improvement = ((zeroShiftMad - minMad) / zeroShiftMad).coerceIn(0f, 1f)
+            val absoluteQuality = (1.0f - minMad * 4.0f).coerceIn(0f, 1f)
+            (0.35f * improvement + 0.65f * absoluteQuality).coerceIn(0f, 1f)
         } else {
-            0.6f
+            (1.0f - minMad * 4.0f).coerceIn(0.65f, 1f)
         }
 
+        val finalIsAligned = isWithinSearchBounds && isMatchQualityAcceptable && (confidence >= 0.65f)
+
         return HdrAlignmentResult(
-            shiftX = fullGlobalShiftX,
-            shiftY = fullGlobalShiftY,
+            shiftX = if (finalIsAligned) fullGlobalShiftX else 0f,
+            shiftY = if (finalIsAligned) fullGlobalShiftY else 0f,
             confidence = confidence,
-            isAligned = true,
+            isAligned = finalIsAligned,
             localMesh = localMesh
         )
     }

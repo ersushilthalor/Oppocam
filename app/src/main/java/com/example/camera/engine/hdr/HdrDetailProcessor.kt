@@ -18,8 +18,8 @@ import kotlin.math.min
 class HdrDetailProcessor {
 
     companion object {
-        private const val MAX_SHARPENING_DELTA = 0.08f // Clamping limit to eliminate halos
-        private const val FLAT_VARIANCE_THRESHOLD = 0.002f // Threshold below which regions are considered flat
+        private const val MAX_SHARPENING_DELTA = 0.02f // Strict clamp to prevent halos and edge ringing
+        private const val FLAT_VARIANCE_THRESHOLD = 0.003f // Threshold below which regions are considered flat
     }
 
     /**
@@ -58,9 +58,9 @@ class HdrDetailProcessor {
         // receive reduced sharpening to eliminate ringing
         val edgeAtten = if (variance > 0.08f) 0.45f else 1.0f
 
-        // 4. ISO-adaptive sharpening strength (lower strength at high ISO to prevent amplifying noise)
-        val isoFactor = if (iso > 800) (800f / iso).coerceIn(0.4f, 1.0f) else 1.0f
-        val baseStrength = 0.35f * isoFactor * edgeAtten
+        // 4. ISO-adaptive sharpening strength (gentle micro-detail preservation, never crunchy)
+        val isoFactor = if (iso > 800) (800f / iso).coerceIn(0.3f, 1.0f) else 1.0f
+        val baseStrength = 0.10f * isoFactor * edgeAtten
 
         // 5. Dynamic Anti-Halo Clamping
         val rawSharpenDelta = deltaLuma * baseStrength
