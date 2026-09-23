@@ -202,6 +202,7 @@ class Camera2Engine(private val context: Context) {
     val dollyZoomEngine = DollyZoomEngine()
     val nightFusionProcessor = NightFusionProcessor()
     val gyroStabilizationEngine = GyroStabilizationEngine(context)
+    val photoHdrEngine = com.example.camera.engine.hdr.PhotoHdrEngine(context)
     val humanVisionEngine = com.example.camera.engine.humanvision.HumanVisionEngine(context)
     val humanVisionProgress: StateFlow<com.example.camera.engine.humanvision.HumanVisionProgress> = humanVisionEngine.progressState
 
@@ -2037,7 +2038,11 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    @Volatile
+    var latestLuminanceStats: FrameLuminanceStats? = null
+
     fun onFrameLuminanceStats(stats: FrameLuminanceStats) {
+        latestLuminanceStats = stats
         cinemaEngine.naturalLogEngine.onFrameLuminanceAnalyzed(stats)
         if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.FLAT_LOG) {
             onNaturalLogAutoToneFrame()
@@ -3490,28 +3495,29 @@ class Camera2Engine(private val context: Context) {
 
         _isCapturing.value = true
 
-        try {
-            val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-            if (isPipelineEnabled) {
-                // SENSOR -> UNPROCESSED YUV/RAW -> CUSTOM PIPELINE -> FINAL JPEG
-                captureBuilder.addTarget(readerYuv.surface)
-            } else {
-                captureBuilder.addTarget(readerJpeg.surface)
-            }
+        val chars = activeLens?.let { getCharacteristics(it.cameraId) }
+        val hdrPlan = photoHdrEngine.planCapture(
+            chars = chars,
+            lastResult = lastCaptureResult,
+            flashMode = flashMode,
+            stats = latestLuminanceStats,
+            gyroEngine = gyroStabilizationEngine
+        )
+        Log.i(TAG, "[PHOTO_CAPTURE_HDR] Plan: ${hdrPlan.bracketType}, specs=${hdrPlan.specs.size} - ${hdrPlan.reason}")
 
+        try {
             val caps = _capabilities.value
             val isRaw = isRawCaptureEnabled && caps.supportsRaw && imageReaderRaw != null
-            if (isRaw) {
-                imageReaderRaw?.surface?.let { captureBuilder.addTarget(it) }
-            }
-
-            applyCommonSettings(captureBuilder)
-            if (!isPipelineEnabled) {
-                captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
-                captureBuilder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
-            }
 
             if (isPipelineEnabled) {
+                val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                // SENSOR -> UNPROCESSED YUV/RAW -> CUSTOM PIPELINE -> FINAL JPEG
+                captureBuilder.addTarget(readerYuv.surface)
+                if (isRaw) {
+                    imageReaderRaw?.surface?.let { captureBuilder.addTarget(it) }
+                }
+                applyCommonSettings(captureBuilder)
+
                 readerYuv.setOnImageAvailableListener({ reader ->
                     val image = reader.acquireLatestImage()
                     if (image != null) {
@@ -3583,7 +3589,47 @@ class Camera2Engine(private val context: Context) {
                         }
                     }
                 }, backgroundHandler)
-            } else {
+
+                if (isRaw) {
+                    imageReaderRaw?.setOnImageAvailableListener({ reader ->
+                        val rawImage = reader.acquireLatestImage()
+                        if (rawImage != null) {
+                            engineScope.launch(Dispatchers.IO) {
+                                val lens = _selectedLens.value
+                                if (lens != null) {
+                                    val characteristics = getCharacteristics(lens.cameraId)
+                                    if (characteristics != null) {
+                                        saveRawToMediaStore(rawImage, characteristics)
+                                    }
+                                }
+                                rawImage.close()
+                            }
+                        }
+                    }, backgroundHandler)
+                }
+
+                session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        Log.d(TAG, "Custom pipeline photo capture completed")
+                    }
+                }, backgroundHandler)
+
+            } else if (hdrPlan.bracketType == com.example.camera.engine.hdr.HdrBracketType.SINGLE_FRAME) {
+                // Single-frame capture path (low contrast scene, active flash, or high motion)
+                val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                captureBuilder.addTarget(readerJpeg.surface)
+                if (isRaw) {
+                    imageReaderRaw?.surface?.let { captureBuilder.addTarget(it) }
+                }
+
+                applyCommonSettings(captureBuilder)
+                captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
+                captureBuilder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
+
                 readerJpeg.setOnImageAvailableListener({ reader ->
                     val image = reader.acquireLatestImage()
                     if (image != null) {
@@ -3598,35 +3644,175 @@ class Camera2Engine(private val context: Context) {
                         }
                     }
                 }, backgroundHandler)
-            }
 
-            if (isRaw) {
-                imageReaderRaw?.setOnImageAvailableListener({ reader ->
-                    val rawImage = reader.acquireLatestImage()
-                    if (rawImage != null) {
-                        engineScope.launch(Dispatchers.IO) {
-                            val lens = _selectedLens.value
-                            if (lens != null) {
-                                val characteristics = getCharacteristics(lens.cameraId)
-                                if (characteristics != null) {
-                                    saveRawToMediaStore(rawImage, characteristics)
+                if (isRaw) {
+                    imageReaderRaw?.setOnImageAvailableListener({ reader ->
+                        val rawImage = reader.acquireLatestImage()
+                        if (rawImage != null) {
+                            engineScope.launch(Dispatchers.IO) {
+                                val lens = _selectedLens.value
+                                if (lens != null) {
+                                    val characteristics = getCharacteristics(lens.cameraId)
+                                    if (characteristics != null) {
+                                        saveRawToMediaStore(rawImage, characteristics)
+                                    }
+                                }
+                                rawImage.close()
+                            }
+                        }
+                    }, backgroundHandler)
+                }
+
+                session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        Log.d(TAG, "Photo single frame capture completed")
+                    }
+                }, backgroundHandler)
+
+            } else {
+                // Multi-frame computational HDR bracket capture path (2-frame or 3-frame)
+                val requests = ArrayList<CaptureRequest>()
+                for (spec in hdrPlan.specs) {
+                    val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                    builder.addTarget(readerJpeg.surface)
+                    if (isRaw && spec.isReference) {
+                        imageReaderRaw?.surface?.let { builder.addTarget(it) }
+                    }
+                    applyCommonSettings(builder)
+                    builder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
+                    builder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
+
+                    if (spec.aeCompIndex != 0) {
+                        builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, spec.aeCompIndex)
+                    }
+                    builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    requests.add(builder.build())
+                }
+
+                val expectedCount = requests.size
+                val capturedFrames = java.util.Collections.synchronizedList(ArrayList<com.example.camera.engine.hdr.HdrInputFrame>())
+                val receivedCount = java.util.concurrent.atomic.AtomicInteger(0)
+                val isProcessingStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
+                fun triggerHdrProcessing() {
+                    if (isProcessingStarted.compareAndSet(false, true)) {
+                        // Viewfinder unblocks immediately!
+                        _isCapturing.value = false
+
+                        val framesToProcess = synchronized(capturedFrames) { ArrayList(capturedFrames) }
+                        engineScope.launch(Dispatchers.Default) {
+                            try {
+                                val finalJpegBytes = photoHdrEngine.processHdrCapture(
+                                    frames = framesToProcess,
+                                    plan = hdrPlan,
+                                    jpegQuality = preferences.jpegQuality
+                                )
+                                val uri = saveJpegBytesToMediaStore(finalJpegBytes)
+                                updateStorageStats()
+                                withContext(Dispatchers.Main) {
+                                    onComplete(uri)
+                                }
+                            } catch (e: Throwable) {
+                                Log.e(TAG, "Error in PhotoHdrEngine processing", e)
+                                // Failsafe: save base frame directly
+                                val baseBytes = framesToProcess.firstOrNull { it.role == com.example.camera.engine.hdr.FrameRole.REFERENCE_BASE }?.jpegBytes
+                                    ?: framesToProcess.firstOrNull()?.jpegBytes
+                                val uri = if (baseBytes != null) saveJpegBytesToMediaStore(baseBytes) else null
+                                updateStorageStats()
+                                withContext(Dispatchers.Main) {
+                                    onComplete(uri)
                                 }
                             }
-                            rawImage.close()
+                        }
+                    }
+                }
+
+                readerJpeg.setOnImageAvailableListener({ reader ->
+                    try {
+                        val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
+                        val buffer = image.planes[0].buffer
+                        val bytes = ByteArray(buffer.remaining())
+                        buffer.get(bytes)
+                        val ts = image.timestamp
+                        image.close()
+
+                        val idx = receivedCount.getAndIncrement()
+                        val spec = hdrPlan.specs.getOrNull(idx) ?: hdrPlan.specs[0]
+                        val frame = com.example.camera.engine.hdr.HdrInputFrame(
+                            jpegBytes = bytes,
+                            role = spec.role,
+                            evOffset = spec.evOffset,
+                            exposureTimeNs = lastCaptureResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 33_333_333L,
+                            iso = lastCaptureResult?.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100,
+                            timestampNs = ts,
+                            gyroYawSpeed = gyroStabilizationEngine.latestYawSpeed,
+                            gyroPitchSpeed = gyroStabilizationEngine.latestPitchSpeed,
+                            gyroRollSpeed = gyroStabilizationEngine.latestRollSpeed
+                        )
+                        capturedFrames.add(frame)
+
+                        if (capturedFrames.size >= expectedCount) {
+                            triggerHdrProcessing()
+                        }
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Error acquiring HDR burst frame", t)
+                        if (capturedFrames.isNotEmpty()) {
+                            triggerHdrProcessing()
                         }
                     }
                 }, backgroundHandler)
-            }
 
-            session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    Log.d(TAG, "Photo capture completed")
+                if (isRaw) {
+                    imageReaderRaw?.setOnImageAvailableListener({ reader ->
+                        val rawImage = reader.acquireLatestImage()
+                        if (rawImage != null) {
+                            engineScope.launch(Dispatchers.IO) {
+                                val lens = _selectedLens.value
+                                if (lens != null) {
+                                    val characteristics = getCharacteristics(lens.cameraId)
+                                    if (characteristics != null) {
+                                        saveRawToMediaStore(rawImage, characteristics)
+                                    }
+                                }
+                                rawImage.close()
+                            }
+                        }
+                    }, backgroundHandler)
                 }
-            }, backgroundHandler)
+
+                // Failsafe timeout: in case HAL drops a frame, trigger processing after 2500ms
+                backgroundHandler?.postDelayed({
+                    if (capturedFrames.isNotEmpty() && !isProcessingStarted.get()) {
+                        Log.w(TAG, "HDR burst timeout: processing ${capturedFrames.size}/$expectedCount frames")
+                        triggerHdrProcessing()
+                    } else if (capturedFrames.isEmpty() && !isProcessingStarted.get()) {
+                        Log.e(TAG, "HDR burst timeout: 0 frames received")
+                        _isCapturing.value = false
+                        onComplete(null)
+                    }
+                }, 2500L)
+
+                session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: TotalCaptureResult
+                    ) {
+                        Log.d(TAG, "Photo HDR burst frame completed")
+                    }
+                    override fun onCaptureFailed(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        failure: CaptureFailure
+                    ) {
+                        Log.w(TAG, "Photo HDR burst frame capture failed: ${failure.reason}")
+                    }
+                }, backgroundHandler)
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error taking photo", e)

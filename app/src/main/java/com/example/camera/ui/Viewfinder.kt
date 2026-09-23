@@ -205,7 +205,7 @@ fun Viewfinder(
                                         com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(this@apply, floatingWindowBlurStrength)
                                     }
 
-                                    if (cameraMode == CameraMode.CINEMA && onFrameLuminanceStats != null) {
+                                    if ((cameraMode == CameraMode.CINEMA || cameraMode == CameraMode.PHOTO) && onFrameLuminanceStats != null) {
                                         val now = android.os.SystemClock.uptimeMillis()
                                         if (now - lastLumaSampleTime >= 100L) { // 10fps analysis rate
                                             lastLumaSampleTime = now
