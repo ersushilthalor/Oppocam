@@ -38,6 +38,7 @@ import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.util.SizeF
+import com.example.camera.computational.video.ComputationalVideoPipeline
 import android.view.Surface
 import com.example.camera.model.*
 import com.example.camera.data.CubeLutParser
@@ -248,6 +249,16 @@ class Camera2Engine(private val context: Context) {
     val rec2020AutoToneParams: StateFlow<Rec2020AutoToneParams> = cinemaEngine.rec2020AutoToneEngine.currentParams
     val nativeNaturalParams: StateFlow<NativeNaturalToneParams> = cinemaEngine.nativeNaturalEngine.currentParams
 
+    private val _computationalVideoPipeline = MutableStateFlow(preferences.computationalVideoPipeline)
+    val computationalVideoPipeline: StateFlow<ComputationalVideoPipeline> = _computationalVideoPipeline.asStateFlow()
+
+    fun setComputationalVideoPipeline(pipeline: ComputationalVideoPipeline, tier: Int = 0) {
+        _computationalVideoPipeline.value = pipeline
+        preferences.computationalVideoPipeline = pipeline
+        motorolaSwitchEngine.compositor.setComputationalVideoPipeline(pipeline, tier)
+        Log.i(TAG, "Computational video pipeline set to ${pipeline.displayName} (tier=$tier)")
+    }
+
     val ultraRes50MStacker = UltraRes50MStacker(context)
     val refocusEngine = RefocusEngine(context)
     val highQualityZoomEngine = com.example.camera.zoom.HighQualityZoomEngine.getInstance(context)
@@ -376,6 +387,12 @@ class Camera2Engine(private val context: Context) {
 
             _isCameraInitialized.value = true
             _cameraInitError.value = null
+
+            try {
+                motorolaSwitchEngine.compositor.setComputationalVideoPipeline(preferences.computationalVideoPipeline)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error initializing compositor computational video pipeline", t)
+            }
 
             // 7. If surface texture is already available, start camera
             if (previewSurfaceTexture != null) {
@@ -5035,9 +5052,17 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 recorderSurface = mr.surface
+                if (_computationalVideoPipeline.value != ComputationalVideoPipeline.DEFAULT) {
+                    motorolaSwitchEngine.compositor.setEncoderSurface(
+                        recorderSurface,
+                        videoRes.width,
+                        videoRes.height
+                    )
+                }
             }
 
             activeRecordingSurface = recorderSurface
+            val isCompPipelineActive = (_computationalVideoPipeline.value != ComputationalVideoPipeline.DEFAULT)
 
             // Seamless Camera2 session transition on camera backgroundHandler:
             // Do NOT close or abort currentSession beforehand; CameraDevice.createCaptureSession
@@ -5046,7 +5071,7 @@ class Camera2Engine(private val context: Context) {
                 try {
                     val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                         addTarget(previewSurf)
-                        if (!isCinema) {
+                        if (!isCinema && !isCompPipelineActive) {
                             addTarget(recorderSurface)
                         }
                         applyCommonSettings(this)

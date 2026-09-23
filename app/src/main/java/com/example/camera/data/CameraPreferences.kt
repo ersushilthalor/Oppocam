@@ -48,7 +48,15 @@ class CameraPreferences(context: Context) {
         private const val KEY_SHOW_FRONT_PREVIEW = "pref_show_front_preview"
         private const val KEY_FLOATING_WINDOW_TRANSPARENCY = "pref_floating_window_transparency"
         private const val KEY_FLOATING_WINDOW_BLUR_STRENGTH = "pref_floating_window_blur_strength"
+        private const val KEY_COMPUTATIONAL_VIDEO_PIPELINE = "pref_computational_video_pipeline"
     }
+
+    var computationalVideoPipeline: com.example.camera.computational.video.ComputationalVideoPipeline
+        get() {
+            val id = prefs.getString(KEY_COMPUTATIONAL_VIDEO_PIPELINE, com.example.camera.computational.video.ComputationalVideoPipeline.DEFAULT.id)
+            return com.example.camera.computational.video.ComputationalVideoPipeline.fromId(id)
+        }
+        set(value) = prefs.edit().putString(KEY_COMPUTATIONAL_VIDEO_PIPELINE, value.id).apply()
 
     var floatingWindowTransparency: Float
         get() = prefs.getFloat(KEY_FLOATING_WINDOW_TRANSPARENCY, 0.50f)

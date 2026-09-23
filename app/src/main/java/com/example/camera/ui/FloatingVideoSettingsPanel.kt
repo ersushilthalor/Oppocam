@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.camera.model.CameraResolution
+import com.example.camera.computational.video.ComputationalVideoPipeline
 import com.example.camera.ui.components.FrostedGlassBox
 
 /**
@@ -41,9 +42,11 @@ fun FloatingVideoSettingsPanel(
     currentResolution: CameraResolution?,
     currentFps: Int,
     isUltraStabilizationEnabled: Boolean = false,
+    currentComputationalPipeline: ComputationalVideoPipeline = ComputationalVideoPipeline.DEFAULT,
     onResolutionSelected: (CameraResolution) -> Unit,
     onFpsSelected: (Int) -> Unit,
     onUltraStabilizationToggle: () -> Unit = {},
+    onComputationalPipelineSelected: (ComputationalVideoPipeline) -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -273,6 +276,51 @@ fun FloatingVideoSettingsPanel(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Section 4: Computational Video Pipeline
+                VideoPanelSectionHeader(
+                    title = "COMPUTATIONAL VIDEO PIPELINE",
+                    badge = currentComputationalPipeline.badge
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ComputationalVideoPipeline.entries.forEach { pipeline ->
+                        val isSelected = (currentComputationalPipeline == pipeline)
+                        val chipColor = if (pipeline == ComputationalVideoPipeline.DEFAULT) accentColor else Color(0xFF4DEEEA)
+                        VideoGlassChip(
+                            label = pipeline.displayName,
+                            isSelected = isSelected,
+                            accentColor = chipColor,
+                            onClick = { onComputationalPipelineSelected(pipeline) },
+                            testTag = "computational_option_${pipeline.name}"
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = when (currentComputationalPipeline) {
+                        ComputationalVideoPipeline.DEFAULT -> "Direct Camera2/ISP video stream without multi-frame computational processing"
+                        ComputationalVideoPipeline.PIXEL -> "Google Pixel Natural HDR: 15-stage multi-frame fusion, natural highlight rolloff, shadow detail, true skin tones"
+                        ComputationalVideoPipeline.SAMSUNG -> "Samsung Vibrant Dynamic HDR: Deep blacks, boosted vibrant dynamic range, vivid color pop & punchy contrast"
+                        ComputationalVideoPipeline.IPHONE -> "iPhone Cinematic Warmth: Warm golden highlights, gentle highlight rolloff, soft shadow gradation, filmic rendering"
+                        ComputationalVideoPipeline.VIVO -> "Vivo Zeiss Natural Color: Micro-contrast clarity, neutral accurate colorimetry, crisp detail & edge micro-contrast"
+                    },
+                    color = Color.White.copy(alpha = 0.70f),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    modifier = Modifier.padding(horizontal = 2.dp)
+                )
             }
         }
     }

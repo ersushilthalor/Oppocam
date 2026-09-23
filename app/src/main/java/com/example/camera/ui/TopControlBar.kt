@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.camera.computational.video.ComputationalVideoPipeline
 import com.example.camera.model.*
 
 fun getTopControlShape(layoutConfig: ModeLayoutConfig): androidx.compose.ui.graphics.Shape {
@@ -136,6 +137,8 @@ fun TopControlBar(
     isVideoAdjustmentsOpen: Boolean = false,
     hasActiveVideoAdjustments: Boolean = false,
     onVideoAdjustmentsClick: () -> Unit = {},
+    activeComputationalPipeline: ComputationalVideoPipeline = ComputationalVideoPipeline.DEFAULT,
+    onComputationalPipelineChange: (ComputationalVideoPipeline) -> Unit = {},
     onFlashClick: () -> Unit,
     onTimerClick: () -> Unit,
     onGridClick: () -> Unit,
@@ -314,25 +317,78 @@ fun TopControlBar(
                         videoResolution?.width == 1280 || videoResolution?.height == 1280 -> "720"
                         else -> "4K"
                     }
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                            .clickable { onVideoSettingsClick() }
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = resLabel,
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                        Box(
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(17.dp))
+                                .background(Color(0xB21A1A1E))
+                                .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
+                                .clickable { onVideoSettingsClick() }
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = resLabel,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+
+                        // Compact Native Computational Video Pipeline Selector Pill
+                        val isCompActive = (activeComputationalPipeline != ComputationalVideoPipeline.DEFAULT)
+                        val pipeColor = if (isCompActive) Color(0xFF4DEEEA) else Color.White.copy(alpha = 0.85f)
+                        val pipeBg = if (isCompActive) Color(0x334DEEEA) else Color(0xB21A1A1E)
+                        val pipeBorder = if (isCompActive) Color(0xFF4DEEEA) else Color.White.copy(alpha = 0.22f)
+
+                        Box(
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(17.dp))
+                                .background(pipeBg)
+                                .border(1.dp, pipeBorder, RoundedCornerShape(17.dp))
+                                .clickable {
+                                    val next = when (activeComputationalPipeline) {
+                                        ComputationalVideoPipeline.DEFAULT -> ComputationalVideoPipeline.PIXEL
+                                        ComputationalVideoPipeline.PIXEL -> ComputationalVideoPipeline.SAMSUNG
+                                        ComputationalVideoPipeline.SAMSUNG -> ComputationalVideoPipeline.IPHONE
+                                        ComputationalVideoPipeline.IPHONE -> ComputationalVideoPipeline.VIVO
+                                        ComputationalVideoPipeline.VIVO -> ComputationalVideoPipeline.DEFAULT
+                                    }
+                                    onComputationalPipelineChange(next)
+                                }
+                                .padding(horizontal = 10.dp)
+                                .testTag("computational_pipeline_selector"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.AutoFixHigh,
+                                    contentDescription = "Computational Video Pipeline: ${activeComputationalPipeline.displayName}",
+                                    tint = pipeColor,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = activeComputationalPipeline.badge,
+                                    color = pipeColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
                     }
                 }
                 CameraMode.CINEMA -> {

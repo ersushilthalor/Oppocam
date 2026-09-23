@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.camera.data.CameraPreferences
 import com.example.camera.engine.Camera2Engine
 import com.example.camera.engine.PortraitProcessor
+import com.example.camera.computational.video.ComputationalVideoPipeline
 import com.example.camera.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -57,6 +58,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val isRecordingVideo: StateFlow<Boolean> = engine.isRecordingVideo
     val videoDurationSeconds: StateFlow<Int> = engine.videoDurationSeconds
+
+    val computationalVideoPipeline: StateFlow<ComputationalVideoPipeline> = engine.computationalVideoPipeline
+
+    fun setComputationalVideoPipeline(pipeline: ComputationalVideoPipeline) {
+        engine.setComputationalVideoPipeline(pipeline)
+    }
+
+    fun cycleComputationalVideoPipeline() {
+        val current = computationalVideoPipeline.value
+        val next = when (current) {
+            ComputationalVideoPipeline.DEFAULT -> ComputationalVideoPipeline.PIXEL
+            ComputationalVideoPipeline.PIXEL -> ComputationalVideoPipeline.SAMSUNG
+            ComputationalVideoPipeline.SAMSUNG -> ComputationalVideoPipeline.IPHONE
+            ComputationalVideoPipeline.IPHONE -> ComputationalVideoPipeline.VIVO
+            ComputationalVideoPipeline.VIVO -> ComputationalVideoPipeline.DEFAULT
+        }
+        engine.setComputationalVideoPipeline(next)
+        showToast("Computational Video: ${next.displayName}")
+    }
 
     // Portrait Mode Controls & Pipeline State
     private val _portraitConfig = MutableStateFlow(preferences.getModePortraitConfig(preferences.cameraMode))

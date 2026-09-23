@@ -19,6 +19,9 @@ import com.example.camera.data.CubeLutParser
 import com.example.camera.model.CinemaConfig
 import com.example.camera.model.CinematicLut
 import com.example.camera.model.LensType
+import com.example.camera.computational.video.ComputationalVideoPipeline
+import com.example.camera.computational.video.ComputationalVideoProfile
+import com.example.camera.computational.video.ComputationalVideoShader
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -163,6 +166,59 @@ class CameraStreamCompositor {
     private var encoderEglSurface: EGLSurface? = null
     private var encoderWidth: Int = 1920
     private var encoderHeight: Int = 1080
+
+    // Computational Video Pipeline State
+    @Volatile var activeComputationalPipeline: ComputationalVideoPipeline = ComputationalVideoPipeline.DEFAULT
+        private set
+    @Volatile var activePerformanceTier: Int = 0
+        private set
+    private var activeComputationalProfile: ComputationalVideoProfile =
+        ComputationalVideoProfile.forPipeline(ComputationalVideoPipeline.DEFAULT)
+
+    // Computational Video Shader Program & Uniform Locations
+    private var compProgramId: Int = 0
+    private var compPositionLoc: Int = 0
+    private var compTexCoordLoc: Int = 0
+    private var compTexMatrixLoc: Int = 0
+    private var compSamplerLoc: Int = 0
+    private var compPrevSamplerLoc: Int = 0
+    private var compHasPrevFrameLoc: Int = 0
+    private var compPipelineModeLoc: Int = 0
+    private var compTemporalDenoiseLoc: Int = 0
+    private var compMotionThresholdLoc: Int = 0
+    private var compTemporalFlickerDampingLoc: Int = 0
+    private var compHdrToneMapLoc: Int = 0
+    private var compHighlightRecoveryLoc: Int = 0
+    private var compShadowRecoveryLoc: Int = 0
+    private var compLocalContrastLoc: Int = 0
+    private var compEdgeSharpeningLoc: Int = 0
+    private var compFineDetailLoc: Int = 0
+    private var compChromaDenoiseLoc: Int = 0
+    private var compSaturationLoc: Int = 0
+    private var compVibranceLoc: Int = 0
+    private var compWarmthLoc: Int = 0
+    private var compSkinToneProtectionLoc: Int = 0
+    private var compColorMatrixLoc: Int = 0
+    private var compTexelSizeLoc: Int = 0
+    private var compPerformanceTierLoc: Int = 0
+
+    // Passthrough Blit Program & Uniform Locations
+    private var blitProgramId: Int = 0
+    private var blitPositionLoc: Int = 0
+    private var blitTexCoordLoc: Int = 0
+    private var blitTexMatrixLoc: Int = 0
+    private var blitSamplerLoc: Int = 0
+
+    // Ping-Pong FBOs & Textures for Temporal Multi-Frame Computational Video
+    private val historyFboIds = IntArray(2)
+    private val historyTextureIds = IntArray(2)
+    private var historyFboWidth = 0
+    private var historyFboHeight = 0
+    private var historyPingPongIndex = 0
+    private var hasValidHistoryFrame = false
+    private val identityMatrix = FloatArray(16).apply {
+        android.opengl.Matrix.setIdentityM(this, 0)
+    }
 
     // Quad Buffers
     private val vertexBuffer: FloatBuffer
@@ -373,6 +429,65 @@ class CameraStreamCompositor {
 
         setupOesTexture(mainTexId)
         setupOesTexture(ultraWideTexId)
+
+        // Compile and link Computational Video Pipeline program
+        try {
+            val compVShader = compileShader(GLES20.GL_VERTEX_SHADER, ComputationalVideoShader.VERTEX_SHADER)
+            val compFShader = compileShader(GLES20.GL_FRAGMENT_SHADER, ComputationalVideoShader.FRAGMENT_SHADER)
+            compProgramId = GLES20.glCreateProgram().also { prog ->
+                GLES20.glAttachShader(prog, compVShader)
+                GLES20.glAttachShader(prog, compFShader)
+                GLES20.glLinkProgram(prog)
+                val status = IntArray(1)
+                GLES20.glGetProgramiv(prog, GLES20.GL_LINK_STATUS, status, 0)
+                if (status[0] == 0) {
+                    Log.e(TAG, "Comp program link failed: " + GLES20.glGetProgramInfoLog(prog))
+                }
+            }
+            compPositionLoc = GLES20.glGetAttribLocation(compProgramId, "aPosition")
+            compTexCoordLoc = GLES20.glGetAttribLocation(compProgramId, "aTextureCoord")
+            compTexMatrixLoc = GLES20.glGetUniformLocation(compProgramId, "uTexMatrix")
+            compSamplerLoc = GLES20.glGetUniformLocation(compProgramId, "sTexture")
+            compPrevSamplerLoc = GLES20.glGetUniformLocation(compProgramId, "sPrevTexture")
+            compHasPrevFrameLoc = GLES20.glGetUniformLocation(compProgramId, "uHasPrevFrame")
+            compPipelineModeLoc = GLES20.glGetUniformLocation(compProgramId, "uPipelineMode")
+            compTemporalDenoiseLoc = GLES20.glGetUniformLocation(compProgramId, "uTemporalDenoise")
+            compMotionThresholdLoc = GLES20.glGetUniformLocation(compProgramId, "uMotionThreshold")
+            compTemporalFlickerDampingLoc = GLES20.glGetUniformLocation(compProgramId, "uTemporalFlickerDamping")
+            compHdrToneMapLoc = GLES20.glGetUniformLocation(compProgramId, "uHdrToneMap")
+            compHighlightRecoveryLoc = GLES20.glGetUniformLocation(compProgramId, "uHighlightRecovery")
+            compShadowRecoveryLoc = GLES20.glGetUniformLocation(compProgramId, "uShadowRecovery")
+            compLocalContrastLoc = GLES20.glGetUniformLocation(compProgramId, "uLocalContrast")
+            compEdgeSharpeningLoc = GLES20.glGetUniformLocation(compProgramId, "uEdgeSharpening")
+            compFineDetailLoc = GLES20.glGetUniformLocation(compProgramId, "uFineDetail")
+            compChromaDenoiseLoc = GLES20.glGetUniformLocation(compProgramId, "uChromaDenoise")
+            compSaturationLoc = GLES20.glGetUniformLocation(compProgramId, "uSaturation")
+            compVibranceLoc = GLES20.glGetUniformLocation(compProgramId, "uVibrance")
+            compWarmthLoc = GLES20.glGetUniformLocation(compProgramId, "uWarmth")
+            compSkinToneProtectionLoc = GLES20.glGetUniformLocation(compProgramId, "uSkinToneProtection")
+            compColorMatrixLoc = GLES20.glGetUniformLocation(compProgramId, "uColorMatrix")
+            compTexelSizeLoc = GLES20.glGetUniformLocation(compProgramId, "uTexelSize")
+            compPerformanceTierLoc = GLES20.glGetUniformLocation(compProgramId, "uPerformanceTier")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to compile computational video shader", e)
+        }
+
+        // Compile and link Passthrough Blit program
+        try {
+            val blitVShader = compileShader(GLES20.GL_VERTEX_SHADER, ComputationalVideoShader.BLIT_VERTEX_SHADER)
+            val blitFShader = compileShader(GLES20.GL_FRAGMENT_SHADER, ComputationalVideoShader.BLIT_FRAGMENT_SHADER)
+            blitProgramId = GLES20.glCreateProgram().also { prog ->
+                GLES20.glAttachShader(prog, blitVShader)
+                GLES20.glAttachShader(prog, blitFShader)
+                GLES20.glLinkProgram(prog)
+            }
+            blitPositionLoc = GLES20.glGetAttribLocation(blitProgramId, "aPosition")
+            blitTexCoordLoc = GLES20.glGetAttribLocation(blitProgramId, "aTextureCoord")
+            blitTexMatrixLoc = GLES20.glGetUniformLocation(blitProgramId, "uTexMatrix")
+            blitSamplerLoc = GLES20.glGetUniformLocation(blitProgramId, "sTexture")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to compile blit shader", e)
+        }
     }
 
     private fun setupOesTexture(id: Int) {
@@ -674,7 +789,85 @@ class CameraStreamCompositor {
             }
         }
 
-        if (mainSurf != null && targetTexId != 0) {
+        val isComputationalActive = (activeComputationalPipeline != ComputationalVideoPipeline.DEFAULT)
+
+        if (isComputationalActive && targetTexId != 0) {
+            // 1. First pass: render computational video pipeline to offscreen history FBO
+            ensureComputationalFbos(cameraBufferWidth, cameraBufferHeight)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, historyFboIds[historyPingPongIndex])
+            GLES20.glViewport(0, 0, historyFboWidth, historyFboHeight)
+
+            drawComputationalQuad(targetTexId, targetTexMatrix)
+
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            hasValidHistoryFrame = true
+            val computedTexId = historyTextureIds[historyPingPongIndex]
+
+            // 2. Second pass: blit to Main Viewfinder EGL Surface
+            if (mainSurf != null) {
+                EGL14.eglMakeCurrent(display, mainSurf, mainSurf, ctx)
+                val surfWidthArr = IntArray(1)
+                val surfHeightArr = IntArray(1)
+                EGL14.eglQuerySurface(display, mainSurf, EGL14.EGL_WIDTH, surfWidthArr, 0)
+                EGL14.eglQuerySurface(display, mainSurf, EGL14.EGL_HEIGHT, surfHeightArr, 0)
+                val dstW = if (surfWidthArr[0] > 0) surfWidthArr[0] else mainWidth
+                val dstH = if (surfHeightArr[0] > 0) surfHeightArr[0] else mainHeight
+                GLES20.glViewport(0, 0, dstW, dstH)
+
+                val camLong = max(cameraBufferWidth, cameraBufferHeight).toFloat()
+                val camShort = min(cameraBufferWidth, cameraBufferHeight).toFloat()
+                val srcAspect = if (camShort > 0f) camLong / camShort else (16f / 9f)
+
+                val dstLong = max(dstW, dstH).toFloat()
+                val dstShort = min(dstW, dstH).toFloat()
+                val dstAspect = if (dstShort > 0f) dstLong / dstShort else (16f / 9f)
+
+                var scaleX = 1.0f
+                var scaleY = 1.0f
+                if (kotlin.math.abs(dstAspect - srcAspect) >= 0.01f) {
+                    if (dstAspect > srcAspect) {
+                        scaleX = srcAspect / dstAspect
+                        scaleY = 1.0f
+                    } else {
+                        scaleX = 1.0f
+                        scaleY = dstAspect / srcAspect
+                    }
+                }
+
+                val finalBlitMatrix = FloatArray(16)
+                if (scaleX == 1.0f && scaleY == 1.0f) {
+                    android.opengl.Matrix.setIdentityM(finalBlitMatrix, 0)
+                } else {
+                    android.opengl.Matrix.setIdentityM(finalBlitMatrix, 0)
+                    android.opengl.Matrix.translateM(finalBlitMatrix, 0, 0.5f, 0.5f, 0.0f)
+                    android.opengl.Matrix.scaleM(finalBlitMatrix, 0, scaleX, scaleY, 1.0f)
+                    android.opengl.Matrix.translateM(finalBlitMatrix, 0, -0.5f, -0.5f, 0.0f)
+                }
+
+                drawBlitQuad(computedTexId, finalBlitMatrix)
+                EGL14.eglSwapBuffers(display, mainSurf)
+            }
+
+            // 3. Third pass: blit to MediaCodec Encoder EGL Surface (if recording)
+            val encSurf = encoderEglSurface
+            if (encSurf != null) {
+                EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
+                GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
+                drawBlitQuad(computedTexId, identityMatrix)
+
+                val frameTimestampNs = if (currentActive == LensType.ULTRAWIDE) {
+                    lastUltraWideTimestampNs.get()
+                } else {
+                    lastMainTimestampNs.get()
+                }
+                val ptsNs = if (frameTimestampNs > 0) frameTimestampNs else System.nanoTime()
+                EGLExt.eglPresentationTimeANDROID(display, encSurf, ptsNs)
+                EGL14.eglSwapBuffers(display, encSurf)
+            }
+
+            // Advance ping-pong index
+            historyPingPongIndex = 1 - historyPingPongIndex
+        } else if (mainSurf != null && targetTexId != 0) {
             EGL14.eglMakeCurrent(display, mainSurf, mainSurf, ctx)
             val surfWidthArr = IntArray(1)
             val surfHeightArr = IntArray(1)
@@ -938,9 +1131,194 @@ class CameraStreamCompositor {
         }
     }
 
+    /**
+     * Updates the computational video pipeline profile in real time on the GL rendering thread.
+     * Takes effect immediately on the next frame (< 16ms) without restarting camera session or dropping frames.
+     */
+    fun setComputationalVideoPipeline(pipeline: ComputationalVideoPipeline, tier: Int = 0) {
+        glHandler?.post {
+            val changed = (activeComputationalPipeline != pipeline || activePerformanceTier != tier)
+            activeComputationalPipeline = pipeline
+            activePerformanceTier = tier
+            activeComputationalProfile = ComputationalVideoProfile.forPipeline(pipeline, tier)
+            if (changed) {
+                hasValidHistoryFrame = false
+                triggerRender()
+            }
+        }
+    }
+
+    private fun ensureComputationalFbos(width: Int, height: Int) {
+        val fboW = if (width > 0) width else 1920
+        val fboH = if (height > 0) height else 1080
+        if (historyFboWidth == fboW && historyFboHeight == fboH && historyFboIds[0] != 0) {
+            return
+        }
+        releaseComputationalFbos()
+
+        GLES20.glGenFramebuffers(2, historyFboIds, 0)
+        GLES20.glGenTextures(2, historyTextureIds, 0)
+
+        for (i in 0 until 2) {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, historyTextureIds[i])
+            GLES20.glTexImage2D(
+                GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA,
+                fboW, fboH, 0,
+                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null
+            )
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, historyFboIds[i])
+            GLES20.glFramebufferTexture2D(
+                GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D, historyTextureIds[i], 0
+            )
+        }
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+
+        historyFboWidth = fboW
+        historyFboHeight = fboH
+        historyPingPongIndex = 0
+        hasValidHistoryFrame = false
+    }
+
+    private fun releaseComputationalFbos() {
+        if (historyFboIds[0] != 0) {
+            GLES20.glDeleteFramebuffers(2, historyFboIds, 0)
+            historyFboIds[0] = 0
+            historyFboIds[1] = 0
+        }
+        if (historyTextureIds[0] != 0) {
+            GLES20.glDeleteTextures(2, historyTextureIds, 0)
+            historyTextureIds[0] = 0
+            historyTextureIds[1] = 0
+        }
+        historyFboWidth = 0
+        historyFboHeight = 0
+        hasValidHistoryFrame = false
+    }
+
+    private fun drawComputationalQuad(textureId: Int, texMatrix: FloatArray) {
+        if (compProgramId == 0) return
+        GLES20.glUseProgram(compProgramId)
+
+        // Bind current camera OES stream
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+        GLES20.glUniform1i(compSamplerLoc, 0)
+        GLES20.glUniformMatrix4fv(compTexMatrixLoc, 1, false, texMatrix, 0)
+
+        // Bind previous frame for temporal multi-frame processing
+        if (hasValidHistoryFrame) {
+            val prevTexId = historyTextureIds[1 - historyPingPongIndex]
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, prevTexId)
+            GLES20.glUniform1i(compPrevSamplerLoc, 1)
+            GLES20.glUniform1i(compHasPrevFrameLoc, 1)
+        } else {
+            GLES20.glUniform1i(compHasPrevFrameLoc, 0)
+        }
+
+        // Set pipeline mode & parameters
+        val profile = activeComputationalProfile
+        val modeInt = when (profile.pipeline) {
+            ComputationalVideoPipeline.DEFAULT -> 0
+            ComputationalVideoPipeline.PIXEL -> 1
+            ComputationalVideoPipeline.SAMSUNG -> 2
+            ComputationalVideoPipeline.IPHONE -> 3
+            ComputationalVideoPipeline.VIVO -> 4
+        }
+        GLES20.glUniform1i(compPipelineModeLoc, modeInt)
+
+        // Temporal & Motion
+        GLES20.glUniform1f(compTemporalDenoiseLoc, profile.temporalDenoise)
+        GLES20.glUniform1f(compMotionThresholdLoc, profile.motionThreshold)
+        GLES20.glUniform1f(compTemporalFlickerDampingLoc, profile.temporalFlickerDamping)
+
+        // Dynamic Range & Tone
+        GLES20.glUniform1f(compHdrToneMapLoc, profile.hdrToneMap)
+        GLES20.glUniform1f(compHighlightRecoveryLoc, profile.highlightRecovery)
+        GLES20.glUniform1f(compShadowRecoveryLoc, profile.shadowRecovery)
+        GLES20.glUniform1f(compLocalContrastLoc, profile.localContrast)
+
+        // Detail & Noise
+        GLES20.glUniform1f(compEdgeSharpeningLoc, profile.edgeSharpening)
+        GLES20.glUniform1f(compFineDetailLoc, profile.fineDetail)
+        GLES20.glUniform1f(compChromaDenoiseLoc, profile.chromaDenoise)
+
+        // Color & Skin
+        GLES20.glUniform1f(compSaturationLoc, profile.saturation)
+        GLES20.glUniform1f(compVibranceLoc, profile.vibrance)
+        GLES20.glUniform1f(compWarmthLoc, profile.warmth)
+        GLES20.glUniform1f(compSkinToneProtectionLoc, profile.skinToneProtection)
+        GLES20.glUniformMatrix3fv(compColorMatrixLoc, 1, false, profile.colorMatrix, 0)
+
+        // Texel size for spatial convolution
+        val tx = 1.0f / max(historyFboWidth.toFloat(), 1.0f)
+        val ty = 1.0f / max(historyFboHeight.toFloat(), 1.0f)
+        GLES20.glUniform2f(compTexelSizeLoc, tx, ty)
+        GLES20.glUniform1i(compPerformanceTierLoc, profile.performanceTier)
+
+        // Draw quad
+        GLES20.glEnableVertexAttribArray(compPositionLoc)
+        GLES20.glVertexAttribPointer(compPositionLoc, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
+
+        GLES20.glEnableVertexAttribArray(compTexCoordLoc)
+        GLES20.glVertexAttribPointer(compTexCoordLoc, 2, GLES20.GL_FLOAT, false, 0, texCoordBuffer)
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+        GLES20.glDisableVertexAttribArray(compPositionLoc)
+        GLES20.glDisableVertexAttribArray(compTexCoordLoc)
+
+        if (hasValidHistoryFrame) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+        }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+    }
+
+    private fun drawBlitQuad(textureId: Int, texMatrix: FloatArray) {
+        if (blitProgramId == 0) return
+        GLES20.glUseProgram(blitProgramId)
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+        GLES20.glUniform1i(blitSamplerLoc, 0)
+        GLES20.glUniformMatrix4fv(blitTexMatrixLoc, 1, false, texMatrix, 0)
+
+        GLES20.glEnableVertexAttribArray(blitPositionLoc)
+        GLES20.glVertexAttribPointer(blitPositionLoc, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
+
+        GLES20.glEnableVertexAttribArray(blitTexCoordLoc)
+        GLES20.glVertexAttribPointer(blitTexCoordLoc, 2, GLES20.GL_FLOAT, false, 0, texCoordBuffer)
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+        GLES20.glDisableVertexAttribArray(blitPositionLoc)
+        GLES20.glDisableVertexAttribArray(blitTexCoordLoc)
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+    }
+
     fun release() {
         glHandler?.post {
             try {
+                releaseComputationalFbos()
+                if (compProgramId != 0) {
+                    GLES20.glDeleteProgram(compProgramId)
+                    compProgramId = 0
+                }
+                if (blitProgramId != 0) {
+                    GLES20.glDeleteProgram(blitProgramId)
+                    blitProgramId = 0
+                }
                 val encSurf = encoderEglSurface
                 val display = eglDisplay
                 if (encSurf != null && display != null) {
