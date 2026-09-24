@@ -1239,6 +1239,7 @@ class Camera2Engine(private val context: Context) {
         } else {
             motorolaSwitchEngine.compositor.setCinemaConfig(null, null)
         }
+        motorolaSwitchEngine.compositor.setVideoModeActive(mode == CameraMode.VIDEO)
         updatePreviewAspectRatio()
 
         val isVideoMode = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA ||
@@ -2505,7 +2506,7 @@ class Camera2Engine(private val context: Context) {
 
             // Fallback for devices without CONTROL_ZOOM_RATIO or legacy hardware: precise SCALER_CROP_REGION
             val maxDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
-            val safeMaxZoom = if (maxDigitalZoom >= 1.0f) maxDigitalZoom else 10.0f
+            val safeMaxZoom = if (maxDigitalZoom >= 1.0f) maxDigitalZoom else lens.maxZoomRatio.coerceAtLeast(1.0f)
 
             val factor = digitalCrop.coerceIn(1.0f, safeMaxZoom)
             val cropW = (sensorRect.width() / factor).toInt().coerceIn(1, sensorRect.width())
@@ -2549,7 +2550,12 @@ class Camera2Engine(private val context: Context) {
             ?: backLenses.firstOrNull()
 
         val minAllowedZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
-        val clampedZoom = zoom.coerceIn(minAllowedZoom, 10.0f)
+        val maxCapabilityZoom = _availableLenses.value
+            .filter { it.facing == currentLens.facing }
+            .map { it.maxZoomRatio }
+            .maxOrNull()
+            ?.coerceAtLeast(minAllowedZoom) ?: currentLens.maxZoomRatio.coerceAtLeast(minAllowedZoom)
+        val clampedZoom = zoom.coerceIn(minAllowedZoom, maxCapabilityZoom)
 
         // Continuously update user target zoom, velocity and direction
         zoomContinuityController.onUserZoomInput(clampedZoom, isPresetTap)
@@ -5592,14 +5598,17 @@ class Camera2Engine(private val context: Context) {
                         put(MediaStore.Video.Media.SIZE, fileToSave.length())
                     }
                     resolver.update(targetUri, updateValues, null, null)
-                }
-
-                MediaScannerConnection.scanFile(
-                    context,
-                    arrayOf(fileToSave.absolutePath),
-                    arrayOf(mimeType)
-                ) { _, scannedUri ->
-                    Log.d(TAG, "Video scanned into MediaStore: $scannedUri")
+                } else {
+                    val legacyPath = contentValues.getAsString(MediaStore.Video.Media.DATA)
+                    if (!legacyPath.isNullOrEmpty()) {
+                        MediaScannerConnection.scanFile(
+                            context,
+                            arrayOf(legacyPath),
+                            arrayOf(mimeType)
+                        ) { _, scannedUri ->
+                            Log.d(TAG, "Video scanned into MediaStore: $scannedUri")
+                        }
+                    }
                 }
                 return@withContext targetUri
             }

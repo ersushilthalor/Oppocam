@@ -130,8 +130,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         }
 
         // 2. Setup MediaMuxer according to container format and codec support
+        val hasVp9 = hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)
         val hasOpus = isAudioEnabled && hasEncoderForMime(MediaFormat.MIMETYPE_AUDIO_OPUS)
-        val isWebm = (codec == CinemaCodec.VP9) && (!isAudioEnabled || hasOpus || destFile.name.endsWith(".webm"))
+        // WebM is strictly used ONLY when VP9 is requested, VP9 encoder is supported,
+        // and either audio is disabled or Opus audio encoder is supported.
+        val isWebm = (codec == CinemaCodec.VP9) && hasVp9 && (!isAudioEnabled || hasOpus)
         val muxerOutputFormat = if (isWebm) {
             MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM
         } else {
@@ -216,7 +219,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         // 2. Wait for video drain thread to finish processing EOS
         try {
-            videoDrainThread?.join(250)
+            videoDrainThread?.join(3000)
         } catch (e: Exception) {
             Log.w(TAG, "Video drain thread join interrupted", e)
         }
@@ -285,8 +288,13 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val is10BitMode = is10Bit || (codec == CinemaCodec.PRORES)
         val mime = when {
             isWebm -> {
+                MediaFormat.MIMETYPE_VIDEO_VP9
+            }
+            codec == CinemaCodec.VP9 -> {
                 if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
                     MediaFormat.MIMETYPE_VIDEO_VP9
+                } else if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
+                    MediaFormat.MIMETYPE_VIDEO_HEVC
                 } else {
                     MediaFormat.MIMETYPE_VIDEO_AVC
                 }
@@ -295,11 +303,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 MediaFormat.MIMETYPE_VIDEO_AVC
             }
             codec == CinemaCodec.PRORES -> {
-                // ProRes 422 10-bit mastering: Verified HEVC Main10 or VP9 Profile 2 10-bit
+                // ProRes 422 10-bit mastering: HEVC Main 10 or HEVC / AVC in MP4
                 if (has10BitEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
                     MediaFormat.MIMETYPE_VIDEO_HEVC
-                } else if (has10BitEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9)) {
-                    MediaFormat.MIMETYPE_VIDEO_VP9
                 } else if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
                     MediaFormat.MIMETYPE_VIDEO_HEVC
                 } else {
@@ -665,8 +671,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 } else {
                     // Handles INFO_TRY_AGAIN_LATER or unknown status
                     if (isStopping.get()) {
-                        // After stopping is initiated, break if no buffers received after grace period
-                        if (stopStartTime > 0L && System.currentTimeMillis() - stopStartTime > 200L) {
+                        // After stopping is initiated, continue draining until EOS or safe watchdog timeout
+                        if (stopStartTime > 0L && System.currentTimeMillis() - stopStartTime > 3000L) {
+                            Log.w(TAG, "Video drain timeout reached (3000ms) without explicit EOS flag")
                             break
                         }
                     }
@@ -901,12 +908,12 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         audioRecord = null
 
         try {
-            audioRecordThread?.join(150)
+            audioRecordThread?.join(1500)
         } catch (ignored: Exception) {}
         audioRecordThread = null
 
         try {
-            audioDrainThread?.join(150)
+            audioDrainThread?.join(1500)
         } catch (ignored: Exception) {}
         audioDrainThread = null
 

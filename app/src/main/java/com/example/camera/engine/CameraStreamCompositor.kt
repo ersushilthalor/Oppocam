@@ -180,6 +180,8 @@ class CameraStreamCompositor {
     private var lastEncodedLens: LensType? = null
 
     // Computational Video Pipeline State
+    @Volatile var isVideoModeActive: Boolean = false
+        private set
     @Volatile var activeComputationalPipeline: ComputationalVideoPipeline = ComputationalVideoPipeline.DEFAULT
         private set
     @Volatile var activePerformanceTier: Int = 0
@@ -820,7 +822,7 @@ class CameraStreamCompositor {
             else -> (newMainFrame || timestampChanged || (lastEncodedLens != LensType.WIDE && hasValidMainTexture))
         }
 
-        val isComputationalActive = (activeComputationalPipeline != ComputationalVideoPipeline.DEFAULT)
+        val isComputationalActive = isVideoModeActive && (activeComputationalPipeline != ComputationalVideoPipeline.DEFAULT)
 
         if (isComputationalActive && targetTexId != 0) {
             // 1. First pass: render computational video pipeline to offscreen history FBO
@@ -1341,6 +1343,22 @@ class CameraStreamCompositor {
             }
 
             if (changed) {
+                triggerRender()
+            }
+        }
+    }
+
+    /**
+     * Activates or deactivates video mode processing on the compositor.
+     * Ensures computational video shaders run strictly during video modes and never leak into photo mode.
+     */
+    fun setVideoModeActive(active: Boolean) {
+        glHandler?.post {
+            if (isVideoModeActive != active) {
+                isVideoModeActive = active
+                if (!active) {
+                    hasValidHistoryFrame = false
+                }
                 triggerRender()
             }
         }

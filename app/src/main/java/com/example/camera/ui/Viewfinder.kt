@@ -239,17 +239,22 @@ fun Viewfinder(
                         val colorMatrix = android.graphics.ColorMatrix()
                         var hasFilter = false
 
-                        if (cameraMode == CameraMode.CINEMA) {
+                        if (cameraMode == CameraMode.PHOTO) {
+                            // Completely isolate Photo Mode from video adjustments and video pipelines
+                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                            if (activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
+                                val filterMat = activePhotoFilter.toAndroidColorMatrix()
+                                if (filterMat != null) {
+                                    colorMatrix.postConcat(filterMat)
+                                    hasFilter = true
+                                }
+                            }
+                        } else if (cameraMode == CameraMode.CINEMA) {
                             // Cinema mode renders the authentic 3D LUT and color grading directly
                             // on the GPU in CameraStreamCompositor. No UI-layer ColorMatrix RenderEffect is applied.
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                        } else if (cameraMode == CameraMode.PHOTO && activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
-                            val filterMat = activePhotoFilter.toAndroidColorMatrix()
-                            if (filterMat != null) {
-                                colorMatrix.postConcat(filterMat)
-                                hasFilter = true
-                            }
                         } else if (cameraMode == CameraMode.PORTRAIT && portraitConfig != null) {
+                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             val style = portraitConfig.selectedStyle
                             if (style.isZeissOptical) {
                                 // Real ZEISS T* anti-reflective micro-contrast & deep clean blacks

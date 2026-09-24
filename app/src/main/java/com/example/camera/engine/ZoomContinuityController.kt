@@ -100,30 +100,16 @@ class ZoomContinuityController(
 
     /**
      * Called on user touch/drag/pinch/preset events to update the desired zoom level.
-     * Continuously tracks velocity and direction.
+     * Continuously tracks target zoom and updates the active camera cleanly.
      */
     fun onUserZoomInput(zoom: Float, isPresetTap: Boolean = false) {
         val nowNs = System.nanoTime()
-        if (lastUserZoomTimeNs > 0L) {
-            val dtSec = (nowNs - lastUserZoomTimeNs) / 1_000_000_000f
-            if (dtSec in 0.002f..0.25f) {
-                val instantaneousVelocity = (zoom - lastUserTargetZoom) / dtSec
-                zoomVelocity = if (isPresetTap) {
-                    val delta = zoom - currentDisplayedZoom
-                    sign(delta) * 8.0f
-                } else {
-                    (zoomVelocity * 0.35f) + (instantaneousVelocity * 0.65f)
-                }
-            }
-        }
         lastUserZoomTimeNs = nowNs
         lastUserTargetZoom = zoom
         userTargetZoom = zoom
 
         if (!isSwitching) {
-            // No switch in progress:
-            // Cancel any prior settling interpolation if user took manual control
-            if (interpolationJob?.isActive == true && !isPresetTap) {
+            if (interpolationJob?.isActive == true) {
                 interpolationJob?.cancel()
             }
             currentDisplayedZoom = zoom
@@ -131,12 +117,12 @@ class ZoomContinuityController(
             onZoomUpdated(zoom)
         } else {
             // Lens switch is currently loading (old camera still streaming frames):
-            // Keep updating the old camera's digital zoom smoothly within its safe physical FOV range.
+            // Keep updating the old camera's digital zoom within its safe physical FOV range.
             val oldLens = activeLens
             if (oldLens != null) {
                 val clampedOldZoom = when (oldLens.lensType) {
                     LensType.ULTRAWIDE -> zoom.coerceIn(oldLens.baseZoomRatio, 1.25f)
-                    LensType.WIDE -> zoom.coerceIn(1.0f, 3.8f) // Main can digitally zoom up to ~3.8x while Telephoto opens
+                    LensType.WIDE -> zoom.coerceIn(1.0f, 3.8f)
                     LensType.TELEPHOTO, LensType.TELEPHOTO_3X -> zoom.coerceAtLeast(oldLens.baseZoomRatio)
                     else -> zoom.coerceAtLeast(1.0f)
                 }
@@ -144,7 +130,6 @@ class ZoomContinuityController(
                 onApplyZoom(clampedOldZoom)
                 onZoomUpdated(clampedOldZoom)
             }
-            Log.d(TAG, "Zoom updated during lens switch: userTarget=$zoom, oldLensDisplayed=$currentDisplayedZoom, velocity=$zoomVelocity")
         }
     }
 
@@ -213,10 +198,9 @@ class ZoomContinuityController(
 
     /**
      * Called when the target lens session/hardware is configured and ready to stream.
-     *
-     * 1. Applies the FOV-equivalent zoom on the new lens to match the current view.
-     * 2. If directTargetZoom is provided, or when switching to Main 1x from Ultra-Wide,
-     *    directly applies the target FOV with zero unnecessary zoom animation or magnification jump.
+     * Applies the calibrated FOV-equivalent zoom on the new lens to match the current view natively.
+     * When switching to Main 1x from Ultra-Wide or switching lenses, directly applies the target FOV
+     * with zero unnecessary zoom animation or magnification jump.
      */
     fun onNewLensReady(newLens: LensInfo, directTargetZoom: Float? = null) {
         val oldLens = activeLens
@@ -225,30 +209,63 @@ class ZoomContinuityController(
         isSwitchingFlag.set(false)
         interpolationJob?.cancel()
 
-        val startZoom = directTargetZoom ?: if (newLens.lensType == LensType.WIDE && oldLens?.lensType == LensType.ULTRAWIDE) {
-            1.0f
+        val isDirectPresetOrMainSwitch = (directTargetZoom != null) ||
+                (newLens.lensType == LensType.WIDE && oldLens?.lensType == LensType.ULTRAWIDE)
+
+        val target = directTargetZoom ?: userTargetZoom
+
+        val startZoom = if (isDirectPresetOrMainSwitch) {
+            target
         } else {
             calculateFovEquivalentZoom(currentDisplayedZoom, oldLens, newLens)
         }
 
         currentDisplayedZoom = startZoom
-        val target = if (directTargetZoom != null) {
-            userTargetZoom = directTargetZoom
-            lastUserTargetZoom = directTargetZoom
-            directTargetZoom
-        } else {
-            userTargetZoom
-        }
+        userTargetZoom = target
+        lastUserTargetZoom = target
 
-        Log.i(TAG, "New lens ${newLens.lensType} ready at FOV zoom: $startZoom (target: $target)")
+        Log.i(TAG, "New lens ${newLens.lensType} ready at native FOV zoom: $startZoom (target: $target)")
 
-        // Instantly apply FOV zoom to the newly active camera session
+        // Natively apply calibrated FOV zoom to the newly active camera session immediately
         onApplyZoom(startZoom)
         onZoomUpdated(startZoom)
 
-        // Interpolate smoothly toward the latest user target zoom if needed
-        if (abs(target - startZoom) > 0.03f) {
-            startSmoothInterpolation(startZoom, target, zoomVelocity)
+        // If target differs from startZoom (e.g. continuous swipe during lens switch),
+        // smoothly bridge from startZoom to target without abrupt jumps
+        if (!isDirectPresetOrMainSwitch && abs(target - startZoom) > 0.03f) {
+            startSmoothInterpolation(startZoom, target)
+        }
+    }
+
+    private fun startSmoothInterpolation(
+        fromZoom: Float,
+        targetZoom: Float
+    ) {
+        interpolationJob?.cancel()
+        interpolationJob = coroutineScope.launch {
+            var current = fromZoom
+            val speed = 20.0f
+            val dt = FRAME_INTERVAL_MS / 1000f
+
+            while (isActive) {
+                delay(FRAME_INTERVAL_MS)
+                val currentTarget = userTargetZoom
+                val remaining = currentTarget - current
+                if (abs(remaining) <= 0.025f) {
+                    current = currentTarget
+                    currentDisplayedZoom = current
+                    onApplyZoom(current)
+                    onZoomUpdated(current)
+                    break
+                }
+                val dir = sign(remaining)
+                val maxStep = minOf(1.0f, speed * dt)
+                val step = dir * minOf(abs(remaining), maxStep)
+                current += step
+                currentDisplayedZoom = current
+                onApplyZoom(current)
+                onZoomUpdated(current)
+            }
         }
     }
 
@@ -259,58 +276,6 @@ class ZoomContinuityController(
         pendingLens = null
         isSwitchingFlag.set(false)
         interpolationJob?.cancel()
-    }
-
-    /**
-     * Smoothly interpolates from [fromZoom] toward [targetZoom] at ~60fps,
-     * honoring [initialVelocity] and dynamically tracking updates to [userTargetZoom].
-     */
-    private fun startSmoothInterpolation(
-        fromZoom: Float,
-        targetZoom: Float,
-        initialVelocity: Float
-    ) {
-        interpolationJob?.cancel()
-        interpolationJob = coroutineScope.launch {
-            var current = fromZoom
-            val initialDelta = targetZoom - fromZoom
-            val initialDir = sign(initialDelta)
-
-            // Determine interpolation speed in zoom units per second
-            val userSpeed = abs(initialVelocity)
-            val speed = if (userSpeed > MIN_SLEW_SPEED && (sign(initialVelocity) == initialDir || initialVelocity == 0f)) {
-                userSpeed.coerceIn(MIN_SLEW_SPEED, MAX_SLEW_SPEED)
-            } else {
-                // Smooth ease over ~350-450ms
-                (abs(initialDelta) / 0.4f).coerceIn(MIN_SLEW_SPEED, MAX_SLEW_SPEED)
-            }
-
-            val dt = FRAME_INTERVAL_MS / 1000f
-
-            while (isActive) {
-                delay(FRAME_INTERVAL_MS)
-
-                // Dynamic target tracking: user may continue swiping during the interpolation!
-                val currentTarget = userTargetZoom
-                val remaining = currentTarget - current
-                if (abs(remaining) <= 0.025f) {
-                    current = currentTarget
-                    currentDisplayedZoom = current
-                    onApplyZoom(current)
-                    onZoomUpdated(current)
-                    Log.d(TAG, "Zoom continuity interpolation settled at target: $current")
-                    break
-                }
-
-                val dir = sign(remaining)
-                val maxStep = speed * dt
-                val step = dir * minOf(abs(remaining), maxStep)
-                current += step
-                currentDisplayedZoom = current
-                onApplyZoom(current)
-                onZoomUpdated(current)
-            }
-        }
     }
 
     fun cancelInterpolation() {

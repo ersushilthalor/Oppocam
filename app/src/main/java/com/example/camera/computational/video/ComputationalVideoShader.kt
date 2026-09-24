@@ -26,10 +26,12 @@ object ComputationalVideoShader {
         attribute vec4 aPosition;
         attribute vec4 aTextureCoord;
         varying vec2 vTextureCoord;
+        varying vec2 vFboCoord;
         uniform mat4 uTexMatrix;
         void main() {
             gl_Position = aPosition;
             vTextureCoord = (uTexMatrix * aTextureCoord).xy;
+            vFboCoord = aTextureCoord.xy;
         }
     """
 
@@ -38,6 +40,7 @@ object ComputationalVideoShader {
         precision mediump float;
 
         varying vec2 vTextureCoord;
+        varying vec2 vFboCoord;
         uniform samplerExternalOES sTexture;
         uniform sampler2D sPrevTexture;
         uniform int uHasPrevFrame;
@@ -107,7 +110,7 @@ object ComputationalVideoShader {
             // 2. Temporal Multi-Frame & Robust Motion Confidence Rejection
             vec3 tempColor = curRgb;
             if (uHasPrevFrame != 0 && uTemporalDenoise > 0.01) {
-                vec3 rawPrevRgb = texture2D(sPrevTexture, vTextureCoord).rgb;
+                vec3 rawPrevRgb = texture2D(sPrevTexture, vFboCoord).rgb;
                 // Clamp history buffer to current local color bounding box to prevent runaway feedback & trailing
                 vec3 prevRgb = clamp(rawPrevRgb, clampMin, clampMax);
 
@@ -146,19 +149,25 @@ object ComputationalVideoShader {
             float laplacian = 4.0 * lumCenter - (lumTop + lumBottom + lumLeft + lumRight);
             float edgeMag = abs(laplacian);
 
-            // Chroma Denoise: Clean chromatic noise specks in flat/dark regions
+            // Chroma Denoise: Clean chromatic noise specks in shadows/dark regions without smearing colors
             if (uChromaDenoise > 0.01) {
-                float chromaMask = clamp(1.0 - edgeMag * 10.0, 0.0, 1.0) * uChromaDenoise;
+                float darkNoiseMask = clamp(1.0 - lumCenter / 0.40, 0.0, 1.0);
+                float chromaMask = clamp(1.0 - edgeMag * 10.0, 0.0, 1.0) * darkNoiseMask * uChromaDenoise;
                 vec3 cleanChroma = vec3(lumCenter) + (blurColor - vec3(blurLum));
-                tempColor = mix(tempColor, cleanChroma, chromaMask * 0.65);
+                tempColor = mix(tempColor, cleanChroma, chromaMask * 0.70);
             }
 
-            // Edge-Aware Adaptive Sharpening with halo suppression and delta clamping
+            // High-Frequency Fine Detail & Edge-Aware Adaptive Sharpening
             vec3 sharpColor = tempColor;
-            if (uEdgeSharpening > 0.01) {
-                float sharpWeight = clamp(edgeMag * 6.0, 0.0, 1.0) * clamp(1.0 - edgeMag * 3.0, 0.0, 1.0);
-                float sharpDelta = clamp(laplacian * (uEdgeSharpening * sharpWeight), -0.12, 0.12);
-                sharpColor = clamp(tempColor + vec3(sharpDelta), 0.0, 1.0);
+            if (uEdgeSharpening > 0.01 || uFineDetail > 0.01) {
+                // High frequency micro-detail extraction
+                vec3 highFreq = curRgb - blurColor;
+                // Edge-aware unsharp mask with halo suppression
+                float detailLuma = lumCenter - blurLum;
+                float haloSuppress = 1.0 / (1.0 + edgeMag * 8.0);
+                float edgeBoost = detailLuma * uEdgeSharpening * (0.7 + 0.6 * haloSuppress);
+                vec3 detailBoost = highFreq * (uFineDetail * 0.75);
+                sharpColor = clamp(tempColor + vec3(edgeBoost) + detailBoost, 0.0, 1.0);
             }
 
             // 5. Dynamic Range, Highlight Recovery & Shadow Recovery

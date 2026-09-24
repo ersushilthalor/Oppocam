@@ -23,6 +23,7 @@ import com.google.mlkit.vision.segmentation.Segmentation
 import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1377,6 +1378,15 @@ class PortraitProcessor(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
+            } else {
+                try {
+                    val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
+                    if (!dcimDir.exists()) dcimDir.mkdirs()
+                    val targetFile = File(dcimDir, fileName)
+                    put(MediaStore.MediaColumns.DATA, targetFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Legacy DCIM path resolution failed", e)
+                }
             }
         }
 
@@ -1396,6 +1406,11 @@ class PortraitProcessor(private val context: Context) {
                     contentValues.clear()
                     contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
                     resolver.update(itemUri, contentValues, null, null)
+                } else {
+                    val legacyPath = contentValues.getAsString(MediaStore.MediaColumns.DATA)
+                    if (!legacyPath.isNullOrEmpty()) {
+                        android.media.MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg"), null)
+                    }
                 }
                 Log.d(TAG, "Portrait saved successfully: $itemUri")
                 itemUri
