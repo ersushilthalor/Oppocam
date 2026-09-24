@@ -130,7 +130,6 @@ fun CameraScreen(
     val fastShutterFrameCount by viewModel.fastShutterFrameCount.collectAsStateWithLifecycle()
     val isFastShutterHolding by viewModel.isFastShutterHolding.collectAsStateWithLifecycle()
     val isVideoSettingsPanelOpen by viewModel.isVideoSettingsPanelOpen.collectAsStateWithLifecycle()
-    val computationalVideoPipeline by viewModel.computationalVideoPipeline.collectAsStateWithLifecycle()
 
     val cinemaConfig by viewModel.cinemaConfig.collectAsStateWithLifecycle()
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
@@ -533,8 +532,6 @@ fun CameraScreen(
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
-            activeComputationalPipeline = computationalVideoPipeline,
-            onComputationalPipelineChange = { viewModel.setComputationalVideoPipeline(it) },
             onFlashClick = { viewModel.cycleFlashMode() },
             onTimerClick = { viewModel.cycleTimerMode() },
             onGridClick = { viewModel.cycleGridType() },
@@ -551,7 +548,6 @@ fun CameraScreen(
                 currentResolution = selectedVideoResolution,
                 currentFps = videoFps,
                 isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-                currentComputationalPipeline = computationalVideoPipeline,
                 onResolutionSelected = { res ->
                     viewModel.selectVideoResolution(res)
                 },
@@ -560,9 +556,6 @@ fun CameraScreen(
                 },
                 onUltraStabilizationToggle = {
                     viewModel.toggleUltraStabilization()
-                },
-                onComputationalPipelineSelected = { pipeline ->
-                    viewModel.setComputationalVideoPipeline(pipeline)
                 },
                 onDismiss = { viewModel.setVideoSettingsPanelOpen(false) },
                 modifier = Modifier

@@ -221,27 +221,4 @@ class ExampleUnitTest {
         prefs.isKeepFrontCameraReady = false
         assertFalse(prefs.isKeepFrontCameraReady)
     }
-
-    @Test
-    fun testMotorolaInstantSwitchEngineState() {
-        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
-        val engine = com.example.camera.engine.MotorolaInstantSwitchEngine(context)
-
-        assertNotNull(engine.switchState.value)
-
-        // Test independent state toggles via engine
-        engine.setShowUltraWidePreview(true)
-        assertTrue(engine.switchState.value.isShowUltraWidePreview)
-
-        engine.setShowUltraWidePreview(false)
-        assertFalse(engine.switchState.value.isShowUltraWidePreview)
-
-        engine.setKeepFrontCameraReady(true)
-        assertTrue(engine.switchState.value.isKeepFrontCameraReady)
-
-        engine.setShowFrontCameraPreview(true)
-        assertTrue(engine.switchState.value.isShowFrontCameraPreview)
-
-        engine.release()
-    }
 }

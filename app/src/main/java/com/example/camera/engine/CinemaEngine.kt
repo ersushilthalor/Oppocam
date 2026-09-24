@@ -143,11 +143,11 @@ class CinemaEngine(private val context: Context) {
         supportsGammaValue = tonemapModes.contains(CameraCharacteristics.TONEMAP_MODE_GAMMA_VALUE)
         tonemapMaxPoints = chars.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS) ?: CURVE_POINTS
 
-        val colorModes = chars.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_MODES) ?: intArrayOf()
-        supportsTransformMatrix = colorModes.contains(CameraCharacteristics.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-        supportsColorCorrection = supportsTransformMatrix ||
-                colorModes.contains(CameraCharacteristics.COLOR_CORRECTION_MODE_FAST) ||
-                colorModes.contains(CameraCharacteristics.COLOR_CORRECTION_MODE_HIGH_QUALITY)
+        val hwLevel = chars.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) ?: CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
+        val isFullOrBetter = hwLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
+                hwLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+        supportsTransformMatrix = isFullOrBetter
+        supportsColorCorrection = true
 
         val edgeModes = chars.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
         availableEdgeModes = edgeModes

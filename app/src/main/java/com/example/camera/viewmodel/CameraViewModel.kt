@@ -13,7 +13,6 @@ import androidx.lifecycle.viewModelScope
 import com.example.camera.data.CameraPreferences
 import com.example.camera.engine.Camera2Engine
 import com.example.camera.engine.PortraitProcessor
-import com.example.camera.computational.video.ComputationalVideoPipeline
 import com.example.camera.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,25 +59,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val isRecordingVideo: StateFlow<Boolean> = engine.isRecordingVideo
     val videoDurationSeconds: StateFlow<Int> = engine.videoDurationSeconds
-
-    val computationalVideoPipeline: StateFlow<ComputationalVideoPipeline> = engine.computationalVideoPipeline
-
-    fun setComputationalVideoPipeline(pipeline: ComputationalVideoPipeline) {
-        engine.setComputationalVideoPipeline(pipeline)
-    }
-
-    fun cycleComputationalVideoPipeline() {
-        val current = computationalVideoPipeline.value
-        val next = when (current) {
-            ComputationalVideoPipeline.DEFAULT -> ComputationalVideoPipeline.PIXEL
-            ComputationalVideoPipeline.PIXEL -> ComputationalVideoPipeline.SAMSUNG
-            ComputationalVideoPipeline.SAMSUNG -> ComputationalVideoPipeline.IPHONE
-            ComputationalVideoPipeline.IPHONE -> ComputationalVideoPipeline.VIVO
-            ComputationalVideoPipeline.VIVO -> ComputationalVideoPipeline.DEFAULT
-        }
-        engine.setComputationalVideoPipeline(next)
-        showToast("Computational Video: ${next.displayName}")
-    }
 
     // Portrait Mode Controls & Pipeline State
     private val _portraitConfig = MutableStateFlow(preferences.getModePortraitConfig(preferences.cameraMode))
@@ -477,30 +457,31 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (enabled) "Custom Image Pipeline: ON" else "Custom Image Pipeline: OFF")
     }
 
-    // --- Motorola Instant Camera Switching ---
-    val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = engine.motorolaSwitchEngine.switchState
+    // --- Camera Switching State ---
+    private val _instantSwitchState = MutableStateFlow(MotorolaInstantSwitchState())
+    val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
 
     fun setShowUltraWidePreview(enabled: Boolean) {
-        engine.motorolaSwitchEngine.setShowUltraWidePreview(enabled)
+        _instantSwitchState.value = _instantSwitchState.value.copy(isShowUltraWidePreview = enabled)
         showToast(if (enabled) "Ultra-Wide Little Preview: ON" else "Ultra-Wide Little Preview: OFF")
     }
 
     fun setKeepFrontCameraReady(enabled: Boolean) {
-        engine.motorolaSwitchEngine.setKeepFrontCameraReady(enabled)
+        _instantSwitchState.value = _instantSwitchState.value.copy(isKeepFrontCameraReady = enabled)
         showToast(if (enabled) "Keep Front Camera Ready: ON" else "Keep Front Camera Ready: OFF")
     }
 
     fun setShowFrontCameraPreview(enabled: Boolean) {
-        engine.motorolaSwitchEngine.setShowFrontCameraPreview(enabled)
+        _instantSwitchState.value = _instantSwitchState.value.copy(isShowFrontCameraPreview = enabled)
         showToast(if (enabled) "Front Camera Little Preview: ON" else "Front Camera Little Preview: OFF")
     }
 
     fun onUltraWideLittlePreviewSurfaceAvailable(surfaceTexture: SurfaceTexture?) {
-        engine.motorolaSwitchEngine.setUltraWidePreviewSurfaceTexture(surfaceTexture)
+        // Safe stub - no background camera HAL lock
     }
 
     fun onFrontLittlePreviewSurfaceAvailable(surfaceTexture: SurfaceTexture?) {
-        engine.motorolaSwitchEngine.setFrontPreviewSurfaceTexture(surfaceTexture)
+        // Safe stub - no background camera HAL lock
     }
 
     fun switchToUltraWideInstant() {

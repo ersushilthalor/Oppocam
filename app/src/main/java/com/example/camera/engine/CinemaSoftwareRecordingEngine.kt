@@ -129,17 +129,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             throw IllegalStateException("Cannot create cinema temp file: ${e.message}", e)
         }
 
-        // 2. Setup MediaMuxer according to container format and codec support
-        val hasVp9 = hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)
-        val hasOpus = isAudioEnabled && hasEncoderForMime(MediaFormat.MIMETYPE_AUDIO_OPUS)
-        // WebM is strictly used ONLY when VP9 is requested, VP9 encoder is supported,
-        // and either audio is disabled or Opus audio encoder is supported.
-        val isWebm = (codec == CinemaCodec.VP9) && hasVp9 && (!isAudioEnabled || hasOpus)
-        val muxerOutputFormat = if (isWebm) {
-            MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM
-        } else {
-            MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
-        }
+        // 2. Setup MediaMuxer: Standard MP4 container for universal playback
+        val isWebm = false
+        val muxerOutputFormat = MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
 
         synchronized(muxerLock) {
             try {
@@ -269,7 +261,13 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val file = outputFile
         outputFile = null
         activeCodec = null
-        return file
+        if (file != null && file.exists()) {
+            Log.i(TAG, "Cinema recording finalized successfully: ${file.absolutePath} (${file.length()} bytes)")
+            return file
+        } else {
+            Log.w(TAG, "Cinema recording output file missing: ${file?.absolutePath}")
+            return null
+        }
     }
 
     // =========================================================================
@@ -620,15 +618,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                         val encodedBuffer = encoder.getOutputBuffer(outputBufferIndex)
                         if (encodedBuffer != null) {
                             synchronized(muxerLock) {
-                                // Normalize presentation timestamps
+                                // Normalize presentation timestamps to always start at 0
                                 if (baseVideoPtsUs < 0) {
-                                    // If incoming PTS is already on a zero-based recording timeline (e.g. from compositor),
-                                    // preserve it (base = 0) so it does not conflict with the compositor timeline or drift A/V sync.
-                                    baseVideoPtsUs = if (bufferInfo.presentationTimeUs in 0L..60_000_000L) {
-                                        0L
-                                    } else {
-                                        bufferInfo.presentationTimeUs
-                                    }
+                                    baseVideoPtsUs = bufferInfo.presentationTimeUs
                                 }
                                 var ptsUs = bufferInfo.presentationTimeUs - baseVideoPtsUs
                                 if (ptsUs < 0) ptsUs = 0
@@ -850,11 +842,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                         if (encodedBuffer != null) {
                             synchronized(muxerLock) {
                                 if (baseAudioPtsUs < 0) {
-                                    baseAudioPtsUs = if (bufferInfo.presentationTimeUs in 0L..60_000_000L) {
-                                        0L
-                                    } else {
-                                        bufferInfo.presentationTimeUs
-                                    }
+                                    baseAudioPtsUs = bufferInfo.presentationTimeUs
                                 }
                                 var ptsUs = bufferInfo.presentationTimeUs - baseAudioPtsUs
                                 if (ptsUs < 0) ptsUs = 0

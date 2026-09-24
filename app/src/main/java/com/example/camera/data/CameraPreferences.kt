@@ -47,7 +47,6 @@ class CameraPreferences(context: Context) {
         private const val KEY_SHOW_FRONT_PREVIEW = "pref_show_front_preview"
         private const val KEY_FLOATING_WINDOW_TRANSPARENCY = "pref_floating_window_transparency"
         private const val KEY_FLOATING_WINDOW_BLUR_STRENGTH = "pref_floating_window_blur_strength"
-        private const val KEY_COMPUTATIONAL_VIDEO_PIPELINE = "pref_computational_video_pipeline"
         private const val KEY_PREFERRED_GALLERY_PACKAGE = "pref_preferred_gallery_package"
         private const val KEY_HAS_PROMPTED_GALLERY = "pref_has_prompted_gallery"
         private const val KEY_ZOOM_PRESETS_MODE = "pref_zoom_presets_mode"
@@ -86,13 +85,6 @@ class CameraPreferences(context: Context) {
     var hasPromptedGallerySelection: Boolean
         get() = prefs.getBoolean(KEY_HAS_PROMPTED_GALLERY, false)
         set(value) = prefs.edit().putBoolean(KEY_HAS_PROMPTED_GALLERY, value).apply()
-
-    var computationalVideoPipeline: com.example.camera.computational.video.ComputationalVideoPipeline
-        get() {
-            val id = prefs.getString(KEY_COMPUTATIONAL_VIDEO_PIPELINE, com.example.camera.computational.video.ComputationalVideoPipeline.DEFAULT.id)
-            return com.example.camera.computational.video.ComputationalVideoPipeline.fromId(id)
-        }
-        set(value) = prefs.edit().putString(KEY_COMPUTATIONAL_VIDEO_PIPELINE, value.id).apply()
 
     var floatingWindowTransparency: Float
         get() = prefs.getFloat(KEY_FLOATING_WINDOW_TRANSPARENCY, 0.50f)
