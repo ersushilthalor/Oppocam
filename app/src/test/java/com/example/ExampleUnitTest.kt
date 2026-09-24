@@ -108,35 +108,10 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun testDollyZoomEngineLockAndApparentSize() {
-        val dolly = com.example.camera.engine.DollyZoomEngine()
-        assertFalse(dolly.dollyState.value.isCalibrated)
-        assertFalse(dolly.dollyState.value.isSubjectLocked)
-
-        // Lock on subject at coordinates (0.5, 0.5)
-        dolly.lockSubject(
-            normX = 0.5f,
-            normY = 0.5f,
-            currentZoom = 1.0f,
-            faces = null,
-            lensFocusDiopters = 1.0f, // 1 meter
-            sensorRect = android.graphics.Rect(0, 0, 4000, 3000),
-            minZoom = 1.0f,
-            maxZoom = 8.0f
-        )
-
-        val lockedState = dolly.dollyState.value
-        assertTrue(lockedState.isCalibrated)
-        assertTrue(lockedState.isTracking)
-        assertTrue(lockedState.isSubjectLocked)
-        assertNotNull(lockedState.subjectBounds)
-        assertEquals(1.0f, lockedState.initialZoom, 0.001f)
-        assertEquals(1.0f, lockedState.targetDistanceMeters, 0.1f)
-
-        // Reset
-        dolly.reset()
-        assertFalse(dolly.dollyState.value.isCalibrated)
-        assertFalse(dolly.dollyState.value.isTracking)
+    fun testRemovedModesPurgedFromCameraMode() {
+        val modes = com.example.camera.model.CameraMode.entries.map { it.name }
+        assertFalse("DOLLY_ZOOM should not exist in CameraMode", modes.contains("DOLLY_ZOOM"))
+        assertFalse("HUMAN_VISION should not exist in CameraMode", modes.contains("HUMAN_VISION"))
     }
 
     @Test

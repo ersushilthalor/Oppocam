@@ -214,12 +214,9 @@ class Camera2Engine(private val context: Context) {
 
     private var activeMeteringRectangle: MeteringRectangle? = null
 
-    val dollyZoomEngine = DollyZoomEngine()
-    val nightFusionProcessor = NightFusionProcessor()
-    val gyroStabilizationEngine = GyroStabilizationEngine(context)
-    val photoHdrEngine = com.example.camera.engine.hdr.PhotoHdrEngine(context)
-    val humanVisionEngine = com.example.camera.engine.humanvision.HumanVisionEngine(context)
-    val humanVisionProgress: StateFlow<com.example.camera.engine.humanvision.HumanVisionProgress> = humanVisionEngine.progressState
+    val nightFusionProcessor by lazy { NightFusionProcessor() }
+    val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
+    val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
 
     private val _hybridStabilizationConfig = MutableStateFlow(HybridStabilizationConfig())
     val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = _hybridStabilizationConfig.asStateFlow()
@@ -229,8 +226,7 @@ class Camera2Engine(private val context: Context) {
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA ||
-                currentMode == CameraMode.DOLLY_ZOOM
+        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
         if (config.isUltraStabilizationEnabled && isVideoMode) {
             gyroStabilizationEngine.start()
         } else {
@@ -1154,8 +1150,7 @@ class Camera2Engine(private val context: Context) {
         currentMode = mode
         updatePreviewAspectRatio()
 
-        val isVideoMode = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA ||
-                mode == CameraMode.DOLLY_ZOOM)
+        val isVideoMode = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA)
         if (!isVideoMode || !_hybridStabilizationConfig.value.isUltraStabilizationEnabled) {
             gyroStabilizationEngine.stop()
             lastStabilizedCrop = null
@@ -1898,8 +1893,6 @@ class Camera2Engine(private val context: Context) {
     }
 
     private var lastCaptureResult: TotalCaptureResult? = null
-    private var lastDollyApplyTime = 0L
-    private var lastAppliedDollyZoom = 1.0f
 
     private var lastStabilizedCropTime = 0L
     private var lastStabilizedCrop: Rect? = null
@@ -1914,29 +1907,7 @@ class Camera2Engine(private val context: Context) {
             lastCaptureResult = result
             CameraPerformanceMonitor.onPreviewFrame()
 
-            if (currentMode == CameraMode.DOLLY_ZOOM) {
-                val lens = _selectedLens.value
-                if (lens != null) {
-                    try {
-                        val chars = getCharacteristics(lens.cameraId) ?: return
-                        val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                        val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
-                        } else null
-                        val minZoom = zoomRange?.lower ?: 1.0f
-                        val maxZoom = zoomRange?.upper ?: (chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 8f)
-                        val newZoom = dollyZoomEngine.processFrame(
-                            result = result,
-                            sensorRect = sensorRect,
-                            minAvailableZoom = minZoom,
-                            maxAvailableZoom = maxZoom
-                        )
-                        if (newZoom != null) {
-                            applyContinuousDollyZoom(newZoom)
-                        }
-                    } catch (ignored: Exception) {}
-                }
-            } else if (_hybridStabilizationConfig.value.isUltraStabilizationEnabled &&
+            if (_hybridStabilizationConfig.value.isUltraStabilizationEnabled &&
                 (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)) {
                 // When hardware EIS is supported, the camera HAL's internal DSP/ISP handles gyro EIS.
                 // Interfering with SCALER_CROP_REGION on every 30fps repeating request disrupts the HAL's internal EIS.
@@ -2067,37 +2038,7 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun applyContinuousDollyZoom(zoom: Float) {
-        val now = System.currentTimeMillis()
-        if (now - lastDollyApplyTime < 16) return // 60fps responsive tracking
-        if (kotlin.math.abs(zoom - lastAppliedDollyZoom) < 0.002f) return
-        lastDollyApplyTime = now
-        lastAppliedDollyZoom = zoom
 
-        currentZoom = zoom
-        _currentZoom.value = zoom
-
-        val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
-            } else {
-                val chars = getCharacteristics(_selectedLens.value?.cameraId ?: "0")
-                val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                if (activeArray != null) {
-                    val cropW = (activeArray.width() / zoom).toInt()
-                    val cropH = (activeArray.height() / zoom).toInt()
-                    val cropX = (activeArray.width() - cropW) / 2
-                    val cropY = (activeArray.height() - cropH) / 2
-                    builder.set(CaptureRequest.SCALER_CROP_REGION, Rect(cropX, cropY, cropX + cropW, cropY + cropH))
-                }
-            }
-            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error applying continuous dolly zoom", e)
-        }
-    }
 
     /**
      * Apply AE, AF, AWB, Flash, ISO, Shutter, Zoom, Stabilization to CaptureRequest.Builder
@@ -2169,8 +2110,7 @@ class Camera2Engine(private val context: Context) {
                 }
             }
             FocusMode.CONTINUOUS -> {
-                val mode = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA ||
-                    currentMode == CameraMode.DOLLY_ZOOM) {
+                val mode = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) {
                     CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
                 } else {
                     CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
@@ -2199,7 +2139,7 @@ class Camera2Engine(private val context: Context) {
 
         // Coordinated Hybrid OIS + EIS Stabilization
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA ||
-                currentMode == CameraMode.DOLLY_ZOOM || _isRecordingVideo.value
+                _isRecordingVideo.value
 
         val hybridConfig = _hybridStabilizationConfig.value
         val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
@@ -2588,7 +2528,7 @@ class Camera2Engine(private val context: Context) {
                         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
                     } else {
                         // Transition to smooth continuous AF holding the tapped region to prevent hunting
-                        val continuousMode = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || currentMode == CameraMode.DOLLY_ZOOM) {
+                        val continuousMode = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) {
                             CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
                         } else {
                             CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
@@ -2630,33 +2570,7 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    fun lockDollySubjectAt(normX: Float, normY: Float) {
-        val lens = _selectedLens.value ?: return
-        val chars = getCharacteristics(lens.cameraId) ?: return
-        val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-        val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 8f
-        val lastResult = lastCaptureResult
-        val faces = lastResult?.get(CaptureResult.STATISTICS_FACES)
-        val diopters = lastResult?.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
-        dollyZoomEngine.lockSubject(
-            normX = normX,
-            normY = normY,
-            currentZoom = currentZoom,
-            faces = faces,
-            lensFocusDiopters = diopters,
-            sensorRect = sensorRect,
-            minZoom = 1.0f,
-            maxZoom = maxZoom
-        )
-    }
 
-    fun calibrateDollyZoom() {
-        lockDollySubjectAt(0.5f, 0.5f)
-    }
-
-    fun resetDollyZoom() {
-        dollyZoomEngine.reset()
-    }
 
     fun setPreviewAspectRatio(ratio: Float) {
         if (ratio > 0f) {
@@ -3062,266 +2976,6 @@ class Camera2Engine(private val context: Context) {
             withContext(Dispatchers.Main) {
                 onProgress(finalProgress)
                 onComplete(uri)
-            }
-        }
-    }
-
-    /**
-     * Human Vision / Natural Perspective Computational Capture:
-     * - Captures 0.5x Ultra-Wide master composition frame (or full sensor reference).
-     * - Captures 1x burst (2-3 frames with locked AE/AWB) for HDR and temporal denoising.
-     * - Captures 3x overlapping tiles covering distant horizon / center regions.
-     * - Passes to HumanVisionEngine for depth-aware fusion & natural perspective correction.
-     */
-    fun takeHumanVisionPhoto(
-        config: com.example.camera.engine.humanvision.HumanVisionConfig = com.example.camera.engine.humanvision.HumanVisionConfig(),
-        onComplete: (Uri?) -> Unit
-    ) {
-        val camera = cameraDevice ?: run {
-            onComplete(null)
-            return
-        }
-        val session = captureSession ?: run {
-            onComplete(null)
-            return
-        }
-        val readerJpeg = imageReaderJpeg ?: run {
-            onComplete(null)
-            return
-        }
-
-        _isCapturing.value = true
-        val isCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
-        val collectedRawBitmaps = java.util.Collections.synchronizedList(mutableListOf<Bitmap>())
-
-        val activeLens = _selectedLens.value
-        val chars = activeLens?.let { getCharacteristics(it.id) }
-        val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-            ?: Rect(0, 0, 4000, 3000)
-
-        val rotationDeg = getCaptureJpegOrientation()
-        val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-
-        // Calculate 3x overlapping tile crop regions on the sensor
-        val sensorW = sensorRect.width().coerceAtLeast(1)
-        val sensorH = sensorRect.height().coerceAtLeast(1)
-        val tileW = (sensorW / 3).coerceAtLeast(1)
-        val tileH = (sensorH / 3).coerceAtLeast(1)
-        val distantCenterY = (sensorH * 0.40f).toInt()
-        val tileTop = (distantCenterY - tileH / 2).coerceIn(0, sensorH - tileH)
-
-        val centerLeft = (sensorW - tileW) / 2
-        val stepX = (tileW * (1.0f - config.tileOverlapRatio)).toInt()
-        val leftTileLeft = (centerLeft - stepX).coerceIn(0, sensorW - tileW)
-        val rightTileLeft = (centerLeft + stepX).coerceIn(0, sensorW - tileW)
-
-        val centerTileRect = Rect(centerLeft, tileTop, centerLeft + tileW, tileTop + tileH)
-        val leftTileRect = Rect(leftTileLeft, tileTop, leftTileLeft + tileW, tileTop + tileH)
-        val rightTileRect = Rect(rightTileLeft, tileTop, rightTileLeft + tileW, tileTop + tileH)
-
-        val totalRequests = 6
-
-        readerJpeg.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
-            try {
-                val buffer = image.planes[0].buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                image.close()
-
-                val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                if (rawBitmap != null) {
-                    val matrix = Matrix()
-                    if (rawBitmap.width > rawBitmap.height && rotationDeg != 0) {
-                        matrix.postRotate(rotationDeg.toFloat())
-                    }
-                    if (isFrontFacing && saveSelfieAsPreviewed) {
-                        matrix.postScale(-1f, 1f)
-                    }
-
-                    val orientedBitmap = if (!matrix.isIdentity) {
-                        val transformed = Bitmap.createBitmap(
-                            rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
-                        )
-                        if (transformed != rawBitmap) rawBitmap.recycle()
-                        transformed
-                    } else rawBitmap
-
-                    synchronized(collectedRawBitmaps) {
-                        collectedRawBitmaps.add(orientedBitmap)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error acquiring Human Vision capture frame", e)
-            }
-
-            val currentCount = synchronized(collectedRawBitmaps) { collectedRawBitmaps.size }
-            if (currentCount >= totalRequests) {
-                if (isCompleted.compareAndSet(false, true)) {
-                    readerJpeg.setOnImageAvailableListener(null, null)
-                    dispatchHumanVisionProcessing(
-                        bitmaps = synchronized(collectedRawBitmaps) { ArrayList(collectedRawBitmaps) },
-                        sensorW = sensorW,
-                        sensorH = sensorH,
-                        centerRect = centerTileRect,
-                        leftRect = leftTileRect,
-                        rightRect = rightTileRect,
-                        config = config,
-                        onComplete = onComplete
-                    )
-                }
-            }
-        }, backgroundHandler)
-
-        try {
-            val requests = mutableListOf<CaptureRequest>()
-
-            // 0. Reference frame (full composition / foreground)
-            val refBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-            applyCommonSettings(refBuilder)
-            refBuilder.set(CaptureRequest.CONTROL_AE_LOCK, false)
-            refBuilder.set(CaptureRequest.CONTROL_AWB_LOCK, false)
-            refBuilder.set(CaptureRequest.JPEG_ORIENTATION, rotationDeg)
-            refBuilder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
-            refBuilder.set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
-            refBuilder.addTarget(readerJpeg.surface)
-            requests.add(refBuilder.build())
-
-            // 1..2. 1x Detail burst with locked AE/AWB
-            for (i in 0 until 2) {
-                val b = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                applyCommonSettings(b)
-                b.set(CaptureRequest.CONTROL_AE_LOCK, true)
-                b.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                b.set(CaptureRequest.JPEG_ORIENTATION, rotationDeg)
-                b.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
-                b.set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
-                b.addTarget(readerJpeg.surface)
-                requests.add(b.build())
-            }
-
-            // 3..5. 3x Distant tiles (Center, Left, Right)
-            val tileCrops = listOf(centerTileRect, leftTileRect, rightTileRect)
-            for (tileRect in tileCrops) {
-                val b = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                applyCommonSettings(b)
-                b.set(CaptureRequest.CONTROL_AE_LOCK, true)
-                b.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                b.set(CaptureRequest.JPEG_ORIENTATION, rotationDeg)
-                b.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
-                b.set(CaptureRequest.SCALER_CROP_REGION, tileRect)
-                b.addTarget(readerJpeg.surface)
-                requests.add(b.build())
-            }
-
-            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    Log.d(TAG, "Human Vision burst frame completed")
-                }
-            }, backgroundHandler)
-
-            // Watchdog fallback in case any frame is dropped by Camera2 HAL
-            engineScope.launch {
-                delay(4500)
-                if (isCompleted.compareAndSet(false, true)) {
-                    Log.w(TAG, "Human Vision capture watchdog triggered")
-                    readerJpeg.setOnImageAvailableListener(null, null)
-                    val frames = synchronized(collectedRawBitmaps) { ArrayList(collectedRawBitmaps) }
-                    dispatchHumanVisionProcessing(
-                        bitmaps = frames,
-                        sensorW = sensorW,
-                        sensorH = sensorH,
-                        centerRect = centerTileRect,
-                        leftRect = leftTileRect,
-                        rightRect = rightTileRect,
-                        config = config,
-                        onComplete = onComplete
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed initiating Human Vision capture burst", e)
-            _isCapturing.value = false
-            takePhoto(onComplete)
-        }
-    }
-
-    private fun dispatchHumanVisionProcessing(
-        bitmaps: List<Bitmap>,
-        sensorW: Int,
-        sensorH: Int,
-        centerRect: Rect,
-        leftRect: Rect,
-        rightRect: Rect,
-        config: com.example.camera.engine.humanvision.HumanVisionConfig,
-        onComplete: (Uri?) -> Unit
-    ) {
-        if (bitmaps.isEmpty()) {
-            _isCapturing.value = false
-            takePhoto(onComplete)
-            return
-        }
-
-        engineScope.launch(Dispatchers.Default) {
-            try {
-                val refBitmap = bitmaps.firstOrNull()
-                val mainFrames = if (bitmaps.size > 2) {
-                    bitmaps.subList(1, min(3, bitmaps.size))
-                } else {
-                    listOfNotNull(refBitmap)
-                }
-
-                val tileRects = listOf(centerRect, leftRect, rightRect)
-                val zoomBitmaps = if (bitmaps.size > 3) bitmaps.subList(3, bitmaps.size) else emptyList()
-                val zoomTiles = mutableListOf<com.example.camera.engine.humanvision.TileRegion>()
-
-                for ((idx, bmp) in zoomBitmaps.withIndex()) {
-                    val r = tileRects.getOrElse(idx) { centerRect }
-                    val normRect = android.graphics.RectF(
-                        r.left.toFloat() / sensorW,
-                        r.top.toFloat() / sensorH,
-                        r.right.toFloat() / sensorW,
-                        r.bottom.toFloat() / sensorH
-                    )
-                    zoomTiles.add(
-                        com.example.camera.engine.humanvision.TileRegion(
-                            index = idx,
-                            rectNorm = normRect,
-                            bitmap = bmp
-                        )
-                    )
-                }
-
-                val frameSet = com.example.camera.engine.humanvision.CapturedFrameSet(
-                    ultraWideReference = refBitmap,
-                    mainFrames = mainFrames,
-                    zoomTiles = zoomTiles
-                )
-
-                humanVisionEngine.processHumanVisionCapture(
-                    frameSet = frameSet,
-                    config = config
-                ) { finalUri ->
-                    _isCapturing.value = false
-                    updateStorageStats()
-                    if (finalUri != null) {
-                        _lastCapturedMedia.value = CapturedMedia(
-                            uri = finalUri,
-                            isVideo = false,
-                            timestamp = System.currentTimeMillis(),
-                            displayName = "HUMAN_VISION_${System.currentTimeMillis()}.jpg"
-                        )
-                    }
-                    onComplete(finalUri)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in dispatchHumanVisionProcessing", e)
-                _isCapturing.value = false
-                withContext(Dispatchers.Main) { onComplete(null) }
             }
         }
     }

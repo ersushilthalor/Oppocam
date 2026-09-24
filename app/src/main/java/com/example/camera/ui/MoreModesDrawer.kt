@@ -34,11 +34,8 @@ fun MoreModesDrawer(
     onDismissRequest: () -> Unit,
     onSelectProManual: () -> Unit,
     onSelectCinemaLog: () -> Unit,
-    onSelectMacro: () -> Unit,
     onSelectNight: () -> Unit,
-    onSelectDollyZoom: () -> Unit = {},
     onSelectAiSubjectTracking: () -> Unit = {},
-    onSelectHumanVision: () -> Unit = {},
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -131,36 +128,12 @@ fun MoreModesDrawer(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     MoreModeCard(
-                        icon = Icons.Outlined.ZoomOutMap,
-                        title = "Dolly Zoom",
-                        subtitle = "Intelligent Hitchcock vertigo",
-                        tag = "mode_card_dolly_zoom",
-                        modifier = Modifier.weight(1f),
-                        onClick = onSelectDollyZoom
-                    )
-                    MoreModeCard(
                         icon = Icons.Outlined.NightsStay,
                         title = "Night Fusion",
                         subtitle = "Computational HDR burst",
                         tag = "mode_card_night",
                         modifier = Modifier.weight(1f),
                         onClick = onSelectNight
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MoreModeCard(
-                        icon = Icons.Outlined.CenterFocusStrong,
-                        title = "Macro Close-Up",
-                        subtitle = "Extreme optical focal lock",
-                        tag = "mode_card_macro",
-                        modifier = Modifier.weight(1f),
-                        onClick = onSelectMacro
                     )
                     MoreModeCard(
                         icon = Icons.Outlined.GpsFixed,
@@ -170,23 +143,6 @@ fun MoreModesDrawer(
                         modifier = Modifier.weight(1f),
                         onClick = onSelectAiSubjectTracking
                     )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MoreModeCard(
-                        icon = Icons.Outlined.Visibility,
-                        title = "Human Vision",
-                        subtitle = "Natural depth & distant acuity",
-                        tag = "mode_card_human_vision",
-                        modifier = Modifier.weight(1f),
-                        onClick = onSelectHumanVision
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))

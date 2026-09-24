@@ -10,10 +10,8 @@ enum class CameraMode(val title: String) {
     VIDEO("Video"),
     CINEMA("Cinema"),
     NIGHT("Night"),
-    DOLLY_ZOOM("Dolly"),
     MORE("More"),
-    AI_SUBJECT_TRACKING("AI Tracking"),
-    HUMAN_VISION("Human Vision")
+    AI_SUBJECT_TRACKING("AI Tracking")
 }
 
 data class PortraitConfig(
@@ -433,27 +431,6 @@ data class CapturedMedia(
     val timestamp: Long,
     val displayName: String,
     val isFrontCamera: Boolean = false
-)
-
-enum class DollyDirection(val label: String) {
-    AUTO("Auto Compensation"),
-    PUSH_IN("Push In (Walk Closer)"),
-    PULL_OUT("Pull Out (Walk Away)")
-}
-
-data class DollyZoomState(
-    val isCalibrated: Boolean = false,
-    val isTracking: Boolean = false,
-    val isSubjectLocked: Boolean = false,
-    val initialZoom: Float = 1.0f,
-    val targetZoom: Float = 1.0f,
-    val smoothedZoom: Float = 1.0f,
-    val targetDistanceMeters: Float = 1.0f,
-    val currentDistanceMeters: Float = 1.0f,
-    val trackingConfidence: Float = 0f,
-    val subjectBounds: RectF? = null,
-    val direction: DollyDirection = DollyDirection.AUTO,
-    val statusPrompt: String = "Tap subject to lock Dolly Zoom"
 )
 
 data class NightConfig(

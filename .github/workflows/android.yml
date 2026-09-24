@@ -22,10 +22,10 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Accept Android SDK Licenses & Install Platform 36
+      - name: Accept Android SDK Licenses & Install Platforms
         run: |
           mkdir -p "$ANDROID_HOME/licenses" || true
-          echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479491eabf01fb2d2b51b60804816ddf\n859f317696e3e0292e429d6e941b9d4290f76702" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo -e "24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479491eabf01fb2d2b51b60804816ddf\n859f317696e3e0292e429d6e941b9d4290f76702\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-license"
           echo -e "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
           
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -35,16 +35,17 @@ jobs:
           
           if [ -n "$SDKMANAGER" ] && [ -x "$SDKMANAGER" ]; then
             yes | "$SDKMANAGER" --licenses || true
-            yes | "$SDKMANAGER" "platforms;android-36" "platform-tools" || true
+            yes | "$SDKMANAGER" "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "platform-tools" || true
           fi
 
       - name: Restore Debug Keystore and Secrets
         run: |
           if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
             echo "Restoring debug.keystore from debug.keystore.base64..."
-            base64 -d debug.keystore.base64 > debug.keystore
+            base64 -d debug.keystore.base64 > debug.keystore || true
           fi
           touch .env
+          touch .env.example
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -52,12 +53,17 @@ jobs:
           gradle-version: '9.3.1'
 
       - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace --no-daemon
+        run: |
+          chmod +x gradlew || true
+          if [ -x "./gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace --no-daemon
+          else
+            gradle assembleDebug --stacktrace --no-daemon
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/**/*.apk
           if-no-files-found: error
-

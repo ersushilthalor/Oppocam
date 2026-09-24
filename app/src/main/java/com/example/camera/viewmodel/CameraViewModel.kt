@@ -37,7 +37,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val portraitProcessor by lazy { PortraitProcessor(application.applicationContext) }
     private val preferences = CameraPreferences(application.applicationContext)
 
-    val dollyZoomState: StateFlow<DollyZoomState> = engine.dollyZoomEngine.dollyState
     val lastCapturedMedia: StateFlow<CapturedMedia?> = engine.lastCapturedMedia
 
     // Mode & Base State must be initialized before combined flows
@@ -47,7 +46,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _nightConfig = MutableStateFlow(preferences.getModeNightConfig(preferences.cameraMode))
     val nightConfig: StateFlow<NightConfig> = _nightConfig.asStateFlow()
     val nightProgress: StateFlow<NightCaptureProgress> = engine.nightProgress
-    val humanVisionProgress = engine.humanVisionProgress
 
     val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = engine.hybridStabilizationConfig
 
@@ -1384,21 +1382,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.setModeTapFocusConfig(_cameraMode.value, config)
     }
 
-    fun calibrateDollyZoom() {
-        engine.calibrateDollyZoom()
-        showToast("Dolly Subject Calibrated")
-    }
-
-    fun resetDollyZoom() {
-        engine.resetDollyZoom()
-        showToast("Dolly Zoom Reset")
-    }
-
-    fun lockDollySubjectAt(x: Float, y: Float) {
-        engine.lockDollySubjectAt(x, y)
-        showToast("Subject Locked for Dolly Zoom")
-    }
-
     fun triggerNightCapture() {
         if (engine.isCapturing.value) return
 
@@ -1508,40 +1491,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         when (_cameraMode.value) {
             CameraMode.PHOTO, CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> triggerPhotoCapture()
             CameraMode.PORTRAIT -> triggerPortraitCapture()
-            CameraMode.VIDEO, CameraMode.CINEMA, CameraMode.DOLLY_ZOOM -> triggerVideoCapture()
+            CameraMode.VIDEO, CameraMode.CINEMA -> triggerVideoCapture()
             CameraMode.NIGHT -> triggerNightCapture()
-            CameraMode.HUMAN_VISION -> triggerHumanVisionCapture()
-        }
-    }
-
-    private fun triggerHumanVisionCapture() {
-        if (engine.isCapturing.value) return
-
-        val timerSeconds = _timerMode.value.seconds
-        if (timerSeconds > 0) {
-            timerJob?.cancel()
-            timerJob = viewModelScope.launch {
-                for (remaining in timerSeconds downTo 1) {
-                    _activeTimerCountdown.value = remaining
-                    delay(1000)
-                }
-                _activeTimerCountdown.value = null
-                executeHumanVisionCapture()
-            }
-        } else {
-            executeHumanVisionCapture()
-        }
-    }
-
-    private fun executeHumanVisionCapture() {
-        showToast("Human Vision: Capturing wide scene & distant acuity...")
-        com.example.camera.sound.CameraSoundManager.playShutter()
-        engine.takeHumanVisionPhoto { uri ->
-            if (uri != null) {
-                showToast("Human Vision photo saved to DCIM/Camera")
-            } else {
-                showToast("Human Vision capture completed")
-            }
         }
     }
 

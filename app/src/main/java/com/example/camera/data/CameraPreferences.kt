@@ -571,15 +571,6 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean("pref_sun_slider", true)
         set(value) = prefs.edit().putBoolean("pref_sun_slider", value).apply()
 
-    // Dolly Zoom Preferences
-    var dollyDirection: com.example.camera.model.DollyDirection
-        get() {
-            val name = prefs.getString("pref_dolly_direction", com.example.camera.model.DollyDirection.AUTO.name)
-                ?: com.example.camera.model.DollyDirection.AUTO.name
-            return try { com.example.camera.model.DollyDirection.valueOf(name) } catch (e: Exception) { com.example.camera.model.DollyDirection.AUTO }
-        }
-        set(value) = prefs.edit().putString("pref_dolly_direction", value.name).apply()
-
     var nightConfig: NightConfig
         get() = NightConfig(
             durationSeconds = nightDurationSeconds,

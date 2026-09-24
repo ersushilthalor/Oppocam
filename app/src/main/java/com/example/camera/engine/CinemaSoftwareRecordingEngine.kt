@@ -115,6 +115,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         }
 
         val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (codec == CinemaCodec.PRORES)
+        val normWidth = maxOf(width, height)
+        val normHeight = minOf(width, height)
 
         // 1. Ensure parent directories and destination file exist before MediaMuxer initializes
         try {
@@ -165,7 +167,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         // 3. Setup Video MediaCodec
         val inputSurface = try {
-            setupVideoPipeline(width, height, fps, bitrate, codec, is10Bit, isWebm)
+            setupVideoPipeline(normWidth, normHeight, fps, bitrate, codec, is10Bit, isWebm)
         } catch (e: Exception) {
             Log.e(TAG, "Video pipeline setup failed", e)
             synchronized(muxerLock) {
@@ -238,6 +240,25 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         // 5. Finalize MediaMuxer
         synchronized(muxerLock) {
+            val muxer = mediaMuxer
+            if (muxer != null && !isMuxerStarted && videoTrackIndex >= 0) {
+                try {
+                    muxer.start()
+                    isMuxerStarted = true
+                    for (s in pendingVideoSamples) {
+                        try { muxer.writeSampleData(videoTrackIndex, s.buffer, s.info) } catch (ignored: Exception) {}
+                    }
+                    pendingVideoSamples.clear()
+                    if (audioTrackIndex >= 0) {
+                        for (s in pendingAudioSamples) {
+                            try { muxer.writeSampleData(audioTrackIndex, s.buffer, s.info) } catch (ignored: Exception) {}
+                        }
+                        pendingAudioSamples.clear()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Force-starting muxer on stop failed", e)
+                }
+            }
             if (isMuxerStarted && mediaMuxer != null) {
                 try {
                     mediaMuxer?.stop()

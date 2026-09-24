@@ -118,9 +118,9 @@ fun Viewfinder(
         // Enforce fixed aspect ratios strictly dictated by mode:
         // - Photo mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
         // - Portrait mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
-        // - All other modes (Video, Cinema, Night, Dolly Zoom, More, etc.): fixed 9:16 (portrait 9:16 -> height / width = 16 / 9)
+        // - All other modes (Video, Cinema, Night, AI Tracking, More, etc.): fixed 9:16 (portrait 9:16 -> height / width = 16 / 9)
         val targetRatio = when (cameraMode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.HUMAN_VISION -> 4f / 3f
+            CameraMode.PHOTO, CameraMode.PORTRAIT -> 4f / 3f
             else -> 16f / 9f
         }
 

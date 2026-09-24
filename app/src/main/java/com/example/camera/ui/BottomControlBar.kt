@@ -304,7 +304,7 @@ fun BottomControlBar(
                             )
 
                             when (cameraMode) {
-                                CameraMode.PHOTO, CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING, CameraMode.HUMAN_VISION -> {
+                                CameraMode.PHOTO, CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> {
                                     val shutterColor = when (layoutConfig.shutterStyle) {
                                         ShutterStyle.MINIMAL_ACCENT -> accentColor
                                         ShutterStyle.LEICA_RED_DOT -> Color(0xFFE53935)
@@ -399,7 +399,7 @@ fun BottomControlBar(
                                         )
                                     }
                                 }
-                                CameraMode.VIDEO, CameraMode.CINEMA, CameraMode.DOLLY_ZOOM -> {
+                                CameraMode.VIDEO, CameraMode.CINEMA -> {
                                     if (isRecordingVideo) {
                                         Box(
                                             modifier = Modifier
@@ -717,7 +717,7 @@ fun BottomControlBar(
                                 modifier = Modifier.padding(3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val isPhotoMode = (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.PORTRAIT || cameraMode == CameraMode.HUMAN_VISION)
+                                val isPhotoMode = (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.PORTRAIT)
                                 val isVideoMode = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
 
                                 Box(

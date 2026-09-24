@@ -174,10 +174,8 @@ fun CameraScreen(
     val customZoomPresetsStr by viewModel.customZoomPresetsStr.collectAsStateWithLifecycle()
     val activeZoomPresets by viewModel.activeZoomPresets.collectAsStateWithLifecycle()
 
-    val dollyZoomState by viewModel.dollyZoomState.collectAsStateWithLifecycle()
     val nightConfig by viewModel.nightConfig.collectAsStateWithLifecycle()
     val nightProgress by viewModel.nightProgress.collectAsStateWithLifecycle()
-    val humanVisionProgress by viewModel.humanVisionProgress.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
@@ -358,16 +356,6 @@ fun CameraScreen(
             )
         }
 
-        // 1c. Dolly Zoom Real-Time Tracking & Alignment Reticle Overlay
-        if (cameraMode == CameraMode.DOLLY_ZOOM) {
-            DollyZoomOverlay(
-                dollyState = dollyZoomState,
-                onCalibrateSubject = { viewModel.calibrateDollyZoom() },
-                onResetDolly = { viewModel.resetDollyZoom() },
-                onLockSubject = { x, y -> viewModel.lockDollySubjectAt(x, y) },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
 
         // 1e. Computational Night Mode Long-Exposure HUD
         if (cameraMode == CameraMode.NIGHT) {
@@ -435,37 +423,6 @@ fun CameraScreen(
             }
         }
 
-        // Computational Human Vision Processing Indicator
-        if (humanVisionProgress.isProcessing) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xDD0D1117),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64B5F6).copy(alpha = 0.5f)),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 74.dp)
-                    .testTag("human_vision_processing_indicator")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator(
-                        progress = { humanVisionProgress.progress },
-                        modifier = Modifier.size(14.dp),
-                        color = Color(0xFF64B5F6),
-                        strokeWidth = 2.dp
-                    )
-                    Text(
-                        text = "${humanVisionProgress.statusText} (${(humanVisionProgress.progress * 100).toInt()}%)",
-                        color = Color.White,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
 
 
 
@@ -522,13 +479,6 @@ fun CameraScreen(
             onVideoQualityClick = { viewModel.cycleVideoQuality() },
             onVideoSettingsClick = { viewModel.toggleVideoSettingsPanel() },
             onToggleMegapixelMode = { viewModel.togglePhotoMegapixelMode() },
-            onDollyZoomClick = {
-                if (cameraMode == CameraMode.DOLLY_ZOOM) {
-                    viewModel.setCameraMode(CameraMode.VIDEO)
-                } else {
-                    viewModel.setCameraMode(CameraMode.DOLLY_ZOOM)
-                }
-            },
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
@@ -746,27 +696,13 @@ fun CameraScreen(
                 viewModel.setMoreModesOpen(false)
                 viewModel.setCameraMode(CameraMode.CINEMA)
             },
-            onSelectMacro = {
-                viewModel.setMoreModesOpen(false)
-                viewModel.setCameraMode(CameraMode.PHOTO)
-                viewModel.showToast("Macro Mode Active (Close Focus)")
-            },
             onSelectNight = {
                 viewModel.setMoreModesOpen(false)
                 viewModel.setCameraMode(CameraMode.NIGHT)
             },
-            onSelectDollyZoom = {
-                viewModel.setMoreModesOpen(false)
-                viewModel.setCameraMode(CameraMode.DOLLY_ZOOM)
-            },
             onSelectAiSubjectTracking = {
                 viewModel.setMoreModesOpen(false)
                 viewModel.setCameraMode(CameraMode.AI_SUBJECT_TRACKING)
-            },
-            onSelectHumanVision = {
-                viewModel.setMoreModesOpen(false)
-                viewModel.setCameraMode(CameraMode.HUMAN_VISION)
-                viewModel.showToast("Human Vision: Natural perspective & distant acuity")
             },
             onOpenSettings = {
                 viewModel.setMoreModesOpen(false)

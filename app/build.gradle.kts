@@ -32,14 +32,21 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk {
+      abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+    }
   }
 
   signingConfigs {
     getByName("debug") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      val customDebugKeystore = file("${rootDir}/debug.keystore")
+      if (customDebugKeystore.exists()) {
+        storeFile = customDebugKeystore
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
@@ -51,10 +58,13 @@ android {
         keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
         keyPassword = System.getenv("KEY_PASSWORD") ?: uploadPassword
       } else {
-        storeFile = file("${rootDir}/debug.keystore")
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
+        val customDebugKeystore = file("${rootDir}/debug.keystore")
+        if (customDebugKeystore.exists()) {
+          storeFile = customDebugKeystore
+          storePassword = "android"
+          keyAlias = "androiddebugkey"
+          keyPassword = "android"
+        }
       }
       enableV1Signing = true
       enableV2Signing = true
@@ -82,7 +92,17 @@ android {
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
-    includeInBundle = true
+    includeInBundle = false
+  }
+  packaging {
+    resources {
+      excludes += listOf(
+        "/META-INF/{AL2.0,LGPL2.1}",
+        "/META-INF/DEPENDENCIES",
+        "/META-INF/LICENSE*",
+        "/META-INF/NOTICE*"
+      )
+    }
   }
 }
 
@@ -131,7 +151,7 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
+  // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
@@ -146,11 +166,11 @@ dependencies {
   // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
+  // implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
-  implementation(libs.okhttp)
+  // implementation(libs.okhttp)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
+  // implementation(libs.retrofit)
   implementation(libs.mlkit.segmentation.selfie)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

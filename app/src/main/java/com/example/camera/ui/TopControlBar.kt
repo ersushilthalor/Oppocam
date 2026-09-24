@@ -132,7 +132,6 @@ fun TopControlBar(
     onVideoQualityClick: () -> Unit = {},
     onVideoSettingsClick: () -> Unit = {},
     onToggleMegapixelMode: () -> Unit = {},
-    onDollyZoomClick: () -> Unit = {},
     isVideoAdjustmentsOpen: Boolean = false,
     hasActiveVideoAdjustments: Boolean = false,
     onVideoAdjustmentsClick: () -> Unit = {},
@@ -387,27 +386,6 @@ fun TopControlBar(
                         )
                     }
                 }
-                CameraMode.HUMAN_VISION -> {
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(accentColor.copy(alpha = 0.2f))
-                            .border(1.dp, accentColor, RoundedCornerShape(17.dp))
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "HUMAN VISION",
-                            color = accentColor,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
                 CameraMode.NIGHT -> {
                     Box(
                         modifier = Modifier
@@ -422,34 +400,6 @@ fun TopControlBar(
                             text = "NIGHT HDR",
                             color = Color(0xFFFFB300),
                             fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
-                CameraMode.DOLLY_ZOOM -> {
-                    val resLabel = when {
-                        videoResolution?.width == 3840 || videoResolution?.height == 3840 -> "4K"
-                        videoResolution?.width == 1920 || videoResolution?.height == 1920 -> "1080"
-                        videoQuality == VideoQualityOption.UHD_4K_30 || videoQuality == VideoQualityOption.UHD_4K_60 -> "4K"
-                        else -> "1080"
-                    }
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                            .clickable { onVideoQualityClick() }
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = resLabel,
-                            color = Color.White,
-                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp,
                             maxLines = 1,
@@ -592,36 +542,6 @@ fun TopControlBar(
                         )
                     }
                 }
-                CameraMode.HUMAN_VISION -> {
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, Color(0xFF64B5F6).copy(alpha = 0.6f), RoundedCornerShape(17.dp))
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Outlined.Visibility,
-                                contentDescription = "Natural Perspective",
-                                tint = Color(0xFF64B5F6),
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "NATURAL",
-                                color = Color(0xFF64B5F6),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
-                }
                 CameraMode.NIGHT -> {
                     Box(
                         modifier = Modifier
@@ -635,28 +555,6 @@ fun TopControlBar(
                         Text(
                             text = "MULTI-FUSION",
                             color = Color(0xFFFFB300),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
-                CameraMode.DOLLY_ZOOM -> {
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                            .clickable { onVideoQualityClick() }
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "${videoFps}FPS",
-                            color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp,
@@ -740,23 +638,6 @@ fun TopControlBar(
             }
         }
 
-        val dollyZoomButton = @Composable {
-            val isActive = (cameraMode == CameraMode.DOLLY_ZOOM)
-            IconButton(
-                onClick = onDollyZoomClick,
-                modifier = Modifier
-                    .size(buttonSize)
-                    .topControlStyle(layoutConfig, activeColor = if (isActive) accentColor else null)
-                    .testTag("top_dolly_zoom_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.CenterFocusStrong,
-                    contentDescription = "Dolly Zoom",
-                    tint = if (isActive) accentColor else Color.White,
-                    modifier = Modifier.size(iconSize)
-                )
-            }
-        }
 
         val portraitStyleButton = @Composable {
             IconButton(
@@ -812,7 +693,7 @@ fun TopControlBar(
             }
         }
 
-        val isVideoFamily = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA || cameraMode == CameraMode.DOLLY_ZOOM)
+        val isVideoFamily = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
 
         // Render Top Controls according to layoutConfig
         val visibleItems = layoutConfig.topControlsOrder.filterNot { layoutConfig.hiddenTopControls.contains(it) }
@@ -846,12 +727,6 @@ fun TopControlBar(
             } else if (cameraMode == CameraMode.VIDEO) {
                 flashButton()
                 videoAdjustmentsButton()
-                primaryBadge()
-                secondaryBadge()
-                settingsButton()
-            } else if (isVideoFamily) {
-                flashButton()
-                dollyZoomButton()
                 primaryBadge()
                 secondaryBadge()
                 settingsButton()
