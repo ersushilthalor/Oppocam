@@ -147,7 +147,8 @@ fun CameraScreen(
     val isManualProOpen by viewModel.isManualProOpen.collectAsStateWithLifecycle()
     val activeProTab by viewModel.activeProTab.collectAsStateWithLifecycle()
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsStateWithLifecycle()
-    val isMediaViewerOpen by viewModel.isMediaViewerOpen.collectAsStateWithLifecycle()
+    val isGallerySelectionDialogOpen by viewModel.isGallerySelectionDialogOpen.collectAsStateWithLifecycle()
+    val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
 
@@ -256,7 +257,7 @@ fun CameraScreen(
     val isAnyWindowOpen = isPhotoFilterBarOpen || isPortraitStyleBarOpen ||
             isCinemaSettingsOpen || isManualProOpen || isMoreModesOpen ||
             (cameraMode == CameraMode.PORTRAIT && isPortraitSettingsOpen) ||
-            isVideoSettingsPanelOpen || isVideoAdjustmentsOpen || isSettingsOpen || isMediaViewerOpen ||
+            isVideoSettingsPanelOpen || isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen
 
     LaunchedEffect(isAnyWindowOpen) {
@@ -836,11 +837,7 @@ fun CameraScreen(
             onFastShutterHoldEnd = { viewModel.onFastShutterHoldEnd() },
             onFlipCameraClick = { viewModel.toggleCameraFacing() },
             onGalleryClick = {
-                if (lastCapturedMedia != null) {
-                    viewModel.setMediaViewerOpen(true)
-                } else {
-                    viewModel.showToast("No recent photos yet")
-                }
+                viewModel.openGallery(context)
             },
             onCinemaModeClick = { viewModel.toggleCinemaSettings() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
@@ -993,6 +990,8 @@ fun CameraScreen(
             onFloatingWindowBlurStrengthChange = { viewModel.setFloatingWindowBlurStrength(it) },
             onFloatingWindowAppearanceChange = { viewModel.setFloatingWindowAppearance(it) },
             onResetFloatingWindowAppearance = { viewModel.resetFloatingWindowAppearance() },
+            preferredGalleryPackage = preferredGalleryPackage,
+            onOpenGalleryChooser = { viewModel.setGallerySelectionDialogOpen(true) },
             onDismiss = {
                 viewModel.setSettingsOpen(false)
                 if (cameraMode == CameraMode.MORE) {
@@ -1001,13 +1000,23 @@ fun CameraScreen(
             }
         )
 
-        // 7. Full-Screen Media Viewer Dialog
-        if (isMediaViewerOpen) {
-            MediaViewerDialog(
-                media = lastCapturedMedia,
-                onDismiss = { viewModel.setMediaViewerOpen(false) }
-            )
-        }
+        // 7. Preferred Gallery App Selection Dialog
+        com.example.camera.gallery.GallerySelectionDialog(
+            isOpen = isGallerySelectionDialogOpen,
+            currentPreferredPackage = preferredGalleryPackage,
+            onAppSelected = { pkg ->
+                viewModel.setPreferredGalleryPackage(pkg)
+                if (lastCapturedMedia != null) {
+                    com.example.camera.gallery.GalleryLauncher.openMedia(
+                        context = context,
+                        uri = lastCapturedMedia!!.uri,
+                        isVideo = lastCapturedMedia!!.isVideo,
+                        preferredPackage = pkg
+                    )
+                }
+            },
+            onDismiss = { viewModel.setGallerySelectionDialogOpen(false) }
+        )
 
         // 8. Dedicated Custom UI Studio & Simulator Page
         if (isCustomUiStudioOpen) {

@@ -1039,12 +1039,13 @@ class Camera2Engine(private val context: Context) {
             val previousLens = _selectedLens.value
             zoomContinuityController.onLensSwitchStarted(lens)
 
-            if (preserveZoom) {
-                val z = targetZoom ?: currentZoom
-                preferences.saveLastLens(lens)
-            } else {
-                preferences.saveLastLens(lens)
-            }
+            val defaultLensZoom = if (lens.isPrimaryMain || lens.lensType == LensType.WIDE) 1.0f else lens.baseZoomRatio
+            val effectiveTargetZoom = targetZoom ?: if (preserveZoom) currentZoom else defaultLensZoom
+            currentZoom = effectiveTargetZoom
+            _currentZoom.value = effectiveTargetZoom
+            preferences.currentZoom = effectiveTargetZoom
+            preferences.saveLastLens(lens)
+            zoomContinuityController.resetToZoom(effectiveTargetZoom, lens)
 
             // If same camera ID and same facing, or both belong to the logical multi-camera,
             // switch optical stream and zoom dynamically without restarting hardware or capture session
@@ -1056,7 +1057,7 @@ class Camera2Engine(private val context: Context) {
                 activeSessionLens = lens
                 isSwitchingLens.set(false)
                 Log.i(TAG, "[IN-SESSION SWITCH] Seamlessly switching lens to ${lens.lensType} (zoom=$currentZoom) within active CameraDevice ${cameraDevice?.id}")
-                zoomContinuityController.onNewLensReady(lens)
+                zoomContinuityController.onNewLensReady(lens, effectiveTargetZoom)
                 updatePreviewSettings()
                 motorolaSwitchEngine.updatePrimaryLens(lens, _availableLenses.value)
                 motorolaSwitchEngine.compositor.switchActiveStream(lens.lensType)
@@ -1856,7 +1857,7 @@ class Camera2Engine(private val context: Context) {
                                 if (configuredLens != null) {
                                     activeSessionLens = configuredLens
                                     isSwitchingLens.set(false)
-                                    zoomContinuityController.onNewLensReady(configuredLens)
+                                    zoomContinuityController.onNewLensReady(configuredLens, currentZoom)
                                 }
                                 Log.i(TAG, "Seamless lens switch during active recording session completed successfully")
                             } catch (e: Exception) {
@@ -1935,7 +1936,7 @@ class Camera2Engine(private val context: Context) {
                                 if (configuredLens != null) {
                                     activeSessionLens = configuredLens
                                     isSwitchingLens.set(false)
-                                    zoomContinuityController.onNewLensReady(configuredLens)
+                                    zoomContinuityController.onNewLensReady(configuredLens, currentZoom)
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to start repeating preview request", e)
@@ -1999,7 +2000,7 @@ class Camera2Engine(private val context: Context) {
                             if (configuredLens != null) {
                                 activeSessionLens = configuredLens
                                 isSwitchingLens.set(false)
-                                zoomContinuityController.onNewLensReady(configuredLens)
+                                zoomContinuityController.onNewLensReady(configuredLens, currentZoom)
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to start repeating preview request", e)
@@ -2483,6 +2484,8 @@ class Camera2Engine(private val context: Context) {
                 lensType = lens.lensType
             )
 
+            val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+
             // On Android 11+ (API 30+), CONTROL_ZOOM_RATIO applies optical multi-camera / ISP continuous zoom
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
@@ -2495,19 +2498,20 @@ class Camera2Engine(private val context: Context) {
                         digitalCrop.coerceIn(zoomRange.lower, zoomRange.upper)
                     }
                     builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetZoomRatio)
+                    builder.set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
                     return
                 }
             }
 
-            // Fallback for legacy devices or SCALER_CROP_REGION
-            val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-            val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
+            // Fallback for devices without CONTROL_ZOOM_RATIO or legacy hardware: precise SCALER_CROP_REGION
+            val maxDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
+            val safeMaxZoom = if (maxDigitalZoom >= 1.0f) maxDigitalZoom else 10.0f
 
-            val factor = digitalCrop.coerceIn(1.0f, maxZoom)
-            val cropW = (sensorRect.width() / factor).toInt().coerceAtLeast(1)
-            val cropH = (sensorRect.height() / factor).toInt().coerceAtLeast(1)
-            val cropX = (sensorRect.width() - cropW) / 2
-            val cropY = (sensorRect.height() - cropH) / 2
+            val factor = digitalCrop.coerceIn(1.0f, safeMaxZoom)
+            val cropW = (sensorRect.width() / factor).toInt().coerceIn(1, sensorRect.width())
+            val cropH = (sensorRect.height() / factor).toInt().coerceIn(1, sensorRect.height())
+            val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
+            val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
 
             val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
             builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
@@ -3612,6 +3616,7 @@ class Camera2Engine(private val context: Context) {
                     val image = reader.acquireLatestImage()
                     if (image != null) {
                         engineScope.launch(Dispatchers.IO) {
+                            var uncompressedBmp: Bitmap? = null
                             try {
                                 val rotation = getCaptureJpegOrientation()
                                 val activeLens = _selectedLens.value
@@ -3619,33 +3624,38 @@ class Camera2Engine(private val context: Context) {
                                 val saveMirrored = saveSelfieAsPreviewed
 
                                 // Convert directly from uncompressed YUV sensor planes without intermediate JPEG
-                                val uncompressedBmp = customImagePipelineEngine.convertCameraImageToUncompressedBitmap(
-                                    image = image,
-                                    rotationDegrees = rotation,
-                                    isFrontFacing = isFront,
-                                    saveMirrored = saveMirrored
-                                )
-                                image.close()
+                                try {
+                                    uncompressedBmp = customImagePipelineEngine.convertCameraImageToUncompressedBitmap(
+                                        image = image,
+                                        rotationDegrees = rotation,
+                                        isFrontFacing = isFront,
+                                        saveMirrored = saveMirrored
+                                    )
+                                } finally {
+                                    image.close()
+                                }
+
+                                val sourceBmp = uncompressedBmp ?: throw IllegalStateException("Failed to decode YUV sensor image")
 
                                 // Build downscaled fast preview for 60fps real-time before/after comparison
-                                val maxDim = max(uncompressedBmp.width, uncompressedBmp.height)
+                                val maxDim = max(sourceBmp.width, sourceBmp.height)
                                 val previewScale = (1080f / maxDim).coerceAtMost(1.0f)
                                 val previewBmp = if (previewScale < 0.95f) {
                                     Bitmap.createScaledBitmap(
-                                        uncompressedBmp,
-                                        (uncompressedBmp.width * previewScale).roundToInt(),
-                                        (uncompressedBmp.height * previewScale).roundToInt(),
+                                        sourceBmp,
+                                        (sourceBmp.width * previewScale).roundToInt(),
+                                        (sourceBmp.height * previewScale).roundToInt(),
                                         true
                                     )
                                 } else {
-                                    uncompressedBmp.copy(Bitmap.Config.ARGB_8888, true)
+                                    sourceBmp.copy(Bitmap.Config.ARGB_8888, true)
                                 }
 
                                 val activePreset = preferences.getActivePipelinePreset()
                                 val activeParams = preferences.getPipelineParams(activePreset.id)
 
                                 val captureSource = com.example.camera.pipeline.engine.PipelineCaptureSource(
-                                    fullResBitmap = uncompressedBmp,
+                                    fullResBitmap = sourceBmp,
                                     previewBitmap = previewBmp,
                                     orientationDegrees = rotation,
                                     isFrontFacing = isFront,
@@ -3657,7 +3667,7 @@ class Camera2Engine(private val context: Context) {
 
                                 // Process uncompressed data through custom pipeline and encode final JPEG directly
                                 val finalJpegBytes = customImagePipelineEngine.processAndEncodeToJpegBytes(
-                                    source = uncompressedBmp,
+                                    source = sourceBmp,
                                     params = activeParams,
                                     jpegQuality = preferences.jpegQuality
                                 )
@@ -3670,10 +3680,31 @@ class Camera2Engine(private val context: Context) {
                                     onComplete(uri)
                                 }
                             } catch (e: Throwable) {
-                                Log.e(TAG, "Error in Custom Pipeline Capture", e)
-                                _isCapturing.value = false
-                                withContext(Dispatchers.Main) {
-                                    onComplete(null)
+                                Log.e(TAG, "Error in Custom Pipeline Capture, falling back to direct JPEG save", e)
+                                try {
+                                    val fallbackBmp = uncompressedBmp
+                                    if (fallbackBmp != null) {
+                                        val stream = java.io.ByteArrayOutputStream()
+                                        fallbackBmp.compress(Bitmap.CompressFormat.JPEG, preferences.jpegQuality, stream)
+                                        val fallbackBytes = stream.toByteArray()
+                                        val fallbackUri = saveJpegBytesToMediaStore(fallbackBytes)
+                                        _isCapturing.value = false
+                                        updateStorageStats()
+                                        withContext(Dispatchers.Main) {
+                                            onComplete(fallbackUri)
+                                        }
+                                    } else {
+                                        _isCapturing.value = false
+                                        withContext(Dispatchers.Main) {
+                                            onComplete(null)
+                                        }
+                                    }
+                                } catch (t2: Throwable) {
+                                    Log.e(TAG, "Fallback direct JPEG save also failed", t2)
+                                    _isCapturing.value = false
+                                    withContext(Dispatchers.Main) {
+                                        onComplete(null)
+                                    }
                                 }
                             }
                         }
@@ -4335,12 +4366,20 @@ class Camera2Engine(private val context: Context) {
                     onComplete(finalUri)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "High-Quality Zoom processing failed", e)
+                Log.e(TAG, "High-Quality Zoom processing failed, falling back to base burst frame", e)
+                val fallbackBmp = frames.firstOrNull()
+                val fallbackUri = if (fallbackBmp != null) {
+                    try {
+                        saveBitmapToMediaStore(fallbackBmp, 0)
+                    } catch (t2: Throwable) {
+                        null
+                    }
+                } else null
                 _isCapturing.value = false
                 _isZoomProcessing.value = false
                 frames.forEach { it.recycle() }
                 withContext(Dispatchers.Main) {
-                    onComplete(null)
+                    onComplete(fallbackUri)
                 }
             }
         }
@@ -4463,13 +4502,18 @@ class Camera2Engine(private val context: Context) {
                         }
 
                         engineScope.launch(Dispatchers.Default) {
-                            val uri = ultraRes50MStacker.processAndSaveSingleFrame50M(
-                                source = uprightBitmap,
-                                iso = capturedIso,
-                                exposureTimeNs = capturedExposureNs,
-                                isFrontFacing = false, // already transformed & mirrored upright
-                                saveMirrored = false
-                            )
+                            val uri = try {
+                                ultraRes50MStacker.processAndSaveSingleFrame50M(
+                                    source = uprightBitmap,
+                                    iso = capturedIso,
+                                    exposureTimeNs = capturedExposureNs,
+                                    isFrontFacing = false, // already transformed & mirrored upright
+                                    saveMirrored = false
+                                )
+                            } catch (t: Throwable) {
+                                Log.e(TAG, "50M computational processing failed, falling back to upright bitmap directly", t)
+                                saveBitmapToMediaStore(uprightBitmap, 0)
+                            }
                             if (!uprightBitmap.isRecycled) {
                                 uprightBitmap.recycle()
                             }
@@ -4488,17 +4532,19 @@ class Camera2Engine(private val context: Context) {
                             }
                         }
                     } else {
+                        Log.w(TAG, "50M decode returned null bitmap, falling back to saving raw captured JPEG bytes")
+                        val uri = saveJpegBytesToMediaStore(bytes)
                         _isCapturing.value = false
                         engineScope.launch(Dispatchers.Main) {
-                            onComplete(null)
+                            onComplete(uri)
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error acquiring single 50M frame", e)
+                    Log.e(TAG, "Error acquiring single 50M frame, falling back to standard capture", e)
                     try { image.close() } catch (ignored: Exception) {}
                     _isCapturing.value = false
                     engineScope.launch(Dispatchers.Main) {
-                        onComplete(null)
+                        takePhoto(onComplete)
                     }
                 }
             }, backgroundHandler)
@@ -4517,9 +4563,9 @@ class Camera2Engine(private val context: Context) {
             }, backgroundHandler)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting 50M single-frame capture", e)
+            Log.e(TAG, "Error starting 50M single-frame capture, falling back to standard capture", e)
             _isCapturing.value = false
-            onComplete(null)
+            takePhoto(onComplete)
         }
     }
 
@@ -5706,6 +5752,15 @@ class Camera2Engine(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
+            } else {
+                try {
+                    val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
+                    if (!dcimDir.exists()) dcimDir.mkdirs()
+                    val targetFile = File(dcimDir, fileName)
+                    put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Legacy DCIM path resolution failed", e)
+                }
             }
         }
 
@@ -5717,7 +5772,8 @@ class Camera2Engine(private val context: Context) {
         try {
             context.contentResolver.openOutputStream(uri)?.use { out ->
                 out.write(outputBytes)
-            }
+                out.flush()
+            } ?: throw IllegalStateException("Unable to open output stream for URI: $uri")
 
             if (isFrontFacing && saveSelfieAsPreviewed) {
                 try {
@@ -5738,6 +5794,11 @@ class Camera2Engine(private val context: Context) {
                 contentValues.clear()
                 contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
                 context.contentResolver.update(uri, contentValues, null, null)
+            } else {
+                val legacyPath = contentValues.getAsString(MediaStore.Images.Media.DATA)
+                if (!legacyPath.isNullOrEmpty()) {
+                    android.media.MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg"), null)
+                }
             }
 
             _lastCapturedMedia.value = CapturedMedia(
@@ -5748,7 +5809,10 @@ class Camera2Engine(private val context: Context) {
             )
             return uri
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save JPEG to media store", e)
+            Log.e(TAG, "Failed to save JPEG to media store, cleaning up pending entry", e)
+            try {
+                context.contentResolver.delete(uri, null, null)
+            } catch (ignored: Throwable) {}
             return null
         }
     }
@@ -5763,6 +5827,15 @@ class Camera2Engine(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
+            } else {
+                try {
+                    val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
+                    if (!dcimDir.exists()) dcimDir.mkdirs()
+                    val targetFile = File(dcimDir, fileName)
+                    put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Legacy DCIM path resolution failed", e)
+                }
             }
         }
 
@@ -5772,14 +5845,33 @@ class Camera2Engine(private val context: Context) {
         ) ?: return null
 
         try {
-            context.contentResolver.openOutputStream(uri)?.use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+            val orientedBitmap = if (orientationDegrees != 0) {
+                val matrix = Matrix().apply { postRotate(orientationDegrees.toFloat()) }
+                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            } else {
+                bitmap
             }
+
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                orientedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+                out.flush()
+            } ?: throw IllegalStateException("Unable to open output stream for URI: $uri")
+
+            if (orientedBitmap != bitmap) {
+                orientedBitmap.recycle()
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 contentValues.clear()
                 contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
                 context.contentResolver.update(uri, contentValues, null, null)
+            } else {
+                val legacyPath = contentValues.getAsString(MediaStore.Images.Media.DATA)
+                if (!legacyPath.isNullOrEmpty()) {
+                    android.media.MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg"), null)
+                }
             }
+
             _lastCapturedMedia.value = CapturedMedia(
                 uri = uri,
                 isVideo = false,
@@ -5788,7 +5880,10 @@ class Camera2Engine(private val context: Context) {
             )
             return uri
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save night bitmap", e)
+            Log.e(TAG, "Failed to save night bitmap, cleaning up pending entry", e)
+            try {
+                context.contentResolver.delete(uri, null, null)
+            } catch (ignored: Throwable) {}
             return null
         }
     }

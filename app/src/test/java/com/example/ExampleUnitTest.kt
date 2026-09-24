@@ -194,26 +194,15 @@ class ExampleUnitTest {
         )
 
         // Test default values
-        assertTrue(prefs.isKeepUltraWideReady)
         assertFalse(prefs.isShowUltraWidePreview)
         assertTrue(prefs.isKeepFrontCameraReady)
         assertFalse(prefs.isShowFrontCameraPreview)
 
-        // Test independent toggling for Ultra-Wide
-        // Ultra-Wide Ready ON + Preview OFF
-        prefs.isKeepUltraWideReady = true
+        // Test independent toggling for Ultra-Wide Preview
         prefs.isShowUltraWidePreview = false
-        assertTrue(prefs.isKeepUltraWideReady)
         assertFalse(prefs.isShowUltraWidePreview)
 
-        // Ultra-Wide Ready ON + Preview ON
         prefs.isShowUltraWidePreview = true
-        assertTrue(prefs.isKeepUltraWideReady)
-        assertTrue(prefs.isShowUltraWidePreview)
-
-        // Ultra-Wide Ready OFF + Preview ON
-        prefs.isKeepUltraWideReady = false
-        assertFalse(prefs.isKeepUltraWideReady)
         assertTrue(prefs.isShowUltraWidePreview)
 
         // Test independent toggling for Front Camera
@@ -241,15 +230,11 @@ class ExampleUnitTest {
         assertNotNull(engine.switchState.value)
 
         // Test independent state toggles via engine
-        engine.setKeepUltraWideReady(true)
-        assertTrue(engine.switchState.value.isKeepUltraWideReady)
-
         engine.setShowUltraWidePreview(true)
         assertTrue(engine.switchState.value.isShowUltraWidePreview)
 
         engine.setShowUltraWidePreview(false)
         assertFalse(engine.switchState.value.isShowUltraWidePreview)
-        assertTrue(engine.switchState.value.isKeepUltraWideReady)
 
         engine.setKeepFrontCameraReady(true)
         assertTrue(engine.switchState.value.isKeepFrontCameraReady)

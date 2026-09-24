@@ -195,29 +195,58 @@ class ZoomContinuityController(
     }
 
     /**
+     * Resets zoom state directly to a specific lens and zoom level,
+     * immediately canceling any pending interpolations or switches.
+     */
+    fun resetToZoom(zoom: Float, lens: LensInfo) {
+        interpolationJob?.cancel()
+        activeLens = lens
+        pendingLens = null
+        isSwitchingFlag.set(false)
+        val z = zoom.coerceIn(0.35f, 10.0f)
+        currentDisplayedZoom = z
+        userTargetZoom = z
+        lastUserTargetZoom = z
+        lastUserZoomTimeNs = System.nanoTime()
+        zoomVelocity = 0f
+    }
+
+    /**
      * Called when the target lens session/hardware is configured and ready to stream.
      *
      * 1. Applies the FOV-equivalent zoom on the new lens to match the current view.
-     * 2. If the user's latest target zoom differs from the FOV-equivalent zoom,
-     *    smoothly interpolates to the target zoom, preserving user velocity and direction.
+     * 2. If directTargetZoom is provided, or when switching to Main 1x from Ultra-Wide,
+     *    directly applies the target FOV with zero unnecessary zoom animation or magnification jump.
      */
-    fun onNewLensReady(newLens: LensInfo) {
+    fun onNewLensReady(newLens: LensInfo, directTargetZoom: Float? = null) {
         val oldLens = activeLens
         pendingLens = null
         activeLens = newLens
         isSwitchingFlag.set(false)
+        interpolationJob?.cancel()
 
-        val startZoom = calculateFovEquivalentZoom(currentDisplayedZoom, oldLens, newLens)
+        val startZoom = directTargetZoom ?: if (newLens.lensType == LensType.WIDE && oldLens?.lensType == LensType.ULTRAWIDE) {
+            1.0f
+        } else {
+            calculateFovEquivalentZoom(currentDisplayedZoom, oldLens, newLens)
+        }
+
         currentDisplayedZoom = startZoom
+        val target = if (directTargetZoom != null) {
+            userTargetZoom = directTargetZoom
+            lastUserTargetZoom = directTargetZoom
+            directTargetZoom
+        } else {
+            userTargetZoom
+        }
 
-        Log.i(TAG, "New lens ${newLens.lensType} ready. Starting at FOV-equivalent zoom: $startZoom (userTarget: $userTargetZoom, velocity: $zoomVelocity)")
+        Log.i(TAG, "New lens ${newLens.lensType} ready at FOV zoom: $startZoom (target: $target)")
 
-        // Instantly apply FOV-equivalent zoom to the newly active camera session
+        // Instantly apply FOV zoom to the newly active camera session
         onApplyZoom(startZoom)
         onZoomUpdated(startZoom)
 
         // Interpolate smoothly toward the latest user target zoom if needed
-        val target = userTargetZoom
         if (abs(target - startZoom) > 0.03f) {
             startSmoothInterpolation(startZoom, target, zoomVelocity)
         }

@@ -1,6 +1,7 @@
 package com.example.camera.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
@@ -38,6 +39,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val preferences = CameraPreferences(application.applicationContext)
 
     val dollyZoomState: StateFlow<DollyZoomState> = engine.dollyZoomEngine.dollyState
+    val lastCapturedMedia: StateFlow<CapturedMedia?> = engine.lastCapturedMedia
 
     // Mode & Base State must be initialized before combined flows
     private val _cameraMode = MutableStateFlow(preferences.cameraMode)
@@ -142,8 +144,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _isVideoSettingsPanelOpen = MutableStateFlow(false)
     val isVideoSettingsPanelOpen: StateFlow<Boolean> = _isVideoSettingsPanelOpen.asStateFlow()
 
-    private val _isMediaViewerOpen = MutableStateFlow(false)
-    val isMediaViewerOpen: StateFlow<Boolean> = _isMediaViewerOpen.asStateFlow()
+    private val _isGallerySelectionDialogOpen = MutableStateFlow(false)
+    val isGallerySelectionDialogOpen: StateFlow<Boolean> = _isGallerySelectionDialogOpen.asStateFlow()
+
+    private val _preferredGalleryPackage = MutableStateFlow(preferences.preferredGalleryPackage)
+    val preferredGalleryPackage: StateFlow<String?> = _preferredGalleryPackage.asStateFlow()
 
     // Focus indicator ring
     private val _focusRingPoint = MutableStateFlow<Offset?>(null)
@@ -1227,8 +1232,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isVideoSettingsPanelOpen.value = !_isVideoSettingsPanelOpen.value
     }
 
-    fun setMediaViewerOpen(open: Boolean) {
-        _isMediaViewerOpen.value = open
+    fun setPreferredGalleryPackage(packageName: String?) {
+        _preferredGalleryPackage.value = packageName
+        preferences.preferredGalleryPackage = packageName
+    }
+
+    fun setGallerySelectionDialogOpen(open: Boolean) {
+        _isGallerySelectionDialogOpen.value = open
+    }
+
+    fun openGallery(context: Context) {
+        val media = lastCapturedMedia.value
+        if (media != null) {
+            if (!preferences.hasPromptedGallerySelection && preferences.preferredGalleryPackage == null) {
+                preferences.hasPromptedGallerySelection = true
+                _isGallerySelectionDialogOpen.value = true
+            } else {
+                com.example.camera.gallery.GalleryLauncher.openMedia(
+                    context = context,
+                    uri = media.uri,
+                    isVideo = media.isVideo,
+                    preferredPackage = _preferredGalleryPackage.value
+                )
+            }
+        } else {
+            showToast("No recent photos yet")
+        }
     }
 
     fun onTapToFocus(point: Offset, normX: Float, normY: Float, isLock: Boolean = false) {

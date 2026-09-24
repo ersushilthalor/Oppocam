@@ -197,11 +197,14 @@ fun SettingsDrawer(
     onFloatingWindowBlurStrengthChange: (Float) -> Unit = {},
     onFloatingWindowAppearanceChange: (FloatingWindowAppearanceConfig) -> Unit = {},
     onResetFloatingWindowAppearance: () -> Unit = {},
+    preferredGalleryPackage: String? = null,
+    onOpenGalleryChooser: () -> Unit = {},
     onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     if (!isOpen) return
 
+    val context = LocalContext.current
     var selectedFilterCategory by remember { mutableStateOf(FlagshipCategory.ALL) }
     var showResetDialog by remember { mutableStateOf(false) }
 
@@ -327,6 +330,35 @@ fun SettingsDrawer(
                                             onClick = { onPhotoMegapixelModeSelected(mode) }
                                         )
                                     }
+                                }
+                            }
+
+                            SamsungDivider()
+
+                            // Default Gallery App
+                            val galleryLabel = remember(preferredGalleryPackage) {
+                                if (preferredGalleryPackage == null) {
+                                    "System Chooser (Always ask)"
+                                } else {
+                                    try {
+                                        val pm = context.packageManager
+                                        val appInfo = pm.getApplicationInfo(preferredGalleryPackage, 0)
+                                        pm.getApplicationLabel(appInfo).toString()
+                                    } catch (e: Exception) {
+                                        "Installed App ($preferredGalleryPackage)"
+                                    }
+                                }
+                            }
+                            SamsungRowItem(
+                                icon = Icons.Outlined.PhotoLibrary,
+                                title = "Default Gallery App",
+                                subtitle = galleryLabel
+                            ) {
+                                OutlinedButton(
+                                    onClick = onOpenGalleryChooser,
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Change")
                                 }
                             }
 
