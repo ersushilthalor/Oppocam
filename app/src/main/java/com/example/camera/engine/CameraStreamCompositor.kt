@@ -701,6 +701,65 @@ class CameraStreamCompositor {
         }
     }
 
+    @Volatile
+    private var encoderRotationDegrees: Int = 0
+
+    /**
+     * Computes an aspect-ratio-correct texture transformation matrix with optional center-based rotation.
+     * Prevents stretching or squeezing across different surface aspect ratios (e.g. 16:9 vs 9:16 or 4:3)
+     * and aligns orientation naturally with the viewfinder.
+     */
+    private fun computeAspectMatrix(
+        srcBufferWidth: Int,
+        srcBufferHeight: Int,
+        dstW: Int,
+        dstH: Int,
+        baseTexMatrix: FloatArray,
+        rotationDegrees: Int = 0
+    ): FloatArray {
+        val camLong = max(srcBufferWidth, srcBufferHeight).toFloat()
+        val camShort = min(srcBufferWidth, srcBufferHeight).toFloat()
+        val srcAspect = if (camShort > 0f) camLong / camShort else (16f / 9f)
+
+        val dstLong = max(dstW, dstH).toFloat()
+        val dstShort = min(dstW, dstH).toFloat()
+        val dstAspect = if (dstShort > 0f) dstLong / dstShort else (16f / 9f)
+
+        var scaleX = 1.0f
+        var scaleY = 1.0f
+        if (kotlin.math.abs(dstAspect - srcAspect) >= 0.01f) {
+            if (dstAspect > srcAspect) {
+                // Destination is taller/narrower than source (e.g. 9:16 dest vs 3:4 source).
+                // Preserve true height and center-crop width without stretching.
+                scaleX = srcAspect / dstAspect
+                scaleY = 1.0f
+            } else {
+                // Destination is wider/shorter than source (e.g. 3:4 dest vs 16:9 source).
+                // Preserve true width and center-crop height without stretching.
+                scaleX = 1.0f
+                scaleY = dstAspect / srcAspect
+            }
+        }
+
+        val result = FloatArray(16)
+        if (scaleX == 1.0f && scaleY == 1.0f && rotationDegrees == 0) {
+            System.arraycopy(baseTexMatrix, 0, result, 0, 16)
+        } else {
+            val transformMatrix = FloatArray(16)
+            android.opengl.Matrix.setIdentityM(transformMatrix, 0)
+            android.opengl.Matrix.translateM(transformMatrix, 0, 0.5f, 0.5f, 0.0f)
+            if (rotationDegrees != 0) {
+                android.opengl.Matrix.rotateM(transformMatrix, 0, rotationDegrees.toFloat(), 0.0f, 0.0f, 1.0f)
+            }
+            if (scaleX != 1.0f || scaleY != 1.0f) {
+                android.opengl.Matrix.scaleM(transformMatrix, 0, scaleX, scaleY, 1.0f)
+            }
+            android.opengl.Matrix.translateM(transformMatrix, 0, -0.5f, -0.5f, 0.0f)
+            android.opengl.Matrix.multiplyMM(result, 0, baseTexMatrix, 0, transformMatrix, 0)
+        }
+        return result
+    }
+
     private fun renderFrame() {
         val display = eglDisplay ?: return
         val ctx = eglContext ?: return
@@ -825,12 +884,23 @@ class CameraStreamCompositor {
         val isComputationalActive = isVideoModeActive && (activeComputationalPipeline != ComputationalVideoPipeline.DEFAULT)
 
         if (isComputationalActive && targetTexId != 0) {
+            // Determine destination orientation to size offscreen history FBO appropriately
+            val isDstPortrait = if (encoderWidth > 0 && encoderHeight > 0) {
+                encoderHeight > encoderWidth
+            } else if (mainWidth > 0 && mainHeight > 0) {
+                mainHeight > mainWidth
+            } else true
+
+            val fboW = if (isDstPortrait) min(cameraBufferWidth, cameraBufferHeight) else max(cameraBufferWidth, cameraBufferHeight)
+            val fboH = if (isDstPortrait) max(cameraBufferWidth, cameraBufferHeight) else min(cameraBufferWidth, cameraBufferHeight)
+
             // 1. First pass: render computational video pipeline to offscreen history FBO
-            ensureComputationalFbos(cameraBufferWidth, cameraBufferHeight)
+            ensureComputationalFbos(fboW, fboH)
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, historyFboIds[historyPingPongIndex])
             GLES20.glViewport(0, 0, historyFboWidth, historyFboHeight)
 
-            drawComputationalQuad(targetTexId, targetTexMatrix)
+            val compTexMatrix = computeAspectMatrix(cameraBufferWidth, cameraBufferHeight, historyFboWidth, historyFboHeight, targetTexMatrix, 0)
+            drawComputationalQuad(targetTexId, compTexMatrix)
 
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
             hasValidHistoryFrame = true
@@ -847,36 +917,7 @@ class CameraStreamCompositor {
                 val dstH = if (surfHeightArr[0] > 0) surfHeightArr[0] else mainHeight
                 GLES20.glViewport(0, 0, dstW, dstH)
 
-                val camLong = max(cameraBufferWidth, cameraBufferHeight).toFloat()
-                val camShort = min(cameraBufferWidth, cameraBufferHeight).toFloat()
-                val srcAspect = if (camShort > 0f) camLong / camShort else (16f / 9f)
-
-                val dstLong = max(dstW, dstH).toFloat()
-                val dstShort = min(dstW, dstH).toFloat()
-                val dstAspect = if (dstShort > 0f) dstLong / dstShort else (16f / 9f)
-
-                var scaleX = 1.0f
-                var scaleY = 1.0f
-                if (kotlin.math.abs(dstAspect - srcAspect) >= 0.01f) {
-                    if (dstAspect > srcAspect) {
-                        scaleX = srcAspect / dstAspect
-                        scaleY = 1.0f
-                    } else {
-                        scaleX = 1.0f
-                        scaleY = dstAspect / srcAspect
-                    }
-                }
-
-                val finalBlitMatrix = FloatArray(16)
-                if (scaleX == 1.0f && scaleY == 1.0f) {
-                    android.opengl.Matrix.setIdentityM(finalBlitMatrix, 0)
-                } else {
-                    android.opengl.Matrix.setIdentityM(finalBlitMatrix, 0)
-                    android.opengl.Matrix.translateM(finalBlitMatrix, 0, 0.5f, 0.5f, 0.0f)
-                    android.opengl.Matrix.scaleM(finalBlitMatrix, 0, scaleX, scaleY, 1.0f)
-                    android.opengl.Matrix.translateM(finalBlitMatrix, 0, -0.5f, -0.5f, 0.0f)
-                }
-
+                val finalBlitMatrix = computeAspectMatrix(historyFboWidth, historyFboHeight, dstW, dstH, identityMatrix, 0)
                 drawBlitQuad(computedTexId, finalBlitMatrix)
                 EGL14.eglSwapBuffers(display, mainSurf)
             }
@@ -886,7 +927,9 @@ class CameraStreamCompositor {
             if (encSurf != null && isRecordingToEncoder.get() && isFreshActiveFrame) {
                 EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
                 GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
-                drawBlitQuad(computedTexId, identityMatrix)
+
+                val finalEncoderBlitMatrix = computeAspectMatrix(historyFboWidth, historyFboHeight, encoderWidth, encoderHeight, identityMatrix, encoderRotationDegrees)
+                drawBlitQuad(computedTexId, finalEncoderBlitMatrix)
 
                 val ptsNs = computeNextEncoderPtsNs(currentActive, activeCameraTimestamp)
                 EGLExt.eglPresentationTimeANDROID(display, encSurf, ptsNs)
@@ -906,46 +949,7 @@ class CameraStreamCompositor {
                 val dstH = if (surfHeightArr[0] > 0) surfHeightArr[0] else mainHeight
                 GLES20.glViewport(0, 0, dstW, dstH)
 
-                // Source camera buffer aspect ratio in portrait orientation:
-                // Camera sensors are natively landscape (e.g. 1920x1080 for 16:9, or 1440x1080 for 4:3).
-                // In a portrait viewfinder, sensor width maps to height and sensor height maps to width.
-                val camLong = max(cameraBufferWidth, cameraBufferHeight).toFloat()
-                val camShort = min(cameraBufferWidth, cameraBufferHeight).toFloat()
-                val srcAspect = if (camShort > 0f) camLong / camShort else (16f / 9f)
-
-                // Destination viewfinder aspect ratio in portrait orientation:
-                val dstLong = max(dstW, dstH).toFloat()
-                val dstShort = min(dstW, dstH).toFloat()
-                val dstAspect = if (dstShort > 0f) dstLong / dstShort else (16f / 9f)
-
-                var scaleX = 1.0f
-                var scaleY = 1.0f
-                if (kotlin.math.abs(dstAspect - srcAspect) >= 0.01f) {
-                    if (dstAspect > srcAspect) {
-                        // Destination is taller/narrower than source (e.g. 9:16 dest vs 3:4 source).
-                        // Preserve true height and center-crop width without stretching.
-                        scaleX = srcAspect / dstAspect
-                        scaleY = 1.0f
-                    } else {
-                        // Destination is wider/shorter than source (e.g. 3:4 dest vs 16:9 source).
-                        // Preserve true width and center-crop height without stretching.
-                        scaleX = 1.0f
-                        scaleY = dstAspect / srcAspect
-                    }
-                }
-
-                val finalTexMatrix = FloatArray(16)
-                if (scaleX == 1.0f && scaleY == 1.0f) {
-                    System.arraycopy(targetTexMatrix, 0, finalTexMatrix, 0, 16)
-                } else {
-                    val cropMatrix = FloatArray(16)
-                    android.opengl.Matrix.setIdentityM(cropMatrix, 0)
-                    android.opengl.Matrix.translateM(cropMatrix, 0, 0.5f, 0.5f, 0.0f)
-                    android.opengl.Matrix.scaleM(cropMatrix, 0, scaleX, scaleY, 1.0f)
-                    android.opengl.Matrix.translateM(cropMatrix, 0, -0.5f, -0.5f, 0.0f)
-                    android.opengl.Matrix.multiplyMM(finalTexMatrix, 0, targetTexMatrix, 0, cropMatrix, 0)
-                }
-
+                val finalTexMatrix = computeAspectMatrix(cameraBufferWidth, cameraBufferHeight, dstW, dstH, targetTexMatrix, 0)
                 drawQuad(targetTexId, finalTexMatrix)
                 EGL14.eglSwapBuffers(display, mainSurf)
                 if (targetTexId == ultraWideTexId) {
@@ -960,8 +964,9 @@ class CameraStreamCompositor {
                 EGL14.eglMakeCurrent(display, encSurf, encSurf, ctx)
                 GLES20.glViewport(0, 0, encoderWidth, encoderHeight)
 
-                // Render camera stream without preview center crop directly onto the encoder surface
-                drawQuad(targetTexId, targetTexMatrix)
+                // Render camera stream with matching framing and orientation directly onto encoder surface
+                val encoderTexMatrix = computeAspectMatrix(cameraBufferWidth, cameraBufferHeight, encoderWidth, encoderHeight, targetTexMatrix, encoderRotationDegrees)
+                drawQuad(targetTexId, encoderTexMatrix)
 
                 val ptsNs = computeNextEncoderPtsNs(currentActive, activeCameraTimestamp)
                 EGLExt.eglPresentationTimeANDROID(display, encSurf, ptsNs)
@@ -1225,8 +1230,9 @@ class CameraStreamCompositor {
      * Attaches or detaches a MediaCodec encoder Surface for real-time GPU recording.
      * When attached, frames rendered will be drawn to the encoder Surface after startEncoding() is called.
      */
-    fun setEncoderSurface(surface: Surface?, width: Int, height: Int, fps: Int = 30) {
+    fun setEncoderSurface(surface: Surface?, width: Int, height: Int, fps: Int = 30, rotationDegrees: Int = 0) {
         glHandler?.post {
+            encoderRotationDegrees = rotationDegrees
             setEncoderSurfaceInternal(surface, width, height, fps)
         }
     }
@@ -1241,10 +1247,11 @@ class CameraStreamCompositor {
         width: Int,
         height: Int,
         timeoutMs: Long = 400L,
-        fps: Int = 30
+        fps: Int = 30,
+        rotationDegrees: Int = 0
     ): Boolean {
         if (surface == null || !surface.isValid) {
-            setEncoderSurface(null, 0, 0, fps)
+            setEncoderSurface(null, 0, 0, fps, 0)
             return false
         }
         val latch = java.util.concurrent.CountDownLatch(1)
@@ -1256,6 +1263,7 @@ class CameraStreamCompositor {
         }
         handler.post {
             try {
+                encoderRotationDegrees = rotationDegrees
                 setEncoderSurfaceInternal(surface, width, height, fps)
                 success = (encoderEglSurface != null && encoderEglSurface != EGL14.EGL_NO_SURFACE)
             } catch (e: Exception) {

@@ -197,8 +197,17 @@ object VideoMirrorTranscoder {
                 }
             }
 
+            val isSourceRotatedPortrait = (rotation == 90 || rotation == 270)
+            val isSourceNativePortrait = (width < height)
+            val isPortraitOutput = isSourceRotatedPortrait || isSourceNativePortrait
+
+            val outWidth = if (isPortraitOutput) minOf(width, height) else maxOf(width, height)
+            val outHeight = if (isPortraitOutput) maxOf(width, height) else minOf(width, height)
+
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            muxer.setOrientationHint(rotation)
+            // Output frames are directly rendered into their upright, natural orientation in OpenGL,
+            // so container orientation metadata is always 0.
+            muxer.setOrientationHint(0)
 
             val targetEncoderMime = try {
                 val testCodec = MediaCodec.createEncoderByType(videoMime)
@@ -209,7 +218,7 @@ object VideoMirrorTranscoder {
             }
 
             // Configure encoder
-            val encFormat = MediaFormat.createVideoFormat(targetEncoderMime, width, height).apply {
+            val encFormat = MediaFormat.createVideoFormat(targetEncoderMime, outWidth, outHeight).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
@@ -238,7 +247,7 @@ object VideoMirrorTranscoder {
             }
 
             // Setup EGL on input surface
-            eglHelper = EglSurfaceHelper(inputSurface, width, height, lutStripBitmap, effectiveLutSize, lutIntensity)
+            eglHelper = EglSurfaceHelper(inputSurface, outWidth, outHeight, lutStripBitmap, effectiveLutSize, lutIntensity)
             eglHelper.makeCurrent()
 
             // Configure decoder with SurfaceTexture
@@ -946,11 +955,11 @@ object VideoMirrorTranscoder {
 
             Matrix.setIdentityM(mvpMatrix, 0)
             if (isMirrored) {
-                if (rotation == 90 || rotation == 270) {
-                    Matrix.scaleM(mvpMatrix, 0, 1f, -1f, 1f)
-                } else {
-                    Matrix.scaleM(mvpMatrix, 0, -1f, 1f, 1f)
-                }
+                Matrix.scaleM(mvpMatrix, 0, -1f, 1f, 1f)
+            }
+            if (rotation != 0) {
+                val renderAngle = (360 - rotation) % 360
+                Matrix.rotateM(mvpMatrix, 0, renderAngle.toFloat(), 0f, 0f, 1f)
             }
 
             GLES20.glUniformMatrix4fv(uMVPMatrixLoc, 1, false, mvpMatrix, 0)

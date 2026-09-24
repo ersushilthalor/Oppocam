@@ -331,6 +331,7 @@ class Camera2Engine(private val context: Context) {
 
 
     init {
+        initOrientationListener()
         val savedCinema = preferences.getCinemaConfig()
         cinemaEngine.updateConfig(savedCinema)
         _cinemaConfig.value = savedCinema
@@ -2832,6 +2833,35 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    private var physicalOrientationEventListener: android.view.OrientationEventListener? = null
+    @Volatile
+    private var physicalOrientationDegrees: Int = 0
+
+    private fun initOrientationListener() {
+        if (physicalOrientationEventListener == null) {
+            physicalOrientationEventListener = object : android.view.OrientationEventListener(context, android.hardware.SensorManager.SENSOR_DELAY_NORMAL) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN) return
+                    physicalOrientationDegrees = when (orientation) {
+                        in 45..134 -> 270
+                        in 135..224 -> 180
+                        in 225..314 -> 90
+                        else -> 0
+                    }
+                }
+            }
+        }
+        if (physicalOrientationEventListener?.canDetectOrientation() == true) {
+            physicalOrientationEventListener?.enable()
+        }
+    }
+
+    private fun getEffectiveDeviceRotation(): Int {
+        val windowRot = getDeviceRotationDegrees()
+        if (windowRot != 0) return windowRot
+        return physicalOrientationDegrees
+    }
+
     private fun getDeviceRotationDegrees(): Int {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager
         val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -4979,27 +5009,47 @@ class Camera2Engine(private val context: Context) {
             }
             currentRecordingTempFile = tempFile
 
+            // Determine device orientation and compute upright recording dimensions
+            val currentRot = getEffectiveDeviceRotation()
+            val isPortraitRecording = (currentRot == 0 || currentRot == 180)
+            val maxDim = maxOf(videoRes.width, videoRes.height)
+            val minDim = minOf(videoRes.width, videoRes.height)
+            val finalRecordWidth = if (isPortraitRecording) minDim else maxDim
+            val finalRecordHeight = if (isPortraitRecording) maxDim else minDim
+
+            val isFront = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
+            val encoderRotation = if (isPortraitRecording) {
+                if (currentRot == 180) 180 else 0
+            } else {
+                if (isFront) {
+                    if (currentRot == 90) 90 else 270
+                } else {
+                    if (currentRot == 90) 270 else 90
+                }
+            }
+
             // Setup recording target surface
             val recorderSurface: Surface
             if (isSoftwareCinema) {
                 isSoftwareCinemaRecording = true
                 recorderSurface = cinemaSoftwareRecorder.startRecording(
                     destFile = tempFile,
-                    width = videoRes.width,
-                    height = videoRes.height,
+                    width = finalRecordWidth,
+                    height = finalRecordHeight,
                     fps = targetFps,
                     bitrate = bitrate,
                     codec = cinemaCodec,
                     bitDepth = if (is10BitRequested || cinemaCodec == CinemaCodec.PRORES) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
                     isAudioEnabled = isAudioEnabled,
-                    orientationHint = getVideoOrientationHint()
+                    orientationHint = 0
                 )
                 // Attach MediaCodec encoder Surface to OpenGL compositor so every frame receives real-time 3D LUT processing
                 motorolaSwitchEngine.compositor.setEncoderSurface(
                     recorderSurface,
-                    videoRes.width,
-                    videoRes.height,
-                    fps = targetFps
+                    finalRecordWidth,
+                    finalRecordHeight,
+                    fps = targetFps,
+                    rotationDegrees = encoderRotation
                 )
             } else {
                 @Suppress("DEPRECATION")
@@ -5175,12 +5225,13 @@ class Camera2Engine(private val context: Context) {
                 if (_computationalVideoPipeline.value != ComputationalVideoPipeline.DEFAULT) {
                     compSuccess = motorolaSwitchEngine.compositor.attachEncoderSurface(
                         recorderSurface,
-                        videoRes.width,
-                        videoRes.height,
-                        fps = targetFps
+                        finalRecordWidth,
+                        finalRecordHeight,
+                        fps = targetFps,
+                        rotationDegrees = encoderRotation
                     )
                     if (compSuccess) {
-                        Log.i(TAG, "Computational GPU video encoder surface attached successfully (${videoRes.width}x${videoRes.height})")
+                        Log.i(TAG, "Computational GPU video encoder surface attached successfully (${finalRecordWidth}x${finalRecordHeight})")
                     } else {
                         Log.w(TAG, "Computational GPU encoding could not initialize; falling back to direct Camera2 -> MediaRecorder")
                         motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)
@@ -6062,6 +6113,10 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun release() {
+        try {
+            physicalOrientationEventListener?.disable()
+            physicalOrientationEventListener = null
+        } catch (ignored: Exception) {}
         motorolaSwitchEngine.release()
         closeCamera()
         stopBackgroundThread()
