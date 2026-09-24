@@ -193,6 +193,20 @@ class Camera2Engine(private val context: Context) {
             }
         )
     }
+
+    data class PreparedVideoGeometry(
+        val width: Int,
+        val height: Int,
+        val fps: Int,
+        val orientationHint: Int,
+        val encoderRotation: Int
+    )
+
+    @Volatile
+    private var preparedVideoGeometry: PreparedVideoGeometry? = null
+
+    @Volatile
+    private var pendingDirectTargetZoom: Float? = null
     var saveSelfieAsPreviewed: Boolean = true
     var viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL
     var selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL
@@ -1038,15 +1052,21 @@ class Camera2Engine(private val context: Context) {
 
         try {
             val previousLens = _selectedLens.value
-            zoomContinuityController.onLensSwitchStarted(lens)
+            if (!zoomContinuityController.isSwitching) {
+                zoomContinuityController.onLensSwitchStarted(lens)
+            }
 
             val defaultLensZoom = if (lens.isPrimaryMain || lens.lensType == LensType.WIDE) 1.0f else lens.baseZoomRatio
             val effectiveTargetZoom = targetZoom ?: if (preserveZoom) currentZoom else defaultLensZoom
-            currentZoom = effectiveTargetZoom
-            _currentZoom.value = effectiveTargetZoom
-            preferences.currentZoom = effectiveTargetZoom
             preferences.saveLastLens(lens)
-            zoomContinuityController.resetToZoom(effectiveTargetZoom, lens)
+
+            if (!preserveZoom) {
+                currentZoom = effectiveTargetZoom
+                _currentZoom.value = effectiveTargetZoom
+                preferences.currentZoom = effectiveTargetZoom
+                zoomContinuityController.resetToZoom(effectiveTargetZoom, lens)
+            }
+            pendingDirectTargetZoom = if (preserveZoom) targetZoom else effectiveTargetZoom
 
             // If same camera ID and same facing, or both belong to the logical multi-camera,
             // switch optical stream and zoom dynamically without restarting hardware or capture session
@@ -1057,8 +1077,10 @@ class Camera2Engine(private val context: Context) {
                 _selectedLens.value = lens
                 activeSessionLens = lens
                 isSwitchingLens.set(false)
-                Log.i(TAG, "[IN-SESSION SWITCH] Seamlessly switching lens to ${lens.lensType} (zoom=$currentZoom) within active CameraDevice ${cameraDevice?.id}")
-                zoomContinuityController.onNewLensReady(lens, effectiveTargetZoom)
+                Log.i(TAG, "[IN-SESSION SWITCH] Seamlessly switching lens to ${lens.lensType} within active CameraDevice ${cameraDevice?.id}")
+                val directTarget = pendingDirectTargetZoom
+                pendingDirectTargetZoom = null
+                zoomContinuityController.onNewLensReady(lens, directTarget)
                 updatePreviewSettings()
                 motorolaSwitchEngine.updatePrimaryLens(lens, _availableLenses.value)
                 motorolaSwitchEngine.compositor.switchActiveStream(lens.lensType)
@@ -1859,7 +1881,9 @@ class Camera2Engine(private val context: Context) {
                                 if (configuredLens != null) {
                                     activeSessionLens = configuredLens
                                     isSwitchingLens.set(false)
-                                    zoomContinuityController.onNewLensReady(configuredLens, currentZoom)
+                                    val directTarget = pendingDirectTargetZoom
+                                    pendingDirectTargetZoom = null
+                                    zoomContinuityController.onNewLensReady(configuredLens, directTarget)
                                 }
                                 Log.i(TAG, "Seamless lens switch during active recording session completed successfully")
                             } catch (e: Exception) {
@@ -1938,7 +1962,9 @@ class Camera2Engine(private val context: Context) {
                                 if (configuredLens != null) {
                                     activeSessionLens = configuredLens
                                     isSwitchingLens.set(false)
-                                    zoomContinuityController.onNewLensReady(configuredLens, currentZoom)
+                                    val directTarget = pendingDirectTargetZoom
+                                    pendingDirectTargetZoom = null
+                                    zoomContinuityController.onNewLensReady(configuredLens, directTarget)
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to start repeating preview request", e)
@@ -2002,7 +2028,9 @@ class Camera2Engine(private val context: Context) {
                             if (configuredLens != null) {
                                 activeSessionLens = configuredLens
                                 isSwitchingLens.set(false)
-                                zoomContinuityController.onNewLensReady(configuredLens, currentZoom)
+                                val directTarget = pendingDirectTargetZoom
+                                pendingDirectTargetZoom = null
+                                zoomContinuityController.onNewLensReady(configuredLens, directTarget)
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to start repeating preview request", e)
@@ -2558,12 +2586,10 @@ class Camera2Engine(private val context: Context) {
             ?.coerceAtLeast(minAllowedZoom) ?: currentLens.maxZoomRatio.coerceAtLeast(minAllowedZoom)
         val clampedZoom = zoom.coerceIn(minAllowedZoom, maxCapabilityZoom)
 
-        // Continuously update user target zoom, velocity and direction
-        zoomContinuityController.onUserZoomInput(clampedZoom, isPresetTap)
-
         // If front selfie camera, apply digital zoom on active stream,
         // or switch to rear lens if user explicitly tapped a rear zoom preset (.5x or 1x)
         if (currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT) {
+            zoomContinuityController.onUserZoomInput(clampedZoom, isPresetTap)
             if (isPresetTap && (clampedZoom < 0.95f || clampedZoom in 0.95f..1.1f)) {
                 val backTarget = if (clampedZoom < 0.95f) {
                     ultraWideLens
@@ -2600,6 +2626,15 @@ class Camera2Engine(private val context: Context) {
             else -> mainWideLens ?: currentLens
         }
 
+        val isSwitchNeeded = (targetLens != currentLens && targetLens != zoomContinuityController.pendingLens)
+        if (isSwitchNeeded && !isSwitchingLens.get() && !zoomContinuityController.isSwitching) {
+            zoomContinuityController.onLensSwitchStarted(targetLens)
+        }
+
+        // Continuously update user target zoom.
+        // If a lens switch is starting/pending, this safely records userTargetZoom without jumping the displayed FOV.
+        zoomContinuityController.onUserZoomInput(clampedZoom, isPresetTap)
+
         // Keep standby camera repeating request synchronized with FOV-equivalent zoom
         val standbyTarget = motorolaSwitchEngine.activeStandbyLensInfo ?: targetLens
         val standbyZoom = if (zoomContinuityController.isSwitching) {
@@ -2613,19 +2648,19 @@ class Camera2Engine(private val context: Context) {
         }
         motorolaSwitchEngine.updateStandbyZoom(standbyZoom)
 
-        if (targetLens != currentLens && targetLens != zoomContinuityController.pendingLens) {
+        if (isSwitchNeeded) {
             // If already switching lens, don't trigger another reconfiguration; keep streaming digital zoom
-            if (!isSwitchingLens.get() && !zoomContinuityController.isSwitching) {
+            if (!isSwitchingLens.get() && zoomContinuityController.isSwitching) {
                 val isSameCameraDevice = (currentLens.cameraId == targetLens.cameraId && currentLens.facing == targetLens.facing) ||
                     (currentLens.isLogicalMultiCamera && targetLens.isLogicalMultiCamera && cameraDevice != null)
 
+                // For continuous dragging: pass targetZoom = null so FOV-equivalent handoff is calculated on new lens
+                // For explicit preset taps: pass direct preset zoom target
                 val pZoom = if (isPresetTap) {
                     if (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE) 1.0f else targetLens.baseZoomRatio
                 } else {
-                    clampedZoom
+                    null
                 }
-
-                zoomContinuityController.onLensSwitchStarted(targetLens)
 
                 if (isSameCameraDevice) {
                     // Instant in-session optical switch without session recreation
@@ -5051,6 +5086,13 @@ class Camera2Engine(private val context: Context) {
                     fps = targetFps,
                     rotationDegrees = encoderRotation
                 )
+                preparedVideoGeometry = PreparedVideoGeometry(
+                    width = finalRecordWidth,
+                    height = finalRecordHeight,
+                    fps = targetFps,
+                    orientationHint = 0,
+                    encoderRotation = encoderRotation
+                )
             } else {
                 @Suppress("DEPRECATION")
                 val mr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -5074,6 +5116,8 @@ class Camera2Engine(private val context: Context) {
                     prefer10Bit = is10BitRequested
                 )
 
+                var activeGeometry: PreparedVideoGeometry? = null
+
                 fun configureAndPrepare(
                     encoder: Int,
                     width: Int,
@@ -5081,7 +5125,9 @@ class Camera2Engine(private val context: Context) {
                     fps: Int,
                     rate: Int,
                     withAudio: Boolean,
-                    is10Bit: Boolean
+                    is10Bit: Boolean,
+                    orientationHint: Int,
+                    encoderRot: Int
                 ): Boolean {
                     return try {
                         mr.reset()
@@ -5138,8 +5184,15 @@ class Camera2Engine(private val context: Context) {
                             }
                         }
 
-                        mr.setOrientationHint(getVideoOrientationHint())
+                        mr.setOrientationHint(orientationHint)
                         mr.prepare()
+                        activeGeometry = PreparedVideoGeometry(
+                            width = width,
+                            height = height,
+                            fps = fps,
+                            orientationHint = orientationHint,
+                            encoderRotation = encoderRot
+                        )
                         true
                     } catch (t: Throwable) {
                         Log.w(TAG, "MediaRecorder prepare failed (enc=$encoder, ${width}x${height}, audio=$withAudio): ${t.message}")
@@ -5147,11 +5200,51 @@ class Camera2Engine(private val context: Context) {
                     }
                 }
 
+                fun tryTier(
+                    encoder: Int,
+                    targetW: Int,
+                    targetH: Int,
+                    fps: Int,
+                    rate: Int,
+                    withAudio: Boolean,
+                    is10Bit: Boolean
+                ): Boolean {
+                    val maxD = maxOf(targetW, targetH)
+                    val minD = minOf(targetW, targetH)
+                    if (isPortraitRecording) {
+                        // Candidate A: upright portrait surface
+                        if (configureAndPrepare(
+                                encoder = encoder,
+                                width = minD,
+                                height = maxD,
+                                fps = fps,
+                                rate = rate,
+                                withAudio = withAudio,
+                                is10Bit = is10Bit,
+                                orientationHint = 0,
+                                encoderRot = encoderRotation
+                            )
+                        ) return true
+                    }
+                    // Candidate B: standard landscape container with hardware orientationHint
+                    return configureAndPrepare(
+                        encoder = encoder,
+                        width = maxD,
+                        height = minD,
+                        fps = fps,
+                        rate = rate,
+                        withAudio = withAudio,
+                        is10Bit = is10Bit,
+                        orientationHint = getVideoOrientationHint(),
+                        encoderRot = 0
+                    )
+                }
+
                 // Tier 1: Validated optimal configuration
-                var prepared = configureAndPrepare(
+                var prepared = tryTier(
                     encoder = validatedConfig.encoder,
-                    width = validatedConfig.width,
-                    height = validatedConfig.height,
+                    targetW = validatedConfig.width,
+                    targetH = validatedConfig.height,
                     fps = validatedConfig.fps,
                     rate = validatedConfig.bitrate,
                     withAudio = isAudioEnabled,
@@ -5161,10 +5254,10 @@ class Camera2Engine(private val context: Context) {
                 // Tier 2: If failed and 10-bit was attempted, downgrade to 8-bit
                 if (!prepared && validatedConfig.is10Bit) {
                     Log.i(TAG, "Tier 2: Downgrading 10-bit to 8-bit standard encoder")
-                    prepared = configureAndPrepare(
+                    prepared = tryTier(
                         encoder = validatedConfig.encoder,
-                        width = validatedConfig.width,
-                        height = validatedConfig.height,
+                        targetW = validatedConfig.width,
+                        targetH = validatedConfig.height,
                         fps = validatedConfig.fps,
                         rate = minOf(validatedConfig.bitrate, 40_000_000),
                         withAudio = isAudioEnabled,
@@ -5175,10 +5268,10 @@ class Camera2Engine(private val context: Context) {
                 // Tier 3: Fallback to universal H.264
                 if (!prepared && validatedConfig.encoder != MediaRecorder.VideoEncoder.H264) {
                     Log.i(TAG, "Tier 3: Fallback to universal H.264 encoder")
-                    prepared = configureAndPrepare(
+                    prepared = tryTier(
                         encoder = MediaRecorder.VideoEncoder.H264,
-                        width = validatedConfig.width,
-                        height = validatedConfig.height,
+                        targetW = validatedConfig.width,
+                        targetH = validatedConfig.height,
                         fps = minOf(validatedConfig.fps, 30),
                         rate = minOf(validatedConfig.bitrate, 30_000_000),
                         withAudio = isAudioEnabled,
@@ -5189,10 +5282,10 @@ class Camera2Engine(private val context: Context) {
                 // Tier 4: Fallback to universal H.264 without audio (fixes MIC permission or busy audio HAL)
                 if (!prepared && isAudioEnabled) {
                     Log.i(TAG, "Tier 4: Fallback to H.264 video-only (bypassing audio hardware)")
-                    prepared = configureAndPrepare(
+                    prepared = tryTier(
                         encoder = MediaRecorder.VideoEncoder.H264,
-                        width = minOf(validatedConfig.width, 1920),
-                        height = minOf(validatedConfig.height, 1080),
+                        targetW = minOf(validatedConfig.width, 1920),
+                        targetH = minOf(validatedConfig.height, 1080),
                         fps = 30,
                         rate = 20_000_000,
                         withAudio = false,
@@ -5203,10 +5296,10 @@ class Camera2Engine(private val context: Context) {
                 // Tier 5: Absolute failsafe: standard 720p 30fps H.264
                 if (!prepared) {
                     Log.i(TAG, "Tier 5: Universal 720p 30fps safe recording profile")
-                    prepared = configureAndPrepare(
+                    prepared = tryTier(
                         encoder = MediaRecorder.VideoEncoder.H264,
-                        width = 1280,
-                        height = 720,
+                        targetW = 1280,
+                        targetH = 720,
                         fps = 30,
                         rate = 12_000_000,
                         withAudio = false,
@@ -5214,24 +5307,30 @@ class Camera2Engine(private val context: Context) {
                     )
                 }
 
-                if (!prepared) {
+                val preparedGeom = activeGeometry
+                if (!prepared || preparedGeom == null) {
                     onError("Unable to initialize video recorder on this device")
                     return
                 }
 
+                preparedVideoGeometry = preparedGeom
                 recorderSurface = mr.surface
             }
                 var compSuccess = false
                 if (_computationalVideoPipeline.value != ComputationalVideoPipeline.DEFAULT) {
+                    val geom = preparedVideoGeometry ?: run {
+                        onError("Recording geometry missing")
+                        return
+                    }
                     compSuccess = motorolaSwitchEngine.compositor.attachEncoderSurface(
                         recorderSurface,
-                        finalRecordWidth,
-                        finalRecordHeight,
-                        fps = targetFps,
-                        rotationDegrees = encoderRotation
+                        geom.width,
+                        geom.height,
+                        fps = geom.fps,
+                        rotationDegrees = geom.encoderRotation
                     )
                     if (compSuccess) {
-                        Log.i(TAG, "Computational GPU video encoder surface attached successfully (${finalRecordWidth}x${finalRecordHeight})")
+                        Log.i(TAG, "Computational GPU video encoder surface attached successfully (${geom.width}x${geom.height} @ ${geom.fps}fps, rot=${geom.encoderRotation})")
                     } else {
                         Log.w(TAG, "Computational GPU encoding could not initialize; falling back to direct Camera2 -> MediaRecorder")
                         motorolaSwitchEngine.compositor.setEncoderSurface(null, 0, 0)

@@ -3,6 +3,7 @@ package com.example.camera.engine
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.ImageFormat
+import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.media.ImageReader
@@ -397,7 +398,62 @@ class MotorolaInstantSwitchEngine(
 
     fun ensureStandbyRepeatingRequest() {}
 
-    fun updateStandbyZoom(zoom: Float) {}
+    fun updateStandbyZoom(zoom: Float) {
+        val handler = backgroundHandler ?: return
+        synchronized(sessionLock) {
+            val session = standbyCaptureSession ?: mainStandbyCaptureSession ?: return
+            val device = standbyCameraDevice ?: mainStandbyCameraDevice ?: return
+            val lens = activeStandbyLens ?: activeMainLens ?: return
+            val previewSurf = if (lens.lensType == LensType.ULTRAWIDE) {
+                compositor.ultraWideCameraSurface
+            } else {
+                compositor.mainCameraSurface
+            } ?: return
+            if (!previewSurf.isValid) return
+
+            try {
+                val chars = cameraManager?.getCameraCharacteristics(lens.cameraId) ?: return
+                val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+                val digitalCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                    uiZoom = zoom,
+                    lensBaseRatio = lens.baseZoomRatio,
+                    lensType = lens.lensType
+                )
+                val req = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                    addTarget(previewSurf)
+                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                        if (zoomRange != null) {
+                            set(CaptureRequest.CONTROL_ZOOM_RATIO, digitalCrop.coerceIn(zoomRange.lower, zoomRange.upper))
+                            set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
+                        } else {
+                            val factor = digitalCrop.coerceIn(1.0f, 10.0f)
+                            val cropW = (sensorRect.width() / factor).toInt().coerceIn(1, sensorRect.width())
+                            val cropH = (sensorRect.height() / factor).toInt().coerceIn(1, sensorRect.height())
+                            val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
+                            val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
+                            set(CaptureRequest.SCALER_CROP_REGION, Rect(cropX, cropY, cropX + cropW, cropY + cropH))
+                        }
+                    } else {
+                        val factor = digitalCrop.coerceIn(1.0f, 10.0f)
+                        val cropW = (sensorRect.width() / factor).toInt().coerceIn(1, sensorRect.width())
+                        val cropH = (sensorRect.height() / factor).toInt().coerceIn(1, sensorRect.height())
+                        val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
+                        val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
+                        set(CaptureRequest.SCALER_CROP_REGION, Rect(cropX, cropY, cropX + cropW, cropY + cropH))
+                    }
+                }.build()
+                session.setRepeatingRequest(req, null, handler)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to update standby zoom for ${lens.lensType}", e)
+            }
+        }
+    }
 
     fun getStandbyCameraDevice(targetLens: LensInfo): CameraDevice? = null
 

@@ -52,6 +52,7 @@ fun BottomControlBar(
     currentZoom: Float = 1.0f,
     displayedLenses: List<LensInfo> = emptyList(),
     selectedLens: LensInfo? = null,
+    activeZoomPresets: List<Float>? = null,
     onLensSelected: (LensInfo) -> Unit = {},
     onZoomChange: (Float) -> Unit = {},
     onZoomPresetTap: (Float) -> Unit = onZoomChange,
@@ -98,6 +99,7 @@ fun BottomControlBar(
                 displayedLenses = displayedLenses,
                 selectedLens = selectedLens,
                 capabilities = capabilities,
+                customPresets = activeZoomPresets,
                 onShowToast = onShowToast,
                 onLensSelected = onLensSelected,
                 onZoomChange = onZoomChange,
@@ -787,6 +789,7 @@ fun MasterZoomCapsule(
     displayedLenses: List<LensInfo>,
     selectedLens: LensInfo?,
     capabilities: HardwareCapabilities = HardwareCapabilities(),
+    customPresets: List<Float>? = null,
     onShowToast: (String) -> Unit = {},
     onLensSelected: (LensInfo) -> Unit,
     onZoomChange: (Float) -> Unit,
@@ -797,11 +800,15 @@ fun MasterZoomCapsule(
     val hasRealUltraWide = remember(displayedLenses) {
         displayedLenses.any { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
     }
-    val presets = remember(isFrontCamera, hasRealUltraWide) {
+    val presets = remember(isFrontCamera, hasRealUltraWide, customPresets) {
         if (isFrontCamera) {
             if (hasRealUltraWide) listOf(0.5f, 1.0f) else listOf(1.0f)
         } else {
-            if (hasRealUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+            customPresets?.takeIf { it.isNotEmpty() } ?: if (hasRealUltraWide) {
+                listOf(0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+            } else {
+                listOf(1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+            }
         }
     }
 
@@ -866,9 +873,11 @@ fun MasterZoomCapsule(
                     1.0f -> "1x"
                     2.0f -> "2"
                     3.0f -> "3"
+                    4.0f -> "4"
                     5.0f -> "5"
+                    8.0f -> "8"
                     10.0f -> "10"
-                    else -> "${preset}x"
+                    else -> if (preset % 1.0f == 0f) "${preset.toInt()}" else "%.1f".format(preset)
                 }
 
                 val displayText = if (isActive && (currentZoom - preset).absoluteValue >= 0.25f) {
@@ -878,19 +887,18 @@ fun MasterZoomCapsule(
                 }
 
                 // Physical lens mapping (Real hardware lenses only)
-                val targetLens = when (preset) {
-                    0.5f -> displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                    1.0f -> displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && it.isPhysical && !it.isZoomPreset }
+                val targetLens = when {
+                    preset < 0.95f -> displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+                        ?: displayedLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+                    preset >= 2.9f -> displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
+                        ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X }
+                        ?: displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
+                        ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO }
+                    preset >= 1.9f -> displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
+                        ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X }
+                    else -> displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && it.isPhysical && !it.isZoomPreset }
                         ?: displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
                         ?: displayedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                    2.0f -> displayedLenses.firstOrNull { (it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X) && it.isPhysical }
-                        ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO || it.lensType == LensType.TELEPHOTO_3X }
-                    3.0f -> displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
-                        ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X }
-                        ?: displayedLenses.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical }
-                    5.0f -> displayedLenses.firstOrNull { it.isPhysical && (it.baseZoomRatio in 4.5f..5.5f || it.equivalent35mmFocalMm in 110f..140f) }
-                    10.0f -> displayedLenses.firstOrNull { it.isPhysical && (it.baseZoomRatio in 9.0f..11.0f || it.equivalent35mmFocalMm >= 220f) }
-                    else -> null
                 }
 
                 Box(

@@ -83,6 +83,10 @@ fun SettingsDrawer(
     ultraFastShutterFps: Int = 15,
     isHighQualityZoomEnabled: Boolean = true,
     zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality = com.example.camera.zoom.ZoomProcessingQuality.BALANCED,
+    zoomPresetsMode: String = "STANDARD",
+    customZoomPresetsStr: String = "1, 2, 4, 8",
+    onZoomPresetsModeSelect: (String) -> Unit = {},
+    onCustomZoomPresetsChange: (String) -> Unit = {},
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     isVideoStabilizationEnabled: Boolean = true,
@@ -1064,6 +1068,58 @@ fun SettingsDrawer(
                                                 onClick = { onZoomProcessingQualitySelect(q) }
                                             )
                                         }
+                                    }
+                                }
+                            }
+
+                            SamsungDivider()
+
+                            // Zoom Presets Style
+                            SamsungRowItem(
+                                icon = Icons.Outlined.LinearScale,
+                                title = "Zoom Presets",
+                                subtitle = when (zoomPresetsMode) {
+                                    "POWERS_OF_TWO" -> "1x, 2x, 4x, 8x"
+                                    "CINEMATIC" -> "Cine (1x, 2x, 3x, 6x, 10x)"
+                                    "CUSTOM" -> "Custom ($customZoomPresetsStr)"
+                                    else -> "Standard (0.5x, 1x, 2x, 3x, 5x, 10x)"
+                                }
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        SamsungSmallChip(
+                                            label = "Standard",
+                                            isSelected = zoomPresetsMode == "STANDARD",
+                                            onClick = { onZoomPresetsModeSelect("STANDARD") }
+                                        )
+                                        SamsungSmallChip(
+                                            label = "1x 2x 4x 8x",
+                                            isSelected = zoomPresetsMode == "POWERS_OF_TWO",
+                                            onClick = { onZoomPresetsModeSelect("POWERS_OF_TWO") }
+                                        )
+                                        SamsungSmallChip(
+                                            label = "Cine",
+                                            isSelected = zoomPresetsMode == "CINEMATIC",
+                                            onClick = { onZoomPresetsModeSelect("CINEMATIC") }
+                                        )
+                                        SamsungSmallChip(
+                                            label = "Custom",
+                                            isSelected = zoomPresetsMode == "CUSTOM",
+                                            onClick = { onZoomPresetsModeSelect("CUSTOM") }
+                                        )
+                                    }
+                                    if (zoomPresetsMode == "CUSTOM") {
+                                        var customText by remember(customZoomPresetsStr) { mutableStateOf(customZoomPresetsStr) }
+                                        OutlinedTextField(
+                                            value = customText,
+                                            onValueChange = {
+                                                customText = it
+                                                onCustomZoomPresetsChange(it)
+                                            },
+                                            label = { Text("Presets (e.g. 1, 2, 4, 8)") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth().testTag("custom_zoom_presets_input")
+                                        )
                                     }
                                 }
                             }

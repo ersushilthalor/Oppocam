@@ -171,6 +171,9 @@ fun CameraScreen(
     val currentZoom by viewModel.currentZoom.collectAsStateWithLifecycle()
     val displayedLenses by viewModel.displayedLenses.collectAsStateWithLifecycle()
     val selectedLens by viewModel.selectedLens.collectAsStateWithLifecycle()
+    val zoomPresetsMode by viewModel.zoomPresetsMode.collectAsStateWithLifecycle()
+    val customZoomPresetsStr by viewModel.customZoomPresetsStr.collectAsStateWithLifecycle()
+    val activeZoomPresets by viewModel.activeZoomPresets.collectAsStateWithLifecycle()
 
     val dollyZoomState by viewModel.dollyZoomState.collectAsStateWithLifecycle()
     val nightConfig by viewModel.nightConfig.collectAsStateWithLifecycle()
@@ -817,6 +820,7 @@ fun CameraScreen(
             currentZoom = currentZoom,
             displayedLenses = displayedLenses,
             selectedLens = selectedLens,
+            activeZoomPresets = activeZoomPresets,
             capabilities = capabilities,
             onShowToast = { msg -> viewModel.showToast(msg) },
             onLensSelected = { lens -> viewModel.selectLens(lens) },
@@ -866,6 +870,10 @@ fun CameraScreen(
             onUltraFastShutterFpsChange = { viewModel.setUltraFastShutterFps(it) },
             isHighQualityZoomEnabled = isHighQualityZoomEnabled,
             zoomProcessingQuality = zoomProcessingQuality,
+            zoomPresetsMode = zoomPresetsMode,
+            customZoomPresetsStr = customZoomPresetsStr,
+            onZoomPresetsModeSelect = { viewModel.setZoomPresetsMode(it) },
+            onCustomZoomPresetsChange = { viewModel.setCustomZoomPresets(it) },
             videoFps = videoFps,
             videoBitrate = videoBitrate,
             isVideoStabilizationEnabled = isVideoStabilizationEnabled,

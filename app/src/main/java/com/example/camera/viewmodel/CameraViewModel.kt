@@ -306,6 +306,40 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Zoom Clarity: ${quality.label}")
     }
 
+    private val _zoomPresetsMode = MutableStateFlow(preferences.zoomPresetsMode)
+    val zoomPresetsMode: StateFlow<String> = _zoomPresetsMode.asStateFlow()
+
+    private val _customZoomPresetsStr = MutableStateFlow(preferences.customZoomPresetsStr)
+    val customZoomPresetsStr: StateFlow<String> = _customZoomPresetsStr.asStateFlow()
+
+    private val _activeZoomPresets = MutableStateFlow(preferences.getEffectiveZoomPresets(hasUltraWide = true))
+    val activeZoomPresets: StateFlow<List<Float>> = _activeZoomPresets.asStateFlow()
+
+    fun setZoomPresetsMode(mode: String) {
+        _zoomPresetsMode.value = mode
+        preferences.zoomPresetsMode = mode
+        refreshActiveZoomPresets()
+        val label = when (mode) {
+            "POWERS_OF_TWO" -> "1x, 2x, 4x, 8x"
+            "CINEMATIC" -> "Cine (1x, 2x, 3x, 6x, 10x)"
+            "CUSTOM" -> "Custom (${preferences.customZoomPresetsStr})"
+            else -> "Standard (0.5x, 1x, 2x, 3x, 5x, 10x)"
+        }
+        showToast("Zoom Presets: $label")
+    }
+
+    fun setCustomZoomPresets(presets: String) {
+        _customZoomPresetsStr.value = presets
+        preferences.customZoomPresetsStr = presets
+        refreshActiveZoomPresets()
+        showToast("Custom Zoom Presets Updated")
+    }
+
+    fun refreshActiveZoomPresets() {
+        val hasUW = engine.availableLenses.value.any { it.lensType == LensType.ULTRAWIDE }
+        _activeZoomPresets.value = preferences.getEffectiveZoomPresets(hasUW)
+    }
+
     fun setRefocusPhotoEnabled(enabled: Boolean) {
         _isRefocusPhotoEnabled.value = enabled
         preferences.isRefocusPhotoEnabled = enabled
@@ -700,6 +734,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             engine.availableLenses.collect { lenses ->
                 if (lenses.isNotEmpty()) {
+                    refreshActiveZoomPresets()
                     val savedModeLens = preferences.getModeLens(preferences.cameraMode, lenses)
                     if (savedModeLens != null && engine.selectedLens.value?.id != savedModeLens.id) {
                         engine.selectLens(savedModeLens)

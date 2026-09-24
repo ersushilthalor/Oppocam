@@ -101,6 +101,7 @@ class ZoomContinuityController(
     /**
      * Called on user touch/drag/pinch/preset events to update the desired zoom level.
      * Continuously tracks target zoom and updates the active camera cleanly.
+     * During a lens switch, freezes current displayed FOV on the old lens to prevent framing jumps.
      */
     fun onUserZoomInput(zoom: Float, isPresetTap: Boolean = false) {
         val nowNs = System.nanoTime()
@@ -116,20 +117,11 @@ class ZoomContinuityController(
             onApplyZoom(zoom)
             onZoomUpdated(zoom)
         } else {
-            // Lens switch is currently loading (old camera still streaming frames):
-            // Keep updating the old camera's digital zoom within its safe physical FOV range.
-            val oldLens = activeLens
-            if (oldLens != null) {
-                val clampedOldZoom = when (oldLens.lensType) {
-                    LensType.ULTRAWIDE -> zoom.coerceIn(oldLens.baseZoomRatio, 1.25f)
-                    LensType.WIDE -> zoom.coerceIn(1.0f, 3.8f)
-                    LensType.TELEPHOTO, LensType.TELEPHOTO_3X -> zoom.coerceAtLeast(oldLens.baseZoomRatio)
-                    else -> zoom.coerceAtLeast(1.0f)
-                }
-                currentDisplayedZoom = clampedOldZoom
-                onApplyZoom(clampedOldZoom)
-                onZoomUpdated(clampedOldZoom)
-            }
+            // Lens switch is currently in progress:
+            // Freeze the current displayed FOV on the old camera to preserve framing stability.
+            // Rapid user gestures update userTargetZoom so that as soon as the new lens is ready,
+            // it smoothly interpolates to the latest target without abrupt snaps or plateaus.
+            Log.d(TAG, "Zoom input during lens switch: userTargetZoom=$zoom (displayed FOV frozen at $currentDisplayedZoom)")
         }
     }
 
@@ -198,9 +190,8 @@ class ZoomContinuityController(
 
     /**
      * Called when the target lens session/hardware is configured and ready to stream.
-     * Applies the calibrated FOV-equivalent zoom on the new lens to match the current view natively.
-     * When switching to Main 1x from Ultra-Wide or switching lenses, directly applies the target FOV
-     * with zero unnecessary zoom animation or magnification jump.
+     * Applies the calibrated FOV-equivalent zoom on the new lens to match the current view natively,
+     * then smoothly interpolates toward the user's latest target zoom.
      */
     fun onNewLensReady(newLens: LensInfo, directTargetZoom: Float? = null) {
         val oldLens = activeLens
@@ -209,12 +200,9 @@ class ZoomContinuityController(
         isSwitchingFlag.set(false)
         interpolationJob?.cancel()
 
-        val isDirectPresetOrMainSwitch = (directTargetZoom != null) ||
-                (newLens.lensType == LensType.WIDE && oldLens?.lensType == LensType.ULTRAWIDE)
-
         val target = directTargetZoom ?: userTargetZoom
 
-        val startZoom = if (isDirectPresetOrMainSwitch) {
+        val startZoom = if (directTargetZoom != null) {
             target
         } else {
             calculateFovEquivalentZoom(currentDisplayedZoom, oldLens, newLens)
@@ -224,15 +212,15 @@ class ZoomContinuityController(
         userTargetZoom = target
         lastUserTargetZoom = target
 
-        Log.i(TAG, "New lens ${newLens.lensType} ready at native FOV zoom: $startZoom (target: $target)")
+        Log.i(TAG, "New lens ${newLens.lensType} ready at native FOV zoom: $startZoom (latest target: $target)")
 
         // Natively apply calibrated FOV zoom to the newly active camera session immediately
         onApplyZoom(startZoom)
         onZoomUpdated(startZoom)
 
-        // If target differs from startZoom (e.g. continuous swipe during lens switch),
+        // If target differs from startZoom (e.g. continuous drag during lens switch),
         // smoothly bridge from startZoom to target without abrupt jumps
-        if (!isDirectPresetOrMainSwitch && abs(target - startZoom) > 0.03f) {
+        if (directTargetZoom == null && abs(target - startZoom) > 0.01f) {
             startSmoothInterpolation(startZoom, target)
         }
     }

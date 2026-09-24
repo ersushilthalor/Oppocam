@@ -166,6 +166,65 @@ class ZoomContinuityControllerTest {
     }
 
     @Test
+    fun testReproduceRealProductionContinuousDragHandoff() = runTest {
+        val testDispatcher = StandardTestDispatcher(testScheduler)
+        val testScope = TestScope(testDispatcher)
+
+        val appliedZooms = mutableListOf<Float>()
+        val updatedZooms = mutableListOf<Float>()
+
+        val controller = ZoomContinuityController(
+            coroutineScope = testScope,
+            onApplyZoom = { appliedZooms.add(it) },
+            onZoomUpdated = { updatedZooms.add(it) }
+        )
+
+        // 1. Initial State: UltraWide (0.5x) at 0.5x
+        controller.initialize(ultraWideLens, 0.5f)
+        assertEquals(0.5f, controller.currentDisplayedZoom, 0.001f)
+
+        // 2. User starts continuous drag: 0.5 -> 0.7 -> 0.95 -> 1.2
+        controller.onUserZoomInput(0.7f)
+        assertEquals(0.7f, controller.currentDisplayedZoom, 0.001f)
+
+        // Crossing threshold to Main lens (1.0x): Lens switch starts
+        controller.onLensSwitchStarted(mainLens)
+        assertTrue(controller.isSwitching)
+        val displayedBeforeSwitch = controller.currentDisplayedZoom
+
+        // 3. User continues dragging while Camera2 session prepares in background
+        controller.onUserZoomInput(1.2f)
+        controller.onUserZoomInput(1.5f)
+        controller.onUserZoomInput(2.0f)
+
+        // The user's target is 2.0x, but displayed FOV must remain frozen at displayedBeforeSwitch (not jumped!)
+        assertEquals(2.0f, controller.userTargetZoom, 0.001f)
+        assertEquals(displayedBeforeSwitch, controller.currentDisplayedZoom, 0.001f)
+
+        // 4. New Camera2 session becomes ready for Main lens!
+        // Notice directTargetZoom is null for continuous drag
+        testScope.advanceTimeBy(300)
+        controller.onNewLensReady(mainLens, directTargetZoom = null)
+
+        assertFalse(controller.isSwitching)
+        assertEquals(mainLens, controller.activeLens)
+
+        // 5. Initial zoom applied to new lens must be FOV-equivalent to displayedBeforeSwitch (clamped to base zoom 1.0x)
+        val handoffZoom = appliedZooms.last()
+        assertEquals(1.0f, handoffZoom, 0.01f)
+
+        // 6. Smooth interpolation carries the zoom to the user's latest target (2.0x)
+        testScope.advanceTimeBy(500)
+        assertEquals(2.0f, controller.currentDisplayedZoom, 0.05f)
+
+        // Verify smoothness across the entire trajectory
+        for (i in 1 until appliedZooms.size) {
+            val delta = Math.abs(appliedZooms[i] - appliedZooms[i - 1])
+            assertTrue("Zoom change between frames must be smooth, delta=$delta", delta < 1.0f)
+        }
+    }
+
+    @Test
     fun testSwitchFailedGracefullyCancelsAndRecovers() {
         val testScope = TestScope()
         val controller = ZoomContinuityController(

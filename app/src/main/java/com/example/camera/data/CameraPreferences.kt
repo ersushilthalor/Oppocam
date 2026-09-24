@@ -50,6 +50,33 @@ class CameraPreferences(context: Context) {
         private const val KEY_COMPUTATIONAL_VIDEO_PIPELINE = "pref_computational_video_pipeline"
         private const val KEY_PREFERRED_GALLERY_PACKAGE = "pref_preferred_gallery_package"
         private const val KEY_HAS_PROMPTED_GALLERY = "pref_has_prompted_gallery"
+        private const val KEY_ZOOM_PRESETS_MODE = "pref_zoom_presets_mode"
+        private const val KEY_CUSTOM_ZOOM_PRESETS = "pref_custom_zoom_presets"
+    }
+
+    var zoomPresetsMode: String
+        get() = prefs.getString(KEY_ZOOM_PRESETS_MODE, "STANDARD") ?: "STANDARD"
+        set(value) = prefs.edit().putString(KEY_ZOOM_PRESETS_MODE, value).apply()
+
+    var customZoomPresetsStr: String
+        get() = prefs.getString(KEY_CUSTOM_ZOOM_PRESETS, "1x, 2x, 4x, 8x") ?: "1x, 2x, 4x, 8x"
+        set(value) = prefs.edit().putString(KEY_CUSTOM_ZOOM_PRESETS, value).apply()
+
+    fun getEffectiveZoomPresets(hasUltraWide: Boolean): List<Float> {
+        return when (zoomPresetsMode) {
+            "POWERS_OF_TWO" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 4.0f, 8.0f) else listOf(1.0f, 2.0f, 4.0f, 8.0f)
+            "CINEMATIC" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 6.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 6.0f, 10.0f)
+            "CUSTOM" -> {
+                val cleaned = customZoomPresetsStr.replace("x", "", ignoreCase = true)
+                val parsed = cleaned.split(",")
+                    .mapNotNull { it.trim().toFloatOrNull() }
+                    .filter { it in 0.35f..100f }
+                    .distinct()
+                    .sorted()
+                if (parsed.isNotEmpty()) parsed else if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 4.0f, 8.0f) else listOf(1.0f, 2.0f, 4.0f, 8.0f)
+            }
+            else -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+        }
     }
 
     var preferredGalleryPackage: String?
