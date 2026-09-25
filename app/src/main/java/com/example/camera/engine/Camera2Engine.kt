@@ -3114,7 +3114,7 @@ class Camera2Engine(private val context: Context) {
                                     jpegQuality = preferences.jpegQuality
                                 )
 
-                                val uri = saveJpegBytesToMediaStore(finalJpegBytes)
+                                val uri = saveJpegBytesToMediaStore(finalJpegBytes, skipPipeline = true)
                                 com.example.camera.pipeline.engine.PipelineCaptureCache.updateSavedUri(uri)
                                 _isCapturing.value = false
                                 updateStorageStats()
@@ -3444,7 +3444,7 @@ class Camera2Engine(private val context: Context) {
                 params = params,
                 jpegQuality = preferences.jpegQuality
             )
-            val uri = saveJpegBytesToMediaStore(finalBytes)
+            val uri = saveJpegBytesToMediaStore(finalBytes, skipPipeline = true)
             com.example.camera.pipeline.engine.PipelineCaptureCache.updateSavedUri(uri)
             updateStorageStats()
             uri
@@ -5219,16 +5219,93 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun saveJpegBytesToMediaStore(bytes: ByteArray): Uri? {
+    private fun processPhotoWithCustomPipeline(jpegBytes: ByteArray): ByteArray {
+        try {
+            val activePreset = preferences.getActivePipelinePreset()
+            val activeParams = preferences.getPipelineParams(activePreset.id)
+            val activeLens = _selectedLens.value
+            val isFront = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+
+            val options = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = true
+            }
+            val sourceBmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, options)
+                ?: return jpegBytes
+
+            val processedBytes = kotlinx.coroutines.runBlocking(Dispatchers.Default) {
+                customImagePipelineEngine.processAndEncodeToJpegBytes(
+                    source = sourceBmp,
+                    params = activeParams,
+                    jpegQuality = preferences.jpegQuality
+                )
+            }
+
+            val maxDim = max(sourceBmp.width, sourceBmp.height)
+            val previewScale = (1080f / maxDim).coerceAtMost(1.0f)
+            val previewBmp = if (previewScale < 0.95f) {
+                Bitmap.createScaledBitmap(
+                    sourceBmp,
+                    (sourceBmp.width * previewScale).roundToInt(),
+                    (sourceBmp.height * previewScale).roundToInt(),
+                    true
+                )
+            } else {
+                sourceBmp.copy(Bitmap.Config.ARGB_8888, true)
+            }
+
+            val captureSource = com.example.camera.pipeline.engine.PipelineCaptureSource(
+                fullResBitmap = sourceBmp,
+                previewBitmap = previewBmp,
+                orientationDegrees = getCaptureJpegOrientation(),
+                isFrontFacing = isFront,
+                lensInfo = activeLens,
+                appliedPreset = activePreset,
+                appliedParams = activeParams
+            )
+            com.example.camera.pipeline.engine.PipelineCaptureCache.setCapture(captureSource)
+
+            return copyExifFromOriginal(srcBytes = jpegBytes, dstBytes = processedBytes)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Error applying custom pipeline preset to photo, falling back to original", e)
+            return jpegBytes
+        }
+    }
+
+    private fun copyExifFromOriginal(srcBytes: ByteArray, dstBytes: ByteArray): ByteArray {
+        return try {
+            val srcExif = android.media.ExifInterface(java.io.ByteArrayInputStream(srcBytes))
+            val tempFile = File.createTempFile("exif_copy", ".jpg", context.cacheDir)
+            try {
+                FileOutputStream(tempFile).use { it.write(dstBytes) }
+                val dstExif = android.media.ExifInterface(tempFile.absolutePath)
+                copyAllExifAttributes(srcExif, dstExif)
+                dstExif.saveAttributes()
+                tempFile.readBytes()
+            } finally {
+                tempFile.delete()
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to copy EXIF attributes to pipeline output", t)
+            dstBytes
+        }
+    }
+
+    private fun saveJpegBytesToMediaStore(bytes: ByteArray, skipPipeline: Boolean = false): Uri? {
+        val effectiveBytes = if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isCustomPipelineEnabled) {
+            processPhotoWithCustomPipeline(bytes)
+        } else {
+            bytes
+        }
         val activeLens = _selectedLens.value
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
 
         val finalBytes = if (isFrontFacing && saveSelfieAsPreviewed) {
             try {
-                val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val rawBitmap = BitmapFactory.decodeByteArray(effectiveBytes, 0, effectiveBytes.size)
                 if (rawBitmap != null) {
                     val srcExif = try {
-                        android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
+                        android.media.ExifInterface(java.io.ByteArrayInputStream(effectiveBytes))
                     } catch (e: Exception) { null }
                     val exifOrientation = srcExif?.getAttributeInt(
                         android.media.ExifInterface.TAG_ORIENTATION,
@@ -5282,14 +5359,14 @@ class Camera2Engine(private val context: Context) {
                     tempSelfieFile.delete()
                     mirroredBytes
                 } else {
-                    bytes
+                    effectiveBytes
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "Failed to mirror selfie JPEG, falling back to original", e)
-                bytes
+                effectiveBytes
             }
         } else {
-            bytes
+            effectiveBytes
         }
 
         val photoFilter = selectedPhotoFilter

@@ -203,21 +203,14 @@ fun CameraScreen(
     val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
     val activePipelinePreset by viewModel.activePipelinePreset.collectAsStateWithLifecycle()
     val isPipelineSheetOpen by viewModel.isPipelineSheetOpen.collectAsStateWithLifecycle()
+    val isPipelinePresetFloatingWindowOpen by viewModel.isPipelinePresetFloatingWindowOpen.collectAsStateWithLifecycle()
+    val customPresets by viewModel.customPresets.collectAsStateWithLifecycle()
     val isBeforeAfterOpen by viewModel.isBeforeAfterOpen.collectAsStateWithLifecycle()
     val latestPipelineCapture by viewModel.latestPipelineCapture.collectAsStateWithLifecycle()
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
     var shutterAreaHeightDp by remember { mutableStateOf(216.dp) }
-
-    if (cameraMode == CameraMode.AI_SUBJECT_TRACKING) {
-        com.example.camera.tracking.ui.AiSubjectTrackingScreen(
-            onBack = {
-                viewModel.setCameraMode(CameraMode.PHOTO)
-            }
-        )
-        return
-    }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
@@ -246,7 +239,7 @@ fun CameraScreen(
             isCinemaSettingsOpen || isManualProOpen || isMoreModesOpen ||
             (cameraMode == CameraMode.PORTRAIT && isPortraitSettingsOpen) ||
             isVideoSettingsPanelOpen || isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
-            isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen
+            isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen
 
     LaunchedEffect(isAnyWindowOpen) {
         com.example.camera.ui.components.BackdropBlurManager.isWindowActive = isAnyWindowOpen
@@ -255,32 +248,6 @@ fun CameraScreen(
     CompositionLocalProvider(
         com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
     ) {
-        if (isSettingsOpen) {
-            CameraSettingsHost(
-                viewModel = viewModel,
-                onOpenCustomUiStudio = {
-                    viewModel.setSettingsOpen(false)
-                    isCustomUiStudioOpen = true
-                },
-                onOpenPipelineStudio = {
-                    viewModel.setSettingsOpen(false)
-                    viewModel.setPipelineSheetOpen(true)
-                },
-                onOpenBeforeAfter = {
-                    viewModel.setSettingsOpen(false)
-                    viewModel.setBeforeAfterOpen(true)
-                },
-                onOpenGalleryChooser = {
-                    viewModel.setGallerySelectionDialogOpen(true)
-                },
-                onDismiss = {
-                    viewModel.setSettingsOpen(false)
-                    if (cameraMode == CameraMode.MORE) {
-                        viewModel.setCameraMode(CameraMode.PHOTO)
-                    }
-                }
-            )
-        } else {
         Box(
             modifier = modifier
                 .fillMaxSize()
@@ -481,6 +448,8 @@ fun CameraScreen(
             onPortraitApertureClick = { viewModel.setPortraitSettingsOpen(!isPortraitSettingsOpen) },
             onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
             activePhotoFilter = selectedPhotoFilter,
+            onPipelineClick = { viewModel.togglePipelinePresetFloatingWindow() },
+            isPipelineActive = isCustomPipelineEnabled,
             selectedPortraitStyle = portraitConfig.selectedStyle,
             onPortraitStyleClick = { viewModel.togglePortraitStyleBar() },
             onCinemaSettingsClick = { viewModel.toggleCinemaSettings() },
@@ -688,6 +657,30 @@ fun CameraScreen(
             )
         }
 
+        // 3d4. Dedicated Compact Pipeline Preset Floating Window (Photo Mode)
+        AnimatedVisibility(
+            visible = cameraMode == CameraMode.PHOTO && isPipelinePresetFloatingWindowOpen,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 56.dp)
+        ) {
+            PipelinePresetFloatingWindow(
+                activePreset = activePipelinePreset,
+                allPresets = remember(customPresets) {
+                    com.example.camera.pipeline.model.PipelinePreset.BUILT_IN_PRESETS + customPresets
+                },
+                onPresetSelected = { preset ->
+                    viewModel.selectPipelinePreset(preset)
+                },
+                onDismiss = {
+                    viewModel.setPipelinePresetFloatingWindowOpen(false)
+                }
+            )
+        }
+
         // 3d3. Portrait Mode Style Selector Bar
         AnimatedVisibility(
             visible = cameraMode == CameraMode.PORTRAIT && isPortraitStyleBarOpen,
@@ -803,14 +796,48 @@ fun CameraScreen(
             onTimerClick = { viewModel.cycleTimerMode() },
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
             onShutterAreaHeightMeasured = { shutterAreaHeightDp = it },
+            selectedPhotoFilter = selectedPhotoFilter,
+            onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
             layoutConfig = activeLayoutConfig.copy(
                 showZoomCapsule = activeLayoutConfig.showZoomCapsule && (!isAnyWindowOpen || (isManualProOpen && !isManualProSliderOpen)),
                 zoomCapsuleVerticalOffsetDp = if (isManualProOpen) -76 else activeLayoutConfig.zoomCapsuleVerticalOffsetDp
             ),
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+
+        // Overlay Settings cleanly on top of viewfinder to prevent destroying TextureView or flickering
+        if (isSettingsOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0C0E14))
+            ) {
+                CameraSettingsHost(
+                    viewModel = viewModel,
+                    onOpenCustomUiStudio = {
+                        viewModel.setSettingsOpen(false)
+                        isCustomUiStudioOpen = true
+                    },
+                    onOpenPipelineStudio = {
+                        viewModel.setSettingsOpen(false)
+                        viewModel.setPipelineSheetOpen(true)
+                    },
+                    onOpenBeforeAfter = {
+                        viewModel.setSettingsOpen(false)
+                        viewModel.setBeforeAfterOpen(true)
+                    },
+                    onOpenGalleryChooser = {
+                        viewModel.setGallerySelectionDialogOpen(true)
+                    },
+                    onDismiss = {
+                        viewModel.setSettingsOpen(false)
+                        if (cameraMode == CameraMode.MORE) {
+                            viewModel.setCameraMode(CameraMode.PHOTO)
+                        }
+                    }
+                )
+            }
         }
-    }
 
         // 7. Preferred Gallery App Selection Dialog
         com.example.camera.gallery.GallerySelectionDialog(
@@ -869,6 +896,7 @@ fun CameraScreen(
             )
         }
     }
+}
 }
 
 @Composable

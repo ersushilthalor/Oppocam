@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -81,6 +82,8 @@ fun BottomControlBar(
     onCinemaModeClick: (() -> Unit)? = null,
     onSettingsClick: () -> Unit = {},
     onTimerClick: () -> Unit = {},
+    selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL,
+    onPhotoFilterClick: () -> Unit = {},
     onShutterAreaHeightMeasured: (Dp) -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
@@ -97,24 +100,57 @@ fun BottomControlBar(
             .testTag("master_bottom_control_bar"),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 1. Floating Master Zoom Capsule (0.5, 1x, 2, 3, 5, 10)
+        // 1. Floating Master Zoom Capsule (0.5, 1x, 2, 3, 5, 10) with Photo Filter icon positioned to its right
         if (layoutConfig.showZoomCapsule) {
-            MasterZoomCapsule(
-                currentZoom = currentZoom,
-                displayedLenses = displayedLenses,
-                selectedLens = selectedLens,
-                capabilities = capabilities,
-                customPresets = activeZoomPresets,
-                onShowToast = onShowToast,
-                onLensSelected = onLensSelected,
-                onZoomChange = onZoomChange,
-                onZoomPresetTap = onZoomPresetTap,
+            Box(
                 modifier = Modifier
+                    .fillMaxWidth()
                     .offset(y = layoutConfig.zoomCapsuleVerticalOffsetDp.dp)
-                    .scale(layoutConfig.zoomCapsuleScale)
-                    .padding(bottom = 14.dp)
-                    .testTag("master_zoom_capsule")
-            )
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                MasterZoomCapsule(
+                    currentZoom = currentZoom,
+                    displayedLenses = displayedLenses,
+                    selectedLens = selectedLens,
+                    capabilities = capabilities,
+                    customPresets = activeZoomPresets,
+                    onShowToast = onShowToast,
+                    onLensSelected = onLensSelected,
+                    onZoomChange = onZoomChange,
+                    onZoomPresetTap = onZoomPresetTap,
+                    modifier = Modifier
+                        .scale(layoutConfig.zoomCapsuleScale)
+                        .testTag("master_zoom_capsule")
+                )
+
+                // Separate Filter icon positioned to the right side of the zoom slider in Photo Mode
+                if (cameraMode == CameraMode.PHOTO) {
+                    val isFilterActive = selectedPhotoFilter != PhotoFilter.ORIGINAL
+                    IconButton(
+                        onClick = onPhotoFilterClick,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(if (isFilterActive) Color(0xFF64FFDA).copy(alpha = 0.25f) else Color(0xD9141418))
+                            .border(
+                                width = 1.2.dp,
+                                color = if (isFilterActive) Color(0xFF64FFDA) else Color.White.copy(alpha = 0.22f),
+                                shape = CircleShape
+                            )
+                            .testTag("photo_filter_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AutoAwesome,
+                            contentDescription = "Photo Filters",
+                            tint = if (isFilterActive) Color(0xFF64FFDA) else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
         }
 
         // 2. Frosted Glass Bottom Control Area

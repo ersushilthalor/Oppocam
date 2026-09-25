@@ -126,6 +126,8 @@ fun TopControlBar(
     onPortraitStyleClick: () -> Unit = {},
     onPhotoFilterClick: () -> Unit = {},
     activePhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL,
+    onPipelineClick: () -> Unit = {},
+    isPipelineActive: Boolean = false,
     selectedPortraitStyle: PortraitStyle = PortraitStyle.NATURAL,
     onCinemaSettingsClick: () -> Unit = {},
     onCinemaEvChange: (Int) -> Unit = {},
@@ -622,19 +624,18 @@ fun TopControlBar(
             }
         }
 
-        val filterButton = @Composable {
-            val isFilterActive = activePhotoFilter != PhotoFilter.ORIGINAL
+        val pipelineButton = @Composable {
             IconButton(
-                onClick = onPhotoFilterClick,
+                onClick = onPipelineClick,
                 modifier = Modifier
                     .size(buttonSize)
-                    .topControlStyle(layoutConfig, activeColor = if (isFilterActive) Color(0xFF64FFDA) else null)
-                    .testTag("photo_filter_button")
+                    .topControlStyle(layoutConfig, activeColor = if (isPipelineActive) Color(0xFFFFD54F) else null)
+                    .testTag("pipeline_preset_button")
             ) {
                 Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = "Photo Filters",
-                    tint = if (isFilterActive) Color(0xFF64FFDA) else Color.White.copy(alpha = 0.9f),
+                    imageVector = Icons.Outlined.Tune,
+                    contentDescription = null, // Dedicated pipeline icon has no text or label
+                    tint = if (isPipelineActive) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.9f),
                     modifier = Modifier.size(iconSize)
                 )
             }
@@ -748,7 +749,7 @@ fun TopControlBar(
                             TopControlItem.SETTINGS -> {
                                 if (cameraMode == CameraMode.PHOTO) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        filterButton()
+                                        pipelineButton()
                                         Spacer(modifier = Modifier.width(layoutConfig.topControlsSpacingDp.dp))
                                         settingsButton()
                                     }

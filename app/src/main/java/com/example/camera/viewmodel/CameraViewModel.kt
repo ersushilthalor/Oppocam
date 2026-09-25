@@ -433,6 +433,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _isPipelineSheetOpen = MutableStateFlow(false)
     val isPipelineSheetOpen: StateFlow<Boolean> = _isPipelineSheetOpen.asStateFlow()
 
+    private val _isPipelinePresetFloatingWindowOpen = MutableStateFlow(false)
+    val isPipelinePresetFloatingWindowOpen: StateFlow<Boolean> = _isPipelinePresetFloatingWindowOpen.asStateFlow()
+
     private val _isBeforeAfterOpen = MutableStateFlow(false)
     val isBeforeAfterOpen: StateFlow<Boolean> = _isBeforeAfterOpen.asStateFlow()
 
@@ -443,6 +446,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setPipelineSheetOpen(isOpen: Boolean) {
         _isPipelineSheetOpen.value = isOpen
+    }
+
+    fun togglePipelinePresetFloatingWindow() {
+        _isPipelinePresetFloatingWindowOpen.value = !_isPipelinePresetFloatingWindowOpen.value
+    }
+
+    fun setPipelinePresetFloatingWindowOpen(open: Boolean) {
+        _isPipelinePresetFloatingWindowOpen.value = open
     }
 
     fun setBeforeAfterOpen(isOpen: Boolean) {
@@ -516,9 +527,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun selectPipelinePreset(preset: com.example.camera.pipeline.model.PipelinePreset) {
         _activePipelinePreset.value = preset
         preferences.saveActivePipelinePreset(preset)
+        _isCustomPipelineEnabled.value = true
+        preferences.isCustomPipelineEnabled = true
         val params = preferences.getPipelineParams(preset.id)
         _activePipelineParams.value = params
-        showToast("Preset: ${preset.displayName}")
+        showToast("Pipeline: ${preset.displayName}")
     }
 
     fun updatePipelineParams(params: com.example.camera.pipeline.model.CustomPipelineParams) {
@@ -801,28 +814,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _cameraMode.value = mode
         preferences.cameraMode = mode
 
-        // 3. Immediately synchronize aspect ratio
-        if (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT || mode == CameraMode.NIGHT) {
-            _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
-            engine.setPreviewAspectRatio(4f / 3f)
-        } else {
-            _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
-            engine.setPreviewAspectRatio(16f / 9f)
-        }
+        // 3. Immediately synchronize aspect ratio (native 9:16 portrait frame is maintained for smooth transitions)
+        _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
+        engine.setPreviewAspectRatio(16f / 9f)
 
         if (mode != CameraMode.VIDEO) {
             _isVideoAdjustmentsOpen.value = false
         }
 
         // 4. Switch engine mode early to synchronize preview buffer and session
-        if (mode == CameraMode.AI_SUBJECT_TRACKING) {
-            engine.closeCamera()
-        } else {
-            if (previousMode == CameraMode.AI_SUBJECT_TRACKING) {
-                engine.startCamera()
-            }
-            engine.setMode(mode)
-        }
+        engine.setMode(mode)
 
         // 5. Restore mode-specific lens if available
         val modeLens = preferences.getModeLens(mode, engine.availableLenses.value)

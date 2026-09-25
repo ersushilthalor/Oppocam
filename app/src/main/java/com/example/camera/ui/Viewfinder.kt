@@ -121,21 +121,12 @@ fun Viewfinder(
         val containerWidth = maxWidth
         val containerHeight = maxHeight
 
-        // Enforce fixed aspect ratios strictly dictated by mode:
-        // - Photo mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
-        // - Portrait mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
-        // - Night mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
-        // - Video & Cinema modes: fixed 9:16 (portrait 9:16 -> height / width = 16 / 9)
-        val targetRatio = when (cameraMode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
-                if (aspectRatio > 1.5f) 16f / 9f else 4f / 3f
-            }
-            else -> 16f / 9f
-        }
+        // Native viewfinder uses a stable 9:16 portrait frame across all modes
+        val targetRatio = 16f / 9f
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
 
-        // Viewfinder spans dimensions dictated strictly by the mode's native aspect ratio
+        // Viewfinder spans dimensions dictated by the 9:16 portrait frame
         val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
             containerWidth to (containerWidth * targetRatio)
         } else {
@@ -259,11 +250,7 @@ fun Viewfinder(
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
-                            val currentAspect = viewH / viewW
-                            // Prevent applying stale, distorted transformations before the layout pass has adjusted dimensions
-                            if (kotlin.math.abs(currentAspect - targetRatio) <= 0.05f) {
-                                updateTextureViewTransform(textureView, previewBufferSize, targetRatio)
-                            }
+                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio)
                         }
 
                         val effectiveLut = activeLut ?: cinemaConfig?.selectedLut
@@ -606,22 +593,24 @@ private fun updateTextureViewTransform(
         val bufPortraitH = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
         bufPortraitH / bufPortraitW
     } else {
-        targetRatio
+        4f / 3f // Native camera sensor preview is 3:4 portrait
     }
 
     val viewAspect = viewH / viewW
     val centerX = viewW / 2f
     val centerY = viewH / 2f
 
-    // When aspect ratios match within 0.01 tolerance, identity transform maintains exact 1:1 framing without cropping
-    if (kotlin.math.abs(bufAspect - viewAspect) > 0.01f) {
+    // When view and buffer aspect ratios differ, apply uniform center-crop scaling
+    // to strictly preserve original aspect ratio and prevent vertical stretching or distortion.
+    if (kotlin.math.abs(bufAspect - viewAspect) > 0.005f) {
         if (viewAspect > bufAspect) {
-            // View is taller than buffer: scale horizontally to preserve aspect ratio without vertical stretching
+            // View is taller than buffer (e.g. 9:16 view with 3:4 sensor buffer):
+            // Scale horizontally around center to center-crop without vertical elongation.
             val scaleX = viewAspect / bufAspect
             val scaleY = 1.0f
             matrix.setScale(scaleX, scaleY, centerX, centerY)
         } else {
-            // View is wider than buffer: scale vertically to preserve aspect ratio without vertical squeezing
+            // View is wider than buffer: scale vertically around center to center-crop.
             val scaleX = 1.0f
             val scaleY = bufAspect / viewAspect
             matrix.setScale(scaleX, scaleY, centerX, centerY)
