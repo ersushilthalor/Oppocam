@@ -240,23 +240,22 @@ fun Viewfinder(
                     },
                     update = { textureView ->
                         // Configure uniform transform if buffer aspect ratio differs from view aspect ratio
-                        if (previewBufferSize != null && textureView.width > 0 && textureView.height > 0) {
-                            val bufW = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-                            val bufH = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-                            val bufAspect = bufW / bufH
-                            val viewAspect = textureView.height.toFloat() / textureView.width.toFloat()
+                        if (textureView.width > 0 && textureView.height > 0) {
                             val matrix = android.graphics.Matrix()
-                            if (kotlin.math.abs(bufAspect - viewAspect) > 0.02f) {
-                                val scaleX: Float
-                                val scaleY: Float
-                                if (viewAspect > bufAspect) {
-                                    scaleX = viewAspect / bufAspect
-                                    scaleY = 1.0f
-                                } else {
-                                    scaleX = 1.0f
-                                    scaleY = bufAspect / viewAspect
+                            if (previewBufferSize != null) {
+                                val bufW = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+                                val bufH = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+                                val bufAspect = bufW / bufH
+                                val viewAspect = textureView.height.toFloat() / textureView.width.toFloat()
+                                if (kotlin.math.abs(bufAspect - viewAspect) > 0.04f) {
+                                    // Uniform center-crop scaling without any vertical or horizontal stretching
+                                    val scale = if (viewAspect > bufAspect) {
+                                        viewAspect / bufAspect
+                                    } else {
+                                        bufAspect / viewAspect
+                                    }
+                                    matrix.setScale(scale, scale, textureView.width / 2f, textureView.height / 2f)
                                 }
-                                matrix.setScale(scaleX, scaleY, textureView.width / 2f, textureView.height / 2f)
                             }
                             textureView.setTransform(matrix)
                         }

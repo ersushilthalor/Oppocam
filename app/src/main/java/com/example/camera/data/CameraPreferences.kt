@@ -223,6 +223,30 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_AUDIO_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_AUDIO_ENABLED, value).apply()
 
+    var proSaturation: Float
+        get() = prefs.getFloat("pref_pro_saturation", 0f)
+        set(value) = prefs.edit().putFloat("pref_pro_saturation", value).apply()
+
+    var proContrast: Float
+        get() = prefs.getFloat("pref_pro_contrast", 1.0f)
+        set(value) = prefs.edit().putFloat("pref_pro_contrast", value).apply()
+
+    var proHighlights: Float
+        get() = prefs.getFloat("pref_pro_highlights", 0f)
+        set(value) = prefs.edit().putFloat("pref_pro_highlights", value).apply()
+
+    var proShadows: Float
+        get() = prefs.getFloat("pref_pro_shadows", 0f)
+        set(value) = prefs.edit().putFloat("pref_pro_shadows", value).apply()
+
+    var proSharpness: Float
+        get() = prefs.getFloat("pref_pro_sharpness", 15f)
+        set(value) = prefs.edit().putFloat("pref_pro_sharpness", value).apply()
+
+    var proNoiseReduction: Float
+        get() = prefs.getFloat("pref_pro_noise_reduction", 12f)
+        set(value) = prefs.edit().putFloat("pref_pro_noise_reduction", value).apply()
+
     var colorProfile: ColorProfile
         get() {
             val name = prefs.getString(KEY_COLOR_PROFILE, ColorProfile.STANDARD.name) ?: ColorProfile.STANDARD.name

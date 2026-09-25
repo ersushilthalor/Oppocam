@@ -1022,10 +1022,9 @@ class Camera2Engine(private val context: Context) {
                 preferences.currentZoom = effectiveTargetZoom
             }
 
-            // Only avoid hardware restart if it is genuinely the exact same Camera ID and physical camera
+            // Avoid hardware device teardown if both lenses use the same underlying openable CameraDevice ID
             val isSameCameraDevice = (previousLens?.cameraId == lens.cameraId &&
-                    previousLens?.facing == lens.facing &&
-                    previousLens?.physicalCameraId == lens.physicalCameraId)
+                    previousLens?.facing == lens.facing)
 
             if (isSameCameraDevice && cameraDevice != null) {
                 _selectedLens.value = lens
@@ -1041,6 +1040,12 @@ class Camera2Engine(private val context: Context) {
 
             // Seamless lens switch during active video recording
             if (_isRecordingVideo.value) {
+                if (isSameCameraDevice) {
+                    activeSessionLens = lens
+                    isSwitchingLens.set(false)
+                    updatePreviewSettings()
+                    return
+                }
                 Log.i(TAG, "[RECORDING_SWITCH] Switching active lens during video recording to ${lens.lensType} (Camera ID: ${lens.cameraId})")
                 inspectCapabilities(lens.cameraId)
                 switchCameraDuringRecording(lens, switchStartNs)
@@ -1206,9 +1211,12 @@ class Camera2Engine(private val context: Context) {
      */
     fun setMode(mode: CameraMode) {
         if (currentMode == mode) return
-        val wasPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT)
-        val isPhotoOrPortrait = (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT)
-        val wasMore = (currentMode == CameraMode.MORE)
+        val previousMode = currentMode
+        val oldRatio = getTargetAspectRatioForMode(previousMode)
+        val newRatio = getTargetAspectRatioForMode(mode)
+        val was43 = (previousMode == CameraMode.PHOTO || previousMode == CameraMode.PORTRAIT || previousMode == CameraMode.NIGHT)
+        val is43 = (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT || mode == CameraMode.NIGHT)
+        val wasMore = (previousMode == CameraMode.MORE)
         if (_isRecordingVideo.value) {
             stopVideoRecording()
         }
@@ -1223,11 +1231,9 @@ class Camera2Engine(private val context: Context) {
             gyroStabilizationEngine.start()
         }
 
-        val oldRatio = getTargetAspectRatioForMode(currentMode)
-        val newRatio = getTargetAspectRatioForMode(mode)
-        val needsReconfigure = (oldRatio != newRatio) ||
-                (wasPhotoOrPortrait != isPhotoOrPortrait) ||
-                (wasMore && isPhotoOrPortrait) ||
+        val needsReconfigure = (kotlin.math.abs(oldRatio - newRatio) > 0.05f) ||
+                (was43 != is43) ||
+                (wasMore && is43) ||
                 (captureSession == null) ||
                 (!_isCameraReady.value)
 
@@ -1420,6 +1426,7 @@ class Camera2Engine(private val context: Context) {
         val mgr = cameraManager ?: return
 
         startBackgroundThread()
+        initOrientationListener()
 
         synchronized(cameraLifecycleLock) {
             if (isStartingCamera) {
@@ -2373,11 +2380,9 @@ class Camera2Engine(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 if (zoomRange != null) {
-                    val targetZoomRatio = if (isLogicalMulti && lens.physicalCameraId.isNullOrEmpty() && zoomRange.lower < 0.95f) {
-                        // Pure logical multi-camera with HAL handling continuous zoom
+                    val targetZoomRatio = if (isLogicalMulti) {
                         effectiveUiZoom.coerceIn(zoomRange.lower, zoomRange.upper)
                     } else {
-                        // Standalone physical camera sensor: apply calibrated digital crop factor
                         digitalCrop.coerceIn(zoomRange.lower, zoomRange.upper)
                     }
                     builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetZoomRatio)
@@ -2482,8 +2487,7 @@ class Camera2Engine(private val context: Context) {
             else -> mainWideLens ?: currentLens
         }
 
-        val needsLensSwitch = (targetLens.cameraId != currentLens.cameraId) ||
-                (targetLens.physicalCameraId != currentLens.physicalCameraId)
+        val needsLensSwitch = (targetLens.cameraId != currentLens.cameraId)
 
         if (needsLensSwitch) {
             if (!isSwitchingLens.get()) {
@@ -2495,7 +2499,9 @@ class Camera2Engine(private val context: Context) {
                 selectLens(targetLens, preserveZoom = true, targetZoom = pZoom)
             }
         } else {
-            // Same physical lens: apply calibrated zoom smoothly via Camera2
+            // Same logical/physical device: smoothly update active lens and zoom without tearing down camera session
+            _selectedLens.value = targetLens
+            activeSessionLens = targetLens
             updatePreviewSettings()
         }
     }
@@ -2671,9 +2677,9 @@ class Camera2Engine(private val context: Context) {
                 override fun onOrientationChanged(orientation: Int) {
                     if (orientation == ORIENTATION_UNKNOWN) return
                     physicalOrientationDegrees = when (orientation) {
-                        in 45..134 -> 270
+                        in 45..134 -> 90
                         in 135..224 -> 180
-                        in 225..314 -> 90
+                        in 225..314 -> 270
                         else -> 0
                     }
                 }
@@ -2730,15 +2736,8 @@ class Camera2Engine(private val context: Context) {
         } catch (e: Exception) {
             if (isFront) 270 else 90
         }
-        val deviceRotation = getDeviceRotationDegrees()
+        val deviceRotation = getEffectiveDeviceRotation()
         val standardHint = calculateOrientation(sensorOrientation, isFront, deviceRotation)
-
-        // When "Save selfie as previewed without flipping" is enabled:
-        // In the viewfinder preview, front camera is mirrored horizontally (scale -1, 1).
-        // Standard video container players play according to orientation hint.
-        // For front camera in portrait (deviceRotation = 0, sensor = 270):
-        // Standard hint is 270°. Some players or sensors inverted this to 90° (upside-down by 180°).
-        // Returning standardHint properly prevents upside down playback.
         return standardHint
     }
 
@@ -2751,7 +2750,7 @@ class Camera2Engine(private val context: Context) {
         } catch (e: Exception) {
             if (isFront) 270 else 90
         }
-        val deviceRotation = getDeviceRotationDegrees()
+        val deviceRotation = getEffectiveDeviceRotation()
         return calculateOrientation(sensorOrientation, isFront, deviceRotation)
     }
 
@@ -4310,6 +4309,7 @@ class Camera2Engine(private val context: Context) {
         return availableFpsRanges.firstOrNull { it.upper == targetFps && it.lower == targetFps }
             ?: availableFpsRanges.firstOrNull { it.upper == targetFps }
             ?: availableFpsRanges.firstOrNull { it.upper >= targetFps && it.lower <= targetFps }
+            ?: availableFpsRanges.maxByOrNull { it.upper }
     }
 
     /**
@@ -4347,15 +4347,8 @@ class Camera2Engine(private val context: Context) {
                 if (targetProfile != null) {
                     val recorderConfig = OutputConfiguration(recorderSurface!!).apply {
                         dynamicRangeProfile = targetProfile
-                        if (isPhysicalRouting) {
-                            setPhysicalCameraId(activeLens!!.physicalCameraId)
-                        }
                     }
-                    val previewConfig = OutputConfiguration(previewSurface).apply {
-                        if (isPhysicalRouting) {
-                            setPhysicalCameraId(activeLens!!.physicalCameraId)
-                        }
-                    }
+                    val previewConfig = OutputConfiguration(previewSurface)
                     val sessionConfig = SessionConfiguration(
                         SessionConfiguration.SESSION_REGULAR,
                         listOf(previewConfig, recorderConfig),
@@ -4371,17 +4364,9 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        val previewConfig = OutputConfiguration(previewSurface).apply {
-            if (isPhysicalRouting) {
-                setPhysicalCameraId(activeLens!!.physicalCameraId)
-            }
-        }
+        val previewConfig = OutputConfiguration(previewSurface)
         val recorderConfig = if (hasSeparateRecorder) {
-            OutputConfiguration(recorderSurface!!).apply {
-                if (isPhysicalRouting) {
-                    setPhysicalCameraId(activeLens!!.physicalCameraId)
-                }
-            }
+            OutputConfiguration(recorderSurface!!)
         } else null
 
         val outputConfigs = if (recorderConfig != null) {
@@ -4499,7 +4484,10 @@ class Camera2Engine(private val context: Context) {
                 ?: map?.getOutputSizes(SurfaceTexture::class.java)
                 ?: emptyArray()
 
-            val isSupported = supportedVideoSizes.any { it.width == requestedRes.width && it.height == requestedRes.height }
+            val isSupported = supportedVideoSizes.any {
+                (maxOf(it.width, it.height) == maxOf(requestedRes.width, requestedRes.height)) &&
+                (minOf(it.width, it.height) == minOf(requestedRes.width, requestedRes.height))
+            }
             val videoRes = if (isSupported) {
                 requestedRes
             } else {
@@ -4509,6 +4497,9 @@ class Camera2Engine(private val context: Context) {
                 if (largest != null) {
                     Log.w(TAG, "[RECORDING] Size ${requestedRes.width}x${requestedRes.height} unsupported for ${lens.lensType}, using ${largest.width}x${largest.height}")
                     CameraResolution(largest.width, largest.height)
+                } else if (supportedVideoSizes.isNotEmpty()) {
+                    val fallback = supportedVideoSizes.first()
+                    CameraResolution(fallback.width, fallback.height)
                 } else {
                     CameraResolution(1920, 1080)
                 }
@@ -4880,6 +4871,7 @@ class Camera2Engine(private val context: Context) {
                         }
                         previewRequestBuilder = recordBuilder
 
+                        var isFallbackActive = false
                         val sessionCallback = object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
                                 Log.i(TAG, "[RECORDING_SESSION] Video recording session configured")
@@ -4899,7 +4891,86 @@ class Camera2Engine(private val context: Context) {
                             }
 
                             override fun onConfigureFailed(session: CameraCaptureSession) {
-                                Log.e(TAG, "[RECORDING_SESSION] Video capture session configuration failed")
+                                Log.w(TAG, "[RECORDING_SESSION] Video capture session configuration failed, trying safe standard fallback")
+                                if (!isFallbackActive) {
+                                    isFallbackActive = true
+                                    try {
+                                        // Build safe fallback capture request: standard FPS, standard template
+                                        val safeBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                            addTarget(previewSurf)
+                                            addTarget(recorderSurface)
+                                            applyCommonSettings(this)
+                                            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                            // Set safe 30fps range
+                                            val fpsRanges = chars?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+                                            val safeRange = fpsRanges.firstOrNull { it.upper == 30 } ?: fpsRanges.firstOrNull()
+                                            if (safeRange != null) {
+                                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, safeRange)
+                                            }
+                                        }
+                                        previewRequestBuilder = safeBuilder
+
+                                        @Suppress("DEPRECATION")
+                                        val fallbackSurfaces = listOf(previewSurf, recorderSurface)
+                                        camera.createCaptureSession(fallbackSurfaces, object : CameraCaptureSession.StateCallback() {
+                                            override fun onConfigured(fallbackSession: CameraCaptureSession) {
+                                                Log.i(TAG, "[RECORDING_SESSION] Fallback video recording session configured successfully")
+                                                captureSession = fallbackSession
+                                                try {
+                                                    fallbackSession.setRepeatingRequest(safeBuilder.build(), captureCallback, backgroundHandler)
+                                                    if (!isSoftwareCinema) {
+                                                        mediaRecorder?.start()
+                                                    }
+                                                    _isRecordingVideo.value = true
+                                                    isStartingRecording.set(false)
+                                                    startVideoTimer()
+                                                } catch (e: Exception) {
+                                                    cleanupFailedRecording(onError, "Failed to start fallback recording: ${e.message}")
+                                                }
+                                            }
+
+                                            override fun onConfigureFailed(fallbackSession: CameraCaptureSession) {
+                                                Log.e(TAG, "[RECORDING_SESSION] Fallback video session failed, trying preview-only recording fallback")
+                                                // Extreme hardware compatibility fallback (e.g. LEGACY or budget devices)
+                                                try {
+                                                    val previewTemplateBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                                        addTarget(previewSurf)
+                                                        addTarget(recorderSurface)
+                                                        applyCommonSettings(this)
+                                                    }
+                                                    @Suppress("DEPRECATION")
+                                                    camera.createCaptureSession(fallbackSurfaces, object : CameraCaptureSession.StateCallback() {
+                                                        override fun onConfigured(prevSession: CameraCaptureSession) {
+                                                            captureSession = prevSession
+                                                            try {
+                                                                prevSession.setRepeatingRequest(previewTemplateBuilder.build(), captureCallback, backgroundHandler)
+                                                                if (!isSoftwareCinema) {
+                                                                    mediaRecorder?.start()
+                                                                }
+                                                                _isRecordingVideo.value = true
+                                                                isStartingRecording.set(false)
+                                                                startVideoTimer()
+                                                            } catch (e: Exception) {
+                                                                cleanupFailedRecording(onError, "Recording initialization failed: ${e.message}")
+                                                            }
+                                                        }
+
+                                                        override fun onConfigureFailed(prevSession: CameraCaptureSession) {
+                                                            cleanupFailedRecording(onError, "Camera hardware failed to configure video capture session")
+                                                        }
+                                                    }, backgroundHandler)
+                                                    return
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Secondary fallback exception", e)
+                                                }
+                                                cleanupFailedRecording(onError, "Camera hardware failed to configure video capture session")
+                                            }
+                                        }, backgroundHandler)
+                                        return
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Fallback capture session creation exception", e)
+                                    }
+                                }
                                 cleanupFailedRecording(onError, "Camera hardware failed to configure video capture session")
                             }
                         }
@@ -5251,49 +5322,134 @@ class Camera2Engine(private val context: Context) {
         }
 
         val photoFilter = selectedPhotoFilter
+        val isFilterActive = (photoFilter != PhotoFilter.ORIGINAL && currentMode == CameraMode.PHOTO)
+        val isProAdjusted = (proSaturation.value != 0f || proContrast.value != 1.0f || proHighlights.value != 0f || proShadows.value != 0f)
+        val needsProcessing = isFilterActive || isProAdjusted
+
         var wasFilterApplied = false
-        val outputBytes = if (photoFilter != PhotoFilter.ORIGINAL && currentMode == CameraMode.PHOTO) {
+        val outputBytes = if (needsProcessing) {
             try {
-                val matrix = photoFilter.toAndroidColorMatrix()
-                val srcBmp = BitmapFactory.decodeByteArray(finalBytes, 0, finalBytes.size)
-                if (srcBmp != null && matrix != null) {
-                    val origExif = try {
-                        android.media.ExifInterface(java.io.ByteArrayInputStream(finalBytes))
-                    } catch (e: Exception) { null }
-                    val exifOrient = origExif?.getAttributeInt(
-                        android.media.ExifInterface.TAG_ORIENTATION,
-                        android.media.ExifInterface.ORIENTATION_NORMAL
-                    ) ?: android.media.ExifInterface.ORIENTATION_NORMAL
+                val srcExif = try {
+                    android.media.ExifInterface(java.io.ByteArrayInputStream(finalBytes))
+                } catch (e: Exception) { null }
+                val exifOrientation = srcExif?.getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_UNDEFINED
+                ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
 
-                    val rotMat = Matrix()
-                    when (exifOrient) {
-                        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> rotMat.postRotate(90f)
-                        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> rotMat.postRotate(180f)
-                        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> rotMat.postRotate(270f)
-                    }
-
-                    val orientedBmp = if (!rotMat.isIdentity) {
-                        Bitmap.createBitmap(srcBmp, 0, 0, srcBmp.width, srcBmp.height, rotMat, true).also {
-                            if (it != srcBmp) srcBmp.recycle()
+                val rawBitmap = BitmapFactory.decodeByteArray(finalBytes, 0, finalBytes.size)
+                if (rawBitmap != null) {
+                    val rotMatrix = Matrix()
+                    when (exifOrientation) {
+                        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> rotMatrix.postRotate(90f)
+                        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> rotMatrix.postRotate(180f)
+                        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> rotMatrix.postRotate(270f)
+                        else -> {
+                            if (isFrontFacing && rawBitmap.width > rawBitmap.height) {
+                                rotMatrix.postRotate(270f)
+                            } else if (!isFrontFacing && rawBitmap.width > rawBitmap.height) {
+                                rotMatrix.postRotate(90f)
+                            }
                         }
-                    } else {
-                        srcBmp
                     }
 
-                    val filteredBmp = Bitmap.createBitmap(orientedBmp.width, orientedBmp.height, Bitmap.Config.ARGB_8888)
-                    val canvas = android.graphics.Canvas(filteredBmp)
-                    val paint = android.graphics.Paint().apply {
-                        colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
+                    val uprightBmp = if (!rotMatrix.isIdentity) {
+                        val rotated = Bitmap.createBitmap(
+                            rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, rotMatrix, true
+                        )
+                        if (rotated != rawBitmap) {
+                            rawBitmap.recycle()
+                        }
+                        rotated
+                    } else {
+                        rawBitmap
                     }
-                    canvas.drawBitmap(orientedBmp, 0f, 0f, paint)
-                    orientedBmp.recycle()
-                    val stream = java.io.ByteArrayOutputStream()
-                    filteredBmp.compress(Bitmap.CompressFormat.JPEG, 98, stream)
+
+                    // Apply filter and Pro image adjustments
+                    val colorMatrix = android.graphics.ColorMatrix()
+                    var hasColorTransform = false
+                    if (isFilterActive) {
+                        photoFilter.toAndroidColorMatrix()?.let {
+                            colorMatrix.postConcat(it)
+                            hasColorTransform = true
+                        }
+                    }
+                    if (proSaturation.value != 0f) {
+                        val satMat = android.graphics.ColorMatrix().apply {
+                            setSaturation((1f + proSaturation.value / 100f).coerceIn(0f, 3f))
+                        }
+                        colorMatrix.postConcat(satMat)
+                        hasColorTransform = true
+                    }
+                    if (proContrast.value != 1.0f || proHighlights.value != 0f || proShadows.value != 0f) {
+                        val c = proContrast.value.coerceIn(0.5f, 2.0f)
+                        val b = ((proHighlights.value + proShadows.value) / 4f)
+                        val cm = android.graphics.ColorMatrix(floatArrayOf(
+                            c, 0f, 0f, 0f, b,
+                            0f, c, 0f, 0f, b,
+                            0f, 0f, c, 0f, b,
+                            0f, 0f, 0f, 1f, 0f
+                        ))
+                        colorMatrix.postConcat(cm)
+                        hasColorTransform = true
+                    }
+
+                    val filteredBmp = if (hasColorTransform) {
+                        val fb = Bitmap.createBitmap(uprightBmp.width, uprightBmp.height, Bitmap.Config.ARGB_8888)
+                        val canvas = android.graphics.Canvas(fb)
+                        val paint = android.graphics.Paint().apply {
+                            colorFilter = android.graphics.ColorMatrixColorFilter(colorMatrix)
+                        }
+                        canvas.drawBitmap(uprightBmp, 0f, 0f, paint)
+                        uprightBmp.recycle()
+                        fb
+                    } else {
+                        uprightBmp
+                    }
+
+                    val tempFilterFile = File.createTempFile("filter_img", ".jpg", context.cacheDir)
+                    val fos = FileOutputStream(tempFilterFile)
+                    filteredBmp.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                    fos.flush()
+                    fos.close()
                     filteredBmp.recycle()
+
+                    // Copy all original EXIF metadata exactly and mark orientation as NORMAL (1)
+                    // since the bitmap pixels were already physically transformed upright
+                    try {
+                        val dstExif = android.media.ExifInterface(tempFilterFile.absolutePath)
+                        val exifTags = arrayOf(
+                            android.media.ExifInterface.TAG_DATETIME,
+                            android.media.ExifInterface.TAG_MAKE,
+                            android.media.ExifInterface.TAG_MODEL,
+                            android.media.ExifInterface.TAG_FLASH,
+                            android.media.ExifInterface.TAG_FOCAL_LENGTH,
+                            android.media.ExifInterface.TAG_WHITE_BALANCE,
+                            android.media.ExifInterface.TAG_EXPOSURE_TIME,
+                            android.media.ExifInterface.TAG_ISO_SPEED_RATINGS
+                        )
+                        if (srcExif != null) {
+                            for (tag in exifTags) {
+                                val v = srcExif.getAttribute(tag)
+                                if (v != null) {
+                                    dstExif.setAttribute(tag, v)
+                                }
+                            }
+                        }
+                        dstExif.setAttribute(
+                            android.media.ExifInterface.TAG_ORIENTATION,
+                            android.media.ExifInterface.ORIENTATION_NORMAL.toString()
+                        )
+                        dstExif.saveAttributes()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "EXIF preservation on filtered photo warning", e)
+                    }
+
+                    val filteredBytes = tempFilterFile.readBytes()
+                    tempFilterFile.delete()
                     wasFilterApplied = true
-                    stream.toByteArray()
+                    filteredBytes
                 } else {
-                    srcBmp?.recycle()
                     finalBytes
                 }
             } catch (e: Throwable) {
