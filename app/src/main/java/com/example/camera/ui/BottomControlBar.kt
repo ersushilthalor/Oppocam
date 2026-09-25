@@ -28,8 +28,11 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -78,6 +81,7 @@ fun BottomControlBar(
     onCinemaModeClick: (() -> Unit)? = null,
     onSettingsClick: () -> Unit = {},
     onTimerClick: () -> Unit = {},
+    onShutterAreaHeightMeasured: (Dp) -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
 ) {
@@ -85,6 +89,7 @@ fun BottomControlBar(
     val fontFamily = layoutConfig.modeFontFamily.toComposeFontFamily()
     val customTextColor = layoutConfig.getComposeTextColor()
     val customIconColor = layoutConfig.getComposeIconColor()
+    val density = LocalDensity.current
 
     Column(
         modifier = modifier
@@ -116,6 +121,10 @@ fun BottomControlBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .onGloballyPositioned { coordinates ->
+                    val heightDp = with(density) { coordinates.size.height.toDp() }
+                    onShutterAreaHeightMeasured(heightDp)
+                }
                 .background(
                     androidx.compose.ui.graphics.Brush.verticalGradient(
                         colors = listOf(

@@ -570,21 +570,55 @@ class HighQualityZoomEngine(private val context: Context) {
      * Saves the processed zoomed bitmap to MediaStore as a final JPEG.
      */
     suspend fun saveZoomImageToMediaStore(bitmap: Bitmap): Uri? = withContext(Dispatchers.IO) {
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val fileName = "ZOOM_${timeStamp}.jpg"
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        val seq = ((System.currentTimeMillis() % 1000).toInt()).toString().padStart(3, '0')
+        val fileName = "ZOOM_${timeStamp}_${seq}.jpg"
 
         val values = android.content.ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
-            put(MediaStore.Images.Media.IS_PENDING, 1)
+            val nowMs = System.currentTimeMillis()
+            put(MediaStore.Images.Media.DATE_ADDED, nowMs / 1000)
+            put(MediaStore.Images.Media.DATE_MODIFIED, nowMs / 1000)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+                put(MediaStore.Images.Media.DATE_TAKEN, nowMs)
+            } else {
+                try {
+                    val dcimDir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DCIM), "Camera")
+                    if (!dcimDir.exists()) dcimDir.mkdirs()
+                    val targetFile = java.io.File(dcimDir, fileName)
+                    put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
+                } catch (ignored: Exception) {}
+            }
         }
 
-        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        val primaryUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } catch (t: Throwable) {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+
+        val uri = try {
+            context.contentResolver.insert(primaryUri, values)
+        } catch (t: Throwable) {
+            try {
+                context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            } catch (t2: Throwable) {
+                null
+            }
+        }
+
         if (uri != null) {
             try {
                 context.contentResolver.openOutputStream(uri)?.use { out ->
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+                    out.flush()
                 }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -602,14 +636,23 @@ class HighQualityZoomEngine(private val context: Context) {
                     }
                 }
 
-                values.clear()
-                values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                context.contentResolver.update(uri, values, null, null)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.clear()
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    context.contentResolver.update(uri, values, null, null)
+                } else {
+                    val legacyPath = values.getAsString(MediaStore.Images.Media.DATA)
+                    if (!legacyPath.isNullOrEmpty()) {
+                        android.media.MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg"), null)
+                    }
+                }
                 Log.d(TAG, "Saved pristine high-quality zoom photo to MediaStore: $uri")
                 uri
             } catch (e: Exception) {
                 Log.e(TAG, "Failed saving high-quality zoom image", e)
-                context.contentResolver.delete(uri, null, null)
+                try {
+                    context.contentResolver.delete(uri, null, null)
+                } catch (ignored: Throwable) {}
                 null
             }
         } else {

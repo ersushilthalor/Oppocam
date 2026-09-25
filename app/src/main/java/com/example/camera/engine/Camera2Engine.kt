@@ -5102,6 +5102,116 @@ class Camera2Engine(private val context: Context) {
         return saveJpegBytesToMediaStore(bytes)
     }
 
+    private val photoSaveSequence = java.util.concurrent.atomic.AtomicInteger((System.currentTimeMillis() % 1000).toInt())
+
+    private fun generateUniqueImageFileName(prefix: String = "IMG", extension: String = "jpg"): String {
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        val seq = (photoSaveSequence.incrementAndGet() and 0xFFFF).toString().padStart(4, '0')
+        return "${prefix}_${timeStamp}_${seq}.$extension"
+    }
+
+    private fun getMediaStorePrimaryImageUri(): Uri {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } catch (t: Throwable) {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+    }
+
+    private fun copyAllExifAttributes(srcExif: android.media.ExifInterface, dstExif: android.media.ExifInterface) {
+        val standardTags = arrayOf(
+            android.media.ExifInterface.TAG_DATETIME,
+            android.media.ExifInterface.TAG_DATETIME_ORIGINAL,
+            android.media.ExifInterface.TAG_DATETIME_DIGITIZED,
+            android.media.ExifInterface.TAG_MAKE,
+            android.media.ExifInterface.TAG_MODEL,
+            android.media.ExifInterface.TAG_FLASH,
+            android.media.ExifInterface.TAG_FOCAL_LENGTH,
+            android.media.ExifInterface.TAG_WHITE_BALANCE,
+            android.media.ExifInterface.TAG_EXPOSURE_TIME,
+            android.media.ExifInterface.TAG_ISO_SPEED_RATINGS,
+            android.media.ExifInterface.TAG_GPS_LATITUDE,
+            android.media.ExifInterface.TAG_GPS_LATITUDE_REF,
+            android.media.ExifInterface.TAG_GPS_LONGITUDE,
+            android.media.ExifInterface.TAG_GPS_LONGITUDE_REF,
+            android.media.ExifInterface.TAG_GPS_ALTITUDE,
+            android.media.ExifInterface.TAG_GPS_ALTITUDE_REF,
+            android.media.ExifInterface.TAG_GPS_TIMESTAMP,
+            android.media.ExifInterface.TAG_GPS_DATESTAMP,
+            android.media.ExifInterface.TAG_GPS_PROCESSING_METHOD,
+            android.media.ExifInterface.TAG_SUBSEC_TIME,
+            android.media.ExifInterface.TAG_SUBSEC_TIME_ORIGINAL,
+            android.media.ExifInterface.TAG_SUBSEC_TIME_DIGITIZED
+        )
+        for (tag in standardTags) {
+            try {
+                val value = srcExif.getAttribute(tag)
+                if (value != null) {
+                    dstExif.setAttribute(tag, value)
+                }
+            } catch (ignored: Throwable) {}
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val nTags = arrayOf(
+                android.media.ExifInterface.TAG_F_NUMBER,
+                android.media.ExifInterface.TAG_APERTURE_VALUE,
+                android.media.ExifInterface.TAG_SHUTTER_SPEED_VALUE,
+                android.media.ExifInterface.TAG_EXPOSURE_PROGRAM,
+                android.media.ExifInterface.TAG_EXPOSURE_MODE,
+                android.media.ExifInterface.TAG_METERING_MODE,
+                android.media.ExifInterface.TAG_LIGHT_SOURCE,
+                android.media.ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM
+            )
+            for (tag in nTags) {
+                try {
+                    val value = srcExif.getAttribute(tag)
+                    if (value != null) {
+                        dstExif.setAttribute(tag, value)
+                    }
+                } catch (ignored: Throwable) {}
+            }
+        }
+    }
+
+    private fun saveDirectFileFallback(bytes: ByteArray, fileName: String): Uri? {
+        return try {
+            val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
+            if (!dcimDir.exists()) {
+                dcimDir.mkdirs()
+            }
+            val targetFile = if (dcimDir.exists() && dcimDir.canWrite()) {
+                File(dcimDir, fileName)
+            } else {
+                val picturesDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                File(picturesDir, fileName)
+            }
+
+            FileOutputStream(targetFile).use { out ->
+                out.write(bytes)
+                out.flush()
+            }
+            Log.i(TAG, "Direct disk fallback write succeeded: ${targetFile.absolutePath} (${bytes.size} bytes)")
+            val fileUri = Uri.fromFile(targetFile)
+            try {
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(targetFile.absolutePath),
+                    arrayOf("image/jpeg")
+                ) { path, scannedUri ->
+                    Log.d(TAG, "Direct fallback scanned: $path -> $scannedUri")
+                }
+            } catch (ignored: Throwable) {}
+            fileUri
+        } catch (e: Throwable) {
+            Log.e(TAG, "Direct file fallback write failed completely for $fileName", e)
+            null
+        }
+    }
+
     private fun saveJpegBytesToMediaStore(bytes: ByteArray): Uri? {
         val activeLens = _selectedLens.value
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
@@ -5110,10 +5220,10 @@ class Camera2Engine(private val context: Context) {
             try {
                 val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (rawBitmap != null) {
-                    val exif = try {
+                    val srcExif = try {
                         android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
                     } catch (e: Exception) { null }
-                    val exifOrientation = exif?.getAttributeInt(
+                    val exifOrientation = srcExif?.getAttributeInt(
                         android.media.ExifInterface.TAG_ORIENTATION,
                         android.media.ExifInterface.ORIENTATION_UNDEFINED
                     ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
@@ -5138,10 +5248,32 @@ class Camera2Engine(private val context: Context) {
                     if (mirroredBitmap != rawBitmap) {
                         rawBitmap.recycle()
                     }
-                    val stream = java.io.ByteArrayOutputStream()
-                    mirroredBitmap.compress(Bitmap.CompressFormat.JPEG, 98, stream)
+
+                    // Encode with preserved EXIF and ORIENTATION_NORMAL
+                    val tempSelfieFile = File.createTempFile("selfie_mirror", ".jpg", context.cacheDir)
+                    FileOutputStream(tempSelfieFile).use { fos ->
+                        mirroredBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                        fos.flush()
+                    }
                     mirroredBitmap.recycle()
-                    stream.toByteArray()
+
+                    try {
+                        val dstExif = android.media.ExifInterface(tempSelfieFile.absolutePath)
+                        if (srcExif != null) {
+                            copyAllExifAttributes(srcExif, dstExif)
+                        }
+                        dstExif.setAttribute(
+                            android.media.ExifInterface.TAG_ORIENTATION,
+                            android.media.ExifInterface.ORIENTATION_NORMAL.toString()
+                        )
+                        dstExif.saveAttributes()
+                    } catch (ex: Throwable) {
+                        Log.w(TAG, "EXIF write warning on mirrored selfie", ex)
+                    }
+
+                    val mirroredBytes = tempSelfieFile.readBytes()
+                    tempSelfieFile.delete()
+                    mirroredBytes
                 } else {
                     bytes
                 }
@@ -5250,23 +5382,8 @@ class Camera2Engine(private val context: Context) {
                     // since the bitmap pixels were already physically transformed upright
                     try {
                         val dstExif = android.media.ExifInterface(tempFilterFile.absolutePath)
-                        val exifTags = arrayOf(
-                            android.media.ExifInterface.TAG_DATETIME,
-                            android.media.ExifInterface.TAG_MAKE,
-                            android.media.ExifInterface.TAG_MODEL,
-                            android.media.ExifInterface.TAG_FLASH,
-                            android.media.ExifInterface.TAG_FOCAL_LENGTH,
-                            android.media.ExifInterface.TAG_WHITE_BALANCE,
-                            android.media.ExifInterface.TAG_EXPOSURE_TIME,
-                            android.media.ExifInterface.TAG_ISO_SPEED_RATINGS
-                        )
                         if (srcExif != null) {
-                            for (tag in exifTags) {
-                                val v = srcExif.getAttribute(tag)
-                                if (v != null) {
-                                    dstExif.setAttribute(tag, v)
-                                }
-                            }
+                            copyAllExifAttributes(srcExif, dstExif)
                         }
                         dstExif.setAttribute(
                             android.media.ExifInterface.TAG_ORIENTATION,
@@ -5292,15 +5409,19 @@ class Camera2Engine(private val context: Context) {
             finalBytes
         }
 
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val fileName = "IMG_$timeStamp.jpg"
+        val fileName = generateUniqueImageFileName("IMG", "jpg")
+        val nowMs = System.currentTimeMillis()
+        val nowSec = nowMs / 1000
 
         val contentValues = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.DATE_ADDED, nowSec)
+            put(MediaStore.Images.Media.DATE_MODIFIED, nowSec)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
+                put(MediaStore.Images.Media.DATE_TAKEN, nowMs)
             } else {
                 try {
                     val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
@@ -5308,21 +5429,45 @@ class Camera2Engine(private val context: Context) {
                     val targetFile = File(dcimDir, fileName)
                     put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Legacy DCIM path resolution failed", e)
+                    Log.w(TAG, "Legacy DCIM path resolution failed for $fileName", e)
                 }
             }
         }
 
-        val uri = context.contentResolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        ) ?: return null
+        val primaryUri = getMediaStorePrimaryImageUri()
+        val uri = try {
+            context.contentResolver.insert(primaryUri, contentValues)
+        } catch (t: Throwable) {
+            Log.e(TAG, "MediaStore insert on primary volume failed: ${t.message}. Trying default external volume", t)
+            try {
+                context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            } catch (t2: Throwable) {
+                Log.e(TAG, "MediaStore insert on fallback external volume also failed: ${t2.message}", t2)
+                null
+            }
+        }
+
+        if (uri == null) {
+            Log.e(TAG, "MediaStore insertion returned null for $fileName (${outputBytes.size} bytes). Executing disk fallback.")
+            val fallbackUri = saveDirectFileFallback(outputBytes, fileName)
+            if (fallbackUri != null) {
+                _lastCapturedMedia.value = CapturedMedia(
+                    uri = fallbackUri,
+                    isVideo = false,
+                    timestamp = nowMs,
+                    displayName = fileName
+                )
+            }
+            return fallbackUri
+        }
 
         try {
-            context.contentResolver.openOutputStream(uri)?.use { out ->
+            val outputStream = context.contentResolver.openOutputStream(uri)
+                ?: throw java.io.IOException("Unable to open output stream for URI: $uri")
+            outputStream.use { out ->
                 out.write(outputBytes)
                 out.flush()
-            } ?: throw IllegalStateException("Unable to open output stream for URI: $uri")
+            }
 
             if ((isFrontFacing && saveSelfieAsPreviewed) || wasFilterApplied) {
                 try {
@@ -5334,8 +5479,8 @@ class Camera2Engine(private val context: Context) {
                         )
                         outExif.saveAttributes()
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to write EXIF orientation on processed photo", e)
+                } catch (e: Throwable) {
+                    Log.d(TAG, "openFileDescriptor 'rw' not supported on this device/provider; pre-encoded EXIF in outputBytes will be used")
                 }
             }
 
@@ -5350,32 +5495,61 @@ class Camera2Engine(private val context: Context) {
                 }
             }
 
+            // Guarantee notification for external gallery apps
+            try {
+                val legacyPath = contentValues.getAsString(MediaStore.Images.Media.DATA)
+                if (!legacyPath.isNullOrEmpty()) {
+                    android.media.MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg")) { path, scannedUri ->
+                        Log.d(TAG, "MediaScanner indexed $path -> $scannedUri")
+                    }
+                }
+            } catch (ignored: Throwable) {}
+
+            Log.i(TAG, "Photo saved successfully to MediaStore: $uri ($fileName, ${outputBytes.size} bytes)")
             _lastCapturedMedia.value = CapturedMedia(
                 uri = uri,
                 isVideo = false,
-                timestamp = System.currentTimeMillis(),
+                timestamp = nowMs,
                 displayName = fileName
             )
             return uri
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save JPEG to media store, cleaning up pending entry", e)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to write photo bytes to MediaStore (uri=$uri, file=$fileName, size=${outputBytes.size})", e)
             try {
                 context.contentResolver.delete(uri, null, null)
-            } catch (ignored: Throwable) {}
+                Log.d(TAG, "Successfully cleaned up pending MediaStore entry: $uri")
+            } catch (cleanupEx: Throwable) {
+                Log.w(TAG, "Failed to delete incomplete MediaStore entry: $uri", cleanupEx)
+            }
+
+            val fallbackUri = saveDirectFileFallback(outputBytes, fileName)
+            if (fallbackUri != null) {
+                _lastCapturedMedia.value = CapturedMedia(
+                    uri = fallbackUri,
+                    isVideo = false,
+                    timestamp = nowMs,
+                    displayName = fileName
+                )
+                return fallbackUri
+            }
             return null
         }
     }
 
     private fun saveBitmapToMediaStore(bitmap: Bitmap, orientationDegrees: Int): Uri? {
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val fileName = "IMG_NIGHT_$timeStamp.jpg"
+        val fileName = generateUniqueImageFileName("IMG_NIGHT", "jpg")
+        val nowMs = System.currentTimeMillis()
+        val nowSec = nowMs / 1000
 
         val contentValues = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.DATE_ADDED, nowSec)
+            put(MediaStore.Images.Media.DATE_MODIFIED, nowSec)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
+                put(MediaStore.Images.Media.DATE_TAKEN, nowMs)
             } else {
                 try {
                     val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
@@ -5383,31 +5557,82 @@ class Camera2Engine(private val context: Context) {
                     val targetFile = File(dcimDir, fileName)
                     put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Legacy DCIM path resolution failed", e)
+                    Log.w(TAG, "Legacy DCIM path resolution failed for $fileName", e)
                 }
             }
         }
 
-        val uri = context.contentResolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        ) ?: return null
+        val primaryUri = getMediaStorePrimaryImageUri()
+        val uri = try {
+            context.contentResolver.insert(primaryUri, contentValues)
+        } catch (t: Throwable) {
+            Log.e(TAG, "MediaStore insert on primary volume failed for night photo: ${t.message}", t)
+            try {
+                context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            } catch (t2: Throwable) {
+                Log.e(TAG, "MediaStore insert on fallback volume failed for night photo: ${t2.message}", t2)
+                null
+            }
+        }
+
+        val orientedBitmap = if (orientationDegrees != 0) {
+            val matrix = Matrix().apply { postRotate(orientationDegrees.toFloat()) }
+            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        } else {
+            bitmap
+        }
+
+        // Compress to byte array first with EXIF ORIENTATION_NORMAL
+        val jpegBytes = try {
+            val tempFile = File.createTempFile("night_temp", ".jpg", context.cacheDir)
+            FileOutputStream(tempFile).use { fos ->
+                orientedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                fos.flush()
+            }
+            try {
+                val exif = android.media.ExifInterface(tempFile.absolutePath)
+                exif.setAttribute(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_NORMAL.toString()
+                )
+                exif.saveAttributes()
+            } catch (ex: Throwable) {
+                Log.d(TAG, "Night temp EXIF write warning", ex)
+            }
+            val bytes = tempFile.readBytes()
+            tempFile.delete()
+            bytes
+        } catch (e: Throwable) {
+            Log.w(TAG, "Night temp file encode failed, fallback to memory stream", e)
+            val stream = java.io.ByteArrayOutputStream()
+            orientedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, stream)
+            stream.toByteArray()
+        }
+
+        if (orientedBitmap != bitmap && !orientedBitmap.isRecycled) {
+            orientedBitmap.recycle()
+        }
+
+        if (uri == null) {
+            Log.e(TAG, "MediaStore insert returned null for night photo $fileName, executing disk fallback")
+            val fallbackUri = saveDirectFileFallback(jpegBytes, fileName)
+            if (fallbackUri != null) {
+                _lastCapturedMedia.value = CapturedMedia(
+                    uri = fallbackUri,
+                    isVideo = false,
+                    timestamp = nowMs,
+                    displayName = fileName
+                )
+            }
+            return fallbackUri
+        }
 
         try {
-            val orientedBitmap = if (orientationDegrees != 0) {
-                val matrix = Matrix().apply { postRotate(orientationDegrees.toFloat()) }
-                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-            } else {
-                bitmap
-            }
-
-            context.contentResolver.openOutputStream(uri)?.use { out ->
-                orientedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+            val outputStream = context.contentResolver.openOutputStream(uri)
+                ?: throw java.io.IOException("Unable to open output stream for night photo URI: $uri")
+            outputStream.use { out ->
+                out.write(jpegBytes)
                 out.flush()
-            } ?: throw IllegalStateException("Unable to open output stream for URI: $uri")
-
-            if (orientedBitmap != bitmap) {
-                orientedBitmap.recycle()
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -5421,46 +5646,83 @@ class Camera2Engine(private val context: Context) {
                 }
             }
 
+            Log.i(TAG, "Night photo saved successfully to MediaStore: $uri ($fileName)")
             _lastCapturedMedia.value = CapturedMedia(
                 uri = uri,
                 isVideo = false,
-                timestamp = System.currentTimeMillis(),
+                timestamp = nowMs,
                 displayName = fileName
             )
             return uri
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save night bitmap, cleaning up pending entry", e)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to save night photo bytes to MediaStore (uri=$uri, file=$fileName)", e)
             try {
                 context.contentResolver.delete(uri, null, null)
-            } catch (ignored: Throwable) {}
+                Log.d(TAG, "Cleaned up incomplete night MediaStore entry: $uri")
+            } catch (cleanupEx: Throwable) {
+                Log.w(TAG, "Failed to delete incomplete night MediaStore entry: $uri", cleanupEx)
+            }
+            val fallbackUri = saveDirectFileFallback(jpegBytes, fileName)
+            if (fallbackUri != null) {
+                _lastCapturedMedia.value = CapturedMedia(
+                    uri = fallbackUri,
+                    isVideo = false,
+                    timestamp = nowMs,
+                    displayName = fileName
+                )
+                return fallbackUri
+            }
             return null
         }
     }
 
     private fun saveRawToMediaStore(rawImage: Image, characteristics: CameraCharacteristics) {
-        try {
-            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val fileName = "RAW_$timeStamp.dng"
+        val fileName = generateUniqueImageFileName("RAW", "dng")
+        val nowMs = System.currentTimeMillis()
+        val nowSec = nowMs / 1000
 
-            val contentValues = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
-                    put(MediaStore.Images.Media.IS_PENDING, 1)
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
+            put(MediaStore.Images.Media.DATE_ADDED, nowSec)
+            put(MediaStore.Images.Media.DATE_MODIFIED, nowSec)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+                put(MediaStore.Images.Media.DATE_TAKEN, nowMs)
+            } else {
+                try {
+                    val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
+                    if (!dcimDir.exists()) dcimDir.mkdirs()
+                    val targetFile = File(dcimDir, fileName)
+                    put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Legacy DCIM path resolution failed for RAW $fileName", e)
                 }
             }
+        }
 
-            val uri = context.contentResolver.insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                contentValues
-            ) ?: return
+        val primaryUri = getMediaStorePrimaryImageUri()
+        val uri = try {
+            context.contentResolver.insert(primaryUri, contentValues)
+        } catch (t: Throwable) {
+            try {
+                context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            } catch (t2: Throwable) {
+                Log.e(TAG, "Failed to insert RAW DNG to MediaStore", t2)
+                null
+            }
+        } ?: return
 
-            val captureResult = lastCaptureResult ?: return
+        try {
+            val captureResult = lastCaptureResult ?: throw java.lang.IllegalStateException("No captureResult for DNG")
             val dngCreator = DngCreator(characteristics, captureResult)
 
-            context.contentResolver.openOutputStream(uri)?.use { out ->
+            val outputStream = context.contentResolver.openOutputStream(uri)
+                ?: throw java.io.IOException("Unable to open output stream for RAW URI: $uri")
+            outputStream.use { out ->
                 dngCreator.writeImage(out, rawImage)
+                out.flush()
             }
             dngCreator.close()
 
@@ -5469,10 +5731,20 @@ class Camera2Engine(private val context: Context) {
                     put(MediaStore.Images.Media.IS_PENDING, 0)
                 }
                 context.contentResolver.update(uri, completeValues, null, null)
+            } else {
+                val legacyPath = contentValues.getAsString(MediaStore.Images.Media.DATA)
+                if (!legacyPath.isNullOrEmpty()) {
+                    android.media.MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/x-adobe-dng"), null)
+                }
             }
-            Log.d(TAG, "Saved RAW DNG successfully to $uri")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save RAW image", e)
+            Log.i(TAG, "Saved RAW DNG successfully to $uri ($fileName)")
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to save RAW image data to $uri, cleaning up pending entry", e)
+            try {
+                context.contentResolver.delete(uri, null, null)
+            } catch (cleanupEx: Throwable) {
+                Log.w(TAG, "Failed to delete incomplete RAW MediaStore entry: $uri", cleanupEx)
+            }
         }
     }
 

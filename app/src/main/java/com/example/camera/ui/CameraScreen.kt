@@ -208,6 +208,7 @@ fun CameraScreen(
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
+    var shutterAreaHeightDp by remember { mutableStateOf(216.dp) }
 
     if (cameraMode == CameraMode.AI_SUBJECT_TRACKING) {
         com.example.camera.tracking.ui.AiSubjectTrackingScreen(
@@ -497,6 +498,8 @@ fun CameraScreen(
             onGridClick = { viewModel.cycleGridType() },
             onRawClick = { viewModel.toggleRawCapture() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
+            isProActive = isManualProOpen,
+            onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
             layoutConfig = activeLayoutConfig,
             modifier = Modifier.align(Alignment.TopCenter)
         )
@@ -525,7 +528,7 @@ fun CameraScreen(
             )
         }
 
-        // 3. Manual Pro Control Bar (Slide-up above bottom controls in Photo/Video modes)
+        // 3. Manual Pro Control Bar (Cleanly positioned ABOVE shutter button and bottom controls)
         if (cameraMode != CameraMode.PORTRAIT) {
             ManualProControlBar(
                 isOpen = isManualProOpen,
@@ -566,7 +569,7 @@ fun CameraScreen(
                 },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 145.dp)
+                    .padding(bottom = shutterAreaHeightDp + 12.dp)
             )
         }
 
@@ -798,9 +801,11 @@ fun CameraScreen(
             onCinemaModeClick = { viewModel.toggleCinemaSettings() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             onTimerClick = { viewModel.cycleTimerMode() },
+            onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
+            onShutterAreaHeightMeasured = { shutterAreaHeightDp = it },
             layoutConfig = activeLayoutConfig.copy(
                 showZoomCapsule = activeLayoutConfig.showZoomCapsule && (!isAnyWindowOpen || (isManualProOpen && !isManualProSliderOpen)),
-                zoomCapsuleVerticalOffsetDp = if (isManualProOpen) -80 else activeLayoutConfig.zoomCapsuleVerticalOffsetDp
+                zoomCapsuleVerticalOffsetDp = if (isManualProOpen) -76 else activeLayoutConfig.zoomCapsuleVerticalOffsetDp
             ),
             modifier = Modifier.align(Alignment.BottomCenter)
         )

@@ -6,13 +6,19 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.media.MediaScannerConnection
 import android.provider.MediaStore
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -573,33 +579,140 @@ class UltraRes50MStacker(private val context: Context) {
         }
     }
 
+    private val saveSequence = AtomicInteger((System.currentTimeMillis() % 1000).toInt())
+
+    private fun getMediaStorePrimaryImageUri(): Uri {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } catch (t: Throwable) {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+    }
+
+    private fun saveDirectFileFallback(bytes: ByteArray, fileName: String): Uri? {
+        return try {
+            val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
+            if (!dcimDir.exists()) {
+                dcimDir.mkdirs()
+            }
+            val targetFile = if (dcimDir.exists() && dcimDir.canWrite()) {
+                File(dcimDir, fileName)
+            } else {
+                val picturesDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                File(picturesDir, fileName)
+            }
+
+            FileOutputStream(targetFile).use { out ->
+                out.write(bytes)
+                out.flush()
+            }
+            Log.i(TAG, "50M direct disk fallback write succeeded: ${targetFile.absolutePath} (${bytes.size} bytes)")
+            val fileUri = Uri.fromFile(targetFile)
+            try {
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(targetFile.absolutePath),
+                    arrayOf("image/jpeg")
+                ) { path, scannedUri ->
+                    Log.d(TAG, "50M direct fallback scanned: $path -> $scannedUri")
+                }
+            } catch (ignored: Throwable) {}
+            fileUri
+        } catch (e: Throwable) {
+            Log.e(TAG, "50M direct file fallback write failed completely for $fileName", e)
+            null
+        }
+    }
+
     /**
      * Saves the final 50MP photo to MediaStore with EXIF attributes.
      */
     private suspend fun saveBitmapToMediaStore(bitmap: Bitmap): Uri? = withContext(Dispatchers.IO) {
-        try {
-            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val fileName = "50M_ULTRA_RES_${timeStamp}.jpg"
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        val seq = (saveSequence.incrementAndGet() and 0xFFFF).toString().padStart(4, '0')
+        val fileName = "50M_ULTRA_RES_${timeStamp}_${seq}.jpg"
 
-            val contentValues = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(MediaStore.Images.Media.WIDTH, bitmap.width)
-                put(MediaStore.Images.Media.HEIGHT, bitmap.height)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
-                    put(MediaStore.Images.Media.IS_PENDING, 1)
+        val nowMs = System.currentTimeMillis()
+        val nowSec = nowMs / 1000
+
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.WIDTH, bitmap.width)
+            put(MediaStore.Images.Media.HEIGHT, bitmap.height)
+            put(MediaStore.Images.Media.DATE_ADDED, nowSec)
+            put(MediaStore.Images.Media.DATE_MODIFIED, nowSec)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+                put(MediaStore.Images.Media.DATE_TAKEN, nowMs)
+            } else {
+                try {
+                    val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
+                    if (!dcimDir.exists()) dcimDir.mkdirs()
+                    val targetFile = File(dcimDir, fileName)
+                    put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Legacy DCIM path resolution failed for 50M image", e)
                 }
             }
+        }
 
-            val uri = context.contentResolver.insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                contentValues
-            ) ?: return@withContext null
+        // Pre-compress to JPEG bytes with EXIF ORIENTATION_NORMAL
+        val jpegBytes = try {
+            val tempFile = File.createTempFile("50m_temp", ".jpg", context.cacheDir)
+            FileOutputStream(tempFile).use { fos ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
+                fos.flush()
+            }
+            try {
+                val exif = android.media.ExifInterface(tempFile.absolutePath)
+                exif.setAttribute(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_NORMAL.toString()
+                )
+                exif.saveAttributes()
+            } catch (ex: Throwable) {
+                Log.d(TAG, "50M temp EXIF write warning", ex)
+            }
+            val bytes = tempFile.readBytes()
+            tempFile.delete()
+            bytes
+        } catch (e: Throwable) {
+            Log.w(TAG, "50M temp file encode failed, fallback to memory stream", e)
+            val stream = java.io.ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 98, stream)
+            stream.toByteArray()
+        }
 
-            context.contentResolver.openOutputStream(uri)?.use { out ->
-                // Optimal 98% compression for maximum photographic clarity
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 98, out)
+        val primaryUri = getMediaStorePrimaryImageUri()
+        val uri = try {
+            context.contentResolver.insert(primaryUri, contentValues)
+        } catch (t: Throwable) {
+            Log.e(TAG, "MediaStore insert on primary volume failed for 50M: ${t.message}", t)
+            try {
+                context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            } catch (t2: Throwable) {
+                Log.e(TAG, "MediaStore insert on fallback volume failed for 50M: ${t2.message}", t2)
+                null
+            }
+        }
+
+        if (uri == null) {
+            Log.e(TAG, "MediaStore insert returned null for 50M image $fileName, executing disk fallback")
+            return@withContext saveDirectFileFallback(jpegBytes, fileName)
+        }
+
+        try {
+            val outputStream = context.contentResolver.openOutputStream(uri)
+                ?: throw IOException("Unable to open output stream for 50M URI: $uri")
+            outputStream.use { out ->
+                out.write(jpegBytes)
+                out.flush()
             }
 
             try {
@@ -611,21 +724,41 @@ class UltraRes50MStacker(private val context: Context) {
                     )
                     outExif.saveAttributes()
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to write normal EXIF orientation on 50M image", e)
+            } catch (exifIgnored: Throwable) {
+                Log.d(TAG, "openFileDescriptor 'rw' not supported on this device/provider for 50M; pre-encoded EXIF used")
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 contentValues.clear()
                 contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
                 context.contentResolver.update(uri, contentValues, null, null)
+            } else {
+                val legacyPath = contentValues.getAsString(MediaStore.Images.Media.DATA)
+                if (!legacyPath.isNullOrEmpty()) {
+                    MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg"), null)
+                }
             }
 
-            Log.d(TAG, "Saved 50M ultra-resolution image: $uri (${bitmap.width}x${bitmap.height})")
+            try {
+                val legacyPath = contentValues.getAsString(MediaStore.Images.Media.DATA)
+                if (!legacyPath.isNullOrEmpty()) {
+                    MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg")) { path, scannedUri ->
+                        Log.d(TAG, "MediaScanner indexed 50M image at $path -> $scannedUri")
+                    }
+                }
+            } catch (ignored: Throwable) {}
+
+            Log.i(TAG, "Saved 50M ultra-resolution image: $uri (${bitmap.width}x${bitmap.height}, $fileName)")
             uri
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save 50M image to MediaStore", e)
-            null
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to save 50M image data to MediaStore (uri=$uri, file=$fileName)", e)
+            try {
+                context.contentResolver.delete(uri, null, null)
+                Log.d(TAG, "Cleaned up incomplete 50M MediaStore entry: $uri")
+            } catch (cleanupEx: Throwable) {
+                Log.w(TAG, "Failed to delete incomplete 50M MediaStore entry: $uri", cleanupEx)
+            }
+            saveDirectFileFallback(jpegBytes, fileName)
         }
     }
 }

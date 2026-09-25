@@ -140,6 +140,8 @@ fun TopControlBar(
     onGridClick: () -> Unit,
     onRawClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    isProActive: Boolean = false,
+    onToggleProClick: () -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
 ) {
@@ -587,14 +589,14 @@ fun TopControlBar(
             Box(
                 modifier = Modifier
                     .height(34.dp)
-                    .topControlStyle(layoutConfig, activeColor = accentColor, isPill = true)
-                    .clickable { onSettingsClick() }
+                    .topControlStyle(layoutConfig, activeColor = if (isProActive) accentColor else null, isPill = true)
+                    .clickable { onToggleProClick() }
                     .padding(horizontal = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "PRO",
-                    color = accentColor,
+                    color = if (isProActive) accentColor else Color.White,
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
