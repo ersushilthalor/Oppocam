@@ -914,22 +914,12 @@ fun MasterZoomCapsule(
                         .clickable {
                             if (isActive) {
                                 isSliderOpen = true
-                            } else if (preset == 1.0f) {
-                                onZoomPresetTap(1.0f)
-                            } else if (preset == 0.5f) {
-                                if (hasRealUltraWide) {
-                                    onZoomPresetTap(0.5f)
-                                } else {
-                                    onShowToast("Ultra-Wide lens is not available on this device")
-                                }
-                            } else if (targetLens != null) {
-                                onLensSelected(targetLens)
+                            } else if (preset == 0.5f && !hasRealUltraWide) {
+                                onShowToast("Ultra-Wide lens is not available on this device")
+                            } else if (preset > capabilities.maxZoom) {
+                                onShowToast("${preset.toInt()}x zoom is not supported on this device")
                             } else {
-                                if (preset <= capabilities.maxZoom) {
-                                    onZoomPresetTap(preset)
-                                } else {
-                                    onShowToast("${preset.toInt()}x zoom is not supported on this device")
-                                }
+                                onZoomPresetTap(preset)
                             }
                         }
                         .testTag("zoom_preset_${(preset * 10).roundToInt()}"),
