@@ -89,6 +89,7 @@ fun Viewfinder(
     proContrast: Float = 1.0f,
     proHighlights: Float = 0f,
     proShadows: Float = 0f,
+    isProModeActive: Boolean = false,
     floatingWindowBlurStrength: Float = 24.0f,
     onSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
@@ -140,10 +141,11 @@ fun Viewfinder(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black),
-            contentAlignment = Alignment.Center
+            contentAlignment = if (isProModeActive) Alignment.TopCenter else Alignment.Center
         ) {
             Box(
                 modifier = Modifier
+                    .then(if (isProModeActive) Modifier.padding(top = 52.dp) else Modifier)
                     .size(width = targetWidth, height = targetHeight)
                     .pointerInput(minZoom, maxZoom) {
                         detectTransformGestures { _, pan, zoom, _ ->
@@ -176,7 +178,6 @@ fun Viewfinder(
                                 val normX = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
                                 val normY = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
                                 onTapToFocus(offset, normX, normY)
-                                onToggleLock()
                             }
                         )
                     }
@@ -242,19 +243,34 @@ fun Viewfinder(
                         // Configure uniform transform if buffer aspect ratio differs from view aspect ratio
                         if (textureView.width > 0 && textureView.height > 0) {
                             val matrix = android.graphics.Matrix()
-                            if (previewBufferSize != null) {
-                                val bufW = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-                                val bufH = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-                                val bufAspect = bufW / bufH
-                                val viewAspect = textureView.height.toFloat() / textureView.width.toFloat()
-                                if (kotlin.math.abs(bufAspect - viewAspect) > 0.04f) {
-                                    // Uniform center-crop scaling without any vertical or horizontal stretching
-                                    val scale = if (viewAspect > bufAspect) {
-                                        viewAspect / bufAspect
+                            val buf = previewBufferSize
+                            if (buf != null && buf.width > 0 && buf.height > 0) {
+                                // In portrait mode, camera sensor is oriented landscape (90/270 degrees).
+                                // Portrait buffer width is min(width, height), portrait buffer height is max(width, height).
+                                val bufPortraitW = minOf(buf.width, buf.height).toFloat()
+                                val bufPortraitH = maxOf(buf.width, buf.height).toFloat()
+                                val bufAspect = bufPortraitH / bufPortraitW
+
+                                val viewW = textureView.width.toFloat()
+                                val viewH = textureView.height.toFloat()
+                                val viewAspect = viewH / viewW
+
+                                val centerX = viewW / 2f
+                                val centerY = viewH / 2f
+
+                                // Prevent non-uniform stretching: center-crop scale the mismatched axis to guarantee exact 1:1 pixel aspect ratio
+                                if (kotlin.math.abs(bufAspect - viewAspect) > 0.01f) {
+                                    if (viewAspect > bufAspect) {
+                                        // View is taller than buffer: scale horizontally to preserve aspect ratio
+                                        val scaleX = viewAspect / bufAspect
+                                        val scaleY = 1.0f
+                                        matrix.setScale(scaleX, scaleY, centerX, centerY)
                                     } else {
-                                        bufAspect / viewAspect
+                                        // View is wider than buffer: scale vertically to preserve aspect ratio
+                                        val scaleX = 1.0f
+                                        val scaleY = bufAspect / viewAspect
+                                        matrix.setScale(scaleX, scaleY, centerX, centerY)
                                     }
-                                    matrix.setScale(scale, scale, textureView.width / 2f, textureView.height / 2f)
                                 }
                             }
                             textureView.setTransform(matrix)
@@ -510,34 +526,6 @@ fun FocusRingIndicator(
                     end = Offset(size.width / 2f, size.height / 2f + 6.dp.toPx()),
                     strokeWidth = 1.5.dp.toPx()
                 )
-            }
-
-            // Lock Indicator Badge (tap to toggle lock)
-            if (isAeLocked || isAfLocked) {
-                Row(
-                    modifier = Modifier
-                        .offset(y = 44.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xEE000000))
-                        .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.5f), CircleShape)
-                        .clickable { onLockClick() }
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = "Lock",
-                        tint = Color(0xFFFFD54F),
-                        modifier = Modifier.size(10.dp)
-                    )
-                    Spacer(modifier = Modifier.width(3.dp))
-                    Text(
-                        text = if (isAeLocked && isAfLocked) "AE/AF LOCK" else if (isAeLocked) "AE LOCK" else "AF LOCK",
-                        color = Color(0xFFFFD54F),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
         }
     }

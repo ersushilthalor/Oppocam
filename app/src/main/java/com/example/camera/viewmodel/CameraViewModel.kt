@@ -1145,6 +1145,72 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.updatePreviewSettings()
     }
 
+    // Pro Advanced Image Adjustments (Saturation, Contrast, Highlights, Shadows, Sharpness, Noise Reduction)
+    val proSaturation: StateFlow<Float> = engine.proSaturation
+    val proContrast: StateFlow<Float> = engine.proContrast
+    val proHighlights: StateFlow<Float> = engine.proHighlights
+    val proShadows: StateFlow<Float> = engine.proShadows
+    val proSharpness: StateFlow<Float> = engine.proSharpness
+    val proNoiseReduction: StateFlow<Float> = engine.proNoiseReduction
+
+    fun setProSaturation(value: Float) {
+        val clamped = value.coerceIn(-100f, 100f)
+        engine.proSaturation.value = clamped
+        preferences.proSaturation = clamped
+        val params = _activePipelineParams.value
+        updatePipelineParams(params.copy(saturation = clamped))
+    }
+
+    fun setProContrast(value: Float) {
+        val clamped = value.coerceIn(0.5f, 2.0f)
+        engine.proContrast.value = clamped
+        preferences.proContrast = clamped
+        val params = _activePipelineParams.value
+        updatePipelineParams(params.copy(contrast = clamped))
+    }
+
+    fun setProHighlights(value: Float) {
+        val clamped = value.coerceIn(-100f, 100f)
+        engine.proHighlights.value = clamped
+        preferences.proHighlights = clamped
+        val params = _activePipelineParams.value
+        updatePipelineParams(params.copy(highlights = clamped))
+    }
+
+    fun setProShadows(value: Float) {
+        val clamped = value.coerceIn(-100f, 100f)
+        engine.proShadows.value = clamped
+        preferences.proShadows = clamped
+        val params = _activePipelineParams.value
+        updatePipelineParams(params.copy(shadows = clamped))
+    }
+
+    fun setProSharpness(value: Float) {
+        val clamped = value.coerceIn(0f, 100f)
+        engine.proSharpness.value = clamped
+        preferences.proSharpness = clamped
+        val params = _activePipelineParams.value
+        updatePipelineParams(params.copy(sharpness = clamped))
+    }
+
+    fun setProNoiseReduction(value: Float) {
+        val clamped = value.coerceIn(0f, 100f)
+        engine.proNoiseReduction.value = clamped
+        preferences.proNoiseReduction = clamped
+        val params = _activePipelineParams.value
+        updatePipelineParams(params.copy(noiseReduction = clamped))
+    }
+
+    fun resetProAdjustments() {
+        setProSaturation(0f)
+        setProContrast(1.0f)
+        setProHighlights(0f)
+        setProShadows(0f)
+        setProSharpness(15f)
+        setProNoiseReduction(12f)
+        showToast("Reset Pro Adjustments")
+    }
+
     fun toggleAeLock() {
         val next = !engine.isAeLockedFlow.value
         engine.isAeLocked = next

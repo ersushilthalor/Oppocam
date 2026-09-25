@@ -225,12 +225,12 @@ class Camera2Engine(private val context: Context) {
     val nightProgress: StateFlow<NightCaptureProgress> = _nightProgress.asStateFlow()
 
     // Pro Mode Advanced Image Adjustments
-    val proSaturation = MutableStateFlow(0f)
-    val proContrast = MutableStateFlow(1.0f)
-    val proHighlights = MutableStateFlow(0f)
-    val proShadows = MutableStateFlow(0f)
-    val proSharpness = MutableStateFlow(15f)
-    val proNoiseReduction = MutableStateFlow(12f)
+    val proSaturation = MutableStateFlow(preferences.proSaturation)
+    val proContrast = MutableStateFlow(preferences.proContrast)
+    val proHighlights = MutableStateFlow(preferences.proHighlights)
+    val proShadows = MutableStateFlow(preferences.proShadows)
+    val proSharpness = MutableStateFlow(preferences.proSharpness)
+    val proNoiseReduction = MutableStateFlow(preferences.proNoiseReduction)
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
@@ -1466,7 +1466,7 @@ class Camera2Engine(private val context: Context) {
             val sensorOrient = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             _sensorOrientation.value = sensorOrient
             _previewBufferSize.value = optimalPreviewSize
-            val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT)
+            val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT || currentMode == CameraMode.NIGHT)
             val targetW = if (viewfinderWidth > 0) viewfinderWidth else 1080
             val targetH = if (viewfinderHeight > 0) viewfinderHeight else if (isPhotoOrPortrait) 1440 else 1920
             val cameraW = max(optimalPreviewSize.width, optimalPreviewSize.height)
@@ -1587,7 +1587,7 @@ class Camera2Engine(private val context: Context) {
             kotlin.math.abs(ratio - (16f / 9f)) < 0.05f
         }
 
-        val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT)
+        val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT || currentMode == CameraMode.NIGHT)
 
         return when {
             isPhotoOrPortrait -> {

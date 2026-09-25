@@ -160,24 +160,25 @@ fun CameraScreen(
     val isAeLocked by viewModel.isAeLocked.collectAsStateWithLifecycle()
     val isAfLocked by viewModel.isAfLocked.collectAsStateWithLifecycle()
     val isRawEnabled by viewModel.isRawCaptureEnabled.collectAsStateWithLifecycle()
-    val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
-    val videoBitrate by viewModel.videoBitrateOption.collectAsStateWithLifecycle()
     val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
     val colorProfile by viewModel.colorProfile.collectAsStateWithLifecycle()
     val isAudioEnabled by viewModel.isAudioEnabled.collectAsStateWithLifecycle()
     val currentVideoQuality by viewModel.currentVideoQuality.collectAsStateWithLifecycle()
-    val viewfinderResolution by viewModel.viewfinderResolution.collectAsStateWithLifecycle()
     val currentZoom by viewModel.currentZoom.collectAsStateWithLifecycle()
     val displayedLenses by viewModel.displayedLenses.collectAsStateWithLifecycle()
     val selectedLens by viewModel.selectedLens.collectAsStateWithLifecycle()
-    val zoomPresetsMode by viewModel.zoomPresetsMode.collectAsStateWithLifecycle()
-    val customZoomPresetsStr by viewModel.customZoomPresetsStr.collectAsStateWithLifecycle()
     val activeZoomPresets by viewModel.activeZoomPresets.collectAsStateWithLifecycle()
+
+    val proSaturation by viewModel.proSaturation.collectAsStateWithLifecycle()
+    val proContrast by viewModel.proContrast.collectAsStateWithLifecycle()
+    val proHighlights by viewModel.proHighlights.collectAsStateWithLifecycle()
+    val proShadows by viewModel.proShadows.collectAsStateWithLifecycle()
+    val proSharpness by viewModel.proSharpness.collectAsStateWithLifecycle()
+    val proNoiseReduction by viewModel.proNoiseReduction.collectAsStateWithLifecycle()
 
     val nightConfig by viewModel.nightConfig.collectAsStateWithLifecycle()
     val nightProgress by viewModel.nightProgress.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
-    val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val activeLayoutConfig = remember(uiCustomizationState, cameraMode) {
         uiCustomizationState.getConfigForMode(cameraMode)
@@ -187,21 +188,6 @@ fun CameraScreen(
     val isPhotoFilterBarOpen by viewModel.isPhotoFilterBarOpen.collectAsStateWithLifecycle()
     val isPortraitStyleBarOpen by viewModel.isPortraitStyleBarOpen.collectAsStateWithLifecycle()
 
-    val videoCodec by viewModel.videoCodec.collectAsStateWithLifecycle()
-    val jpegQuality by viewModel.jpegQuality.collectAsStateWithLifecycle()
-    val volumeKeyAction by viewModel.volumeKeyAction.collectAsStateWithLifecycle()
-    val doubleTapAction by viewModel.doubleTapAction.collectAsStateWithLifecycle()
-    val shutterFeedback by viewModel.shutterFeedback.collectAsStateWithLifecycle()
-    val antibandingMode by viewModel.antibandingMode.collectAsStateWithLifecycle()
-    val windNoiseReduction by viewModel.windNoiseReduction.collectAsStateWithLifecycle()
-    val audioSource by viewModel.audioSource.collectAsStateWithLifecycle()
-    val horizonLeveler by viewModel.horizonLeveler.collectAsStateWithLifecycle()
-    val viewfinderFps by viewModel.viewfinderFps.collectAsStateWithLifecycle()
-    val thermalProtection by viewModel.thermalProtection.collectAsStateWithLifecycle()
-    val isAutoHdrEnabled by viewModel.isAutoHdrEnabled.collectAsStateWithLifecycle()
-    val isAiAutoFramingEnabled by viewModel.isAiAutoFramingEnabled.collectAsStateWithLifecycle()
-    val isHighQualityZoomEnabled by viewModel.isHighQualityZoomEnabled.collectAsStateWithLifecycle()
-    val zoomProcessingQuality by viewModel.zoomProcessingQuality.collectAsStateWithLifecycle()
     val isZoomProcessing by viewModel.isZoomProcessing.collectAsStateWithLifecycle()
     val zoomProgress by viewModel.zoomProgress.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
@@ -221,6 +207,7 @@ fun CameraScreen(
     val latestPipelineCapture by viewModel.latestPipelineCapture.collectAsStateWithLifecycle()
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
+    var isManualProSliderOpen by remember { mutableStateOf(false) }
 
     if (cameraMode == CameraMode.AI_SUBJECT_TRACKING) {
         com.example.camera.tracking.ui.AiSubjectTrackingScreen(
@@ -267,6 +254,32 @@ fun CameraScreen(
     CompositionLocalProvider(
         com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
     ) {
+        if (isSettingsOpen) {
+            CameraSettingsHost(
+                viewModel = viewModel,
+                onOpenCustomUiStudio = {
+                    viewModel.setSettingsOpen(false)
+                    isCustomUiStudioOpen = true
+                },
+                onOpenPipelineStudio = {
+                    viewModel.setSettingsOpen(false)
+                    viewModel.setPipelineSheetOpen(true)
+                },
+                onOpenBeforeAfter = {
+                    viewModel.setSettingsOpen(false)
+                    viewModel.setBeforeAfterOpen(true)
+                },
+                onOpenGalleryChooser = {
+                    viewModel.setGallerySelectionDialogOpen(true)
+                },
+                onDismiss = {
+                    viewModel.setSettingsOpen(false)
+                    if (cameraMode == CameraMode.MORE) {
+                        viewModel.setCameraMode(CameraMode.PHOTO)
+                    }
+                }
+            )
+        } else {
         Box(
             modifier = modifier
                 .fillMaxSize()
@@ -297,6 +310,11 @@ fun CameraScreen(
                 portraitConfig = portraitConfig,
                 videoAdjustments = videoAdjustments,
                 rec2020AutoToneParams = rec2020AutoToneParams,
+                proSaturation = proSaturation,
+                proContrast = proContrast,
+                proHighlights = proHighlights,
+                proShadows = proShadows,
+                isProModeActive = isManualProOpen,
                 floatingWindowBlurStrength = floatingWindowAppearance.blurStrength,
                 onSurfaceTextureAvailable = { texture ->
                     viewModel.engine.setPreviewSurfaceTexture(texture)
@@ -364,6 +382,9 @@ fun CameraScreen(
                 captureProgress = nightProgress,
                 onDurationChange = { dur ->
                     viewModel.setNightConfig(nightConfig.copy(durationSeconds = dur))
+                },
+                onToggleNightHdr = {
+                    viewModel.setNightConfig(nightConfig.copy(multiFrameFusionEnabled = !nightConfig.multiFrameFusionEnabled))
                 },
                 modifier = Modifier.fillMaxSize()
             )
@@ -528,8 +549,13 @@ fun CameraScreen(
                 focusMode = focusMode,
                 manualFocusDistance = manualFocusDistance,
                 colorProfile = colorProfile,
-                isAeLocked = isAeLocked,
-                isAfLocked = isAfLocked,
+                proSaturation = proSaturation,
+                proContrast = proContrast,
+                proHighlights = proHighlights,
+                proShadows = proShadows,
+                proSharpness = proSharpness,
+                proNoiseReduction = proNoiseReduction,
+                onSliderVisibilityChange = { isManualProSliderOpen = it },
                 onTabSelected = { viewModel.setActiveProTab(it) },
                 onExposureChange = { viewModel.setExposureCompensation(it) },
                 onIsoChange = { viewModel.setManualIso(it) },
@@ -538,12 +564,20 @@ fun CameraScreen(
                 onFocusModeChange = { viewModel.setFocusMode(it) },
                 onFocusDistanceChange = { viewModel.setManualFocusDistance(it) },
                 onColorProfileChange = { viewModel.setColorProfile(it) },
-                onToggleAeLock = { viewModel.toggleAeLock() },
-                onToggleAfLock = { viewModel.toggleAfLock() },
-                onClose = { viewModel.setManualProOpen(false) },
+                onProSaturationChange = { viewModel.setProSaturation(it) },
+                onProContrastChange = { viewModel.setProContrast(it) },
+                onProHighlightsChange = { viewModel.setProHighlights(it) },
+                onProShadowsChange = { viewModel.setProShadows(it) },
+                onProSharpnessChange = { viewModel.setProSharpness(it) },
+                onProNoiseReductionChange = { viewModel.setProNoiseReduction(it) },
+                onResetProAdjustments = { viewModel.resetProAdjustments() },
+                onClose = {
+                    viewModel.setManualProOpen(false)
+                    isManualProSliderOpen = false
+                },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 215.dp)
+                    .padding(bottom = 145.dp)
             )
         }
 
@@ -776,166 +810,13 @@ fun CameraScreen(
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             onTimerClick = { viewModel.cycleTimerMode() },
             layoutConfig = activeLayoutConfig.copy(
-                showZoomCapsule = activeLayoutConfig.showZoomCapsule && !isAnyWindowOpen
+                showZoomCapsule = activeLayoutConfig.showZoomCapsule && (!isAnyWindowOpen || (isManualProOpen && !isManualProSliderOpen)),
+                zoomCapsuleVerticalOffsetDp = if (isManualProOpen) -80 else activeLayoutConfig.zoomCapsuleVerticalOffsetDp
             ),
             modifier = Modifier.align(Alignment.BottomCenter)
         )
-
-        // 6. Settings Bottom Sheet (Light Mode, Categorized 19 Categories)
-        SettingsDrawer(
-            isOpen = isSettingsOpen,
-            cameraMode = cameraMode,
-            capabilities = capabilities,
-            availableLenses = displayedLenses,
-            selectedLens = selectedLens,
-            selectedPhotoResolution = selectedPhotoResolution,
-            selectedVideoResolution = selectedVideoResolution,
-            photoMegapixelMode = photoMegapixelMode,
-            isRefocusPhotoEnabled = isRefocusPhotoEnabled,
-            refocusFrameCount = refocusFrameCount,
-            isUltraFastShutterEnabled = isUltraFastShutterEnabled,
-            ultraFastShutterFps = ultraFastShutterFps,
-            onUltraFastShutterToggle = { viewModel.setUltraFastShutterEnabled(it) },
-            onUltraFastShutterFpsChange = { viewModel.setUltraFastShutterFps(it) },
-            isHighQualityZoomEnabled = isHighQualityZoomEnabled,
-            zoomProcessingQuality = zoomProcessingQuality,
-            zoomPresetsMode = zoomPresetsMode,
-            customZoomPresetsStr = customZoomPresetsStr,
-            onZoomPresetsModeSelect = { viewModel.setZoomPresetsMode(it) },
-            onCustomZoomPresetsChange = { viewModel.setCustomZoomPresets(it) },
-            videoFps = videoFps,
-            videoBitrate = videoBitrate,
-            isVideoStabilizationEnabled = isVideoStabilizationEnabled,
-            isAudioEnabled = isAudioEnabled,
-            isRawEnabled = isRawEnabled,
-            saveSelfieAsPreviewed = saveSelfieAsPreviewed,
-            gridType = gridType,
-            cinemaConfig = cinemaConfig,
-            cinemaCapabilities = cinemaCapabilities,
-            viewfinderResolution = viewfinderResolution,
-            hybridStabilizationConfig = hybridStabilizationConfig,
-            nightConfig = nightConfig,
-            tapFocusConfig = tapFocusConfig,
-            mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
-                when {
-                    !isVideoStabilizationEnabled -> com.example.camera.model.MainCameraStabilizationMode.OFF
-                    hybridStabilizationConfig.isUltraStabilizationEnabled -> com.example.camera.model.MainCameraStabilizationMode.ULTRA
-                    hybridStabilizationConfig.isEisOnly -> com.example.camera.model.MainCameraStabilizationMode.EIS_ONLY
-                    hybridStabilizationConfig.isHybridEnabled -> com.example.camera.model.MainCameraStabilizationMode.HYBRID_OIS_EIS
-                    hybridStabilizationConfig.isOisPreferred && !hybridStabilizationConfig.isEisPreferred -> com.example.camera.model.MainCameraStabilizationMode.OIS_ONLY
-                    else -> com.example.camera.model.MainCameraStabilizationMode.HYBRID_OIS_EIS
-                }
-            },
-            onMainCameraStabilizationModeSelected = { viewModel.setMainCameraStabilizationMode(it) },
-            // Extended Settings States
-            videoCodec = videoCodec,
-            jpegQuality = jpegQuality,
-            volumeKeyAction = volumeKeyAction,
-            doubleTapAction = doubleTapAction,
-            shutterFeedback = shutterFeedback,
-            antibandingMode = antibandingMode,
-            windNoiseReduction = windNoiseReduction,
-            audioSource = audioSource,
-            horizonLeveler = horizonLeveler,
-            viewfinderFps = viewfinderFps,
-            thermalProtection = thermalProtection,
-            isAutoHdrEnabled = isAutoHdrEnabled,
-            isAiAutoFramingEnabled = isAiAutoFramingEnabled,
-            currentZoom = currentZoom,
-            exposureCompensation = exposureCompensation,
-            manualIso = manualIso,
-            manualShutterSpeedNs = manualShutterSpeedNs,
-            focusMode = focusMode,
-            manualFocusDistance = manualFocusDistance,
-            portraitConfig = portraitConfig,
-            selectedPhotoFilter = selectedPhotoFilter,
-            // Extended Callbacks
-            onVideoCodecSelected = { viewModel.setVideoCodec(it) },
-            onJpegQualitySelected = { viewModel.setJpegQuality(it) },
-            onVolumeKeyActionSelected = { viewModel.setVolumeKeyAction(it) },
-            onDoubleTapActionSelected = { viewModel.setDoubleTapAction(it) },
-            onShutterFeedbackSelected = { viewModel.setShutterFeedback(it) },
-            onAntibandingModeSelected = { viewModel.setAntibandingMode(it) },
-            onWindNoiseReductionToggle = { viewModel.setWindNoiseReduction(it) },
-            onAudioSourceSelected = { viewModel.setAudioSource(it) },
-            onHorizonLevelerToggle = { viewModel.setHorizonLeveler(it) },
-            onViewfinderFpsSelected = { viewModel.setViewfinderFps(it) },
-            onThermalProtectionToggle = { viewModel.setThermalProtection(it) },
-            onAutoHdrToggle = { viewModel.setAutoHdrEnabled(it) },
-            onAiAutoFramingToggle = { viewModel.setAiAutoFramingEnabled(it) },
-            onZoomChange = { viewModel.setZoom(it, isPresetTap = false) },
-            onExposureCompensationChange = { viewModel.setExposureCompensation(it) },
-            onManualIsoChange = { viewModel.setManualIso(it) },
-            onManualShutterSpeedChange = { viewModel.setManualShutterSpeed(it) },
-            onFocusModeChange = { viewModel.setFocusMode(it) },
-            onManualFocusDistanceChange = { viewModel.setManualFocusDistance(it) },
-            onPortraitConfigChange = { viewModel.setPortraitConfig(it) },
-            onPhotoFilterSelected = { viewModel.setPhotoFilter(it) },
-            onResetAllSettings = { viewModel.resetAllSettings() },
-            // UI Customization callbacks
-            uiCustomizationState = uiCustomizationState,
-            onSelectTemplate = { viewModel.selectUiTemplate(it) },
-            onUpdateGlobalLayoutConfig = { viewModel.updateGlobalLayoutConfig(it) },
-            onUpdateModeLayoutConfig = { mode, config -> viewModel.updateModeLayoutConfig(mode, config) },
-            onResetModeLayoutConfig = { mode -> viewModel.resetModeLayoutToGlobal(mode) },
-            onSaveCustomPreset = { name, config -> viewModel.saveCustomPreset(name, config) },
-            onLoadCustomPreset = { viewModel.loadCustomPreset(it) },
-            onDeleteCustomPreset = { viewModel.deleteCustomPreset(it) },
-            onResetAllToTemplate = { viewModel.resetLayoutToTemplate(it) },
-            onLensSelected = { viewModel.selectLens(it) },
-            onForceDeepScan = { viewModel.forceDeepScanLenses() },
-            onPhotoResolutionSelected = { viewModel.selectPhotoResolution(it) },
-            onPhotoMegapixelModeSelected = { viewModel.setPhotoMegapixelMode(it) },
-            onRefocusPhotoToggle = { viewModel.setRefocusPhotoEnabled(it) },
-            onRefocusFrameCountChange = { viewModel.setRefocusFrameCount(it) },
-            onHighQualityZoomToggle = { viewModel.setHighQualityZoomEnabled(it) },
-            onZoomProcessingQualitySelect = { viewModel.setZoomProcessingQuality(it) },
-            onVideoResolutionSelected = { viewModel.selectVideoResolution(it) },
-            onViewfinderResolutionSelected = { viewModel.setViewfinderResolution(it) },
-            onVideoFpsSelected = { viewModel.setVideoFps(it) },
-            onVideoBitrateSelected = { viewModel.setVideoBitrate(it) },
-            onStabilizationToggle = { viewModel.setVideoStabilization(it) },
-            onHybridStabilizationChange = { viewModel.setHybridStabilizationConfig(it) },
-            onOisToggle = { viewModel.setOisPreferred(it) },
-            onUltraStabilizationToggle = { viewModel.toggleUltraStabilization() },
-            onNightConfigChange = { viewModel.setNightConfig(it) },
-            onTapFocusConfigChange = { viewModel.setTapFocusConfig(it) },
-            onAudioToggle = { viewModel.toggleAudio() },
-            onRawToggle = { viewModel.toggleRawCapture() },
-            onSaveSelfieAsPreviewedToggle = { viewModel.setSaveSelfieAsPreviewed(it) },
-            onGridTypeSelected = { viewModel.setGridType(it) },
-            onCinemaConfigChange = { viewModel.updateCinemaConfig(it) },
-            onOpenCustomUiStudio = { isCustomUiStudioOpen = true },
-            isCustomPipelineEnabled = isCustomPipelineEnabled,
-            activePipelinePreset = activePipelinePreset,
-            onCustomPipelineToggle = { viewModel.toggleCustomPipelineEnabled(it) },
-            onSelectPipelinePreset = { viewModel.selectPipelinePreset(it) },
-            onOpenPipelineStudio = {
-                viewModel.setSettingsOpen(false)
-                viewModel.setPipelineSheetOpen(true)
-            },
-            onOpenBeforeAfter = {
-                viewModel.setSettingsOpen(false)
-                viewModel.setBeforeAfterOpen(true)
-            },
-            instantSwitchState = instantSwitchState,
-            onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
-            onKeepFrontCameraReadyToggle = { viewModel.setKeepFrontCameraReady(it) },
-            onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },
-            floatingWindowAppearance = floatingWindowAppearance,
-            onFloatingWindowTransparencyChange = { viewModel.setFloatingWindowTransparency(it) },
-            onFloatingWindowBlurStrengthChange = { viewModel.setFloatingWindowBlurStrength(it) },
-            onFloatingWindowAppearanceChange = { viewModel.setFloatingWindowAppearance(it) },
-            onResetFloatingWindowAppearance = { viewModel.resetFloatingWindowAppearance() },
-            preferredGalleryPackage = preferredGalleryPackage,
-            onOpenGalleryChooser = { viewModel.setGallerySelectionDialogOpen(true) },
-            onDismiss = {
-                viewModel.setSettingsOpen(false)
-                if (cameraMode == CameraMode.MORE) {
-                    viewModel.setCameraMode(CameraMode.PHOTO)
-                }
-            }
-        )
+        }
+    }
 
         // 7. Preferred Gallery App Selection Dialog
         com.example.camera.gallery.GallerySelectionDialog(
@@ -994,7 +875,6 @@ fun CameraScreen(
             )
         }
     }
-}
 }
 
 @Composable
