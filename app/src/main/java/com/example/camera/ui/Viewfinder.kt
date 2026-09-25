@@ -85,6 +85,10 @@ fun Viewfinder(
     portraitConfig: PortraitConfig? = null,
     videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
     rec2020AutoToneParams: com.example.camera.engine.Rec2020AutoToneParams? = null,
+    proSaturation: Float = 0f,
+    proContrast: Float = 1.0f,
+    proHighlights: Float = 0f,
+    proShadows: Float = 0f,
     floatingWindowBlurStrength: Float = 24.0f,
     onSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
@@ -118,9 +122,10 @@ fun Viewfinder(
         // Enforce fixed aspect ratios strictly dictated by mode:
         // - Photo mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
         // - Portrait mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
-        // - All other modes (Video, Cinema, Night, AI Tracking, More, etc.): fixed 9:16 (portrait 9:16 -> height / width = 16 / 9)
+        // - Night mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
+        // - Video & Cinema modes: fixed 9:16 (portrait 9:16 -> height / width = 16 / 9)
         val targetRatio = when (cameraMode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT -> 4f / 3f
+            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f
             else -> 16f / 9f
         }
 
@@ -234,6 +239,28 @@ fun Viewfinder(
                         }
                     },
                     update = { textureView ->
+                        // Configure uniform transform if buffer aspect ratio differs from view aspect ratio
+                        if (previewBufferSize != null && textureView.width > 0 && textureView.height > 0) {
+                            val bufW = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+                            val bufH = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+                            val bufAspect = bufW / bufH
+                            val viewAspect = textureView.height.toFloat() / textureView.width.toFloat()
+                            val matrix = android.graphics.Matrix()
+                            if (kotlin.math.abs(bufAspect - viewAspect) > 0.02f) {
+                                val scaleX: Float
+                                val scaleY: Float
+                                if (viewAspect > bufAspect) {
+                                    scaleX = viewAspect / bufAspect
+                                    scaleY = 1.0f
+                                } else {
+                                    scaleX = 1.0f
+                                    scaleY = bufAspect / viewAspect
+                                }
+                                matrix.setScale(scaleX, scaleY, textureView.width / 2f, textureView.height / 2f)
+                            }
+                            textureView.setTransform(matrix)
+                        }
+
                         val effectiveLut = activeLut ?: cinemaConfig?.selectedLut
 
                         val colorMatrix = android.graphics.ColorMatrix()
@@ -248,6 +275,28 @@ fun Viewfinder(
                                     colorMatrix.postConcat(filterMat)
                                     hasFilter = true
                                 }
+                            }
+                            // Real-time Pro adjustments: Saturation
+                            if (proSaturation != 0f) {
+                                val satMat = android.graphics.ColorMatrix().apply {
+                                    setSaturation((1f + proSaturation / 100f).coerceIn(0f, 3f))
+                                }
+                                colorMatrix.postConcat(satMat)
+                                hasFilter = true
+                            }
+                            // Real-time Pro adjustments: Contrast & Highlights / Shadows
+                            if (proContrast != 1.0f || proHighlights != 0f || proShadows != 0f) {
+                                val c = proContrast.coerceIn(0.5f, 2.0f)
+                                val b = ((proHighlights + proShadows) / 4f)
+                                val t = (1f - c) * 128f + b
+                                val contrastMat = android.graphics.ColorMatrix(floatArrayOf(
+                                    c, 0f, 0f, 0f, t,
+                                    0f, c, 0f, 0f, t,
+                                    0f, 0f, c, 0f, t,
+                                    0f, 0f, 0f, 1f, 0f
+                                ))
+                                colorMatrix.postConcat(contrastMat)
+                                hasFilter = true
                             }
                         } else if (cameraMode == CameraMode.CINEMA) {
                             // Cinema mode renders the authentic 3D LUT and color grading directly

@@ -224,6 +224,14 @@ class Camera2Engine(private val context: Context) {
     private val _nightProgress = MutableStateFlow(NightCaptureProgress())
     val nightProgress: StateFlow<NightCaptureProgress> = _nightProgress.asStateFlow()
 
+    // Pro Mode Advanced Image Adjustments
+    val proSaturation = MutableStateFlow(0f)
+    val proContrast = MutableStateFlow(1.0f)
+    val proHighlights = MutableStateFlow(0f)
+    val proShadows = MutableStateFlow(0f)
+    val proSharpness = MutableStateFlow(15f)
+    val proNoiseReduction = MutableStateFlow(12f)
+
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
@@ -980,7 +988,7 @@ class Camera2Engine(private val context: Context) {
 
     fun getTargetAspectRatioForMode(mode: CameraMode = currentMode): Float {
         return when (mode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT -> 4f / 3f // Fixed 3:4 portrait (sensor landscape 4:3)
+            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f // Fixed 3:4 portrait (sensor landscape 4:3)
             else -> 16f / 9f // Fixed 9:16 portrait (sensor landscape 16:9)
         }
     }
@@ -1049,7 +1057,10 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun switchCameraDuringRecording(lens: LensInfo, switchStartNs: Long) {
-        val mgr = cameraManager ?: return
+        val mgr = cameraManager ?: run {
+            isSwitchingLens.set(false)
+            return
+        }
         startBackgroundThread()
         backgroundHandler?.post {
             synchronized(cameraLifecycleLock) {
@@ -1069,7 +1080,10 @@ class Camera2Engine(private val context: Context) {
                         override fun onOpened(camera: CameraDevice) {
                             synchronized(cameraLifecycleLock) {
                                 cameraDevice = camera
-                                val texture = previewSurfaceTexture ?: return
+                                val texture = previewSurfaceTexture ?: run {
+                                    isSwitchingLens.set(false)
+                                    return
+                                }
                                 val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
                                 val cameraW = max(optimalSize.width, optimalSize.height)
                                 val cameraH = min(optimalSize.width, optimalSize.height)
@@ -1078,7 +1092,55 @@ class Camera2Engine(private val context: Context) {
                                     try { previewSurface?.release() } catch (ignored: Throwable) {}
                                     previewSurface = Surface(texture)
                                 }
-                                createCameraCaptureSession()
+
+                                val recSurf = activeRecordingSurface
+                                val isRecording = _isRecordingVideo.value
+                                if (isRecording && recSurf != null && recSurf.isValid) {
+                                    try {
+                                        val template = CameraDevice.TEMPLATE_RECORD
+                                        val recordBuilder = camera.createCaptureRequest(template).apply {
+                                            addTarget(previewSurface!!)
+                                            addTarget(recSurf)
+                                            applyCommonSettings(this)
+                                            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                        }
+                                        previewRequestBuilder = recordBuilder
+
+                                        val sessionCallback = object : CameraCaptureSession.StateCallback() {
+                                            override fun onConfigured(session: CameraCaptureSession) {
+                                                captureSession = session
+                                                try {
+                                                    session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Failed repeating request after lens switch in recording", e)
+                                                }
+                                                activeSessionLens = lens
+                                                isSwitchingLens.set(false)
+                                            }
+
+                                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                                Log.e(TAG, "Failed to configure recording session after lens switch")
+                                                isSwitchingLens.set(false)
+                                                createCameraCaptureSession()
+                                            }
+                                        }
+
+                                        createRecordingCaptureSession(
+                                            camera = camera,
+                                            previewSurface = previewSurface!!,
+                                            recorderSurface = recSurf,
+                                            is10Bit = false,
+                                            callback = sessionCallback
+                                        )
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Error re-attaching recorder surface after lens switch", e)
+                                        createCameraCaptureSession()
+                                        isSwitchingLens.set(false)
+                                    }
+                                } else {
+                                    createCameraCaptureSession()
+                                    isSwitchingLens.set(false)
+                                }
                                 val elapsedMs = (System.nanoTime() - switchStartNs) / 1_000_000L
                                 Log.i(TAG, "[RECORDING_SWITCH] Seamless lens switch to ${lens.lensType} completed in ${elapsedMs}ms")
                             }
@@ -1087,16 +1149,19 @@ class Camera2Engine(private val context: Context) {
                         override fun onDisconnected(camera: CameraDevice) {
                             camera.close()
                             if (cameraDevice == camera) cameraDevice = null
+                            isSwitchingLens.set(false)
                         }
 
                         override fun onError(camera: CameraDevice, error: Int) {
                             Log.e(TAG, "Error opening camera ${lens.cameraId} during recording: $error")
                             camera.close()
                             if (cameraDevice == camera) cameraDevice = null
+                            isSwitchingLens.set(false)
                         }
                     }, backgroundHandler)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to open camera ${lens.cameraId} during recording", e)
+                    isSwitchingLens.set(false)
                 }
             }
         }
@@ -1158,7 +1223,10 @@ class Camera2Engine(private val context: Context) {
             gyroStabilizationEngine.start()
         }
 
-        val needsReconfigure = (wasPhotoOrPortrait != isPhotoOrPortrait) ||
+        val oldRatio = getTargetAspectRatioForMode(currentMode)
+        val newRatio = getTargetAspectRatioForMode(mode)
+        val needsReconfigure = (oldRatio != newRatio) ||
+                (wasPhotoOrPortrait != isPhotoOrPortrait) ||
                 (wasMore && isPhotoOrPortrait) ||
                 (captureSession == null) ||
                 (!_isCameraReady.value)
@@ -2250,6 +2318,18 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
+        // Pro Mode Edge & Noise Reduction tuning
+        if (proSharpness.value > 50f) {
+            builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+        } else if (proSharpness.value < 5f) {
+            builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+        }
+        if (proNoiseReduction.value > 50f) {
+            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+        } else if (proNoiseReduction.value < 5f) {
+            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+        }
+
         // Dedicated Cinema Log Color Profile
         if (currentMode == CameraMode.CINEMA) {
             cinemaEngine.applyToCaptureRequest(builder)
@@ -2402,7 +2482,10 @@ class Camera2Engine(private val context: Context) {
             else -> mainWideLens ?: currentLens
         }
 
-        if (targetLens.cameraId != currentLens.cameraId) {
+        val needsLensSwitch = (targetLens.cameraId != currentLens.cameraId) ||
+                (targetLens.physicalCameraId != currentLens.physicalCameraId)
+
+        if (needsLensSwitch) {
             if (!isSwitchingLens.get()) {
                 val pZoom = if (isPresetTap) {
                     if (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE) 1.0f else targetLens.baseZoomRatio
@@ -4244,6 +4327,11 @@ class Camera2Engine(private val context: Context) {
         val executor = Executor { command -> backgroundHandler?.post(command) ?: command.run() }
         val hasSeparateRecorder = (recorderSurface != null && recorderSurface.isValid && recorderSurface != previewSurface)
 
+        val activeLens = _selectedLens.value
+        val isPhysicalRouting = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                activeLens?.physicalCameraId != null &&
+                activeLens.physicalCameraId != activeLens.cameraId
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && is10Bit && hasSeparateRecorder) {
             try {
                 val chars = getCharacteristics(camera.id)
@@ -4259,8 +4347,15 @@ class Camera2Engine(private val context: Context) {
                 if (targetProfile != null) {
                     val recorderConfig = OutputConfiguration(recorderSurface!!).apply {
                         dynamicRangeProfile = targetProfile
+                        if (isPhysicalRouting) {
+                            setPhysicalCameraId(activeLens!!.physicalCameraId)
+                        }
                     }
-                    val previewConfig = OutputConfiguration(previewSurface)
+                    val previewConfig = OutputConfiguration(previewSurface).apply {
+                        if (isPhysicalRouting) {
+                            setPhysicalCameraId(activeLens!!.physicalCameraId)
+                        }
+                    }
                     val sessionConfig = SessionConfiguration(
                         SessionConfiguration.SESSION_REGULAR,
                         listOf(previewConfig, recorderConfig),
@@ -4276,10 +4371,23 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        val outputConfigs = if (hasSeparateRecorder) {
-            listOf(OutputConfiguration(previewSurface), OutputConfiguration(recorderSurface!!))
+        val previewConfig = OutputConfiguration(previewSurface).apply {
+            if (isPhysicalRouting) {
+                setPhysicalCameraId(activeLens!!.physicalCameraId)
+            }
+        }
+        val recorderConfig = if (hasSeparateRecorder) {
+            OutputConfiguration(recorderSurface!!).apply {
+                if (isPhysicalRouting) {
+                    setPhysicalCameraId(activeLens!!.physicalCameraId)
+                }
+            }
+        } else null
+
+        val outputConfigs = if (recorderConfig != null) {
+            listOf(previewConfig, recorderConfig)
         } else {
-            listOf(OutputConfiguration(previewSurface))
+            listOf(previewConfig)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -4501,6 +4609,7 @@ class Camera2Engine(private val context: Context) {
             val recorderSurface: Surface
             if (isSoftwareCinema) {
                 isSoftwareCinemaRecording = true
+                val cinemaOrientationHint = getVideoOrientationHint()
                 recorderSurface = cinemaSoftwareRecorder.startRecording(
                     destFile = tempFile,
                     width = finalRecordWidth,
@@ -4510,13 +4619,13 @@ class Camera2Engine(private val context: Context) {
                     codec = cinemaCodec,
                     bitDepth = if (is10BitRequested || cinemaCodec == CinemaCodec.PRORES) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
                     isAudioEnabled = isAudioEnabled,
-                    orientationHint = 0
+                    orientationHint = cinemaOrientationHint
                 )
                 preparedVideoGeometry = PreparedVideoGeometry(
                     width = finalRecordWidth,
                     height = finalRecordHeight,
                     fps = targetFps,
-                    orientationHint = 0,
+                    orientationHint = cinemaOrientationHint,
                     encoderRotation = encoderRotation
                 )
             } else {
@@ -4637,33 +4746,39 @@ class Camera2Engine(private val context: Context) {
                 ): Boolean {
                     val maxD = maxOf(targetW, targetH)
                     val minD = minOf(targetW, targetH)
-                    if (isPortraitRecording) {
-                        // Candidate A: upright portrait surface
+                    val orientHint = getVideoOrientationHint()
+
+                    // Always configure MediaRecorder surface with standard landscape dimensions (matching Camera HAL stream configuration map)
+                    // and rely on hardware orientationHint for upright playback
+                    if (configureAndPrepare(
+                            encoder = encoder,
+                            width = maxD,
+                            height = minD,
+                            fps = fps,
+                            rate = rate,
+                            withAudio = withAudio,
+                            is10Bit = is10Bit,
+                            orientationHint = orientHint,
+                            encoderRot = 0
+                        )
+                    ) return true
+
+                    // Fallback: If withAudio failed, retry without audio immediately
+                    if (withAudio) {
                         if (configureAndPrepare(
                                 encoder = encoder,
-                                width = minD,
-                                height = maxD,
+                                width = maxD,
+                                height = minD,
                                 fps = fps,
                                 rate = rate,
-                                withAudio = withAudio,
+                                withAudio = false,
                                 is10Bit = is10Bit,
-                                orientationHint = 0,
-                                encoderRot = encoderRotation
+                                orientationHint = orientHint,
+                                encoderRot = 0
                             )
                         ) return true
                     }
-                    // Candidate B: standard landscape container with hardware orientationHint
-                    return configureAndPrepare(
-                        encoder = encoder,
-                        width = maxD,
-                        height = minD,
-                        fps = fps,
-                        rate = rate,
-                        withAudio = withAudio,
-                        is10Bit = is10Bit,
-                        orientationHint = getVideoOrientationHint(),
-                        encoderRot = 0
-                    )
+                    return false
                 }
 
                 // Tier 1: Validated optimal configuration
@@ -5136,21 +5251,46 @@ class Camera2Engine(private val context: Context) {
         }
 
         val photoFilter = selectedPhotoFilter
+        var wasFilterApplied = false
         val outputBytes = if (photoFilter != PhotoFilter.ORIGINAL && currentMode == CameraMode.PHOTO) {
             try {
                 val matrix = photoFilter.toAndroidColorMatrix()
                 val srcBmp = BitmapFactory.decodeByteArray(finalBytes, 0, finalBytes.size)
                 if (srcBmp != null && matrix != null) {
-                    val filteredBmp = Bitmap.createBitmap(srcBmp.width, srcBmp.height, Bitmap.Config.ARGB_8888)
+                    val origExif = try {
+                        android.media.ExifInterface(java.io.ByteArrayInputStream(finalBytes))
+                    } catch (e: Exception) { null }
+                    val exifOrient = origExif?.getAttributeInt(
+                        android.media.ExifInterface.TAG_ORIENTATION,
+                        android.media.ExifInterface.ORIENTATION_NORMAL
+                    ) ?: android.media.ExifInterface.ORIENTATION_NORMAL
+
+                    val rotMat = Matrix()
+                    when (exifOrient) {
+                        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> rotMat.postRotate(90f)
+                        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> rotMat.postRotate(180f)
+                        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> rotMat.postRotate(270f)
+                    }
+
+                    val orientedBmp = if (!rotMat.isIdentity) {
+                        Bitmap.createBitmap(srcBmp, 0, 0, srcBmp.width, srcBmp.height, rotMat, true).also {
+                            if (it != srcBmp) srcBmp.recycle()
+                        }
+                    } else {
+                        srcBmp
+                    }
+
+                    val filteredBmp = Bitmap.createBitmap(orientedBmp.width, orientedBmp.height, Bitmap.Config.ARGB_8888)
                     val canvas = android.graphics.Canvas(filteredBmp)
                     val paint = android.graphics.Paint().apply {
                         colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
                     }
-                    canvas.drawBitmap(srcBmp, 0f, 0f, paint)
-                    srcBmp.recycle()
+                    canvas.drawBitmap(orientedBmp, 0f, 0f, paint)
+                    orientedBmp.recycle()
                     val stream = java.io.ByteArrayOutputStream()
                     filteredBmp.compress(Bitmap.CompressFormat.JPEG, 98, stream)
                     filteredBmp.recycle()
+                    wasFilterApplied = true
                     stream.toByteArray()
                 } else {
                     srcBmp?.recycle()
@@ -5196,7 +5336,7 @@ class Camera2Engine(private val context: Context) {
                 out.flush()
             } ?: throw IllegalStateException("Unable to open output stream for URI: $uri")
 
-            if (isFrontFacing && saveSelfieAsPreviewed) {
+            if ((isFrontFacing && saveSelfieAsPreviewed) || wasFilterApplied) {
                 try {
                     context.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
                         val outExif = android.media.ExifInterface(pfd.fileDescriptor)
@@ -5207,7 +5347,7 @@ class Camera2Engine(private val context: Context) {
                         outExif.saveAttributes()
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to write EXIF orientation on mirrored selfie", e)
+                    Log.w(TAG, "Failed to write EXIF orientation on processed photo", e)
                 }
             }
 

@@ -144,7 +144,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 } else {
                     mediaMuxer = MediaMuxer(destFile.absolutePath, muxerOutputFormat)
                 }
-                if (!isWebm && orientationHint != 0) {
+                if (!isWebm && orientationHint >= 0) {
                     try {
                         mediaMuxer?.setOrientationHint(orientationHint)
                     } catch (e: Exception) {

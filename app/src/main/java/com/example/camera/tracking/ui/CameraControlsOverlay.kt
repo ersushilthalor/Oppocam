@@ -117,7 +117,8 @@ private fun TopFixedControlsBar(
                     colors = listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)
                 )
             )
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .statusBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         // Upper row: Back button on left, clean icon buttons on right
         Row(
