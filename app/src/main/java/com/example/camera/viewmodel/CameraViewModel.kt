@@ -49,7 +49,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = engine.hybridStabilizationConfig
 
-    private val _selectedAspectRatio = MutableStateFlow(CameraAspectRatio.RATIO_9_16)
+    private val _selectedAspectRatio = MutableStateFlow(
+        if (preferences.cameraMode == CameraMode.PHOTO || preferences.cameraMode == CameraMode.PORTRAIT || preferences.cameraMode == CameraMode.NIGHT) {
+            CameraAspectRatio.RATIO_4_3
+        } else {
+            CameraAspectRatio.RATIO_9_16
+        }
+    )
     val selectedAspectRatio: StateFlow<CameraAspectRatio> = _selectedAspectRatio.asStateFlow()
 
     private val _tapFocusConfig = MutableStateFlow(preferences.getModeTapFocusConfig(preferences.cameraMode))
@@ -814,9 +820,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _cameraMode.value = mode
         preferences.cameraMode = mode
 
-        // 3. Immediately synchronize aspect ratio (native 9:16 portrait frame is maintained for smooth transitions)
-        _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
-        engine.setPreviewAspectRatio(16f / 9f)
+        // 3. Immediately synchronize aspect ratio:
+        // Photo, Portrait, Night, and Pro modes strictly keep 3:4 aspect ratio.
+        // Video and Cinema modes keep 9:16 aspect ratio.
+        if (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT || mode == CameraMode.NIGHT) {
+            _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
+            engine.setPreviewAspectRatio(4f / 3f)
+        } else {
+            _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
+            engine.setPreviewAspectRatio(16f / 9f)
+        }
 
         if (mode != CameraMode.VIDEO) {
             _isVideoAdjustmentsOpen.value = false

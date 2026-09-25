@@ -121,12 +121,18 @@ fun Viewfinder(
         val containerWidth = maxWidth
         val containerHeight = maxHeight
 
-        // Native viewfinder uses a stable 9:16 portrait frame across all modes
-        val targetRatio = 16f / 9f
+        // Native viewfinder uses 3:4 portrait frame for Photo, Portrait, Pro, and Night modes,
+        // and 9:16 portrait frame for Video and Cinema modes.
+        val isFourThree = when (cameraMode) {
+            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> true
+            CameraMode.VIDEO, CameraMode.CINEMA -> false
+            else -> if (aspectRatio > 0f) aspectRatio < 1.5f else true
+        }
+        val targetRatio = if (isFourThree || isProModeActive) 4f / 3f else 16f / 9f
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
 
-        // Viewfinder spans dimensions dictated by the 9:16 portrait frame
+        // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame
         val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
             containerWidth to (containerWidth * targetRatio)
         } else {
@@ -137,11 +143,19 @@ fun Viewfinder(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black),
-            contentAlignment = if (isProModeActive) Alignment.TopCenter else Alignment.Center
+            contentAlignment = if (isFourThree || isProModeActive) Alignment.TopCenter else Alignment.Center
         ) {
             Box(
                 modifier = Modifier
-                    .then(if (isProModeActive) Modifier.padding(top = 52.dp) else Modifier)
+                    .then(
+                        if (isFourThree || isProModeActive) {
+                            Modifier
+                                .statusBarsPadding()
+                                .padding(top = 52.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
                     .size(width = targetWidth, height = targetHeight)
                     .clipToBounds()
                     .pointerInput(minZoom, maxZoom) {
@@ -593,7 +607,7 @@ private fun updateTextureViewTransform(
         val bufPortraitH = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
         bufPortraitH / bufPortraitW
     } else {
-        4f / 3f // Native camera sensor preview is 3:4 portrait
+        targetRatio
     }
 
     val viewAspect = viewH / viewW
