@@ -36,6 +36,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -126,9 +127,13 @@ fun Viewfinder(
         // - Night mode: fixed 3:4 (portrait 3:4 -> height / width = 4 / 3)
         // - Video & Cinema modes: fixed 9:16 (portrait 9:16 -> height / width = 16 / 9)
         val targetRatio = when (cameraMode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f
+            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> {
+                if (aspectRatio > 1.5f) 16f / 9f else 4f / 3f
+            }
             else -> 16f / 9f
         }
+        val currentTargetRatio by rememberUpdatedState(targetRatio)
+        val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
 
         // Viewfinder spans dimensions dictated strictly by the mode's native aspect ratio
         val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
@@ -147,6 +152,7 @@ fun Viewfinder(
                 modifier = Modifier
                     .then(if (isProModeActive) Modifier.padding(top = 52.dp) else Modifier)
                     .size(width = targetWidth, height = targetHeight)
+                    .clipToBounds()
                     .pointerInput(minZoom, maxZoom) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             var changed = false
@@ -191,12 +197,21 @@ fun Viewfinder(
                         var lastLumaSampleTime = 0L
                         var lumaSampleBitmap: Bitmap? = null
                         TextureView(context).apply {
+                            addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+                                val newW = right - left
+                                val newH = bottom - top
+                                if (newW > 0 && newH > 0) {
+                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio)
+                                }
+                            }
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio)
                                     onSurfaceTextureAvailable(st)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -240,40 +255,15 @@ fun Viewfinder(
                         }
                     },
                     update = { textureView ->
-                        // Configure uniform transform if buffer aspect ratio differs from view aspect ratio
-                        if (textureView.width > 0 && textureView.height > 0) {
-                            val matrix = android.graphics.Matrix()
-                            val buf = previewBufferSize
-                            if (buf != null && buf.width > 0 && buf.height > 0) {
-                                // In portrait mode, camera sensor is oriented landscape (90/270 degrees).
-                                // Portrait buffer width is min(width, height), portrait buffer height is max(width, height).
-                                val bufPortraitW = minOf(buf.width, buf.height).toFloat()
-                                val bufPortraitH = maxOf(buf.width, buf.height).toFloat()
-                                val bufAspect = bufPortraitH / bufPortraitW
-
-                                val viewW = textureView.width.toFloat()
-                                val viewH = textureView.height.toFloat()
-                                val viewAspect = viewH / viewW
-
-                                val centerX = viewW / 2f
-                                val centerY = viewH / 2f
-
-                                // Prevent non-uniform stretching: center-crop scale the mismatched axis to guarantee exact 1:1 pixel aspect ratio
-                                if (kotlin.math.abs(bufAspect - viewAspect) > 0.01f) {
-                                    if (viewAspect > bufAspect) {
-                                        // View is taller than buffer: scale horizontally to preserve aspect ratio
-                                        val scaleX = viewAspect / bufAspect
-                                        val scaleY = 1.0f
-                                        matrix.setScale(scaleX, scaleY, centerX, centerY)
-                                    } else {
-                                        // View is wider than buffer: scale vertically to preserve aspect ratio
-                                        val scaleX = 1.0f
-                                        val scaleY = bufAspect / viewAspect
-                                        matrix.setScale(scaleX, scaleY, centerX, centerY)
-                                    }
-                                }
+                        // Dynamically synchronize TextureView transformation with current dimensions and buffer size
+                        val viewW = textureView.width.toFloat()
+                        val viewH = textureView.height.toFloat()
+                        if (viewW > 0f && viewH > 0f) {
+                            val currentAspect = viewH / viewW
+                            // Prevent applying stale, distorted transformations before the layout pass has adjusted dimensions
+                            if (kotlin.math.abs(currentAspect - targetRatio) <= 0.05f) {
+                                updateTextureViewTransform(textureView, previewBufferSize, targetRatio)
                             }
-                            textureView.setTransform(matrix)
                         }
 
                         val effectiveLut = activeLut ?: cinemaConfig?.selectedLut
@@ -593,6 +583,51 @@ fun CameraGridOverlay(
             GridType.NONE -> {}
         }
     }
+}
+
+/**
+ * Synchronizes the TextureView transformation matrix with the active camera buffer dimensions
+ * and the Viewfinder layout aspect ratio.
+ * Ensures uniform scaling (center-crop without distortion or non-uniform stretching)
+ * and resets to identity when buffer aspect ratio matches the view aspect ratio.
+ */
+private fun updateTextureViewTransform(
+    textureView: TextureView,
+    previewBufferSize: CameraSize?,
+    targetRatio: Float
+) {
+    val viewW = textureView.width.toFloat()
+    val viewH = textureView.height.toFloat()
+    if (viewW <= 0f || viewH <= 0f) return
+
+    val matrix = Matrix()
+    val bufAspect = if (previewBufferSize != null && previewBufferSize.width > 0 && previewBufferSize.height > 0) {
+        val bufPortraitW = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+        val bufPortraitH = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+        bufPortraitH / bufPortraitW
+    } else {
+        targetRatio
+    }
+
+    val viewAspect = viewH / viewW
+    val centerX = viewW / 2f
+    val centerY = viewH / 2f
+
+    // When aspect ratios match within 0.01 tolerance, identity transform maintains exact 1:1 framing without cropping
+    if (kotlin.math.abs(bufAspect - viewAspect) > 0.01f) {
+        if (viewAspect > bufAspect) {
+            // View is taller than buffer: scale horizontally to preserve aspect ratio without vertical stretching
+            val scaleX = viewAspect / bufAspect
+            val scaleY = 1.0f
+            matrix.setScale(scaleX, scaleY, centerX, centerY)
+        } else {
+            // View is wider than buffer: scale vertically to preserve aspect ratio without vertical squeezing
+            val scaleX = 1.0f
+            val scaleY = bufAspect / viewAspect
+            matrix.setScale(scaleX, scaleY, centerX, centerY)
+        }
+    }
+    textureView.setTransform(matrix)
 }
 
 

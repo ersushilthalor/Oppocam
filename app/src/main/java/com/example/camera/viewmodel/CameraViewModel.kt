@@ -701,8 +701,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // Restore initial mode aspect ratio:
         // - Photo mode: fixed 3:4
         // - Portrait mode: fixed 3:4
+        // - Night mode: fixed 3:4
         // - All other modes (Video, Cinema, etc.): fixed 9:16
-        if (initialMode == CameraMode.PHOTO || initialMode == CameraMode.PORTRAIT) {
+        if (initialMode == CameraMode.PHOTO || initialMode == CameraMode.PORTRAIT || initialMode == CameraMode.NIGHT) {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
             engine.setPreviewAspectRatio(4f / 3f)
         } else {
@@ -800,7 +801,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _cameraMode.value = mode
         preferences.cameraMode = mode
 
-        // 3. Restore mode-specific lens if available
+        // 3. Immediately synchronize aspect ratio
+        if (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT || mode == CameraMode.NIGHT) {
+            _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
+            engine.setPreviewAspectRatio(4f / 3f)
+        } else {
+            _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
+            engine.setPreviewAspectRatio(16f / 9f)
+        }
+
+        if (mode != CameraMode.VIDEO) {
+            _isVideoAdjustmentsOpen.value = false
+        }
+
+        // 4. Switch engine mode early to synchronize preview buffer and session
+        if (mode == CameraMode.AI_SUBJECT_TRACKING) {
+            engine.closeCamera()
+        } else {
+            if (previousMode == CameraMode.AI_SUBJECT_TRACKING) {
+                engine.startCamera()
+            }
+            engine.setMode(mode)
+        }
+
+        // 5. Restore mode-specific lens if available
         val modeLens = preferences.getModeLens(mode, engine.availableLenses.value)
         if (modeLens != null && modeLens.id != engine.selectedLens.value?.id) {
             engine.selectLens(modeLens)
@@ -811,7 +835,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             engine.setZoom(modeZoom, isPresetTap = false)
         }
 
-        // 4. Restore mode-specific controls
+        // 6. Restore mode-specific controls
         val mFlash = preferences.getModeFlashMode(mode)
         _flashMode.value = mFlash
         engine.flashMode = mFlash
@@ -920,31 +944,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.updateHybridStabilizationConfig(mHybridStab)
 
         engine.updatePreviewSettings()
-
-        // Apply strictly required aspect ratios:
-        // - Photo mode: fixed 3:4
-        // - Portrait mode: fixed 3:4
-        // - All other modes (Video, Cinema, etc.): fixed 9:16
-        if (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT) {
-            _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
-            engine.setPreviewAspectRatio(4f / 3f)
-        } else {
-            _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
-            engine.setPreviewAspectRatio(16f / 9f)
-        }
-
-        if (mode != CameraMode.VIDEO) {
-            _isVideoAdjustmentsOpen.value = false
-        }
-
-        if (mode == CameraMode.AI_SUBJECT_TRACKING) {
-            engine.closeCamera()
-        } else {
-            if (previousMode == CameraMode.AI_SUBJECT_TRACKING) {
-                engine.startCamera()
-            }
-            engine.setMode(mode)
-        }
 
         _isCinemaSettingsOpen.value = false
         if (mode == CameraMode.MORE) {

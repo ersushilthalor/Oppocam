@@ -254,6 +254,8 @@ class Camera2Engine(private val context: Context) {
     private var isConfiguringSession = false
     @Volatile
     private var restartPending = false
+    @Volatile
+    private var pendingReconfigureSession = false
     private var zoomDebounceJob: Job? = null
     private val isStartingRecording = java.util.concurrent.atomic.AtomicBoolean(false)
     private val isStoppingRecording = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -665,6 +667,40 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    fun getOptimalPreviewSize(cameraId: String? = null, targetRatio: Float = getTargetAspectRatioForMode(currentMode)): Size {
+        val id = cameraId ?: _selectedLens.value?.cameraId ?: return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+        val chars = getCharacteristics(id) ?: return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+        val previewSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
+        if (previewSizes.isEmpty()) {
+            return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+        }
+        val maxDim = viewfinderResolution.maxDimension
+        val matchingRatioSizes = previewSizes.filter {
+            val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
+            kotlin.math.abs(r - targetRatio) < 0.08f
+        }
+        return matchingRatioSizes
+            .filter { max(it.width, it.height) <= maxDim }
+            .maxByOrNull { it.width * it.height }
+            ?: matchingRatioSizes.minByOrNull { max(it.width, it.height) }
+            ?: previewSizes.minByOrNull {
+                val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
+                kotlin.math.abs(r - targetRatio)
+            }
+            ?: Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+    }
+
+    private fun onSessionConfigurationFinished() {
+        synchronized(cameraLifecycleLock) {
+            isConfiguringSession = false
+            if (pendingReconfigureSession) {
+                pendingReconfigureSession = false
+                backgroundHandler?.post { reconfigureSession() }
+            }
+        }
+    }
+
     private fun updatePreviewAspectRatio() {
         _previewAspectRatio.value = getTargetAspectRatioForMode(currentMode)
     }
@@ -826,7 +862,7 @@ class Camera2Engine(private val context: Context) {
                                 Executors.newSingleThreadExecutor(),
                                 object : CameraCaptureSession.StateCallback() {
                                     override fun onConfigured(session: CameraCaptureSession) {
-                                        isConfiguringSession = false
+                                        onSessionConfigurationFinished()
                                         if (cameraDevice == null) {
                                             isSwitchingLens.set(false)
                                             return
@@ -852,7 +888,7 @@ class Camera2Engine(private val context: Context) {
 
                                     override fun onConfigureFailed(session: CameraCaptureSession) {
                                         Log.w(TAG, "Physical camera output session rejected by HAL for $physId, falling back to standard session")
-                                        isConfiguringSession = false
+                                        onSessionConfigurationFinished()
                                         createCameraCaptureSession()
                                     }
                                 }
@@ -1027,7 +1063,7 @@ class Camera2Engine(private val context: Context) {
      * Switch between Photo, Portrait, Video & Cinema modes smoothly without closing hardware device
      */
     fun setMode(mode: CameraMode) {
-        if (currentMode == mode) return
+        if (currentMode == mode && _previewBufferSize.value != null) return
         val previousMode = currentMode
         val oldRatio = getTargetAspectRatioForMode(previousMode)
         val newRatio = getTargetAspectRatioForMode(mode)
@@ -1038,7 +1074,16 @@ class Camera2Engine(private val context: Context) {
             stopVideoRecording()
         }
         currentMode = mode
-        updatePreviewAspectRatio()
+
+        // Immediately synchronize aspect ratio and optimal buffer dimensions on mode switch
+        _previewAspectRatio.value = newRatio
+        val optimalSize = getOptimalPreviewSize(_selectedLens.value?.cameraId, newRatio)
+        _previewBufferSize.value = optimalSize
+        previewSurfaceTexture?.let { texture ->
+            val cameraW = max(optimalSize.width, optimalSize.height)
+            val cameraH = min(optimalSize.width, optimalSize.height)
+            texture.setDefaultBufferSize(cameraW, cameraH)
+        }
 
         val isVideoMode = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA)
         if (!isVideoMode || !_hybridStabilizationConfig.value.isUltraStabilizationEnabled) {
@@ -1077,7 +1122,8 @@ class Camera2Engine(private val context: Context) {
         backgroundHandler?.post {
             synchronized(cameraLifecycleLock) {
                 if (isConfiguringSession || isStartingCamera) {
-                    Log.d(TAG, "reconfigureSession already in progress, skipping")
+                    Log.d(TAG, "reconfigureSession already in progress, queuing pending reconfigure for $currentMode")
+                    pendingReconfigureSession = true
                     return@synchronized
                 }
                 isConfiguringSession = true
@@ -1094,30 +1140,9 @@ class Camera2Engine(private val context: Context) {
                         isConfiguringSession = false
                         return@synchronized
                     }
-                    val chars = getCharacteristics(lens.cameraId) ?: run {
-                        isConfiguringSession = false
-                        return@synchronized
-                    }
-                    val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: run {
-                        isConfiguringSession = false
-                        return@synchronized
-                    }
-                    val previewSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
 
                     val targetRatio = getTargetAspectRatioForMode(currentMode)
-                    val maxDim = viewfinderResolution.maxDimension
-                    val matchingRatioSizes = previewSizes.filter {
-                        val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
-                        kotlin.math.abs(r - targetRatio) < 0.08f
-                    }
-
-                    val optimalPreviewSize = matchingRatioSizes
-                        .filter { max(it.width, it.height) <= maxDim }
-                        .maxByOrNull { it.width * it.height }
-                        ?: matchingRatioSizes.minByOrNull { max(it.width, it.height) }
-                        ?: previewSizes.firstOrNull { it.width <= 1920 && it.height <= 1080 }
-                        ?: previewSizes.firstOrNull()
-                        ?: Size(1920, 1080)
+                    val optimalPreviewSize = getOptimalPreviewSize(lens.cameraId, targetRatio)
 
                     _previewAspectRatio.value = targetRatio
                     _previewBufferSize.value = optimalPreviewSize
@@ -1136,15 +1161,11 @@ class Camera2Engine(private val context: Context) {
                     captureSession = null
                     _isCameraReady.value = false
 
-                    // Direct native Surface connection to TextureView
-                    var curSurf = previewSurface
-                    if (curSurf == null || !curSurf.isValid) {
-                        try {
-                            curSurf?.release()
-                        } catch (ignored: Exception) {}
-                        curSurf = Surface(texture)
-                        previewSurface = curSurf
-                    }
+                    // Direct native Surface connection to TextureView with updated buffer size
+                    try {
+                        previewSurface?.release()
+                    } catch (ignored: Throwable) {}
+                    previewSurface = Surface(texture)
 
                     setupImageReaders(lens.cameraId)
                     createCameraCaptureSession()
@@ -1201,7 +1222,9 @@ class Camera2Engine(private val context: Context) {
             viewfinderHeight = height
         }
         if (texture != null) {
-            val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
+            val targetRatio = getTargetAspectRatioForMode(currentMode)
+            val optimalSize = _previewBufferSize.value ?: getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
+            _previewBufferSize.value = optimalSize
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
             texture.setDefaultBufferSize(cameraW, cameraH)
@@ -1274,21 +1297,7 @@ class Camera2Engine(private val context: Context) {
 
             // Pick optimal preview size matching selected aspect ratio and viewfinderResolution level
             val targetRatio = getTargetAspectRatioForMode(currentMode)
-            val previewSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
-
-            val maxDim = viewfinderResolution.maxDimension
-            val matchingRatioSizes = previewSizes.filter {
-                val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
-                kotlin.math.abs(r - targetRatio) < 0.08f
-            }
-
-            val optimalPreviewSize = matchingRatioSizes
-                .filter { max(it.width, it.height) <= maxDim }
-                .maxByOrNull { it.width * it.height }
-                ?: matchingRatioSizes.minByOrNull { max(it.width, it.height) }
-                ?: previewSizes.firstOrNull { it.width <= 1920 && it.height <= 1080 }
-                ?: previewSizes.firstOrNull()
-                ?: Size(1920, 1080)
+            val optimalPreviewSize = getOptimalPreviewSize(lens.cameraId, targetRatio)
 
             _previewAspectRatio.value = targetRatio
             val sensorOrient = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
@@ -1299,14 +1308,12 @@ class Camera2Engine(private val context: Context) {
             val targetH = if (viewfinderHeight > 0) viewfinderHeight else if (isPhotoOrPortrait) 1440 else 1920
             val cameraW = max(optimalPreviewSize.width, optimalPreviewSize.height)
             val cameraH = min(optimalPreviewSize.width, optimalPreviewSize.height)
-
-            if (previewSurface == null || !previewSurface!!.isValid) {
-                try {
-                    previewSurface?.release()
-                } catch (ignored: Throwable) {}
-                previewSurface = Surface(texture)
-            }
             texture.setDefaultBufferSize(cameraW, cameraH)
+
+            try {
+                previewSurface?.release()
+            } catch (ignored: Throwable) {}
+            previewSurface = Surface(texture)
 
             // Setup ImageReader for Photo mode
             setupImageReaders(lens.cameraId)
@@ -1620,7 +1627,7 @@ class Camera2Engine(private val context: Context) {
                     is10Bit = is10BitMode,
                     callback = object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
-                            isConfiguringSession = false
+                            onSessionConfigurationFinished()
                             if (cameraDevice == null) return
                             captureSession = session
                             try {
@@ -1640,7 +1647,7 @@ class Camera2Engine(private val context: Context) {
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
-                            isConfiguringSession = false
+                            onSessionConfigurationFinished()
                             isSwitchingLens.set(false)
                             Log.e(TAG, "Failed to configure video recording session after lens switch")
                             _isCameraReady.value = false
@@ -1696,7 +1703,7 @@ class Camera2Engine(private val context: Context) {
                     java.util.concurrent.Executors.newSingleThreadExecutor(),
                     object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
-                            isConfiguringSession = false
+                            onSessionConfigurationFinished()
                             if (cameraDevice == null) return
                             captureSession = session
                             try {
@@ -1716,7 +1723,7 @@ class Camera2Engine(private val context: Context) {
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
-                            isConfiguringSession = false
+                            onSessionConfigurationFinished()
                             isSwitchingLens.set(false)
                             Log.e(TAG, "Camera capture session configuration failed, scheduling recovery")
                             _isCameraReady.value = false
@@ -1758,7 +1765,7 @@ class Camera2Engine(private val context: Context) {
                 surfaces,
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
-                        isConfiguringSession = false
+                        onSessionConfigurationFinished()
                         if (cameraDevice == null) return
                         captureSession = session
                         try {
@@ -1778,7 +1785,7 @@ class Camera2Engine(private val context: Context) {
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        isConfiguringSession = false
+                        onSessionConfigurationFinished()
                         isSwitchingLens.set(false)
                         Log.e(TAG, "Camera capture session configuration failed, scheduling recovery")
                         _isCameraReady.value = false
@@ -1790,7 +1797,7 @@ class Camera2Engine(private val context: Context) {
                 backgroundHandler
             )
         } catch (e: Exception) {
-            isConfiguringSession = false
+            onSessionConfigurationFinished()
             Log.e(TAG, "Failed to create camera capture session", e)
         }
     }
