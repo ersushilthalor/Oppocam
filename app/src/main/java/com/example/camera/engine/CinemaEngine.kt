@@ -308,7 +308,6 @@ class CinemaEngine(private val context: Context) {
             } else if (supportsGammaValue) {
                 // Adaptive logarithmic gamma fallback for HALs without custom curve support
                 val baseGamma = when (config.colorProfile) {
-                    CinemaColorProfile.PROCESSED_JPEG -> 2.25f
                     CinemaColorProfile.NATIVE -> 2.2f
                     CinemaColorProfile.FLAT_LOG -> 1.55f
                     CinemaColorProfile.HLG -> 1.8f
@@ -332,22 +331,6 @@ class CinemaEngine(private val context: Context) {
                     // Maintain Camera2 ISP in High Quality Color Correction mode with factory-calibrated AWB gains.
                     // This strictly prevents channel imbalance and false color / red / pink tint artifacts in bright highlights!
                     builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
-                } else if (config.colorProfile == CinemaColorProfile.PROCESSED_JPEG) {
-                    // Smartphone JPEG photo rendering: natural saturation with accurate calibrated white balance
-                    val transform = generateColorSpaceTransform(
-                        config.colorSpace,
-                        config.colorProfile,
-                        config.saturation,
-                        lutForIsp,
-                        config.washedOut
-                    )
-                    if (supportsTransformMatrix) {
-                        builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-                        builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, transform)
-                        builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, RggbChannelVector(1.02f, 1.00f, 1.00f, 1.03f))
-                    } else {
-                        builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
-                    }
                 } else if (config.colorProfile == CinemaColorProfile.NATIVE) {
                     // Ultra-natural real-life colors: neutral white gains with zero yellow/warm bias
                     val transform = nativeNaturalEngine.getColorSpaceTransform(config.colorSpace)

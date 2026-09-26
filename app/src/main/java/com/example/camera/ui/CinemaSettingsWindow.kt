@@ -415,12 +415,12 @@ fun CinemaSettingsWindow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 listOf(
-                    CinemaColorProfile.PROCESSED_JPEG to "RAW Photo JPEG",
+                    CinemaColorProfile.NATIVE to "Natural",
                     CinemaColorProfile.FLAT_LOG to "Flat Log",
                     CinemaColorProfile.REC_2020 to "Rec.2020 HDR",
                     CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
                     CinemaColorProfile.HLG to "HLG Broadcast",
-                    CinemaColorProfile.NATIVE to "Natural"
+                    CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log"
                 ).forEach { (profile, label) ->
                     val isSelected = config.colorProfile == profile
                     CinemaPillChip(

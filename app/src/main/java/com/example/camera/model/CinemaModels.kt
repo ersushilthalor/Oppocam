@@ -24,7 +24,6 @@ enum class CinemaColorProfile(
     val description: String,
     val gammaName: String
 ) {
-    PROCESSED_JPEG("Processed Photo", "Smartphone JPEG photo rendering from RAW sensor: deep controlled blacks, punchy midtones, rich shadows & highlight roll-off", "Processed JPEG"),
     NATIVE("Native", "iPhone-style natural video processing with true-to-life colors, balanced sky/ground, and intelligent shadow recovery", "Native"),
     FLAT_LOG("Flat", "Logarithmic dynamic range curve for color grading", "Flat Log"),
     REC_2020("Rec.2020", "ITU-R BT.2020 wide color gamut transfer curve", "BT.2020"),
@@ -64,9 +63,9 @@ data class CinemaConfig(
     val selectedLut: CinematicLut = CinematicLut.REC_709, // Default Rec.709 as requested
     val customLutPath: String? = null,
     val customLutName: String? = null,
-    val colorProfile: CinemaColorProfile = CinemaColorProfile.PROCESSED_JPEG,
+    val colorProfile: CinemaColorProfile = CinemaColorProfile.NATIVE,
     val colorSpace: CinemaColorSpace = CinemaColorSpace.REC_709,
-    val isRawSensorLogPipeline: Boolean = true, // RAW sensor stream source with full ISP processing into smartphone JPEG photo rendering
+    val isRawSensorLogPipeline: Boolean = false, // Clean cinematic video pipeline without raw JPEG sensor simulation
     val isFocusPeakingEnabled: Boolean = false,
     val isWaveformEnabled: Boolean = false,
     val zebraThreshold: ZebraThreshold = ZebraThreshold.IRE_70,
@@ -89,7 +88,7 @@ data class CinemaConfig(
     val isLutPreviewEnabled: Boolean = true, // Default true: LUT preview is always active
     val lutIntensity: Float = 1.0f // 0.0f (0% neutral baseline) to 1.0f (100% full LUT grade)
 ) {
-    val isLogMode: Boolean get() = (colorProfile != CinemaColorProfile.NATIVE && colorProfile != CinemaColorProfile.PROCESSED_JPEG) || logBitDepth != LogBitDepth.OFF
+    val isLogMode: Boolean get() = colorProfile != CinemaColorProfile.NATIVE || logBitDepth != LogBitDepth.OFF
     val activeLut: CinematicLut get() = selectedLut
     val shouldBakeLut: Boolean get() = selectedLut != CinematicLut.NONE && isBakeLutToOutput
     val isLutPreviewOnly: Boolean get() = false

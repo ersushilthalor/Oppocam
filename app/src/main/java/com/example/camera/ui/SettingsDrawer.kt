@@ -841,7 +841,7 @@ private fun CinemaSettingsPage(
                     CinemaColorProfile.NATIVE to "Native",
                     CinemaColorProfile.FLAT_LOG to "Flat Log",
                     CinemaColorProfile.REC_2020 to "Rec.2020",
-                    CinemaColorProfile.PROCESSED_JPEG to "Standard"
+                    CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2"
                 ),
                 selectedOption = cinemaConfig.colorProfile,
                 onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(colorProfile = it)) }
