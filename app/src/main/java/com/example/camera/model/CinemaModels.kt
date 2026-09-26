@@ -29,7 +29,8 @@ enum class CinemaColorProfile(
     REC_2020("Rec.2020", "ITU-R BT.2020 wide color gamut transfer curve", "BT.2020"),
     HLG("HLG", "ITU-R BT.2100 Hybrid Log-Gamma HDR profile", "HLG"),
     APPLE_LOG_2("Apple Log 2", "Apple Log 2 wide-gamut log transfer curve with extended highlight latitude and parabolic shadow retention", "Apple Log 2"),
-    SAMSUNG_APV_LOG("Samsung APV Log", "Samsung Advanced Professional Video (APV) Log profile with high-efficiency mastering curve, wide dynamic range, and clean shadow-to-highlight roll-off", "Samsung APV Log")
+    SAMSUNG_APV_LOG("Samsung APV Log", "Samsung Advanced Professional Video (APV) Log profile with high-efficiency mastering curve, wide dynamic range, and clean shadow-to-highlight roll-off", "Samsung APV Log"),
+    PROCESSED_JPEG("Processed JPEG", "Smartphone JPEG photo technical transform with natural contrast and saturation", "Processed JPEG")
 }
 
 enum class CinemaColorSpace(val label: String) {

@@ -83,10 +83,20 @@ data class HdrPlusRawFrame(
     val iso: Int,
     val timestampNs: Long,
     val role: HdrPlusRole,
-    val evDelta: Float
+    val evDelta: Float,
+    val blackLevelPattern: FloatArray = floatArrayOf(
+        blackLevel.toFloat(),
+        blackLevel.toFloat(),
+        blackLevel.toFloat(),
+        blackLevel.toFloat()
+    ),
+    val colorCorrectionMatrix: FloatArray? = null,
+    val postRawSensitivityBoost: Int = 100
 ) {
     val exposureProduct: Double
-        get() = iso.coerceAtLeast(1).toDouble() * exposureTimeNs.coerceAtLeast(1000L).toDouble()
+        get() = iso.coerceAtLeast(1).toDouble() *
+                exposureTimeNs.coerceAtLeast(1000L).toDouble() *
+                (postRawSensitivityBoost.coerceAtLeast(100).toDouble() / 100.0)
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -106,16 +116,20 @@ data class HdrPlusRawFrame(
  * Demosaiced linear RGB float representation of a RAW frame.
  */
 data class HdrPlusDevelopedImage(
-    val rgbLinear: FloatArray, // Interleaved R, G, B floats in [0.0, 1.0]
+    val rgbLinear: FloatArray, // Interleaved R, G, B floats in linear sRGB radiance space
     val width: Int,
     val height: Int,
     val exposureTimeNs: Long,
     val iso: Int,
     val role: HdrPlusRole,
-    val evDelta: Float
+    val evDelta: Float,
+    val postRawSensitivityBoost: Int = 100,
+    val baseExposureGain: Float = 1.0f
 ) {
     val exposureProduct: Double
-        get() = iso.coerceAtLeast(1).toDouble() * exposureTimeNs.coerceAtLeast(1000L).toDouble()
+        get() = iso.coerceAtLeast(1).toDouble() *
+                exposureTimeNs.coerceAtLeast(1000L).toDouble() *
+                (postRawSensitivityBoost.coerceAtLeast(100).toDouble() / 100.0)
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -138,5 +152,11 @@ data class HdrPlusDevelopedImage(
 data class HdrPlusAlignmentResult(
     val shiftX: Int = 0,
     val shiftY: Int = 0,
-    val confidence: Float = 1.0f
+    val confidence: Float = 1.0f,
+    val subpixelShiftX: Float = shiftX.toFloat(),
+    val subpixelShiftY: Float = shiftY.toFloat(),
+    val tileShiftsX: FloatArray? = null,
+    val tileShiftsY: FloatArray? = null,
+    val gridCols: Int = 1,
+    val gridRows: Int = 1
 )

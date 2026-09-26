@@ -252,4 +252,79 @@ class HdrPlusEngineTest {
         )
         assertTrue(jpegBytes.isNotEmpty())
     }
+
+    @Test
+    fun testRawExtractionRowStrideAndYellowColorAccuracy() = runBlocking {
+        val developer = HdrPlusRawDeveloper()
+        val width = 32
+        val height = 32
+        val pixelStride = 2
+        val rowStride = width * pixelStride + 12 // padded row stride (76 bytes = 38 shorts)
+        val strideShorts = rowStride shr 1
+        val rawShorts = ShortArray(strideShorts * height)
+
+        // Simulate RGGB Bayer sensor viewing a yellow notebook (high R, high G, low B)
+        val blackLevel = 64f
+        val whiteLevel = 1023
+        for (y in 0 until height) {
+            val evenY = (y and 1) == 0
+            for (x in 0 until width) {
+                val evenX = (x and 1) == 0
+                val sample = when {
+                    evenY && evenX -> 820   // R (high)
+                    evenY && !evenX -> 800  // Gr (high)
+                    !evenY && evenX -> 800  // Gb (high)
+                    else -> 150             // B (low)
+                }
+                rawShorts[y * strideShorts + x] = sample.toShort()
+            }
+        }
+
+        val rawFrame = HdrPlusRawFrame(
+            rawData = rawShorts,
+            width = width,
+            height = height,
+            rowStride = rowStride,
+            pixelStride = pixelStride,
+            blackLevel = blackLevel.toInt(),
+            blackLevelPattern = floatArrayOf(blackLevel, blackLevel, blackLevel, blackLevel),
+            whiteLevel = whiteLevel,
+            cfaPattern = 0, // RGGB
+            rGain = 1.0f,
+            gGain = 1.0f,
+            bGain = 1.0f,
+            colorCorrectionMatrix = floatArrayOf(
+                1.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 1.0f
+            ),
+            exposureTimeNs = 16_666_666L,
+            iso = 100,
+            timestampNs = 1_000_000L,
+            role = HdrPlusRole.BASE_PRIMARY,
+            evDelta = 0f
+        )
+
+        val developed = developer.developRawToLinearRgb(
+            frame = rawFrame
+        )
+        val merger = HdrPlusMerger()
+        val jpegBytes = merger.mergeFrames(
+            baseFrame = developed,
+            secondaryFrames = emptyList(),
+            jpegQuality = 95
+        )
+        val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+        assertNotNull(bitmap)
+        val centerPixel = bitmap.getPixel(width / 2, height / 2)
+        val r = android.graphics.Color.red(centerPixel)
+        val g = android.graphics.Color.green(centerPixel)
+        val b = android.graphics.Color.blue(centerPixel)
+        bitmap.recycle()
+
+        assertTrue(
+            "Expected yellow surface to remain yellow (R > B + 60 and G > B + 60), got R=$r, G=$g, B=$b",
+            r > b + 60 && g > b + 60
+        )
+    }
 }

@@ -262,6 +262,7 @@ class Camera2Engine(private val context: Context) {
 
     // Camera Session Concurrency & State Guard
     private val cameraLifecycleLock = Any()
+    private val previewRequestLock = Any()
     @Volatile
     private var isStartingCamera = false
     @Volatile
@@ -276,6 +277,16 @@ class Camera2Engine(private val context: Context) {
     private val isStartingRecording = java.util.concurrent.atomic.AtomicBoolean(false)
     private val isStoppingRecording = java.util.concurrent.atomic.AtomicBoolean(false)
     private val isSwitchingLens = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val lensSwitchGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val sessionConfigGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile
+    private var activeSessionPhysicalCameraId: String? = null
+    @Volatile
+    private var pendingZoomWhileSwitching: Float? = null
+    @Volatile
+    private var pendingZoomPresetTapWhileSwitching: Boolean = false
+    @Volatile
+    private var pendingLensWhileSwitching: LensInfo? = null
 
     val cinemaEngine = CinemaEngine(context)
     private val _cinemaConfig = MutableStateFlow(preferences.getCinemaConfig())
@@ -477,7 +488,10 @@ class Camera2Engine(private val context: Context) {
             _selectedLens.value = validSelection
             if (validSelection != null) {
                 inspectCapabilities(validSelection.cameraId)
-                val initialZoom = if (validSelection.isPrimaryMain || validSelection.lensType == LensType.WIDE) {
+                val preserveExistingZoom = (currentSelected != null && validSelection.id == currentSelected.id && currentZoom > 0f)
+                val initialZoom = if (preserveExistingZoom) {
+                    currentZoom
+                } else if (validSelection.isPrimaryMain || validSelection.lensType == LensType.WIDE) {
                     1.0f
                 } else {
                     validSelection.baseZoomRatio
@@ -722,6 +736,71 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
+     * Checks whether the logical camera device can seamlessly handle the target lens and zoom ratio
+     * using CONTROL_ZOOM_RATIO without binding OutputConfiguration to a physical camera stream.
+     */
+    private fun canUseLogicalZoomForLens(cameraId: String, lens: LensInfo, targetZoom: Float): Boolean {
+        if (lens.cameraId != cameraId) return false
+        val chars = getCharacteristics(cameraId) ?: return false
+        val isLogicalMulti = lens.isLogicalMultiCamera ||
+            (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(
+                CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
+            ) == true)
+        if (!isLogicalMulti) {
+            return lens.physicalCameraId == null || lens.physicalCameraId == cameraId
+        }
+        if (lens.physicalCameraId == null || !lens.supportsPhysicalStream) {
+            return true
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            if (zoomRange != null) {
+                val neededRatio = minOf(lens.baseZoomRatio, targetZoom)
+                if (zoomRange.lower <= neededRatio + 0.05f) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * Completes an active lens switch, unlocks [isSwitchingLens], and immediately applies any
+     * coalesced zoom or lens updates that arrived while the switch was in progress.
+     */
+    private fun completeLensSwitch(configuredLens: LensInfo? = _selectedLens.value) {
+        if (configuredLens != null) {
+            activeSessionLens = configuredLens
+            _selectedLens.value = configuredLens
+        }
+        val nextLens = pendingLensWhileSwitching
+        val nextZoom = pendingZoomWhileSwitching
+        val nextPresetTap = pendingZoomPresetTapWhileSwitching
+        pendingLensWhileSwitching = null
+        pendingZoomWhileSwitching = null
+        pendingZoomPresetTapWhileSwitching = false
+
+        if (nextZoom != null) {
+            currentZoom = nextZoom
+            _currentZoom.value = nextZoom
+            preferences.currentZoom = nextZoom
+        }
+
+        isSwitchingLens.set(false)
+
+        val currentActive = activeSessionLens ?: _selectedLens.value
+        if (nextLens != null && currentActive != null &&
+            (nextLens.id != currentActive.id ||
+             nextLens.cameraId != currentActive.cameraId ||
+             nextLens.physicalCameraId != currentActive.physicalCameraId)
+        ) {
+            selectLens(nextLens, preserveZoom = true, targetZoom = currentZoom)
+        } else {
+            scheduleZoomPreviewUpdate(immediate = nextPresetTap || nextZoom != null)
+        }
+    }
+
+    /**
      * Switch active lens using PhotonCamera's lens switching architecture.
      * Handles:
      * - INDEPENDENT_DEVICE: Cleanly closes previous camera and opens target device (e.g. Front <-> Back or separate Aux camera)
@@ -729,54 +808,85 @@ class Camera2Engine(private val context: Context) {
      * - LOGICAL_ZOOM: Seamlessly adjusts continuous zoom ratio on the active logical multi-camera session
      */
     fun selectLens(lens: LensInfo, preserveZoom: Boolean = false, targetZoom: Float? = null) {
+        val defaultLensZoom = if (lens.isPrimaryMain || lens.lensType == LensType.WIDE) 1.0f else lens.baseZoomRatio
+        val effectiveTargetZoom = targetZoom ?: if (preserveZoom) currentZoom else defaultLensZoom
+
         if (isStartingRecording.get() || isStoppingRecording.get()) {
-            Log.w(TAG, "Lens switch ignored: video recording is transitioning")
+            Log.w(TAG, "Lens switch deferred: video recording is transitioning")
+            pendingLensWhileSwitching = lens
+            pendingZoomWhileSwitching = effectiveTargetZoom
             return
         }
         if (!isSwitchingLens.compareAndSet(false, true)) {
-            Log.d(TAG, "Lens switch already in progress, ignoring duplicate call")
+            Log.d(TAG, "Lens switch already in progress, coalescing target lens=${lens.lensType} zoom=$effectiveTargetZoom")
+            currentZoom = effectiveTargetZoom
+            _currentZoom.value = effectiveTargetZoom
+            preferences.currentZoom = effectiveTargetZoom
+            pendingLensWhileSwitching = lens
+            pendingZoomWhileSwitching = effectiveTargetZoom
             return
         }
 
         try {
+            val switchGen = lensSwitchGeneration.incrementAndGet()
+            pendingLensWhileSwitching = null
+            pendingZoomWhileSwitching = null
+            pendingZoomPresetTapWhileSwitching = false
+            pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+            pendingZoomRunnable = null
+
             val previousLens = _selectedLens.value
             val strategy = CameraDiscovery.resolveSwitchStrategy(previousLens, lens)
-            val defaultLensZoom = if (lens.isPrimaryMain || lens.lensType == LensType.WIDE) 1.0f else lens.baseZoomRatio
-            val effectiveTargetZoom = targetZoom ?: if (preserveZoom) currentZoom else defaultLensZoom
             preferences.saveLastLens(lens)
 
             currentZoom = effectiveTargetZoom
             _currentZoom.value = effectiveTargetZoom
             preferences.currentZoom = effectiveTargetZoom
+            _selectedLens.value = lens
 
             Log.i(TAG, "[LENS_SWITCH] Switching from ${previousLens?.lensType} (ID=${previousLens?.cameraId}, phys=${previousLens?.physicalCameraId}) to ${lens.lensType} (ID=${lens.cameraId}, phys=${lens.physicalCameraId}) via strategy: $strategy (effectiveZoom=$effectiveTargetZoom)")
 
             // Seamless lens switch during active video recording
             if (_isRecordingVideo.value) {
-                if (strategy == LensSwitchStrategy.LOGICAL_ZOOM) {
-                    _selectedLens.value = lens
-                    activeSessionLens = lens
-                    isSwitchingLens.set(false)
-                    updatePreviewSettings()
-                    return
+                val activeCam = cameraDevice
+                val isSameOpenCamera = (activeCam != null && activeCam.id == lens.cameraId && previousLens?.cameraId == lens.cameraId)
+                if (isSameOpenCamera && captureSession != null) {
+                    val useLogicalZoom = (strategy == LensSwitchStrategy.LOGICAL_ZOOM) ||
+                            canUseLogicalZoomForLens(lens.cameraId, lens, effectiveTargetZoom)
+                    val targetPhysId = if (useLogicalZoom) null else lens.physicalCameraId
+                    if (targetPhysId == activeSessionPhysicalCameraId) {
+                        // Keep the active recording session and encoder surface untouched; apply zoom directly
+                        activeSessionLens = lens
+                        completeLensSwitch(lens)
+                        return
+                    } else {
+                        // Same CameraDevice requires switching between physical and logical stream without closing CameraDevice
+                        reconfigureRecordingSessionOnSameCamera(lens, targetPhysId, switchGen)
+                        return
+                    }
                 }
                 inspectCapabilities(lens.cameraId)
-                switchCameraDuringRecording(lens, System.nanoTime())
+                switchCameraDuringRecording(lens, previousLens, System.nanoTime(), switchGen)
                 return
             }
-
-            _selectedLens.value = lens
 
             when (strategy) {
                 LensSwitchStrategy.LOGICAL_ZOOM -> {
                     activeSessionLens = lens
-                    isSwitchingLens.set(false)
-                    updatePreviewSettings()
+                    if (activeSessionPhysicalCameraId != null && cameraDevice != null && previewSurfaceTexture != null) {
+                        reconfigureSessionForPhysicalLens(lens, switchGen)
+                    } else {
+                        completeLensSwitch(lens)
+                    }
                 }
                 LensSwitchStrategy.LOGICAL_PHYSICAL_STREAM -> {
                     activeSessionLens = lens
-                    if (cameraDevice != null && previewSurfaceTexture != null) {
-                        reconfigureSessionForPhysicalLens(lens)
+                    if (cameraDevice != null && cameraDevice?.id == lens.cameraId && previewSurfaceTexture != null) {
+                        if (activeSessionPhysicalCameraId == lens.physicalCameraId) {
+                            completeLensSwitch(lens)
+                        } else {
+                            reconfigureSessionForPhysicalLens(lens, switchGen)
+                        }
                     } else {
                         inspectCapabilities(lens.cameraId)
                         restartCamera()
@@ -794,24 +904,154 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
+     * Reconfigures the active recording CameraCaptureSession on the already-open CameraDevice
+     * when transitioning between a physical sub-camera stream and logical stream during video recording,
+     * avoiding closing or reopening the CameraDevice.
+     */
+    private fun reconfigureRecordingSessionOnSameCamera(
+        targetLens: LensInfo,
+        targetPhysicalId: String?,
+        switchGen: Int
+    ) {
+        val camera = cameraDevice ?: run {
+            completeLensSwitch(targetLens)
+            return
+        }
+        backgroundHandler?.post {
+            synchronized(cameraLifecycleLock) {
+                if (switchGen != lensSwitchGeneration.get() || cameraDevice != camera) {
+                    return@synchronized
+                }
+                val previewSurf = getActivePreviewSurface()
+                val recSurf = activeRecordingSurface
+                if (!_isRecordingVideo.value || previewSurf == null || recSurf == null || !recSurf.isValid) {
+                    completeLensSwitch(targetLens)
+                    return@synchronized
+                }
+
+                try {
+                    try {
+                        captureSession?.stopRepeating()
+                    } catch (ignored: Throwable) {}
+                    try {
+                        captureSession?.close()
+                    } catch (ignored: Throwable) {}
+                    captureSession = null
+
+                    val configGen = sessionConfigGeneration.incrementAndGet()
+                    val is10BitMode = currentMode == CameraMode.CINEMA && cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10
+                    activeSessionPhysicalCameraId = targetPhysicalId
+                    activeSessionLens = targetLens
+
+                    val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        addTarget(previewSurf)
+                        addTarget(recSurf)
+                        applyCommonSettings(this)
+                        set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                    }
+                    synchronized(previewRequestLock) {
+                        previewRequestBuilder = recordBuilder
+                    }
+
+                    createRecordingCaptureSession(
+                        camera = camera,
+                        previewSurface = previewSurf,
+                        recorderSurface = recSurf,
+                        is10Bit = is10BitMode,
+                        physicalCameraId = targetPhysicalId,
+                        callback = object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                                    try { session.close() } catch (ignored: Throwable) {}
+                                    return
+                                }
+                                captureSession = session
+                                _isCameraReady.value = true
+                                try {
+                                    synchronized(previewRequestLock) {
+                                        previewRequestBuilder?.let { builder ->
+                                            applyCommonSettings(builder)
+                                            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed repeating request on same-camera recording switch", e)
+                                }
+                                completeLensSwitch(targetLens)
+                            }
+
+                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
+                                Log.w(TAG, "Physical recording session rejected for phys=$targetPhysicalId, falling back to logical recording session")
+                                activeSessionPhysicalCameraId = null
+                                val fallbackGen = sessionConfigGeneration.incrementAndGet()
+                                createRecordingCaptureSession(
+                                    camera = camera,
+                                    previewSurface = previewSurf,
+                                    recorderSurface = recSurf,
+                                    is10Bit = false,
+                                    physicalCameraId = null,
+                                    callback = object : CameraCaptureSession.StateCallback() {
+                                        override fun onConfigured(fallbackSession: CameraCaptureSession) {
+                                            if (fallbackGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                                                try { fallbackSession.close() } catch (ignored: Throwable) {}
+                                                return
+                                            }
+                                            captureSession = fallbackSession
+                                            _isCameraReady.value = true
+                                            try {
+                                                synchronized(previewRequestLock) {
+                                                    previewRequestBuilder?.let { builder ->
+                                                        applyCommonSettings(builder)
+                                                        fallbackSession.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                                                    }
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.e(TAG, "Failed repeating request on fallback logical recording session", e)
+                                            }
+                                            completeLensSwitch(targetLens)
+                                        }
+
+                                        override fun onConfigureFailed(fallbackSession: CameraCaptureSession) {
+                                            Log.e(TAG, "Fallback logical recording session also failed")
+                                            completeLensSwitch(targetLens)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error reconfiguring recording session on same camera", e)
+                    activeSessionPhysicalCameraId = null
+                    completeLensSwitch(targetLens)
+                }
+            }
+        } ?: completeLensSwitch(targetLens)
+    }
+
+    /**
      * Reconfigures CameraCaptureSession to bind to a physical camera stream inside a logical multi-camera.
      * Keeps the CameraDevice open, eliminating hardware tear-down and HAL contention.
      * If the device HAL does not support physical output binding for the requested surface,
      * falls back safely to standard logical capture session with continuous zoom.
      */
-    fun reconfigureSessionForPhysicalLens(targetLens: LensInfo) {
+    fun reconfigureSessionForPhysicalLens(targetLens: LensInfo, switchGen: Int = lensSwitchGeneration.get()) {
         val camera = cameraDevice ?: run {
             isSwitchingLens.set(false)
             restartCamera()
             return
         }
         val texture = previewSurfaceTexture ?: run {
-            isSwitchingLens.set(false)
+            completeLensSwitch(targetLens)
             return
         }
 
         backgroundHandler?.post {
             synchronized(cameraLifecycleLock) {
+                if (switchGen != lensSwitchGeneration.get()) {
+                    return@synchronized
+                }
                 try {
                     // Close previous session
                     try {
@@ -849,10 +1089,13 @@ class Camera2Engine(private val context: Context) {
 
                     val isPhysicalStreamSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                             physId != null &&
+                            targetLens.supportsPhysicalStream &&
                             physicalIds.contains(physId)
 
                     if (isPhysicalStreamSupported) {
                         try {
+                            val configGen = sessionConfigGeneration.incrementAndGet()
+                            activeSessionPhysicalCameraId = physId
                             val outputConfigs = mutableListOf<OutputConfiguration>()
 
                             val previewConfig = OutputConfiguration(previewSurf)
@@ -878,51 +1121,59 @@ class Camera2Engine(private val context: Context) {
                             val sessionConfig = SessionConfiguration(
                                 SessionConfiguration.SESSION_REGULAR,
                                 outputConfigs,
-                                Executors.newSingleThreadExecutor(),
+                                Executor { command -> backgroundHandler?.post(command) ?: command.run() },
                                 object : CameraCaptureSession.StateCallback() {
                                     override fun onConfigured(session: CameraCaptureSession) {
                                         onSessionConfigurationFinished()
-                                        if (cameraDevice == null) {
-                                            isSwitchingLens.set(false)
+                                        if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                                            try { session.close() } catch (ignored: Throwable) {}
                                             return
                                         }
                                         captureSession = session
                                         try {
+                                            activeSessionPhysicalCameraId = physId
+                                            activeSessionLens = targetLens
                                             val template = CameraDevice.TEMPLATE_PREVIEW
                                             val builder = camera.createCaptureRequest(template).apply {
                                                 addTarget(previewSurf)
                                                 applyCommonSettings(this)
                                             }
-                                            previewRequestBuilder = builder
-                                            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                                            synchronized(previewRequestLock) {
+                                                previewRequestBuilder = builder
+                                                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                                            }
                                             _isCameraReady.value = true
-                                            activeSessionLens = targetLens
-                                            isSwitchingLens.set(false)
+                                            completeLensSwitch(targetLens)
                                             Log.i(TAG, "[PHYSICAL_STREAM] Successfully configured physical camera stream $physId")
                                         } catch (e: Exception) {
                                             Log.e(TAG, "Failed repeating request on physical session", e)
-                                            isSwitchingLens.set(false)
+                                            completeLensSwitch(targetLens)
                                         }
                                     }
 
                                     override fun onConfigureFailed(session: CameraCaptureSession) {
+                                        if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                                         Log.w(TAG, "Physical camera output session rejected by HAL for $physId, falling back to standard session")
+                                        activeSessionPhysicalCameraId = null
                                         onSessionConfigurationFinished()
-                                        createCameraCaptureSession()
+                                        createCameraCaptureSession(forceLogicalStream = true)
                                     }
                                 }
                             )
                             camera.createCaptureSession(sessionConfig)
                             return@synchronized
                         } catch (e: Exception) {
+                            activeSessionPhysicalCameraId = null
                             Log.w(TAG, "Failed to create physical camera output configuration for $physId, falling back", e)
                         }
                     }
 
-                    // Fallback: standard session with logical zoom
-                    createCameraCaptureSession()
+                    // Fallback or return to logical stream: standard session with logical zoom
+                    activeSessionPhysicalCameraId = null
+                    createCameraCaptureSession(forceLogicalStream = true)
                 } catch (e: Exception) {
                     Log.e(TAG, "reconfigureSessionForPhysicalLens failed", e)
+                    activeSessionPhysicalCameraId = null
                     isSwitchingLens.set(false)
                     restartCamera()
                 }
@@ -933,17 +1184,30 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun switchCameraDuringRecording(lens: LensInfo, switchStartNs: Long) {
+    @SuppressLint("MissingPermission")
+    private fun switchCameraDuringRecording(
+        lens: LensInfo,
+        previousLens: LensInfo?,
+        switchStartNs: Long,
+        switchGen: Int
+    ) {
         val mgr = cameraManager ?: run {
-            isSwitchingLens.set(false)
+            completeLensSwitch(lens)
             return
         }
         startBackgroundThread()
         backgroundHandler?.post {
             synchronized(cameraLifecycleLock) {
+                if (switchGen != lensSwitchGeneration.get()) {
+                    return@synchronized
+                }
                 val oldSession = captureSession
                 val oldDevice = cameraDevice
                 captureSession = null
+                activeSessionPhysicalCameraId = null
+                try {
+                    oldSession?.stopRepeating()
+                } catch (ignored: Throwable) {}
                 try {
                     oldSession?.close()
                 } catch (ignored: Throwable) {}
@@ -952,13 +1216,90 @@ class Camera2Engine(private val context: Context) {
                 } catch (ignored: Throwable) {}
                 cameraDevice = null
 
+                fun recoverToPreviousLensIfNeeded() {
+                    val fallbackLens = previousLens?.takeIf { it.cameraId != lens.cameraId }
+                    if (fallbackLens != null && switchGen == lensSwitchGeneration.get()) {
+                        Log.w(TAG, "[RECORDING_SWITCH] Recovering to previous lens ${fallbackLens.lensType} (${fallbackLens.cameraId})")
+                        _selectedLens.value = fallbackLens
+                        activeSessionLens = fallbackLens
+                        try {
+                            mgr.openCamera(fallbackLens.cameraId, object : CameraDevice.StateCallback() {
+                                override fun onOpened(recoveredCam: CameraDevice) {
+                                    synchronized(cameraLifecycleLock) {
+                                        cameraDevice = recoveredCam
+                                        val recSurf = activeRecordingSurface
+                                        val pSurf = getActivePreviewSurface()
+                                        if (_isRecordingVideo.value && recSurf != null && recSurf.isValid && pSurf != null) {
+                                            val configGen = sessionConfigGeneration.incrementAndGet()
+                                            val builder = recoveredCam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                                addTarget(pSurf)
+                                                addTarget(recSurf)
+                                                applyCommonSettings(this)
+                                                set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                            }
+                                            synchronized(previewRequestLock) {
+                                                previewRequestBuilder = builder
+                                            }
+                                            createRecordingCaptureSession(
+                                                camera = recoveredCam,
+                                                previewSurface = pSurf,
+                                                recorderSurface = recSurf,
+                                                is10Bit = false,
+                                                physicalCameraId = null,
+                                                callback = object : CameraCaptureSession.StateCallback() {
+                                                    override fun onConfigured(session: CameraCaptureSession) {
+                                                        if (configGen != sessionConfigGeneration.get() || cameraDevice != recoveredCam) return
+                                                        captureSession = session
+                                                        _isCameraReady.value = true
+                                                        try {
+                                                            synchronized(previewRequestLock) {
+                                                                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                                                            }
+                                                        } catch (ignored: Exception) {}
+                                                        completeLensSwitch(fallbackLens)
+                                                    }
+                                                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                                                        completeLensSwitch(fallbackLens)
+                                                        createCameraCaptureSession()
+                                                    }
+                                                }
+                                            )
+                                        } else {
+                                            createCameraCaptureSession()
+                                            completeLensSwitch(fallbackLens)
+                                        }
+                                    }
+                                }
+                                override fun onDisconnected(cam: CameraDevice) {
+                                    cam.close()
+                                    if (cameraDevice == cam) cameraDevice = null
+                                    completeLensSwitch(fallbackLens)
+                                }
+                                override fun onError(cam: CameraDevice, err: Int) {
+                                    cam.close()
+                                    if (cameraDevice == cam) cameraDevice = null
+                                    completeLensSwitch(fallbackLens)
+                                }
+                            }, backgroundHandler)
+                            return
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to recover previous camera during recording", e)
+                        }
+                    }
+                    completeLensSwitch(lens)
+                }
+
                 try {
                     mgr.openCamera(lens.cameraId, object : CameraDevice.StateCallback() {
                         override fun onOpened(camera: CameraDevice) {
                             synchronized(cameraLifecycleLock) {
+                                if (switchGen != lensSwitchGeneration.get()) {
+                                    camera.close()
+                                    return
+                                }
                                 cameraDevice = camera
                                 val texture = previewSurfaceTexture ?: run {
-                                    isSwitchingLens.set(false)
+                                    completeLensSwitch(lens)
                                     return
                                 }
                                 val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
@@ -974,6 +1315,12 @@ class Camera2Engine(private val context: Context) {
                                 val isRecording = _isRecordingVideo.value
                                 if (isRecording && recSurf != null && recSurf.isValid) {
                                     try {
+                                        val configGen = sessionConfigGeneration.incrementAndGet()
+                                        val useLogicalZoom = canUseLogicalZoomForLens(lens.cameraId, lens, currentZoom)
+                                        val targetPhysId = if (useLogicalZoom) null else lens.physicalCameraId
+                                        activeSessionPhysicalCameraId = targetPhysId
+                                        activeSessionLens = lens
+
                                         val template = CameraDevice.TEMPLATE_RECORD
                                         val recordBuilder = camera.createCaptureRequest(template).apply {
                                             addTarget(previewSurface!!)
@@ -981,23 +1328,36 @@ class Camera2Engine(private val context: Context) {
                                             applyCommonSettings(this)
                                             set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
                                         }
-                                        previewRequestBuilder = recordBuilder
+                                        synchronized(previewRequestLock) {
+                                            previewRequestBuilder = recordBuilder
+                                        }
 
                                         val sessionCallback = object : CameraCaptureSession.StateCallback() {
                                             override fun onConfigured(session: CameraCaptureSession) {
+                                                if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                                                    try { session.close() } catch (ignored: Throwable) {}
+                                                    return
+                                                }
                                                 captureSession = session
+                                                _isCameraReady.value = true
                                                 try {
-                                                    session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
+                                                    synchronized(previewRequestLock) {
+                                                        previewRequestBuilder?.let { builder ->
+                                                            applyCommonSettings(builder)
+                                                            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+                                                        }
+                                                    }
                                                 } catch (e: Exception) {
                                                     Log.e(TAG, "Failed repeating request after lens switch in recording", e)
                                                 }
-                                                activeSessionLens = lens
-                                                isSwitchingLens.set(false)
+                                                completeLensSwitch(lens)
                                             }
 
                                             override fun onConfigureFailed(session: CameraCaptureSession) {
+                                                if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                                                 Log.e(TAG, "Failed to configure recording session after lens switch")
-                                                isSwitchingLens.set(false)
+                                                activeSessionPhysicalCameraId = null
+                                                completeLensSwitch(lens)
                                                 createCameraCaptureSession()
                                             }
                                         }
@@ -1007,16 +1367,18 @@ class Camera2Engine(private val context: Context) {
                                             previewSurface = previewSurface!!,
                                             recorderSurface = recSurf,
                                             is10Bit = false,
+                                            physicalCameraId = targetPhysId,
                                             callback = sessionCallback
                                         )
                                     } catch (e: Exception) {
                                         Log.e(TAG, "Error re-attaching recorder surface after lens switch", e)
+                                        activeSessionPhysicalCameraId = null
                                         createCameraCaptureSession()
-                                        isSwitchingLens.set(false)
+                                        completeLensSwitch(lens)
                                     }
                                 } else {
                                     createCameraCaptureSession()
-                                    isSwitchingLens.set(false)
+                                    completeLensSwitch(lens)
                                 }
                                 val elapsedMs = (System.nanoTime() - switchStartNs) / 1_000_000L
                                 Log.i(TAG, "[RECORDING_SWITCH] Seamless lens switch to ${lens.lensType} completed in ${elapsedMs}ms")
@@ -1026,19 +1388,23 @@ class Camera2Engine(private val context: Context) {
                         override fun onDisconnected(camera: CameraDevice) {
                             camera.close()
                             if (cameraDevice == camera) cameraDevice = null
-                            isSwitchingLens.set(false)
+                            if (switchGen == lensSwitchGeneration.get()) {
+                                recoverToPreviousLensIfNeeded()
+                            }
                         }
 
                         override fun onError(camera: CameraDevice, error: Int) {
                             Log.e(TAG, "Error opening camera ${lens.cameraId} during recording: $error")
                             camera.close()
                             if (cameraDevice == camera) cameraDevice = null
-                            isSwitchingLens.set(false)
+                            if (switchGen == lensSwitchGeneration.get()) {
+                                recoverToPreviousLensIfNeeded()
+                            }
                         }
                     }, backgroundHandler)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to open camera ${lens.cameraId} during recording", e)
-                    isSwitchingLens.set(false)
+                    recoverToPreviousLensIfNeeded()
                 }
             }
         }
@@ -1604,10 +1970,16 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun createCameraCaptureSession() {
-        val camera = cameraDevice ?: return
+    private fun createCameraCaptureSession(forceLogicalStream: Boolean = false) {
+        val camera = cameraDevice ?: run {
+            completeLensSwitch()
+            return
+        }
         val activeLens = _selectedLens.value
-        val previewSurf = previewSurface ?: return
+        val previewSurf = previewSurface ?: run {
+            completeLensSwitch()
+            return
+        }
 
         // Close previous session safely to avoid overlapping capture sessions
         val oldSession = captureSession
@@ -1624,18 +1996,27 @@ class Camera2Engine(private val context: Context) {
 
         isConfiguringSession = true
         _isCameraReady.value = false
+        val configGen = sessionConfigGeneration.incrementAndGet()
 
         // Seamless lens switch during active video recording (Front, Back, Ultra-Wide)
         val isRecording = _isRecordingVideo.value
         val recSurface = activeRecordingSurface
         if (isRecording && recSurface != null && recSurface.isValid) {
             try {
+                val useLogicalZoom = forceLogicalStream ||
+                        (activeLens != null && canUseLogicalZoomForLens(camera.id, activeLens, currentZoom))
+                val targetPhysId = if (useLogicalZoom) null else activeLens?.physicalCameraId
+                activeSessionPhysicalCameraId = targetPhysId
+
                 val template = CameraDevice.TEMPLATE_RECORD
-                previewRequestBuilder = camera.createCaptureRequest(template).apply {
+                val recBuilder = camera.createCaptureRequest(template).apply {
                     addTarget(previewSurf)
                     addTarget(recSurface)
                     applyCommonSettings(this)
                     set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                }
+                synchronized(previewRequestLock) {
+                    previewRequestBuilder = recBuilder
                 }
 
                 val is10BitMode = currentMode == CameraMode.CINEMA && cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10
@@ -1644,30 +2025,36 @@ class Camera2Engine(private val context: Context) {
                     previewSurface = previewSurf,
                     recorderSurface = recSurface,
                     is10Bit = is10BitMode,
+                    physicalCameraId = targetPhysId,
                     callback = object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
                             onSessionConfigurationFinished()
-                            if (cameraDevice == null) return
+                            if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                                try { session.close() } catch (ignored: Throwable) {}
+                                return
+                            }
                             captureSession = session
                             try {
-                                previewRequestBuilder?.let {
-                                    session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
+                                synchronized(previewRequestLock) {
+                                    previewRequestBuilder?.let {
+                                        applyCommonSettings(it)
+                                        session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
+                                    }
                                 }
                                 _isCameraReady.value = true
-                                val configuredLens = _selectedLens.value
-                                if (configuredLens != null) {
-                                    activeSessionLens = configuredLens
-                                    isSwitchingLens.set(false)
-                                }
+                                completeLensSwitch(_selectedLens.value)
                                 Log.i(TAG, "Seamless lens switch during active recording session completed successfully")
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed repeating record request after seamless lens switch", e)
+                                completeLensSwitch(_selectedLens.value)
                             }
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
+                            if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                             onSessionConfigurationFinished()
-                            isSwitchingLens.set(false)
+                            activeSessionPhysicalCameraId = null
+                            completeLensSwitch(_selectedLens.value)
                             Log.e(TAG, "Failed to configure video recording session after lens switch")
                             _isCameraReady.value = false
                         }
@@ -1675,14 +2062,18 @@ class Camera2Engine(private val context: Context) {
                 )
                 return
             } catch (e: Exception) {
+                activeSessionPhysicalCameraId = null
                 Log.e(TAG, "Error configuring video recording capture session during lens switch", e)
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+        if (!forceLogicalStream &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
             activeLens?.physicalCameraId != null &&
+            activeLens.supportsPhysicalStream &&
             activeLens.physicalCameraId != activeLens.cameraId) {
             try {
+                activeSessionPhysicalCameraId = activeLens.physicalCameraId
                 val outputConfigs = mutableListOf<android.hardware.camera2.params.OutputConfiguration>()
                 val previewConfig = android.hardware.camera2.params.OutputConfiguration(previewSurf)
                 previewConfig.setPhysicalCameraId(activeLens.physicalCameraId)
@@ -1711,55 +2102,62 @@ class Camera2Engine(private val context: Context) {
                 CameraPerformanceMonitor.setActiveOutputs(activeOutputs)
 
                 val template = CameraDevice.TEMPLATE_PREVIEW
-                previewRequestBuilder = camera.createCaptureRequest(template).apply {
+                val builder = camera.createCaptureRequest(template).apply {
                     addTarget(previewSurf)
                     applyCommonSettings(this)
+                }
+                synchronized(previewRequestLock) {
+                    previewRequestBuilder = builder
                 }
 
                 val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
                     android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
                     outputConfigs,
-                    java.util.concurrent.Executors.newSingleThreadExecutor(),
+                    Executor { command -> backgroundHandler?.post(command) ?: command.run() },
                     object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: CameraCaptureSession) {
                             onSessionConfigurationFinished()
-                            if (cameraDevice == null) return
+                            if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                                try { session.close() } catch (ignored: Throwable) {}
+                                return
+                            }
                             captureSession = session
                             try {
-                                previewRequestBuilder?.let {
-                                    session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
+                                activeSessionPhysicalCameraId = activeLens.physicalCameraId
+                                synchronized(previewRequestLock) {
+                                    previewRequestBuilder?.let {
+                                        applyCommonSettings(it)
+                                        session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
+                                    }
                                 }
                                 _isCameraReady.value = true
                                 CameraPerformanceMonitor.start()
-                                val configuredLens = _selectedLens.value
-                                if (configuredLens != null) {
-                                    activeSessionLens = configuredLens
-                                    isSwitchingLens.set(false)
-                                }
+                                completeLensSwitch(_selectedLens.value)
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to start repeating preview request", e)
+                                completeLensSwitch(_selectedLens.value)
                             }
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
+                            if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                             onSessionConfigurationFinished()
-                            isSwitchingLens.set(false)
-                            Log.e(TAG, "Camera capture session configuration failed, scheduling recovery")
-                            _isCameraReady.value = false
-                            backgroundHandler?.postDelayed({
-                                restartCamera()
-                            }, 250)
+                            activeSessionPhysicalCameraId = null
+                            Log.w(TAG, "Physical capture session failed, falling back to logical session")
+                            createCameraCaptureSession(forceLogicalStream = true)
                         }
                     }
                 )
                 camera.createCaptureSession(sessionConfig)
                 return
             } catch (e: Exception) {
+                activeSessionPhysicalCameraId = null
                 Log.w(TAG, "Falling back to standard session creation: ${e.message}")
             }
         }
 
         try {
+            activeSessionPhysicalCameraId = null
             val surfaces = mutableListOf<Surface>()
             surfaces.add(previewSurf)
 
@@ -1775,9 +2173,12 @@ class Camera2Engine(private val context: Context) {
 
             val template = CameraDevice.TEMPLATE_PREVIEW
 
-            previewRequestBuilder = camera.createCaptureRequest(template).apply {
+            val builder = camera.createCaptureRequest(template).apply {
                 addTarget(previewSurf)
                 applyCommonSettings(this)
+            }
+            synchronized(previewRequestLock) {
+                previewRequestBuilder = builder
             }
 
             camera.createCaptureSession(
@@ -1785,38 +2186,46 @@ class Camera2Engine(private val context: Context) {
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         onSessionConfigurationFinished()
-                        if (cameraDevice == null) return
+                        if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                            try { session.close() } catch (ignored: Throwable) {}
+                            return
+                        }
                         captureSession = session
                         try {
-                            previewRequestBuilder?.let {
-                                session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
+                            activeSessionPhysicalCameraId = null
+                            synchronized(previewRequestLock) {
+                                previewRequestBuilder?.let {
+                                    applyCommonSettings(it)
+                                    session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
+                                }
                             }
                             _isCameraReady.value = true
                             CameraPerformanceMonitor.start()
-                            val configuredLens = _selectedLens.value
-                            if (configuredLens != null) {
-                                activeSessionLens = configuredLens
-                                isSwitchingLens.set(false)
-                            }
+                            completeLensSwitch(_selectedLens.value)
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to start repeating preview request", e)
+                            completeLensSwitch(_selectedLens.value)
                         }
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
+                        if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                         onSessionConfigurationFinished()
-                        isSwitchingLens.set(false)
+                        completeLensSwitch(_selectedLens.value)
                         Log.e(TAG, "Camera capture session configuration failed, scheduling recovery")
                         _isCameraReady.value = false
-                        backgroundHandler?.postDelayed({
-                            restartCamera()
-                        }, 250)
+                        if (!_isRecordingVideo.value) {
+                            backgroundHandler?.postDelayed({
+                                restartCamera()
+                            }, 250)
+                        }
                     }
                 },
                 backgroundHandler
             )
         } catch (e: Exception) {
             onSessionConfigurationFinished()
+            completeLensSwitch(_selectedLens.value)
             Log.e(TAG, "Failed to create camera capture session", e)
         }
     }
@@ -2241,7 +2650,11 @@ class Camera2Engine(private val context: Context) {
 
             val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
 
-            val isRunningOnPhysicalStream = (lens.physicalCameraId != null && lens.supportsPhysicalStream)
+            // A session is only running on a bound physical stream when OutputConfiguration.setPhysicalCameraId
+            // was actually applied to the active CameraCaptureSession (tracked by activeSessionPhysicalCameraId).
+            val isRunningOnPhysicalStream = (activeSessionPhysicalCameraId != null &&
+                    activeSessionPhysicalCameraId == lens.physicalCameraId) ||
+                    (!isLogicalMulti && lens.physicalCameraId != null && lens.supportsPhysicalStream)
 
             // On Android 11+ (API 30+), CONTROL_ZOOM_RATIO applies optical multi-camera / ISP continuous zoom
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -2279,18 +2692,56 @@ class Camera2Engine(private val context: Context) {
      * Updates preview request with new settings on the fly
      */
     fun updatePreviewSettings() {
+        if (isClosingCamera) return
         val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
-            applyCommonSettings(builder)
-            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to update preview settings", e)
+        synchronized(previewRequestLock) {
+            val builder = previewRequestBuilder ?: return
+            val activeSess = captureSession ?: return
+            if (activeSess !== session) return
+            try {
+                applyCommonSettings(builder)
+                activeSess.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update preview settings", e)
+            }
         }
     }
 
     private var lastZoomPreviewUpdateTime = 0L
     private var pendingZoomRunnable: Runnable? = null
+
+    private fun scheduleZoomPreviewUpdate(immediate: Boolean = false) {
+        val handler = backgroundHandler
+        val now = android.os.SystemClock.uptimeMillis()
+        if (handler == null || Looper.myLooper() == handler.looper) {
+            pendingZoomRunnable?.let { handler?.removeCallbacks(it) }
+            pendingZoomRunnable = null
+            lastZoomPreviewUpdateTime = now
+            updatePreviewSettings()
+            return
+        }
+
+        if (immediate || (now - lastZoomPreviewUpdateTime >= 16L && pendingZoomRunnable == null)) {
+            pendingZoomRunnable?.let { handler.removeCallbacks(it) }
+            lastZoomPreviewUpdateTime = now
+            val runnable = Runnable {
+                pendingZoomRunnable = null
+                lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
+                updatePreviewSettings()
+            }
+            pendingZoomRunnable = runnable
+            handler.post(runnable)
+        } else if (pendingZoomRunnable == null) {
+            val delayMs = (16L - (now - lastZoomPreviewUpdateTime)).coerceIn(4L, 16L)
+            val runnable = Runnable {
+                pendingZoomRunnable = null
+                lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
+                updatePreviewSettings()
+            }
+            pendingZoomRunnable = runnable
+            handler.postDelayed(runnable, delayMs)
+        }
+    }
 
     /**
      * Set Zoom (.5x to 10x) with seamless automatic lens switching and hysteresis
@@ -2332,27 +2783,11 @@ class Camera2Engine(private val context: Context) {
                     return
                 }
             }
-            if (isPresetTap) {
-                pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
-                pendingZoomRunnable = null
-                lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                updatePreviewSettings()
+            if (isSwitchingLens.get()) {
+                pendingZoomWhileSwitching = clampedZoom
+                pendingZoomPresetTapWhileSwitching = isPresetTap
             } else {
-                val now = android.os.SystemClock.uptimeMillis()
-                if (now - lastZoomPreviewUpdateTime >= 28L) {
-                    lastZoomPreviewUpdateTime = now
-                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
-                    pendingZoomRunnable = null
-                    updatePreviewSettings()
-                } else {
-                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
-                    val runnable = Runnable {
-                        lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                        updatePreviewSettings()
-                    }
-                    pendingZoomRunnable = runnable
-                    backgroundHandler?.postDelayed(runnable, 30L)
-                }
+                scheduleZoomPreviewUpdate(immediate = isPresetTap)
             }
             return
         }
@@ -2362,8 +2797,9 @@ class Camera2Engine(private val context: Context) {
         val hasTele2x = backLenses.any { it.lensType == LensType.TELEPHOTO && it.isPhysical }
         val hasTele3x = backLenses.any { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
 
+        val referenceLensType = (activeSessionLens ?: currentLens).lensType
         val targetType = CameraOpticalCalibration.resolveTargetLensType(
-            currentLensType = currentLens.lensType,
+            currentLensType = referenceLensType,
             targetZoom = clampedZoom,
             hasUltraWide = hasUltraWide,
             hasTelephoto2x = hasTele2x,
@@ -2378,45 +2814,33 @@ class Camera2Engine(private val context: Context) {
             else -> mainWideLens ?: currentLens
         }
 
-        val needsLensSwitch = (targetLens.id != currentLens.id) ||
-                (targetLens.cameraId != currentLens.cameraId) ||
-                (targetLens.physicalCameraId != currentLens.physicalCameraId)
+        val pZoom = if (isPresetTap) {
+            if (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE) 1.0f else clampedZoom
+        } else {
+            clampedZoom
+        }
+
+        if (isSwitchingLens.get()) {
+            // Coalesce rapid zoom requests while lens switch is in progress;
+            // completeLensSwitch() will apply the latest zoom and lens when the switch finishes.
+            pendingZoomWhileSwitching = pZoom
+            pendingZoomPresetTapWhileSwitching = isPresetTap
+            pendingLensWhileSwitching = targetLens
+            return
+        }
+
+        val activeLens = activeSessionLens ?: currentLens
+        val needsLensSwitch = (targetLens.id != activeLens.id) ||
+                (targetLens.cameraId != activeLens.cameraId) ||
+                (targetLens.physicalCameraId != activeLens.physicalCameraId)
 
         if (needsLensSwitch) {
-            if (!isSwitchingLens.get()) {
-                val pZoom = if (isPresetTap) {
-                    if (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE) 1.0f else clampedZoom
-                } else {
-                    clampedZoom
-                }
-                selectLens(targetLens, preserveZoom = true, targetZoom = pZoom)
-            }
+            selectLens(targetLens, preserveZoom = true, targetZoom = pZoom)
         } else {
             // Same logical/physical device: smoothly update active lens and zoom without tearing down camera session
             _selectedLens.value = targetLens
             activeSessionLens = targetLens
-            if (isPresetTap) {
-                pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
-                pendingZoomRunnable = null
-                lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                updatePreviewSettings()
-            } else {
-                val now = android.os.SystemClock.uptimeMillis()
-                if (now - lastZoomPreviewUpdateTime >= 28L) {
-                    lastZoomPreviewUpdateTime = now
-                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
-                    pendingZoomRunnable = null
-                    updatePreviewSettings()
-                } else {
-                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
-                    val runnable = Runnable {
-                        lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                        updatePreviewSettings()
-                    }
-                    pendingZoomRunnable = runnable
-                    backgroundHandler?.postDelayed(runnable, 30L)
-                }
-            }
+            scheduleZoomPreviewUpdate(immediate = isPresetTap)
         }
     }
 
@@ -3399,9 +3823,6 @@ class Camera2Engine(private val context: Context) {
                 val spec = prediction.specs[idx]
                 val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                 builder.addTarget(readerRaw.surface)
-                if (spec.role == com.example.camera.engine.hdrplus.HdrPlusRole.BASE_PRIMARY && imageReaderJpeg != null) {
-                    builder.addTarget(imageReaderJpeg!!.surface)
-                }
 
                 applyCommonSettings(builder)
                 builder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
@@ -3426,10 +3847,75 @@ class Camera2Engine(private val context: Context) {
             }
 
             val expectedCount = requests.size
-            val capturedRawFrames = java.util.Collections.synchronizedList(ArrayList<com.example.camera.engine.hdrplus.HdrPlusRawFrame>())
+            val captureOrientation = getCaptureJpegOrientation()
+            val capturedRawFramesByIndex = java.util.concurrent.ConcurrentHashMap<Int, com.example.camera.engine.hdrplus.HdrPlusRawFrame>()
             val receivedCount = java.util.concurrent.atomic.AtomicInteger(0)
+            val completedResultCount = java.util.concurrent.atomic.AtomicInteger(0)
             val isProcessingTriggered = java.util.concurrent.atomic.AtomicBoolean(false)
             val captureResultsByIndex = java.util.concurrent.ConcurrentHashMap<Int, TotalCaptureResult>()
+            val captureResultsByTimestamp = java.util.concurrent.ConcurrentHashMap<Long, TotalCaptureResult>()
+
+            fun triggerHdrPlusProcessingIfReady(force: Boolean = false) {
+                val haveAllImages = receivedCount.get() >= expectedCount
+                val haveAllResults = completedResultCount.get() >= expectedCount
+                if ((!force && (!haveAllImages || !haveAllResults)) || capturedRawFramesByIndex.isEmpty()) {
+                    return
+                }
+                if (!isProcessingTriggered.compareAndSet(false, true)) {
+                    return
+                }
+                _isCapturing.value = false
+
+                // Ensure every RAW frame is enriched with its exact per-frame TotalCaptureResult metadata
+                val framesToProcess = ArrayList<com.example.camera.engine.hdrplus.HdrPlusRawFrame>(expectedCount)
+                for (i in 0 until expectedCount) {
+                    val rawFrame = capturedRawFramesByIndex[i] ?: continue
+                    val spec = prediction.specs.getOrNull(i) ?: prediction.specs.first()
+                    val matchedResult = captureResultsByTimestamp[rawFrame.timestampNs]
+                        ?: captureResultsByIndex[i]
+                        ?: lastCaptureResult
+                    val enrichedFrame = if (matchedResult != null) {
+                        hdrPlusEngine.developer.buildRawFrameWithMetadata(
+                            rawData = rawFrame.rawData,
+                            width = rawFrame.width,
+                            height = rawFrame.height,
+                            rowStride = rawFrame.rowStride,
+                            pixelStride = rawFrame.pixelStride,
+                            timestampNs = rawFrame.timestampNs,
+                            result = matchedResult,
+                            chars = chars,
+                            role = spec.role,
+                            evDelta = spec.evDelta,
+                            fallbackExpTimeNs = spec.exposureTimeNs,
+                            fallbackIso = spec.iso
+                        )
+                    } else {
+                        rawFrame
+                    }
+                    framesToProcess.add(enrichedFrame)
+                }
+
+                engineScope.launch(Dispatchers.Default) {
+                    try {
+                        val mergedJpeg = hdrPlusEngine.processHdrPlusRawCapture(
+                            rawFrames = framesToProcess,
+                            jpegQuality = preferences.jpegQuality,
+                            orientationDegrees = captureOrientation
+                        )
+                        val uri = saveJpegBytesToMediaStore(mergedJpeg)
+                        updateStorageStats()
+                        withContext(Dispatchers.Main) {
+                            onComplete(uri)
+                        }
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "[HDR+] Error processing RAW HDR+ capture", e)
+                        _isCapturing.value = false
+                        withContext(Dispatchers.Main) {
+                            onComplete(null)
+                        }
+                    }
+                }
+            }
 
             readerRaw.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireNextImage()
@@ -3437,7 +3923,8 @@ class Camera2Engine(private val context: Context) {
                     val count = receivedCount.incrementAndGet()
                     val frameIdx = count - 1
                     val spec = prediction.specs.getOrNull(frameIdx) ?: prediction.specs.first()
-                    val result = captureResultsByIndex[frameIdx] ?: lastCaptureResult
+                    val ts = image.timestamp
+                    val result = captureResultsByTimestamp[ts] ?: captureResultsByIndex[frameIdx]
 
                     try {
                         val rawFrame = hdrPlusEngine.developer.extractRawFrame(
@@ -3445,37 +3932,26 @@ class Camera2Engine(private val context: Context) {
                             result = result,
                             chars = chars,
                             role = spec.role,
-                            evDelta = spec.evDelta
+                            evDelta = spec.evDelta,
+                            fallbackExpTimeNs = spec.exposureTimeNs,
+                            fallbackIso = spec.iso,
+                            fallbackResult = lastCaptureResult
                         )
-                        capturedRawFrames.add(rawFrame)
+                        capturedRawFramesByIndex[frameIdx] = rawFrame
                     } catch (t: Throwable) {
                         Log.e(TAG, "[HDR+] Error extracting RAW frame $frameIdx", t)
                     } finally {
                         image.close()
                     }
 
-                    if (count >= expectedCount && isProcessingTriggered.compareAndSet(false, true)) {
-                        _isCapturing.value = false
-
-                        val framesToProcess = ArrayList(capturedRawFrames)
-                        engineScope.launch(Dispatchers.Default) {
-                            try {
-                                val mergedJpeg = hdrPlusEngine.processHdrPlusRawCapture(
-                                    rawFrames = framesToProcess,
-                                    jpegQuality = preferences.jpegQuality
-                                )
-                                val uri = saveJpegBytesToMediaStore(mergedJpeg)
-                                updateStorageStats()
-                                withContext(Dispatchers.Main) {
-                                    onComplete(uri)
-                                }
-                            } catch (e: Throwable) {
-                                Log.e(TAG, "[HDR+] Error processing RAW HDR+ capture", e)
-                                _isCapturing.value = false
-                                withContext(Dispatchers.Main) {
-                                    onComplete(null)
-                                }
-                            }
+                    if (count >= expectedCount) {
+                        if (completedResultCount.get() >= expectedCount) {
+                            triggerHdrPlusProcessingIfReady(force = true)
+                        } else {
+                            // Wait briefly (up to 120ms) for any trailing onCaptureCompleted metadata
+                            backgroundHandler?.postDelayed({
+                                triggerHdrPlusProcessingIfReady(force = true)
+                            }, 120L)
                         }
                     }
                 }
@@ -3483,28 +3959,9 @@ class Camera2Engine(private val context: Context) {
 
             // Failsafe timeout in case HAL drops a frame
             backgroundHandler?.postDelayed({
-                if (capturedRawFrames.isNotEmpty() && isProcessingTriggered.compareAndSet(false, true)) {
-                    _isCapturing.value = false
-                    val framesToProcess = ArrayList(capturedRawFrames)
-                    engineScope.launch(Dispatchers.Default) {
-                        try {
-                            val mergedJpeg = hdrPlusEngine.processHdrPlusRawCapture(
-                                rawFrames = framesToProcess,
-                                jpegQuality = preferences.jpegQuality
-                            )
-                            val uri = saveJpegBytesToMediaStore(mergedJpeg)
-                            updateStorageStats()
-                            withContext(Dispatchers.Main) {
-                                onComplete(uri)
-                            }
-                        } catch (e: Throwable) {
-                            Log.e(TAG, "[HDR+] Timeout processing failed", e)
-                            withContext(Dispatchers.Main) {
-                                onComplete(null)
-                            }
-                        }
-                    }
-                } else if (capturedRawFrames.isEmpty() && isProcessingTriggered.compareAndSet(false, true)) {
+                if (capturedRawFramesByIndex.isNotEmpty()) {
+                    triggerHdrPlusProcessingIfReady(force = true)
+                } else if (isProcessingTriggered.compareAndSet(false, true)) {
                     _isCapturing.value = false
                     onComplete(null)
                 }
@@ -3518,6 +3975,13 @@ class Camera2Engine(private val context: Context) {
                 ) {
                     val tag = request.tag as? Int ?: 0
                     captureResultsByIndex[tag] = result
+                    val ts = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                    if (ts != null) {
+                        captureResultsByTimestamp[ts] = result
+                    }
+                    if (completedResultCount.incrementAndGet() >= expectedCount && receivedCount.get() >= expectedCount) {
+                        triggerHdrPlusProcessingIfReady(force = true)
+                    }
                 }
 
                 override fun onCaptureFailed(
@@ -4283,19 +4747,26 @@ class Camera2Engine(private val context: Context) {
         previewSurface: Surface,
         recorderSurface: Surface?,
         is10Bit: Boolean,
+        physicalCameraId: String? = null,
         callback: CameraCaptureSession.StateCallback
     ) {
         val executor = Executor { command -> backgroundHandler?.post(command) ?: command.run() }
         val hasSeparateRecorder = (recorderSurface != null && recorderSurface.isValid && recorderSurface != previewSurface)
 
-        val activeLens = _selectedLens.value
-        val isPhysicalRouting = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                activeLens?.physicalCameraId != null &&
-                activeLens.physicalCameraId != activeLens.cameraId
+        val chars = getCharacteristics(camera.id)
+        val physicalIds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            chars?.physicalCameraIds ?: emptySet()
+        } else emptySet()
+
+        val usePhysicalRouting = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                physicalCameraId != null &&
+                physicalCameraId != camera.id &&
+                physicalIds.contains(physicalCameraId)
+
+        activeSessionPhysicalCameraId = if (usePhysicalRouting) physicalCameraId else null
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && is10Bit && hasSeparateRecorder) {
             try {
-                val chars = getCharacteristics(camera.id)
                 val dynamicProfiles = chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
                 val supported = dynamicProfiles?.supportedProfiles ?: emptySet()
                 val targetProfile = when {
@@ -4308,8 +4779,11 @@ class Camera2Engine(private val context: Context) {
                 if (targetProfile != null) {
                     val recorderConfig = OutputConfiguration(recorderSurface!!).apply {
                         dynamicRangeProfile = targetProfile
+                        if (usePhysicalRouting) setPhysicalCameraId(physicalCameraId)
                     }
-                    val previewConfig = OutputConfiguration(previewSurface)
+                    val previewConfig = OutputConfiguration(previewSurface).apply {
+                        if (usePhysicalRouting) setPhysicalCameraId(physicalCameraId)
+                    }
                     val sessionConfig = SessionConfiguration(
                         SessionConfiguration.SESSION_REGULAR,
                         listOf(previewConfig, recorderConfig),
@@ -4317,7 +4791,7 @@ class Camera2Engine(private val context: Context) {
                         callback
                     )
                     camera.createCaptureSession(sessionConfig)
-                    Log.i(TAG, "Configured 10-bit CameraCaptureSession with DynamicRangeProfile: $targetProfile")
+                    Log.i(TAG, "Configured 10-bit CameraCaptureSession with DynamicRangeProfile: $targetProfile (phys=$physicalCameraId)")
                     return
                 }
             } catch (e: Exception) {
@@ -4325,9 +4799,13 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        val previewConfig = OutputConfiguration(previewSurface)
+        val previewConfig = OutputConfiguration(previewSurface).apply {
+            if (usePhysicalRouting) setPhysicalCameraId(physicalCameraId)
+        }
         val recorderConfig = if (hasSeparateRecorder) {
-            OutputConfiguration(recorderSurface!!)
+            OutputConfiguration(recorderSurface!!).apply {
+                if (usePhysicalRouting) setPhysicalCameraId(physicalCameraId)
+            }
         } else null
 
         val outputConfigs = if (recorderConfig != null) {
@@ -4347,10 +4825,12 @@ class Camera2Engine(private val context: Context) {
                 camera.createCaptureSession(sessionConfig)
                 return
             } catch (e: Exception) {
+                activeSessionPhysicalCameraId = null
                 Log.w(TAG, "Failed SessionConfiguration for recording, falling back to createCaptureSession", e)
             }
         }
 
+        activeSessionPhysicalCameraId = null
         @Suppress("DEPRECATION")
         val surfaces = if (hasSeparateRecorder) {
             listOf(previewSurface, recorderSurface!!)
@@ -4815,6 +5295,10 @@ class Camera2Engine(private val context: Context) {
                 // Feeds camera frames to both previewSurface and recorderSurface.
                 backgroundHandler?.post {
                     try {
+                        val useLogicalZoom = canUseLogicalZoomForLens(camera.id, lens, currentZoom)
+                        val targetPhysId = if (useLogicalZoom) null else lens.physicalCameraId
+                        activeSessionPhysicalCameraId = targetPhysId
+
                         val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                             addTarget(previewSurf)
                             addTarget(recorderSurface)
@@ -4830,7 +5314,9 @@ class Camera2Engine(private val context: Context) {
                                 }
                             }
                         }
-                        previewRequestBuilder = recordBuilder
+                        synchronized(previewRequestLock) {
+                            previewRequestBuilder = recordBuilder
+                        }
 
                         var isFallbackActive = false
                         val sessionCallback = object : CameraCaptureSession.StateCallback() {
@@ -4838,13 +5324,19 @@ class Camera2Engine(private val context: Context) {
                                 Log.i(TAG, "[RECORDING_SESSION] Video recording session configured")
                                 captureSession = session
                                 try {
-                                    session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
+                                    synchronized(previewRequestLock) {
+                                        applyCommonSettings(recordBuilder)
+                                        session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
+                                    }
                                     if (!isSoftwareCinema) {
                                         mediaRecorder?.start()
                                     }
                                     _isRecordingVideo.value = true
                                     isStartingRecording.set(false)
                                     startVideoTimer()
+                                    if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {
+                                        completeLensSwitch(lens)
+                                    }
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed starting repeating request or recorder", e)
                                     cleanupFailedRecording(onError, "Failed to start recording: ${e.message}")
@@ -4853,6 +5345,7 @@ class Camera2Engine(private val context: Context) {
 
                             override fun onConfigureFailed(session: CameraCaptureSession) {
                                 Log.w(TAG, "[RECORDING_SESSION] Video capture session configuration failed, trying safe standard fallback")
+                                activeSessionPhysicalCameraId = null
                                 if (!isFallbackActive) {
                                     isFallbackActive = true
                                     try {
@@ -4869,7 +5362,9 @@ class Camera2Engine(private val context: Context) {
                                                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, safeRange)
                                             }
                                         }
-                                        previewRequestBuilder = safeBuilder
+                                        synchronized(previewRequestLock) {
+                                            previewRequestBuilder = safeBuilder
+                                        }
 
                                         @Suppress("DEPRECATION")
                                         val fallbackSurfaces = listOf(previewSurf, recorderSurface)
@@ -4878,13 +5373,19 @@ class Camera2Engine(private val context: Context) {
                                                 Log.i(TAG, "[RECORDING_SESSION] Fallback video recording session configured successfully")
                                                 captureSession = fallbackSession
                                                 try {
-                                                    fallbackSession.setRepeatingRequest(safeBuilder.build(), captureCallback, backgroundHandler)
+                                                    synchronized(previewRequestLock) {
+                                                        applyCommonSettings(safeBuilder)
+                                                        fallbackSession.setRepeatingRequest(safeBuilder.build(), captureCallback, backgroundHandler)
+                                                    }
                                                     if (!isSoftwareCinema) {
                                                         mediaRecorder?.start()
                                                     }
                                                     _isRecordingVideo.value = true
                                                     isStartingRecording.set(false)
                                                     startVideoTimer()
+                                                    if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {
+                                                        completeLensSwitch(lens)
+                                                    }
                                                 } catch (e: Exception) {
                                                     cleanupFailedRecording(onError, "Failed to start fallback recording: ${e.message}")
                                                 }
@@ -4899,18 +5400,27 @@ class Camera2Engine(private val context: Context) {
                                                         addTarget(recorderSurface)
                                                         applyCommonSettings(this)
                                                     }
+                                                    synchronized(previewRequestLock) {
+                                                        previewRequestBuilder = previewTemplateBuilder
+                                                    }
                                                     @Suppress("DEPRECATION")
                                                     camera.createCaptureSession(fallbackSurfaces, object : CameraCaptureSession.StateCallback() {
                                                         override fun onConfigured(prevSession: CameraCaptureSession) {
                                                             captureSession = prevSession
                                                             try {
-                                                                prevSession.setRepeatingRequest(previewTemplateBuilder.build(), captureCallback, backgroundHandler)
+                                                                synchronized(previewRequestLock) {
+                                                                    applyCommonSettings(previewTemplateBuilder)
+                                                                    prevSession.setRepeatingRequest(previewTemplateBuilder.build(), captureCallback, backgroundHandler)
+                                                                }
                                                                 if (!isSoftwareCinema) {
                                                                     mediaRecorder?.start()
                                                                 }
                                                                 _isRecordingVideo.value = true
                                                                 isStartingRecording.set(false)
                                                                 startVideoTimer()
+                                                                if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {
+                                                                    completeLensSwitch(lens)
+                                                                }
                                                             } catch (e: Exception) {
                                                                 cleanupFailedRecording(onError, "Recording initialization failed: ${e.message}")
                                                             }
@@ -4941,6 +5451,7 @@ class Camera2Engine(private val context: Context) {
                             previewSurface = previewSurf,
                             recorderSurface = recorderSurface,
                             is10Bit = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES),
+                            physicalCameraId = targetPhysId,
                             callback = sessionCallback
                         )
                     } catch (e: Exception) {
@@ -6009,6 +6520,9 @@ class Camera2Engine(private val context: Context) {
 
     private fun closeCameraCaptureSession() {
         try {
+            pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+            pendingZoomRunnable = null
+            activeSessionPhysicalCameraId = null
             captureSession?.close()
             captureSession = null
         } catch (e: Exception) {

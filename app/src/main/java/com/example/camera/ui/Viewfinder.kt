@@ -106,10 +106,12 @@ fun Viewfinder(
     onFrameLuminanceStats: ((com.example.camera.engine.FrameLuminanceStats) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var currentScale by remember(currentZoom) { mutableFloatStateOf(currentZoom) }
+    var currentScale by remember { mutableFloatStateOf(currentZoom) }
 
     LaunchedEffect(currentZoom) {
-        currentScale = currentZoom
+        if (abs(currentZoom - currentScale) > 0.05f) {
+            currentScale = currentZoom
+        }
     }
 
     BoxWithConstraints(
@@ -173,9 +175,8 @@ fun Viewfinder(
                                 changed = true
                             }
                             if (changed) {
-                                val rounded = (updated * 10f).roundToInt() / 10f
-                                currentScale = rounded
-                                onZoomChange(rounded)
+                                currentScale = updated
+                                onZoomChange(updated)
                             }
                         }
                     }

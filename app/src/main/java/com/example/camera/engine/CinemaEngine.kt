@@ -314,6 +314,7 @@ class CinemaEngine(private val context: Context) {
                     CinemaColorProfile.REC_2020 -> 2.1f
                     CinemaColorProfile.APPLE_LOG_2 -> 1.60f
                     CinemaColorProfile.SAMSUNG_APV_LOG -> 1.65f
+                    CinemaColorProfile.PROCESSED_JPEG -> 2.2f
                 }
                 val lutContrastOffset = if (lutForIsp != CinematicLut.NONE) (lutForIsp.contrast - 1.0f) * 0.3f else 0.0f
                 val washedOutOffset = config.washedOut * 0.35f

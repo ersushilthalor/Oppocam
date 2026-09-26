@@ -764,12 +764,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             engine.availableLenses.collect { lenses ->
                 if (lenses.isNotEmpty()) {
                     refreshActiveZoomPresets()
+                    val savedModeZoom = preferences.getModeZoom(preferences.cameraMode)
                     val savedModeLens = preferences.getModeLens(preferences.cameraMode, lenses)
                     if (savedModeLens != null && engine.selectedLens.value?.id != savedModeLens.id) {
-                        engine.selectLens(savedModeLens)
-                    }
-                    val savedModeZoom = preferences.getModeZoom(preferences.cameraMode)
-                    if (savedModeZoom > 0f) {
+                        if (savedModeZoom > 0f) {
+                            _currentZoom.value = savedModeZoom
+                        }
+                        engine.selectLens(
+                            savedModeLens,
+                            preserveZoom = savedModeZoom > 0f,
+                            targetZoom = savedModeZoom.takeIf { it > 0f }
+                        )
+                    } else if (savedModeZoom > 0f) {
                         _currentZoom.value = savedModeZoom
                         engine.setZoom(savedModeZoom, isPresetTap = false)
                     }
@@ -868,13 +874,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 4. Switch engine mode early to synchronize preview buffer and session
         engine.setMode(mode)
 
-        // 5. Restore mode-specific lens if available
+        // 5. Restore mode-specific lens and zoom if available
+        val modeZoom = preferences.getModeZoom(mode)
         val modeLens = preferences.getModeLens(mode, engine.availableLenses.value)
         if (modeLens != null && modeLens.id != engine.selectedLens.value?.id) {
-            engine.selectLens(modeLens)
-        }
-        val modeZoom = preferences.getModeZoom(mode)
-        if (modeZoom > 0f) {
+            if (modeZoom > 0f) {
+                _currentZoom.value = modeZoom
+            }
+            engine.selectLens(
+                modeLens,
+                preserveZoom = modeZoom > 0f,
+                targetZoom = modeZoom.takeIf { it > 0f }
+            )
+        } else if (modeZoom > 0f) {
             _currentZoom.value = modeZoom
             engine.setZoom(modeZoom, isPresetTap = false)
         }
@@ -1277,9 +1289,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
-        val ultraWideLens = engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val currentFacing = engine.selectedLens.value?.facing
+        val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
+        val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+            ?: engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
         val minZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
-        val clamped = zoom.coerceIn(minZoom, 10.0f)
+        val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 10.0f
+        val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 10.0f)
+        val clamped = zoom.coerceIn(minZoom, maxZoom)
+        _currentZoom.value = clamped
         preferences.setModeZoom(_cameraMode.value, clamped)
         engine.setZoom(clamped, isPresetTap)
     }

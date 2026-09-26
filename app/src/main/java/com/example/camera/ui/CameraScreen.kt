@@ -258,7 +258,13 @@ fun CameraScreen(
                 displayedLenses.any { it.lensType == LensType.ULTRAWIDE && it.isPhysical } || displayedLenses.any { it.baseZoomRatio < 0.9f }
             }
             val minViewfinderZoom = if (hasRealUltraWide) 0.5f else 1.0f
-            val maxViewfinderZoom = kotlin.math.max(capabilities.maxZoom, 10.0f)
+            val activeFacing = selectedLens?.facing
+            val maxLensZoom = remember(displayedLenses, activeFacing) {
+                displayedLenses
+                    .filter { activeFacing == null || it.facing == activeFacing }
+                    .maxOfOrNull { it.maxZoomRatio } ?: 10.0f
+            }
+            val maxViewfinderZoom = maxOf(capabilities.maxZoom, maxLensZoom, 10.0f)
 
             // 1. Viewfinder layer preserving exact aspect ratio without distortion
             Viewfinder(
