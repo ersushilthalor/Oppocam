@@ -67,6 +67,7 @@ class Camera2Engine(private val context: Context) {
     // Background threads
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Camera instances
     private var cameraDevice: CameraDevice? = null
@@ -3805,9 +3806,21 @@ class Camera2Engine(private val context: Context) {
      * ultra-fast hardware sequential burst, and background highlight-only computational fusion.
      */
     private fun takePhotoHdrPlusRaw(onComplete: (Uri?) -> Unit) {
-        val camera = cameraDevice ?: return
-        val session = captureSession ?: return
-        val readerRaw = imageReaderRaw ?: return
+        val camera = cameraDevice ?: run {
+            _isCapturing.value = false
+            mainHandler.post { onComplete(null) }
+            return
+        }
+        val session = captureSession ?: run {
+            _isCapturing.value = false
+            mainHandler.post { onComplete(null) }
+            return
+        }
+        val readerRaw = imageReaderRaw ?: run {
+            _isCapturing.value = false
+            mainHandler.post { onComplete(null) }
+            return
+        }
         val activeLens = _selectedLens.value
         val chars = activeLens?.let { getCharacteristics(it.cameraId) }
 
@@ -3895,6 +3908,19 @@ class Camera2Engine(private val context: Context) {
                     framesToProcess.add(enrichedFrame)
                 }
 
+                if (framesToProcess.isEmpty()) {
+                    for (rawFrame in capturedRawFramesByIndex.values) {
+                        framesToProcess.add(rawFrame)
+                    }
+                }
+
+                if (framesToProcess.isEmpty()) {
+                    Log.e(TAG, "[HDR+] No RAW frames captured to process")
+                    _isCapturing.value = false
+                    mainHandler.post { onComplete(null) }
+                    return
+                }
+
                 engineScope.launch(Dispatchers.Default) {
                     try {
                         val mergedJpeg = hdrPlusEngine.processHdrPlusRawCapture(
@@ -3902,7 +3928,7 @@ class Camera2Engine(private val context: Context) {
                             jpegQuality = preferences.jpegQuality,
                             orientationDegrees = captureOrientation
                         )
-                        val uri = saveJpegBytesToMediaStore(mergedJpeg)
+                        val uri = saveJpegBytesToMediaStore(mergedJpeg, skipPipeline = true)
                         updateStorageStats()
                         withContext(Dispatchers.Main) {
                             onComplete(uri)
@@ -3963,7 +3989,7 @@ class Camera2Engine(private val context: Context) {
                     triggerHdrPlusProcessingIfReady(force = true)
                 } else if (isProcessingTriggered.compareAndSet(false, true)) {
                     _isCapturing.value = false
-                    onComplete(null)
+                    mainHandler.post { onComplete(null) }
                 }
             }, 3000L)
 
@@ -3990,13 +4016,17 @@ class Camera2Engine(private val context: Context) {
                     failure: CaptureFailure
                 ) {
                     Log.w(TAG, "[HDR+] Capture burst frame failed: reason=${failure.reason}")
+                    completedResultCount.incrementAndGet()
+                    if (receivedCount.get() >= expectedCount) {
+                        triggerHdrPlusProcessingIfReady(force = true)
+                    }
                 }
             }, backgroundHandler)
 
         } catch (e: Throwable) {
             Log.e(TAG, "[HDR+] Failed to trigger RAW HDR+ burst", e)
             _isCapturing.value = false
-            onComplete(null)
+            mainHandler.post { onComplete(null) }
         }
     }
 
@@ -5950,6 +5980,9 @@ class Camera2Engine(private val context: Context) {
                         android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
                         android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
                         android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                        android.media.ExifInterface.ORIENTATION_NORMAL -> {
+                            // Already upright! Do NOT rotate!
+                        }
                         else -> {
                             if (rawBitmap.width > rawBitmap.height) {
                                 matrix.postRotate(270f)
@@ -6025,6 +6058,9 @@ class Camera2Engine(private val context: Context) {
                         android.media.ExifInterface.ORIENTATION_ROTATE_90 -> rotMatrix.postRotate(90f)
                         android.media.ExifInterface.ORIENTATION_ROTATE_180 -> rotMatrix.postRotate(180f)
                         android.media.ExifInterface.ORIENTATION_ROTATE_270 -> rotMatrix.postRotate(270f)
+                        android.media.ExifInterface.ORIENTATION_NORMAL -> {
+                            // Already upright! Do NOT rotate!
+                        }
                         else -> {
                             if (isFrontFacing && rawBitmap.width > rawBitmap.height) {
                                 rotMatrix.postRotate(270f)

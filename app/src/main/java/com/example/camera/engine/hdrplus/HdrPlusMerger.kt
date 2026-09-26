@@ -15,7 +15,7 @@ import kotlin.math.pow
  * motion-aware ghosting suppression, shadow-preserving toe gradation, and hue-preserving
  * filmic shoulder tone mapping to output a single high-quality JPEG image.
  */
-class HdrPlusMerger {
+class HdrPlusMerger(private val context: android.content.Context? = null) {
 
     companion object {
         private const val TAG = "HdrPlusMerger"
@@ -389,8 +389,13 @@ class HdrPlusMerger {
         finalBitmap.recycle()
 
         val rawJpeg = byteStream.toByteArray()
-        return try {
-            val tempFile = java.io.File.createTempFile("hdrplus_out", ".jpg")
+        val cacheDir = context?.cacheDir
+        val stampedBytes = try {
+            val tempFile = if (cacheDir != null && cacheDir.exists()) {
+                java.io.File.createTempFile("hdrplus_out", ".jpg", cacheDir)
+            } else {
+                java.io.File.createTempFile("hdrplus_out", ".jpg")
+            }
             tempFile.writeBytes(rawJpeg)
             val exif = android.media.ExifInterface(tempFile.absolutePath)
             exif.setAttribute(
@@ -398,11 +403,12 @@ class HdrPlusMerger {
                 android.media.ExifInterface.ORIENTATION_NORMAL.toString()
             )
             exif.saveAttributes()
-            val stampedBytes = tempFile.readBytes()
+            val stamped = tempFile.readBytes()
             tempFile.delete()
-            stampedBytes
+            stamped
         } catch (e: Exception) {
             rawJpeg
         }
+        stampedBytes
     }
 }

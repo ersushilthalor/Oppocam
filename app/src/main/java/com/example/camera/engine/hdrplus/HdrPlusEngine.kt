@@ -25,7 +25,7 @@ class HdrPlusEngine(private val context: Context) {
     val predictor = HdrPlusPredictor()
     val developer = HdrPlusRawDeveloper()
     val aligner = HdrPlusAligner()
-    val merger = HdrPlusMerger()
+    val merger = HdrPlusMerger(context)
 
     /**
      * Checks if hardware can support the RAW HDR+ capture pipeline.
@@ -80,28 +80,21 @@ class HdrPlusEngine(private val context: Context) {
         // matches natural ISP brightness while preventing black crush or midtone clipping
         val baseExpGain = estimateBaselineExposureGain(baseRaw)
 
-        // Parallelize RAW frame developing with consistent reference calibration
-        val baseJob = async {
+        // Develop RAW frames with consistent reference calibration
+        val baseDeveloped = developer.developRawToLinearRgb(
+            frame = baseRaw,
+            referenceGains = refGains,
+            referenceCcm = refCcm,
+            baseExposureGain = baseExpGain
+        )
+        val secondaryDeveloped = secondaries.map { sec ->
             developer.developRawToLinearRgb(
-                frame = baseRaw,
+                frame = sec,
                 referenceGains = refGains,
                 referenceCcm = refCcm,
                 baseExposureGain = baseExpGain
             )
         }
-        val secondaryJobs = secondaries.map { sec ->
-            async {
-                developer.developRawToLinearRgb(
-                    frame = sec,
-                    referenceGains = refGains,
-                    referenceCcm = refCcm,
-                    baseExposureGain = baseExpGain
-                )
-            }
-        }
-
-        val baseDeveloped = baseJob.await()
-        val secondaryDeveloped = secondaryJobs.map { it.await() }
 
         // Downsampled luminance thumbnail for base frame alignment
         val baseThumb = developer.createLumaThumbnail(baseDeveloped)
