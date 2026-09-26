@@ -159,60 +159,45 @@ fun HorizontalRulerZoomSlider(
                         .weight(1f)
                         .fillMaxHeight()
                         .pointerInput(safeMinZoom, safeMaxZoom, totalRulerWidthPx) {
-                            androidx.compose.foundation.gestures.awaitEachGesture {
-                                val down = androidx.compose.foundation.gestures.awaitFirstDown(requireUnconsumed = false)
+                            detectTapGestures { offset ->
                                 restartAutoHideTimer()
                                 val minZ = safeMinZoomState.value
                                 val maxZ = safeMaxZoomState.value
-                                val downX = down.position.x
-                                var lastX = downX
-                                var isDragGesture = false
-                                val touchSlop = viewConfiguration.touchSlop
-
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-
-                                    if (!change.pressed) {
-                                        // Finger lifted: if it didn't drag past touch slop, treat as tap on ruler
-                                        if (!isDragGesture) {
-                                            val centerX = size.width / 2f
-                                            val deltaX = downX - centerX
-                                            val currentNorm = zoomToNormalized(activeZoom, minZ, maxZ)
-                                            val newNorm = (currentNorm + deltaX / totalRulerWidthPx).coerceIn(0f, 1f)
-                                            val newZoom = normalizedToZoom(newNorm, minZ, maxZ)
-                                            activeZoom = newZoom
-                                            accumulatedNorm = newNorm
-                                            onZoomChangeState.value(newZoom)
-                                        } else {
-                                            isDragging = false
-                                        }
-                                        restartAutoHideTimer()
-                                        break
-                                    } else {
-                                        val totalMovement = abs(change.position.x - downX)
-                                        if (!isDragGesture && totalMovement > touchSlop) {
-                                            isDragGesture = true
-                                            isDragging = true
-                                            accumulatedNorm = zoomToNormalized(activeZoom, minZ, maxZ)
-                                            lastX = change.position.x
-                                        }
-
-                                        if (isDragGesture) {
-                                            change.consume()
-                                            restartAutoHideTimer()
-                                            val deltaX = change.position.x - lastX
-                                            lastX = change.position.x
-                                            // 1:1 physical ruler movement: dragging 1px moves ruler by exactly 1px
-                                            val deltaNorm = -deltaX / totalRulerWidthPx
-                                            accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
-                                            val newZoom = normalizedToZoom(accumulatedNorm, minZ, maxZ)
-                                            activeZoom = newZoom
-                                            onZoomChangeState.value(newZoom)
-                                        }
-                                    }
-                                }
+                                val centerX = size.width / 2f
+                                val deltaX = offset.x - centerX
+                                val currentNorm = zoomToNormalized(activeZoom, minZ, maxZ)
+                                val newNorm = (currentNorm + deltaX / totalRulerWidthPx).coerceIn(0f, 1f)
+                                val newZoom = normalizedToZoom(newNorm, minZ, maxZ)
+                                activeZoom = newZoom
+                                accumulatedNorm = newNorm
+                                onZoomChangeState.value(newZoom)
                             }
+                        }
+                        .pointerInput(safeMinZoom, safeMaxZoom, totalRulerWidthPx) {
+                            detectDragGestures(
+                                onDragStart = {
+                                    restartAutoHideTimer()
+                                    isDragging = true
+                                    accumulatedNorm = zoomToNormalized(activeZoom, safeMinZoomState.value, safeMaxZoomState.value)
+                                },
+                                onDragEnd = {
+                                    isDragging = false
+                                    restartAutoHideTimer()
+                                },
+                                onDragCancel = {
+                                    isDragging = false
+                                    restartAutoHideTimer()
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    restartAutoHideTimer()
+                                    val deltaNorm = -dragAmount.x / totalRulerWidthPx
+                                    accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
+                                    val newZoom = normalizedToZoom(accumulatedNorm, safeMinZoomState.value, safeMaxZoomState.value)
+                                    activeZoom = newZoom
+                                    onZoomChangeState.value(newZoom)
+                                }
+                            )
                         }
                         .testTag("zoom_ruler_canvas_container")
                 ) {
