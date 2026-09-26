@@ -388,6 +388,21 @@ class HdrPlusMerger {
         finalBitmap.compress(Bitmap.CompressFormat.JPEG, jpegQuality.coerceIn(80, 100), byteStream)
         finalBitmap.recycle()
 
-        byteStream.toByteArray()
+        val rawJpeg = byteStream.toByteArray()
+        return try {
+            val tempFile = java.io.File.createTempFile("hdrplus_out", ".jpg")
+            tempFile.writeBytes(rawJpeg)
+            val exif = android.media.ExifInterface(tempFile.absolutePath)
+            exif.setAttribute(
+                android.media.ExifInterface.TAG_ORIENTATION,
+                android.media.ExifInterface.ORIENTATION_NORMAL.toString()
+            )
+            exif.saveAttributes()
+            val stampedBytes = tempFile.readBytes()
+            tempFile.delete()
+            stampedBytes
+        } catch (e: Exception) {
+            rawJpeg
+        }
     }
 }

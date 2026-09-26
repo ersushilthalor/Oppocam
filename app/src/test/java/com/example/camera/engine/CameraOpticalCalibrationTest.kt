@@ -81,7 +81,7 @@ class CameraOpticalCalibrationTest {
     @Test
     fun testHysteresisPreventsOscillationDuringZoomDrag() {
         // When currently on Ultra-Wide:
-        // Dragging up past 0.9x and 1.0x should remain on Ultra-Wide until >= 1.02x threshold
+        // Dragging below 1.0x stays on Ultra-Wide; at >= 1.0x transitions cleanly to Main Wide
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
@@ -93,8 +93,9 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
+        // At 1.0x and above, transitions to Wide
         assertEquals(
-            LensType.ULTRAWIDE,
+            LensType.WIDE,
             CameraOpticalCalibration.resolveTargetLensType(
                 currentLensType = LensType.ULTRAWIDE,
                 targetZoom = 1.00f,
@@ -104,7 +105,6 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
-        // Switches to Wide at 1.02x
         assertEquals(
             LensType.WIDE,
             CameraOpticalCalibration.resolveTargetLensType(
@@ -118,9 +118,9 @@ class CameraOpticalCalibrationTest {
         )
 
         // When currently on Wide (Main):
-        // Dragging down below 1.0x (e.g. 0.98x, 0.95x) remains on Wide until < 0.92x threshold
+        // Above 1.0x stays on Wide, transitions to Ultra-Wide below 1.0x
         assertEquals(
-            LensType.WIDE,
+            LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
                 currentLensType = LensType.WIDE,
                 targetZoom = 0.98f,
@@ -131,7 +131,7 @@ class CameraOpticalCalibrationTest {
             )
         )
         assertEquals(
-            LensType.WIDE,
+            LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
                 currentLensType = LensType.WIDE,
                 targetZoom = 0.95f,
@@ -141,7 +141,7 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
-        // Switches to Ultra-Wide below 0.92x
+        // Switches to Ultra-Wide below 1.0x
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(

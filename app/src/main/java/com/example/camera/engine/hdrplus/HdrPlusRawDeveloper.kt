@@ -107,10 +107,10 @@ class HdrPlusRawDeveloper {
     ): HdrPlusRawFrame {
         val width = image.width
         val height = image.height
-        val plane = image.planes[0]
-        val buffer = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        val plane = image.planes.firstOrNull() ?: throw IllegalArgumentException("Image contains no planes")
+        val buffer = plane.buffer.duplicate().apply { rewind() }.order(ByteOrder.LITTLE_ENDIAN)
         val rowStride = plane.rowStride.coerceAtLeast(width * 2)
-        val pixelStride = plane.pixelStride.coerceAtLeast(2)
+        val pixelStride = if (plane.pixelStride > 0) plane.pixelStride else 2
 
         // Extract tightly-packed width * height 16-bit Bayer samples respecting rowStride and pixelStride
         val rawData = ShortArray(width * height)

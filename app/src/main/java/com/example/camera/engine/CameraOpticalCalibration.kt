@@ -159,13 +159,13 @@ object CameraOpticalCalibration {
         // Continuous dragging with hysteresis thresholds:
         return when (currentLensType) {
             LensType.ULTRAWIDE -> {
-                // Ultra-wide stays active while dragging up until 1.02x to avoid early jump
-                if (targetZoom >= 1.02f) LensType.WIDE else LensType.ULTRAWIDE
+                // Transition cleanly at 1.0x where Ultra-Wide FOV matches uncropped 1x Main
+                if (targetZoom >= 1.0f) LensType.WIDE else LensType.ULTRAWIDE
             }
             LensType.WIDE -> {
                 when {
-                    // Main stays active down to 0.92x before falling back to Ultra-Wide
-                    targetZoom < 0.92f && hasUltraWide -> LensType.ULTRAWIDE
+                    // Transition to Ultra-Wide below 1.0x since physical Main sensor cannot zoom wider than 1x
+                    targetZoom < 1.0f && hasUltraWide -> LensType.ULTRAWIDE
                     // Main stays active up to 2.15x before switching to 2x Tele
                     targetZoom >= 2.15f && hasTelephoto2x -> LensType.TELEPHOTO
                     // Main stays active up to 3.15x before switching to 3x Tele
