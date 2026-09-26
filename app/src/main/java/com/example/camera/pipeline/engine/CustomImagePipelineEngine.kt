@@ -427,22 +427,29 @@ class CustomImagePipelineEngine(private val context: Context) {
         noiseReduction: Float,
         detailPreservation: Float
     ) {
-        val original = pixels.clone()
         val sharpWeight = (sharpness / 100.0f) * 0.45f
         val microWeight = microContrast * 0.35f
         val textWeight = texture * 0.30f
         val nrStrength = noiseReduction * 0.30f
 
-        for (y in 1 until height - 1) {
-            val rowOffset = y * width
-            for (x in 1 until width - 1) {
-                val idx = rowOffset + x
+        var prevRow = IntArray(width)
+        var currRow = IntArray(width)
+        var nextRow = IntArray(width)
 
-                val pC = original[idx]
-                val pT = original[idx - width]
-                val pB = original[idx + width]
-                val pL = original[idx - 1]
-                val pR = original[idx + 1]
+        System.arraycopy(pixels, 0, prevRow, 0, width)
+        System.arraycopy(pixels, width, currRow, 0, width)
+
+        for (y in 1 until height - 1) {
+            val nextRowOffset = (y + 1) * width
+            System.arraycopy(pixels, nextRowOffset, nextRow, 0, width)
+            val rowOffset = y * width
+
+            for (x in 1 until width - 1) {
+                val pC = currRow[x]
+                val pT = prevRow[x]
+                val pB = nextRow[x]
+                val pL = currRow[x - 1]
+                val pR = currRow[x + 1]
 
                 val lumaC = ((pC shr 16) and 0xFF) * 0.299f + ((pC shr 8) and 0xFF) * 0.587f + (pC and 0xFF) * 0.114f
                 val lumaT = ((pT shr 16) and 0xFF) * 0.299f + ((pT shr 8) and 0xFF) * 0.587f + (pT and 0xFF) * 0.114f
@@ -481,8 +488,13 @@ class CustomImagePipelineEngine(private val context: Context) {
                 g = g.coerceIn(0f, 255f)
                 b = b.coerceIn(0f, 255f)
 
-                pixels[idx] = (0xFF shl 24) or (r.toInt() shl 16) or (g.toInt() shl 8) or b.toInt()
+                pixels[rowOffset + x] = (0xFF shl 24) or (r.toInt() shl 16) or (g.toInt() shl 8) or b.toInt()
             }
+
+            val temp = prevRow
+            prevRow = currRow
+            currRow = nextRow
+            nextRow = temp
         }
     }
 

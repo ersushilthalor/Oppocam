@@ -533,11 +533,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun selectPipelinePreset(preset: com.example.camera.pipeline.model.PipelinePreset) {
         _activePipelinePreset.value = preset
         preferences.saveActivePipelinePreset(preset)
-        _isCustomPipelineEnabled.value = true
-        preferences.isCustomPipelineEnabled = true
         val params = preferences.getPipelineParams(preset.id)
         _activePipelineParams.value = params
-        showToast("Pipeline: ${preset.displayName}")
+        val status = if (_isCustomPipelineEnabled.value) "Pipeline: ${preset.displayName}" else "${preset.displayName} selected (Pipeline: OFF)"
+        showToast(status)
     }
 
     fun updatePipelineParams(params: com.example.camera.pipeline.model.CustomPipelineParams) {

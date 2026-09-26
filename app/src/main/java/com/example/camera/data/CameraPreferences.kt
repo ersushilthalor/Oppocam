@@ -1221,7 +1221,7 @@ class CameraPreferences(context: Context) {
     // --- Custom Image Processing Pipeline Persistence ---
 
     var isCustomPipelineEnabled: Boolean
-        get() = prefs.getBoolean("pref_custom_pipeline_enabled", true)
+        get() = prefs.getBoolean("pref_custom_pipeline_enabled", false)
         set(value) = prefs.edit().putBoolean("pref_custom_pipeline_enabled", value).apply()
 
     var activePipelinePresetId: String

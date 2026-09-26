@@ -37,6 +37,8 @@ fun PipelinePresetFloatingWindow(
     activePreset: PipelinePreset,
     allPresets: List<PipelinePreset>,
     onPresetSelected: (PipelinePreset) -> Unit,
+    isPipelineEnabled: Boolean = false,
+    onToggleEnabled: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -92,6 +94,43 @@ fun PipelinePresetFloatingWindow(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // Dedicated ON/OFF Master Toggle
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isPipelineEnabled) accentGold.copy(alpha = 0.20f) else Color(0x22FFFFFF))
+                            .border(
+                                1.dp,
+                                if (isPipelineEnabled) accentGold.copy(alpha = 0.6f) else Color.White.copy(alpha = 0.2f),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onToggleEnabled(!isPipelineEnabled) }
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                            .testTag("pipeline_master_toggle")
+                    ) {
+                        Text(
+                            text = if (isPipelineEnabled) "ON" else "OFF",
+                            color = if (isPipelineEnabled) accentGold else Color.White.copy(alpha = 0.65f),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Switch(
+                            checked = isPipelineEnabled,
+                            onCheckedChange = onToggleEnabled,
+                            modifier = Modifier
+                                .size(width = 36.dp, height = 22.dp)
+                                .testTag("pipeline_enable_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = accentGold,
+                                checkedTrackColor = accentGold.copy(alpha = 0.45f),
+                                uncheckedThumbColor = Color(0xFFAAAAAA),
+                                uncheckedTrackColor = Color(0xFF333338)
+                            )
+                        )
+                    }
+
                     // Active preset badge
                     Box(
                         modifier = Modifier

@@ -128,9 +128,10 @@ fun Viewfinder(
             CameraMode.VIDEO, CameraMode.CINEMA -> false
             else -> if (aspectRatio > 0f) aspectRatio < 1.5f else true
         }
-        val targetRatio = if (isFourThree || isProModeActive) 4f / 3f else 16f / 9f
+        val targetRatio = if (isFourThree) 4f / 3f else 16f / 9f
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
+        val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
 
         // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame
         val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
@@ -143,12 +144,12 @@ fun Viewfinder(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black),
-            contentAlignment = if (isFourThree || isProModeActive) Alignment.TopCenter else Alignment.Center
+            contentAlignment = if (isFourThree) Alignment.TopCenter else Alignment.Center
         ) {
             Box(
                 modifier = Modifier
                     .then(
-                        if (isFourThree || isProModeActive) {
+                        if (isFourThree) {
                             Modifier
                                 .statusBarsPadding()
                                 .padding(top = 52.dp)
@@ -206,17 +207,17 @@ fun Viewfinder(
                                 val newW = right - left
                                 val newH = bottom - top
                                 if (newW > 0 && newH > 0) {
-                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio)
+                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation)
                                 }
                             }
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation)
                                     onSurfaceTextureAvailable(st)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -264,7 +265,7 @@ fun Viewfinder(
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
-                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio)
+                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation)
                         }
 
                         val effectiveLut = activeLut ?: cinemaConfig?.selectedLut
@@ -595,16 +596,18 @@ fun CameraGridOverlay(
 private fun updateTextureViewTransform(
     textureView: TextureView,
     previewBufferSize: CameraSize?,
-    targetRatio: Float
+    targetRatio: Float,
+    sensorOrientation: Int = 90
 ) {
     val viewW = textureView.width.toFloat()
     val viewH = textureView.height.toFloat()
     if (viewW <= 0f || viewH <= 0f) return
 
     val matrix = Matrix()
+    val isSensorLandscape = (sensorOrientation == 90 || sensorOrientation == 270)
     val bufAspect = if (previewBufferSize != null && previewBufferSize.width > 0 && previewBufferSize.height > 0) {
-        val bufPortraitW = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-        val bufPortraitH = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+        val bufPortraitW = if (isSensorLandscape) minOf(previewBufferSize.width, previewBufferSize.height).toFloat() else maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+        val bufPortraitH = if (isSensorLandscape) maxOf(previewBufferSize.width, previewBufferSize.height).toFloat() else minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
         bufPortraitH / bufPortraitW
     } else {
         targetRatio
@@ -614,7 +617,7 @@ private fun updateTextureViewTransform(
     val centerX = viewW / 2f
     val centerY = viewH / 2f
 
-    // When view and buffer aspect ratios differ, apply uniform center-crop scaling
+    // When view and buffer aspect ratios differ, apply mathematically correct uniform scaling
     // to strictly preserve original aspect ratio and prevent vertical stretching or distortion.
     if (kotlin.math.abs(bufAspect - viewAspect) > 0.005f) {
         if (viewAspect > bufAspect) {

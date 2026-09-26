@@ -675,6 +675,10 @@ fun CameraScreen(
                 onPresetSelected = { preset ->
                     viewModel.selectPipelinePreset(preset)
                 },
+                isPipelineEnabled = isCustomPipelineEnabled,
+                onToggleEnabled = { enabled ->
+                    viewModel.toggleCustomPipelineEnabled(enabled)
+                },
                 onDismiss = {
                     viewModel.setPipelinePresetFloatingWindowOpen(false)
                 }

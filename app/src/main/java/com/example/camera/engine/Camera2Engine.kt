@@ -808,7 +808,10 @@ class Camera2Engine(private val context: Context) {
                     captureSession = null
                     _isCameraReady.value = false
 
-                    val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
+                    val targetRatio = getTargetAspectRatioForMode(currentMode)
+                    val optimalSize = getOptimalPreviewSize(targetLens.cameraId, targetRatio)
+                    _previewAspectRatio.value = targetRatio
+                    _previewBufferSize.value = optimalSize
                     val cameraW = max(optimalSize.width, optimalSize.height)
                     val cameraH = min(optimalSize.width, optimalSize.height)
                     texture.setDefaultBufferSize(cameraW, cameraH)
@@ -2259,6 +2262,9 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    private var lastZoomPreviewUpdateTime = 0L
+    private var pendingZoomRunnable: Runnable? = null
+
     /**
      * Set Zoom (.5x to 10x) with seamless automatic lens switching and hysteresis
      */
@@ -2299,7 +2305,28 @@ class Camera2Engine(private val context: Context) {
                     return
                 }
             }
-            updatePreviewSettings()
+            if (isPresetTap) {
+                pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+                pendingZoomRunnable = null
+                lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
+                updatePreviewSettings()
+            } else {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastZoomPreviewUpdateTime >= 28L) {
+                    lastZoomPreviewUpdateTime = now
+                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+                    pendingZoomRunnable = null
+                    updatePreviewSettings()
+                } else {
+                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+                    val runnable = Runnable {
+                        lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
+                        updatePreviewSettings()
+                    }
+                    pendingZoomRunnable = runnable
+                    backgroundHandler?.postDelayed(runnable, 30L)
+                }
+            }
             return
         }
 
@@ -2341,7 +2368,28 @@ class Camera2Engine(private val context: Context) {
             // Same logical/physical device: smoothly update active lens and zoom without tearing down camera session
             _selectedLens.value = targetLens
             activeSessionLens = targetLens
-            updatePreviewSettings()
+            if (isPresetTap) {
+                pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+                pendingZoomRunnable = null
+                lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
+                updatePreviewSettings()
+            } else {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastZoomPreviewUpdateTime >= 28L) {
+                    lastZoomPreviewUpdateTime = now
+                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+                    pendingZoomRunnable = null
+                    updatePreviewSettings()
+                } else {
+                    pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+                    val runnable = Runnable {
+                        lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
+                        updatePreviewSettings()
+                    }
+                    pendingZoomRunnable = runnable
+                    backgroundHandler?.postDelayed(runnable, 30L)
+                }
+            }
         }
     }
 
@@ -3020,14 +3068,12 @@ class Camera2Engine(private val context: Context) {
         val camera = cameraDevice ?: return
         val session = captureSession ?: return
         val readerJpeg = imageReaderJpeg ?: return
-        val readerYuv = imageReaderYuv
-        val isPipelineEnabled = preferences.isCustomPipelineEnabled && readerYuv != null
 
         val activeLens = _selectedLens.value
         val jpegW = readerJpeg.width
         val jpegH = readerJpeg.height
         val mp = (jpegW.toLong() * jpegH.toLong()) / 1_000_000f
-        Log.i(TAG, "[PHOTO_CAPTURE] Initiating capture on ${activeLens?.lensType}: ImageReader JPEG=${jpegW}x${jpegH} (~${mp}MP), YUV=${readerYuv?.width}x${readerYuv?.height}")
+        Log.i(TAG, "[PHOTO_CAPTURE] Initiating capture on ${activeLens?.lensType}: ImageReader JPEG=${jpegW}x${jpegH} (~${mp}MP)")
 
         _isCapturing.value = true
 
@@ -3045,143 +3091,7 @@ class Camera2Engine(private val context: Context) {
             val caps = _capabilities.value
             val isRaw = isRawCaptureEnabled && caps.supportsRaw && imageReaderRaw != null
 
-            if (isPipelineEnabled) {
-                val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                // SENSOR -> UNPROCESSED YUV/RAW -> CUSTOM PIPELINE -> FINAL JPEG
-                captureBuilder.addTarget(readerYuv.surface)
-                if (isRaw) {
-                    imageReaderRaw?.surface?.let { captureBuilder.addTarget(it) }
-                }
-                applyCommonSettings(captureBuilder)
-
-                readerYuv.setOnImageAvailableListener({ reader ->
-                    val image = reader.acquireLatestImage()
-                    if (image != null) {
-                        engineScope.launch(Dispatchers.IO) {
-                            var uncompressedBmp: Bitmap? = null
-                            try {
-                                val rotation = getCaptureJpegOrientation()
-                                val activeLens = _selectedLens.value
-                                val isFront = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-                                val saveMirrored = saveSelfieAsPreviewed
-
-                                // Convert directly from uncompressed YUV sensor planes without intermediate JPEG
-                                try {
-                                    uncompressedBmp = customImagePipelineEngine.convertCameraImageToUncompressedBitmap(
-                                        image = image,
-                                        rotationDegrees = rotation,
-                                        isFrontFacing = isFront,
-                                        saveMirrored = saveMirrored
-                                    )
-                                } finally {
-                                    image.close()
-                                }
-
-                                val sourceBmp = uncompressedBmp ?: throw IllegalStateException("Failed to decode YUV sensor image")
-
-                                // Build downscaled fast preview for 60fps real-time before/after comparison
-                                val maxDim = max(sourceBmp.width, sourceBmp.height)
-                                val previewScale = (1080f / maxDim).coerceAtMost(1.0f)
-                                val previewBmp = if (previewScale < 0.95f) {
-                                    Bitmap.createScaledBitmap(
-                                        sourceBmp,
-                                        (sourceBmp.width * previewScale).roundToInt(),
-                                        (sourceBmp.height * previewScale).roundToInt(),
-                                        true
-                                    )
-                                } else {
-                                    sourceBmp.copy(Bitmap.Config.ARGB_8888, true)
-                                }
-
-                                val activePreset = preferences.getActivePipelinePreset()
-                                val activeParams = preferences.getPipelineParams(activePreset.id)
-
-                                val captureSource = com.example.camera.pipeline.engine.PipelineCaptureSource(
-                                    fullResBitmap = sourceBmp,
-                                    previewBitmap = previewBmp,
-                                    orientationDegrees = rotation,
-                                    isFrontFacing = isFront,
-                                    lensInfo = activeLens,
-                                    appliedPreset = activePreset,
-                                    appliedParams = activeParams
-                                )
-                                com.example.camera.pipeline.engine.PipelineCaptureCache.setCapture(captureSource)
-
-                                // Process uncompressed data through custom pipeline and encode final JPEG directly
-                                val finalJpegBytes = customImagePipelineEngine.processAndEncodeToJpegBytes(
-                                    source = sourceBmp,
-                                    params = activeParams,
-                                    jpegQuality = preferences.jpegQuality
-                                )
-
-                                val uri = saveJpegBytesToMediaStore(finalJpegBytes, skipPipeline = true)
-                                com.example.camera.pipeline.engine.PipelineCaptureCache.updateSavedUri(uri)
-                                _isCapturing.value = false
-                                updateStorageStats()
-                                withContext(Dispatchers.Main) {
-                                    onComplete(uri)
-                                }
-                            } catch (e: Throwable) {
-                                Log.e(TAG, "Error in Custom Pipeline Capture, falling back to direct JPEG save", e)
-                                try {
-                                    val fallbackBmp = uncompressedBmp
-                                    if (fallbackBmp != null) {
-                                        val stream = java.io.ByteArrayOutputStream()
-                                        fallbackBmp.compress(Bitmap.CompressFormat.JPEG, preferences.jpegQuality, stream)
-                                        val fallbackBytes = stream.toByteArray()
-                                        val fallbackUri = saveJpegBytesToMediaStore(fallbackBytes)
-                                        _isCapturing.value = false
-                                        updateStorageStats()
-                                        withContext(Dispatchers.Main) {
-                                            onComplete(fallbackUri)
-                                        }
-                                    } else {
-                                        _isCapturing.value = false
-                                        withContext(Dispatchers.Main) {
-                                            onComplete(null)
-                                        }
-                                    }
-                                } catch (t2: Throwable) {
-                                    Log.e(TAG, "Fallback direct JPEG save also failed", t2)
-                                    _isCapturing.value = false
-                                    withContext(Dispatchers.Main) {
-                                        onComplete(null)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }, backgroundHandler)
-
-                if (isRaw) {
-                    imageReaderRaw?.setOnImageAvailableListener({ reader ->
-                        val rawImage = reader.acquireLatestImage()
-                        if (rawImage != null) {
-                            engineScope.launch(Dispatchers.IO) {
-                                val lens = _selectedLens.value
-                                if (lens != null) {
-                                    val characteristics = getCharacteristics(lens.cameraId)
-                                    if (characteristics != null) {
-                                        saveRawToMediaStore(rawImage, characteristics)
-                                    }
-                                }
-                                rawImage.close()
-                            }
-                        }
-                    }, backgroundHandler)
-                }
-
-                session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureCompleted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        result: TotalCaptureResult
-                    ) {
-                        Log.d(TAG, "Custom pipeline photo capture completed")
-                    }
-                }, backgroundHandler)
-
-            } else if (hdrPlan.bracketType == com.example.camera.engine.hdr.HdrBracketType.SINGLE_FRAME) {
+            if (hdrPlan.bracketType == com.example.camera.engine.hdr.HdrBracketType.SINGLE_FRAME) {
                 // Single-frame capture path (low contrast scene, active flash, or high motion)
                 val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                 captureBuilder.addTarget(readerJpeg.surface)
@@ -3444,7 +3354,22 @@ class Camera2Engine(private val context: Context) {
                 params = params,
                 jpegQuality = preferences.jpegQuality
             )
-            val uri = saveJpegBytesToMediaStore(finalBytes, skipPipeline = true)
+            val tempFile = File.createTempFile("reprocess_exif", ".jpg", context.cacheDir)
+            val bytesWithExif = try {
+                FileOutputStream(tempFile).use { it.write(finalBytes) }
+                val exif = android.media.ExifInterface(tempFile.absolutePath)
+                exif.setAttribute(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_NORMAL.toString()
+                )
+                exif.saveAttributes()
+                tempFile.readBytes()
+            } catch (t: Throwable) {
+                finalBytes
+            } finally {
+                tempFile.delete()
+            }
+            val uri = saveJpegBytesToMediaStore(bytesWithExif, skipPipeline = true)
             com.example.camera.pipeline.engine.PipelineCaptureCache.updateSavedUri(uri)
             updateStorageStats()
             uri
