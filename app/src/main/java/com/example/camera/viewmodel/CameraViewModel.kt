@@ -202,6 +202,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Refocus: $clamped Focus Planes")
     }
 
+    // Advanced RAW HDR+ System
+    private val _isHdrPlusEnabled = MutableStateFlow(preferences.getModeHdrPlusEnabled(preferences.cameraMode))
+    val isHdrPlusEnabled: StateFlow<Boolean> = _isHdrPlusEnabled.asStateFlow()
+
+    private val _hdrPlusFrameCount = MutableStateFlow(preferences.getModeHdrPlusFrameCount(preferences.cameraMode))
+    val hdrPlusFrameCount: StateFlow<com.example.camera.engine.hdrplus.HdrPlusFrameCount> = _hdrPlusFrameCount.asStateFlow()
+
+    fun setHdrPlusEnabled(enabled: Boolean) {
+        val caps = engine.capabilities.value
+        if (enabled && (!caps.supportsRaw || caps.supportedRawResolutions.isEmpty())) {
+            showToast("RAW capture not supported on this sensor")
+            return
+        }
+        _isHdrPlusEnabled.value = enabled
+        preferences.isHdrPlusEnabled = enabled
+        preferences.setModeHdrPlusEnabled(_cameraMode.value, enabled)
+        engine.isHdrPlusEnabled = enabled
+        engine.refreshCaptureSessionForRaw()
+        showToast(if (enabled) "HDR+ Enabled (${_hdrPlusFrameCount.value.label})" else "HDR+ Disabled")
+    }
+
+    fun setHdrPlusFrameCount(count: com.example.camera.engine.hdrplus.HdrPlusFrameCount) {
+        _hdrPlusFrameCount.value = count
+        preferences.hdrPlusFrameCount = count
+        preferences.setModeHdrPlusFrameCount(_cameraMode.value, count)
+        engine.hdrPlusFrameCount = count
+        showToast("HDR+ Mode: ${count.label}")
+    }
+
     // Ultra Fast Shutter System
     private val _isUltraFastShutterEnabled = MutableStateFlow(preferences.getModeUltraFastShutterEnabled(preferences.cameraMode))
     val isUltraFastShutterEnabled: StateFlow<Boolean> = _isUltraFastShutterEnabled.asStateFlow()
@@ -710,6 +739,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.ultraFastShutterFps = preferences.getModeUltraFastShutterFps(initialMode)
         engine.isHighQualityZoomEnabled = preferences.getModeHqZoomEnabled(initialMode)
         engine.zoomProcessingQuality = preferences.getModeZoomQuality(initialMode)
+        engine.isHdrPlusEnabled = preferences.getModeHdrPlusEnabled(initialMode)
+        engine.hdrPlusFrameCount = preferences.getModeHdrPlusFrameCount(initialMode)
         engine.setMode(initialMode)
         engine.restoreInitialVideoResolution(CameraResolution(preferences.videoWidth, preferences.videoHeight))
         engine.setCinemaConfig(preferences.getCinemaConfig())
@@ -909,6 +940,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val mAutoHdr = preferences.getModeAutoHdr(mode)
         _autoHdrEnabled.value = mAutoHdr
+
+        val mHdrPlus = preferences.getModeHdrPlusEnabled(mode)
+        _isHdrPlusEnabled.value = mHdrPlus
+        engine.isHdrPlusEnabled = mHdrPlus
+
+        val mHdrPlusFrames = preferences.getModeHdrPlusFrameCount(mode)
+        _hdrPlusFrameCount.value = mHdrPlusFrames
+        engine.hdrPlusFrameCount = mHdrPlusFrames
 
         val mAutoFraming = preferences.getModeAutoFraming(mode)
         _autoFramingEnabled.value = mAutoFraming

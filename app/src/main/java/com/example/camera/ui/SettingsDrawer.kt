@@ -109,6 +109,8 @@ fun SettingsDrawer(
     viewfinderFps: Int = 60,
     thermalProtection: Boolean = true,
     isAutoHdrEnabled: Boolean = true,
+    isHdrPlusEnabled: Boolean = false,
+    hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount = com.example.camera.engine.hdrplus.HdrPlusFrameCount.TWO_FRAMES,
     isAiAutoFramingEnabled: Boolean = false,
     currentZoom: Float = 1.0f,
     exposureCompensation: Int = 0,
@@ -131,6 +133,8 @@ fun SettingsDrawer(
     onViewfinderFpsSelected: (Int) -> Unit = {},
     onThermalProtectionToggle: (Boolean) -> Unit = {},
     onAutoHdrToggle: (Boolean) -> Unit = {},
+    onHdrPlusToggle: (Boolean) -> Unit = {},
+    onHdrPlusFrameCountSelected: (com.example.camera.engine.hdrplus.HdrPlusFrameCount) -> Unit = {},
     onAiAutoFramingToggle: (Boolean) -> Unit = {},
     onZoomChange: (Float) -> Unit = {},
     onExposureCompensationChange: (Int) -> Unit = {},
@@ -324,6 +328,10 @@ fun SettingsDrawer(
                         SettingsPage.PHOTO -> PhotoSettingsPage(
                             isAutoHdrEnabled = isAutoHdrEnabled,
                             onAutoHdrToggle = onAutoHdrToggle,
+                            isHdrPlusEnabled = isHdrPlusEnabled,
+                            hdrPlusFrameCount = hdrPlusFrameCount,
+                            onHdrPlusToggle = onHdrPlusToggle,
+                            onHdrPlusFrameCountSelected = onHdrPlusFrameCountSelected,
                             photoMegapixelMode = photoMegapixelMode,
                             onPhotoMegapixelModeSelected = onPhotoMegapixelModeSelected,
                             selectedPhotoResolution = selectedPhotoResolution,
@@ -529,6 +537,10 @@ private fun SettingsOverviewPage(
 private fun PhotoSettingsPage(
     isAutoHdrEnabled: Boolean,
     onAutoHdrToggle: (Boolean) -> Unit,
+    isHdrPlusEnabled: Boolean,
+    hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount,
+    onHdrPlusToggle: (Boolean) -> Unit,
+    onHdrPlusFrameCountSelected: (com.example.camera.engine.hdrplus.HdrPlusFrameCount) -> Unit,
     photoMegapixelMode: PhotoMegapixelMode,
     onPhotoMegapixelModeSelected: (PhotoMegapixelMode) -> Unit,
     selectedPhotoResolution: CameraResolution?,
@@ -556,6 +568,31 @@ private fun PhotoSettingsPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        item {
+            SettingsSwitchCard(
+                title = "HDR+",
+                description = "Advanced 2-frame / 3-frame RAW computational photography with predictive exposure and natural highlight recovery.",
+                isChecked = isHdrPlusEnabled,
+                onCheckedChange = onHdrPlusToggle,
+                tag = "toggle_hdr_plus"
+            )
+        }
+
+        if (isHdrPlusEnabled) {
+            item {
+                SettingsSegmentedCard(
+                    title = "HDR+ Frame Count",
+                    description = "2 Frames for ultra-fast capture or 3 Frames for extreme dynamic range scenes.",
+                    options = listOf(
+                        com.example.camera.engine.hdrplus.HdrPlusFrameCount.TWO_FRAMES to "2 Frames",
+                        com.example.camera.engine.hdrplus.HdrPlusFrameCount.THREE_FRAMES to "3 Frames"
+                    ),
+                    selectedOption = hdrPlusFrameCount,
+                    onOptionSelected = onHdrPlusFrameCountSelected
+                )
+            }
+        }
+
         item {
             SettingsSwitchCard(
                 title = "Auto HDR",
@@ -1653,6 +1690,8 @@ fun CameraSettingsScreen(
     val viewfinderFps by viewModel.viewfinderFps.collectAsStateWithLifecycle()
     val thermalProtection by viewModel.thermalProtection.collectAsStateWithLifecycle()
     val isAutoHdrEnabled by viewModel.isAutoHdrEnabled.collectAsStateWithLifecycle()
+    val isHdrPlusEnabled by viewModel.isHdrPlusEnabled.collectAsStateWithLifecycle()
+    val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsStateWithLifecycle()
     val isAiAutoFramingEnabled by viewModel.isAiAutoFramingEnabled.collectAsStateWithLifecycle()
     val currentZoom by viewModel.currentZoom.collectAsStateWithLifecycle()
     val exposureCompensation by viewModel.exposureCompensation.collectAsStateWithLifecycle()
@@ -1749,6 +1788,10 @@ fun CameraSettingsScreen(
         onViewfinderFpsSelected = { viewModel.setViewfinderFps(it) },
         onThermalProtectionToggle = { viewModel.setThermalProtection(it) },
         onAutoHdrToggle = { viewModel.setAutoHdrEnabled(it) },
+        isHdrPlusEnabled = isHdrPlusEnabled,
+        hdrPlusFrameCount = hdrPlusFrameCount,
+        onHdrPlusToggle = { viewModel.setHdrPlusEnabled(it) },
+        onHdrPlusFrameCountSelected = { viewModel.setHdrPlusFrameCount(it) },
         onAiAutoFramingToggle = { viewModel.setAiAutoFramingEnabled(it) },
         onZoomChange = { viewModel.setZoom(it, isPresetTap = false) },
         onExposureCompensationChange = { viewModel.setExposureCompensation(it) },

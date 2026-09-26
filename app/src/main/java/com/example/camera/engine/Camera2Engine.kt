@@ -217,6 +217,22 @@ class Camera2Engine(private val context: Context) {
     val nightFusionProcessor by lazy { NightFusionProcessor() }
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
+    val hdrPlusEngine by lazy { com.example.camera.engine.hdrplus.HdrPlusEngine(context) }
+
+    var isHdrPlusEnabled: Boolean = false
+    var hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount = com.example.camera.engine.hdrplus.HdrPlusFrameCount.TWO_FRAMES
+
+    fun refreshCaptureSessionForRaw() {
+        val lens = _selectedLens.value ?: return
+        val caps = _capabilities.value
+        if (!caps.supportsRaw) return
+        val needsRaw = isRawCaptureEnabled || isHdrPlusEnabled
+        val hasRaw = imageReaderRaw != null
+        if (needsRaw != hasRaw) {
+            setupImageReaders(lens.cameraId)
+            createCameraCaptureSession()
+        }
+    }
 
     private val _hybridStabilizationConfig = MutableStateFlow(HybridStabilizationConfig())
     val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = _hybridStabilizationConfig.asStateFlow()
@@ -1573,14 +1589,14 @@ class Camera2Engine(private val context: Context) {
             imageReaderYuv = null
         }
 
-        if (caps.supportsRaw && isRawCaptureEnabled && caps.supportedRawResolutions.isNotEmpty()) {
+        if (caps.supportsRaw && (isRawCaptureEnabled || isHdrPlusEnabled) && caps.supportedRawResolutions.isNotEmpty()) {
             val rawRes = caps.supportedRawResolutions.first()
             try {
                 imageReaderRaw = ImageReader.newInstance(
                     rawRes.width,
                     rawRes.height,
                     ImageFormat.RAW_SENSOR,
-                    6
+                    8
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to create RAW ImageReader", t)
@@ -1881,6 +1897,17 @@ class Camera2Engine(private val context: Context) {
         cinemaEngine.naturalLogEngine.onFrameLuminanceAnalyzed(stats)
         if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.FLAT_LOG) {
             onNaturalLogAutoToneFrame()
+        }
+        if (currentMode == CameraMode.PHOTO && isHdrPlusEnabled) {
+            hdrPlusEngine.onViewfinderFrame(
+                stats = stats,
+                lastResult = lastCaptureResult,
+                caps = _capabilities.value,
+                frameCount = hdrPlusFrameCount,
+                userIso = manualIso,
+                userExpNs = manualExposureTimeNs,
+                userAeComp = exposureCompensationIndex
+            )
         }
     }
 
@@ -3065,6 +3092,16 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
+        if (isHdrPlusEnabled && currentMode == CameraMode.PHOTO) {
+            val caps = _capabilities.value
+            if (caps.supportsRaw && imageReaderRaw != null) {
+                takePhotoHdrPlusRaw(onComplete)
+                return
+            } else {
+                Log.w(TAG, "[HDR+] Hardware does not support RAW stream or reader not armed, falling back to standard capture")
+            }
+        }
+
         val camera = cameraDevice ?: return
         val session = captureSession ?: return
         val readerJpeg = imageReaderJpeg ?: return
@@ -3334,6 +3371,166 @@ class Camera2Engine(private val context: Context) {
 
         } catch (e: Exception) {
             Log.e(TAG, "Error taking photo", e)
+            _isCapturing.value = false
+            onComplete(null)
+        }
+    }
+
+    /**
+     * Executes advanced RAW HDR+ capture (2-frame or 3-frame) using Camera2 manual sensor controls,
+     * ultra-fast hardware sequential burst, and background highlight-only computational fusion.
+     */
+    private fun takePhotoHdrPlusRaw(onComplete: (Uri?) -> Unit) {
+        val camera = cameraDevice ?: return
+        val session = captureSession ?: return
+        val readerRaw = imageReaderRaw ?: return
+        val activeLens = _selectedLens.value
+        val chars = activeLens?.let { getCharacteristics(it.cameraId) }
+
+        Log.i(TAG, "[HDR+] Initiating advanced RAW HDR+ capture (${hdrPlusFrameCount.label})")
+        _isCapturing.value = true
+
+        val prediction = hdrPlusEngine.predictor.getLatestPrediction(hdrPlusFrameCount)
+        Log.i(TAG, "[HDR+] Precomputed Plan: ${prediction.summary}")
+
+        try {
+            val requests = ArrayList<CaptureRequest>()
+            for (idx in prediction.specs.indices) {
+                val spec = prediction.specs[idx]
+                val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                builder.addTarget(readerRaw.surface)
+                if (spec.role == com.example.camera.engine.hdrplus.HdrPlusRole.BASE_PRIMARY && imageReaderJpeg != null) {
+                    builder.addTarget(imageReaderJpeg!!.surface)
+                }
+
+                applyCommonSettings(builder)
+                builder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
+
+                if (spec.role == com.example.camera.engine.hdrplus.HdrPlusRole.BASE_PRIMARY) {
+                    if (manualIso != null || manualExposureTimeNs != null) {
+                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                        manualIso?.let { builder.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
+                        manualExposureTimeNs?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
+                    } else {
+                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, spec.aeCompIndex)
+                    }
+                } else {
+                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, spec.exposureTimeNs)
+                    builder.set(CaptureRequest.SENSOR_SENSITIVITY, spec.iso)
+                }
+                builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                builder.setTag(idx)
+                requests.add(builder.build())
+            }
+
+            val expectedCount = requests.size
+            val capturedRawFrames = java.util.Collections.synchronizedList(ArrayList<com.example.camera.engine.hdrplus.HdrPlusRawFrame>())
+            val receivedCount = java.util.concurrent.atomic.AtomicInteger(0)
+            val isProcessingTriggered = java.util.concurrent.atomic.AtomicBoolean(false)
+            val captureResultsByIndex = java.util.concurrent.ConcurrentHashMap<Int, TotalCaptureResult>()
+
+            readerRaw.setOnImageAvailableListener({ reader ->
+                val image = reader.acquireNextImage()
+                if (image != null) {
+                    val count = receivedCount.incrementAndGet()
+                    val frameIdx = count - 1
+                    val spec = prediction.specs.getOrNull(frameIdx) ?: prediction.specs.first()
+                    val result = captureResultsByIndex[frameIdx] ?: lastCaptureResult
+
+                    try {
+                        val rawFrame = hdrPlusEngine.developer.extractRawFrame(
+                            image = image,
+                            result = result,
+                            chars = chars,
+                            role = spec.role,
+                            evDelta = spec.evDelta
+                        )
+                        capturedRawFrames.add(rawFrame)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "[HDR+] Error extracting RAW frame $frameIdx", t)
+                    } finally {
+                        image.close()
+                    }
+
+                    if (count >= expectedCount && isProcessingTriggered.compareAndSet(false, true)) {
+                        _isCapturing.value = false
+
+                        val framesToProcess = ArrayList(capturedRawFrames)
+                        engineScope.launch(Dispatchers.Default) {
+                            try {
+                                val mergedJpeg = hdrPlusEngine.processHdrPlusRawCapture(
+                                    rawFrames = framesToProcess,
+                                    jpegQuality = preferences.jpegQuality
+                                )
+                                val uri = saveJpegBytesToMediaStore(mergedJpeg)
+                                updateStorageStats()
+                                withContext(Dispatchers.Main) {
+                                    onComplete(uri)
+                                }
+                            } catch (e: Throwable) {
+                                Log.e(TAG, "[HDR+] Error processing RAW HDR+ capture", e)
+                                _isCapturing.value = false
+                                withContext(Dispatchers.Main) {
+                                    onComplete(null)
+                                }
+                            }
+                        }
+                    }
+                }
+            }, backgroundHandler)
+
+            // Failsafe timeout in case HAL drops a frame
+            backgroundHandler?.postDelayed({
+                if (capturedRawFrames.isNotEmpty() && isProcessingTriggered.compareAndSet(false, true)) {
+                    _isCapturing.value = false
+                    val framesToProcess = ArrayList(capturedRawFrames)
+                    engineScope.launch(Dispatchers.Default) {
+                        try {
+                            val mergedJpeg = hdrPlusEngine.processHdrPlusRawCapture(
+                                rawFrames = framesToProcess,
+                                jpegQuality = preferences.jpegQuality
+                            )
+                            val uri = saveJpegBytesToMediaStore(mergedJpeg)
+                            updateStorageStats()
+                            withContext(Dispatchers.Main) {
+                                onComplete(uri)
+                            }
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "[HDR+] Timeout processing failed", e)
+                            withContext(Dispatchers.Main) {
+                                onComplete(null)
+                            }
+                        }
+                    }
+                } else if (capturedRawFrames.isEmpty() && isProcessingTriggered.compareAndSet(false, true)) {
+                    _isCapturing.value = false
+                    onComplete(null)
+                }
+            }, 3000L)
+
+            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    val tag = request.tag as? Int ?: 0
+                    captureResultsByIndex[tag] = result
+                }
+
+                override fun onCaptureFailed(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    failure: CaptureFailure
+                ) {
+                    Log.w(TAG, "[HDR+] Capture burst frame failed: reason=${failure.reason}")
+                }
+            }, backgroundHandler)
+
+        } catch (e: Throwable) {
+            Log.e(TAG, "[HDR+] Failed to trigger RAW HDR+ burst", e)
             _isCapturing.value = false
             onComplete(null)
         }

@@ -705,6 +705,17 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean("pref_auto_hdr_enabled", true)
         set(value) = prefs.edit().putBoolean("pref_auto_hdr_enabled", value).apply()
 
+    var isHdrPlusEnabled: Boolean
+        get() = prefs.getBoolean("pref_hdr_plus_enabled", false)
+        set(value) = prefs.edit().putBoolean("pref_hdr_plus_enabled", value).apply()
+
+    var hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount
+        get() {
+            val count = prefs.getInt("pref_hdr_plus_frame_count", 2)
+            return com.example.camera.engine.hdrplus.HdrPlusFrameCount.fromInt(count)
+        }
+        set(value) = prefs.edit().putInt("pref_hdr_plus_frame_count", value.count).apply()
+
     var autoFramingEnabled: Boolean
         get() = prefs.getBoolean("pref_auto_framing_enabled", true)
         set(value) = prefs.edit().putBoolean("pref_auto_framing_enabled", value).apply()
@@ -1114,6 +1125,29 @@ class CameraPreferences(context: Context) {
         return if (prefs.contains(modeKey(mode, "auto_hdr"))) {
             prefs.getBoolean(modeKey(mode, "auto_hdr"), true)
         } else autoHdrEnabled
+    }
+
+    fun setModeHdrPlusEnabled(mode: CameraMode, enabled: Boolean) {
+        isHdrPlusEnabled = enabled
+        prefs.edit().putBoolean(modeKey(mode, "hdr_plus_enabled"), enabled).apply()
+    }
+
+    fun getModeHdrPlusEnabled(mode: CameraMode): Boolean {
+        return if (prefs.contains(modeKey(mode, "hdr_plus_enabled"))) {
+            prefs.getBoolean(modeKey(mode, "hdr_plus_enabled"), false)
+        } else isHdrPlusEnabled
+    }
+
+    fun setModeHdrPlusFrameCount(mode: CameraMode, frameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount) {
+        hdrPlusFrameCount = frameCount
+        prefs.edit().putInt(modeKey(mode, "hdr_plus_frame_count"), frameCount.count).apply()
+    }
+
+    fun getModeHdrPlusFrameCount(mode: CameraMode): com.example.camera.engine.hdrplus.HdrPlusFrameCount {
+        return if (prefs.contains(modeKey(mode, "hdr_plus_frame_count"))) {
+            val c = prefs.getInt(modeKey(mode, "hdr_plus_frame_count"), 2)
+            com.example.camera.engine.hdrplus.HdrPlusFrameCount.fromInt(c)
+        } else hdrPlusFrameCount
     }
 
     fun setModeAutoFraming(mode: CameraMode, enabled: Boolean) {
