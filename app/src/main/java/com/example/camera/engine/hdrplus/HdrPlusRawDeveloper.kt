@@ -6,6 +6,8 @@ import android.hardware.camera2.params.ColorSpaceTransform
 import android.media.Image
 import android.util.Rational
 import java.nio.ByteOrder
+import java.util.concurrent.Callable
+import java.util.concurrent.ForkJoinPool
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -22,6 +24,29 @@ class HdrPlusRawDeveloper {
 
     companion object {
         private const val TAG = "HdrPlusRawDev"
+        private val PARALLEL_THREADS = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+
+        private fun runParallelRows(height: Int, minRowsPerTask: Int = 32, action: (startY: Int, endY: Int) -> Unit) {
+            if (height < minRowsPerTask * 2 || PARALLEL_THREADS <= 1) {
+                action(0, height)
+                return
+            }
+            val numTasks = min(PARALLEL_THREADS, (height + minRowsPerTask - 1) / minRowsPerTask)
+            if (numTasks <= 1) {
+                action(0, height)
+                return
+            }
+            val chunk = (height + numTasks - 1) / numTasks
+            val tasks = ArrayList<Callable<Unit>>(numTasks)
+            for (t in 0 until numTasks) {
+                val startY = t * chunk
+                val endY = min(height, startY + chunk)
+                if (startY < endY) {
+                    tasks.add(Callable { action(startY, endY) })
+                }
+            }
+            ForkJoinPool.commonPool().invokeAll(tasks)
+        }
 
         // CFA Arrangement constants matching CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT
         const val CFA_RGGB = 0
@@ -36,11 +61,11 @@ class HdrPlusRawDeveloper {
              0.0719453f, -0.2289914f,  1.4052427f
         )
 
-        // Default white-point-preserving sensor-to-linear-sRGB CCM when device metadata is absent
+        // Balanced natural sensor-to-linear-sRGB CCM when device metadata is absent
         private val DEFAULT_SENSOR_CCM = floatArrayOf(
-             1.32f, -0.24f, -0.08f,
-            -0.16f,  1.28f, -0.12f,
-            -0.06f, -0.30f,  1.36f
+             1.22f, -0.16f, -0.06f,
+            -0.11f,  1.19f, -0.08f,
+            -0.04f, -0.20f,  1.24f
         )
 
         /**
@@ -351,7 +376,8 @@ class HdrPlusRawDeveloper {
 
     /**
      * Normalizes each row of the 3x3 CCM to sum to 1.0 so that neutral white [1, 1, 1]
-     * after white balance is strictly preserved as [1, 1, 1] in linear sRGB.
+     * after white balance is strictly preserved as [1, 1, 1] in linear sRGB, and regularizes
+     * overly aggressive off-diagonal coefficients to avoid unnatural color shifts or oversaturation.
      */
     private fun normalizeCcmRows(m: FloatArray): FloatArray {
         val out = FloatArray(9)
@@ -367,6 +393,19 @@ class HdrPlusRawDeveloper {
                 out[idx] = if (row == 0) 1f else 0f
                 out[idx + 1] = if (row == 1) 1f else 0f
                 out[idx + 2] = if (row == 2) 1f else 0f
+            }
+        }
+        // Regularize if diagonal terms are overly aggressive (> 1.40 causes neon saturation / color shifts)
+        val maxDiag = maxOf(out[0], out[4], out[8])
+        if (maxDiag > 1.40f) {
+            val targetMaxDiag = 1.32f
+            val blend = ((targetMaxDiag - 1.0f) / (maxDiag - 1.0f)).coerceIn(0.35f, 1.0f)
+            for (row in 0..2) {
+                for (col in 0..2) {
+                    val idx = row * 3 + col
+                    val identity = if (row == col) 1.0f else 0.0f
+                    out[idx] = identity + (out[idx] - identity) * blend
+                }
             }
         }
         return out
@@ -412,79 +451,82 @@ class HdrPlusRawDeveloper {
         // Normalize reference white-balance gains so green gain = 1.0
         val (rawRG, rawGG, rawBG) = referenceGains ?: Triple(frame.rGain, frame.gGain, frame.bGain)
         val safeGG = if (rawGG.isFinite() && rawGG > 1e-4f) rawGG else 1.0f
-        val rGain = (rawRG / safeGG).coerceIn(0.25f, 5.0f)
+        val rGain = (rawRG / safeGG).coerceIn(0.45f, 3.8f)
         val gGain = 1.0f
-        val bGain = (rawBG / safeGG).coerceIn(0.25f, 5.0f)
+        val bGain = (rawBG / safeGG).coerceIn(0.45f, 3.8f)
         val channelWbGains = floatArrayOf(rGain, gGain, gGain, bGain)
 
-        // Step 0: Build white-balanced normalized Bayer plane and track raw sensor saturation
+        // Step 0: Build white-balanced normalized Bayer plane in parallel
         val totalPixels = width * height
         val wbBayer = FloatArray(totalPixels)
 
-        for (y in 0 until height) {
-            val srcRow = y * rowStep
-            val dstRow = y * width
-            for (x in 0 until width) {
-                val srcIdx = srcRow + x * colStep
-                val sample = if (srcIdx in raw.indices) (raw[srcIdx].toInt() and 0xFFFF).toFloat() else 0f
-                val ch = cfaChannelAt(x, y, cfa)
-                val linearNorm = ((sample - blPattern[ch]) * invRanges[ch]).coerceAtLeast(0.0f)
-                val dstIdx = dstRow + x
-                wbBayer[dstIdx] = linearNorm * channelWbGains[ch]
+        runParallelRows(height) { startY, endY ->
+            for (y in startY until endY) {
+                val srcRow = y * rowStep
+                val dstRow = y * width
+                for (x in 0 until width) {
+                    val srcIdx = srcRow + x * colStep
+                    val sample = if (srcIdx in raw.indices) (raw[srcIdx].toInt() and 0xFFFF).toFloat() else 0f
+                    val ch = cfaChannelAt(x, y, cfa)
+                    val linearNorm = ((sample - blPattern[ch]) * invRanges[ch]).coerceIn(0.0f, 1.0f)
+                    val dstIdx = dstRow + x
+                    wbBayer[dstIdx] = linearNorm * channelWbGains[ch]
+                }
             }
         }
 
-        // Step 1: Full-resolution Green plane via Hamilton-Adams gradient-directed interpolation
+        // Step 1: Full-resolution Green plane via Hamilton-Adams gradient-directed interpolation in parallel
         val greenPlane = FloatArray(totalPixels)
-        for (y in 0 until height) {
-            val rowOff = y * width
-            val ym1 = max(0, y - 1) * width
-            val yp1 = min(height - 1, y + 1) * width
-            val ym2 = max(0, y - 2) * width
-            val yp2 = min(height - 1, y + 2) * width
+        runParallelRows(height) { startY, endY ->
+            for (y in startY until endY) {
+                val rowOff = y * width
+                val ym1 = max(0, y - 1) * width
+                val yp1 = min(height - 1, y + 1) * width
+                val ym2 = max(0, y - 2) * width
+                val yp2 = min(height - 1, y + 2) * width
 
-            for (x in 0 until width) {
-                val ch = cfaChannelAt(x, y, cfa)
-                val idx = rowOff + x
-                if (ch == 1 || ch == 2) {
-                    // Exact green sample from Gr or Gb pixel
-                    greenPlane[idx] = wbBayer[idx]
-                } else {
-                    val xm1 = max(0, x - 1)
-                    val xp1 = min(width - 1, x + 1)
-                    val xm2 = max(0, x - 2)
-                    val xp2 = min(width - 1, x + 2)
-
-                    val gLeft = wbBayer[rowOff + xm1]
-                    val gRight = wbBayer[rowOff + xp1]
-                    val gUp = wbBayer[ym1 + x]
-                    val gDown = wbBayer[yp1 + x]
-
-                    val cCenter = wbBayer[idx]
-                    val cLeft2 = wbBayer[rowOff + xm2]
-                    val cRight2 = wbBayer[rowOff + xp2]
-                    val cUp2 = wbBayer[ym2 + x]
-                    val cDown2 = wbBayer[yp2 + x]
-
-                    val lapH = 2.0f * cCenter - cLeft2 - cRight2
-                    val lapV = 2.0f * cCenter - cUp2 - cDown2
-
-                    val gradH = abs(gLeft - gRight) + abs(lapH) * 0.5f
-                    val gradV = abs(gUp - gDown) + abs(lapV) * 0.5f
-
-                    val minH = min(gLeft, gRight)
-                    val maxH = max(gLeft, gRight)
-                    val minV = min(gUp, gDown)
-                    val maxV = max(gUp, gDown)
-
-                    val gH = (0.5f * (gLeft + gRight) + 0.25f * lapH).coerceIn(minH, maxH)
-                    val gV = (0.5f * (gUp + gDown) + 0.25f * lapV).coerceIn(minV, maxV)
-
-                    val gradSum = gradH + gradV
-                    greenPlane[idx] = if (gradSum > 1e-5f) {
-                        (gradV * gH + gradH * gV) / gradSum
+                for (x in 0 until width) {
+                    val ch = cfaChannelAt(x, y, cfa)
+                    val idx = rowOff + x
+                    if (ch == 1 || ch == 2) {
+                        greenPlane[idx] = wbBayer[idx]
                     } else {
-                        0.5f * (gH + gV)
+                        val xm1 = max(0, x - 1)
+                        val xp1 = min(width - 1, x + 1)
+                        val xm2 = max(0, x - 2)
+                        val xp2 = min(width - 1, x + 2)
+
+                        val gLeft = wbBayer[rowOff + xm1]
+                        val gRight = wbBayer[rowOff + xp1]
+                        val gUp = wbBayer[ym1 + x]
+                        val gDown = wbBayer[yp1 + x]
+
+                        val cCenter = wbBayer[idx]
+                        val cLeft2 = wbBayer[rowOff + xm2]
+                        val cRight2 = wbBayer[rowOff + xp2]
+                        val cUp2 = wbBayer[ym2 + x]
+                        val cDown2 = wbBayer[yp2 + x]
+
+                        val lapH = 2.0f * cCenter - cLeft2 - cRight2
+                        val lapV = 2.0f * cCenter - cUp2 - cDown2
+
+                        val gradH = abs(gLeft - gRight) + abs(lapH) * 0.5f
+                        val gradV = abs(gUp - gDown) + abs(lapV) * 0.5f
+
+                        val minH = min(gLeft, gRight)
+                        val maxH = max(gLeft, gRight)
+                        val minV = min(gUp, gDown)
+                        val maxV = max(gUp, gDown)
+
+                        val gH = (0.5f * (gLeft + gRight) + 0.25f * lapH).coerceIn(minH, maxH)
+                        val gV = (0.5f * (gUp + gDown) + 0.25f * lapV).coerceIn(minV, maxV)
+
+                        val gradSum = gradH + gradV
+                        greenPlane[idx] = if (gradSum > 1e-5f) {
+                            (gradV * gH + gradH * gV) / gradSum
+                        } else {
+                            0.5f * (gH + gV)
+                        }
                     }
                 }
             }
@@ -495,7 +537,6 @@ class HdrPlusRawDeveloper {
         val ccm = if (activeCcm != null && isValidCcm(activeCcm)) {
             normalizeCcmRows(activeCcm)
         } else {
-            // Identity when no CCM was provided in synthetic tests, or default sensor CCM when from camera
             null
         }
 
@@ -505,105 +546,120 @@ class HdrPlusRawDeveloper {
         // Step 2: Constant-hue color-difference (C - G) interpolation for Red & Blue + CCM & highlight handling
         val rgbLinear = FloatArray(totalPixels * 3)
 
-        // Determine for the current CFA whether Red is on even or odd rows/cols
         val rRowParity = when (cfa) {
             CFA_RGGB, CFA_GRBG -> 0
             else -> 1
         }
 
-        for (y in 0 until height) {
-            val rowOff = y * width
-            val ym1 = if (y > 0) (y - 1) * width else min(height - 1, y + 1) * width
-            val yp1 = if (y + 1 < height) (y + 1) * width else max(0, y - 1) * width
-            val isRedRow = (y and 1) == rRowParity
+        val invRGain = 1.0f / rGain
+        val invBGain = 1.0f / bGain
 
-            for (x in 0 until width) {
-                val xm1 = if (x > 0) x - 1 else min(width - 1, x + 1)
-                val xp1 = if (x + 1 < width) x + 1 else max(0, x - 1)
+        runParallelRows(height) { startY, endY ->
+            for (y in startY until endY) {
+                val rowOff = y * width
+                val ym1 = if (y > 0) (y - 1) * width else min(height - 1, y + 1) * width
+                val yp1 = if (y + 1 < height) (y + 1) * width else max(0, y - 1) * width
+                val isRedRow = (y and 1) == rRowParity
 
-                val idx = rowOff + x
-                val ch = cfaChannelAt(x, y, cfa)
-                val gVal = greenPlane[idx]
+                for (x in 0 until width) {
+                    val xm1 = if (x > 0) x - 1 else min(width - 1, x + 1)
+                    val xp1 = if (x + 1 < width) x + 1 else max(0, x - 1)
 
-                var rVal: Float
-                var bVal: Float
+                    val idx = rowOff + x
+                    val ch = cfaChannelAt(x, y, cfa)
+                    val gVal = greenPlane[idx]
 
-                when (ch) {
-                    0 -> {
-                        // Red site: R is exact, B is at 4 diagonals
-                        rVal = wbBayer[idx]
-                        bVal = interpolateDiagonalColorDiff(
-                            wbBayer, greenPlane, gVal,
-                            ym1 + xm1, ym1 + xp1, yp1 + xm1, yp1 + xp1
-                        )
-                    }
-                    3 -> {
-                        // Blue site: B is exact, R is at 4 diagonals
-                        bVal = wbBayer[idx]
-                        rVal = interpolateDiagonalColorDiff(
-                            wbBayer, greenPlane, gVal,
-                            ym1 + xm1, ym1 + xp1, yp1 + xm1, yp1 + xp1
-                        )
-                    }
-                    else -> {
-                        // Green site (Gr or Gb): one of R/B is horizontal, the other is vertical
-                        val hDiff = 0.5f * ((wbBayer[rowOff + xm1] - greenPlane[rowOff + xm1]) +
-                                (wbBayer[rowOff + xp1] - greenPlane[rowOff + xp1]))
-                        val vDiff = 0.5f * ((wbBayer[ym1 + x] - greenPlane[ym1 + x]) +
-                                (wbBayer[yp1 + x] - greenPlane[yp1 + x]))
+                    var rVal: Float
+                    var bVal: Float
 
-                        val hEst = (gVal + hDiff).coerceAtLeast(0.0f)
-                        val vEst = (gVal + vDiff).coerceAtLeast(0.0f)
+                    when (ch) {
+                        0 -> {
+                            rVal = wbBayer[idx]
+                            bVal = interpolateDiagonalColorDiff(
+                                wbBayer, greenPlane, gVal,
+                                ym1 + xm1, ym1 + xp1, yp1 + xm1, yp1 + xp1
+                            )
+                        }
+                        3 -> {
+                            bVal = wbBayer[idx]
+                            rVal = interpolateDiagonalColorDiff(
+                                wbBayer, greenPlane, gVal,
+                                ym1 + xm1, ym1 + xp1, yp1 + xm1, yp1 + xp1
+                            )
+                        }
+                        else -> {
+                            val hDiff = 0.5f * ((wbBayer[rowOff + xm1] - greenPlane[rowOff + xm1]) +
+                                    (wbBayer[rowOff + xp1] - greenPlane[rowOff + xp1]))
+                            val vDiff = 0.5f * ((wbBayer[ym1 + x] - greenPlane[ym1 + x]) +
+                                    (wbBayer[yp1 + x] - greenPlane[yp1 + x]))
 
-                        if (isRedRow) {
-                            rVal = hEst
-                            bVal = vEst
-                        } else {
-                            rVal = vEst
-                            bVal = hEst
+                            val hEst = (gVal + hDiff).coerceAtLeast(0.0f)
+                            val vEst = (gVal + vDiff).coerceAtLeast(0.0f)
+
+                            if (isRedRow) {
+                                rVal = hEst
+                                bVal = vEst
+                            } else {
+                                rVal = vEst
+                                bVal = hEst
+                            }
                         }
                     }
-                }
 
-                // Step 3: Sensor saturation & highlight neutrality protection
-                // Estimate raw sensor saturation level to detect physical photodiode clipping
-                val localRawMax = maxOf(rVal / rGain, gVal, bVal / bGain)
+                    // Step 3: Differential WB Clipping & Highlight Neutrality Protection
+                    // When Green clips at 1.0f on the physical sensor, Red (multiplied by rGain ~ 1.85)
+                    // and Blue (multiplied by bGain ~ 1.55) would otherwise exceed 1.0f and create a
+                    // false magenta/pink cast in bright clouds, skies, and sunlit walls.
+                    val rawR = rVal * invRGain
+                    val rawG = gVal
+                    val rawB = bVal * invBGain
+                    val localRawMax = maxOf(rawR, rawG, rawB)
 
-                // Apply sensor-to-sRGB CCM if available
-                var outR = rVal
-                var outG = gVal
-                var outB = bVal
-
-                if (ccm != null) {
-                    val ccmR = (ccm[0] * rVal + ccm[1] * gVal + ccm[2] * bVal).coerceAtLeast(0.0f)
-                    val ccmG = (ccm[3] * rVal + ccm[4] * gVal + ccm[5] * bVal).coerceAtLeast(0.0f)
-                    val ccmB = (ccm[6] * rVal + ccm[7] * gVal + ccm[8] * bVal).coerceAtLeast(0.0f)
-
-                    // Smoothly protect near-clipped sensor pixels from negative off-diagonal CCM tinting
-                    if (localRawMax > 0.92f) {
-                        val clipT = ((localRawMax - 0.92f) / 0.07f).coerceIn(0.0f, 1.0f)
-                        val neutralLuma = 0.2126f * ccmR + 0.7152f * ccmG + 0.0722f * ccmB
-                        outR = ccmR * (1.0f - clipT) + neutralLuma * clipT
-                        outG = ccmG * (1.0f - clipT) + neutralLuma * clipT
-                        outB = ccmB * (1.0f - clipT) + neutralLuma * clipT
-                    } else {
-                        outR = ccmR
-                        outG = ccmG
-                        outB = ccmB
+                    if (localRawMax > 0.84f) {
+                        val clipT = ((localRawMax - 0.84f) / 0.15f).coerceIn(0.0f, 1.0f)
+                        val smoothT = clipT * clipT * (3.0f - 2.0f * clipT)
+                        // Reconstruct clipped green from unclipped R/B or pull excess R/B toward neutral white ceiling
+                        val wbMax = maxOf(rVal, gVal, bVal)
+                        val neutralTarget = min(1.0f, 0.30f * min(rVal, 1.0f) + 0.50f * min(gVal, 1.0f) + 0.20f * min(bVal, 1.0f) + 0.15f * smoothT)
+                        if (wbMax > 1.0f) {
+                            rVal = min(rVal, 1.0f + (rVal - 1.0f) * (1.0f - smoothT))
+                            bVal = min(bVal, 1.0f + (bVal - 1.0f) * (1.0f - smoothT))
+                        }
+                        if (localRawMax > 0.92f) {
+                            val desatT = ((localRawMax - 0.92f) / 0.08f).coerceIn(0.0f, 1.0f)
+                            rVal = rVal * (1.0f - desatT) + neutralTarget * desatT
+                            bVal = bVal * (1.0f - desatT) + neutralTarget * desatT
+                        }
                     }
-                } else if (localRawMax > 0.96f) {
-                    // Even without CCM, neutralize fully clipped raw specular highlights
-                    val clipT = ((localRawMax - 0.96f) / 0.04f).coerceIn(0.0f, 1.0f)
-                    val neutralLuma = 0.2126f * outR + 0.7152f * outG + 0.0722f * outB
-                    outR = outR * (1.0f - clipT) + neutralLuma * clipT
-                    outG = outG * (1.0f - clipT) + neutralLuma * clipT
-                    outB = outB * (1.0f - clipT) + neutralLuma * clipT
-                }
 
-                val pIdx = idx * 3
-                rgbLinear[pIdx] = (outR * postBoostScale).coerceIn(0.0f, 8.0f)
-                rgbLinear[pIdx + 1] = (outG * postBoostScale).coerceIn(0.0f, 8.0f)
-                rgbLinear[pIdx + 2] = (outB * postBoostScale).coerceIn(0.0f, 8.0f)
+                    var outR = rVal
+                    var outG = gVal
+                    var outB = bVal
+
+                    if (ccm != null) {
+                        val ccmR = (ccm[0] * rVal + ccm[1] * gVal + ccm[2] * bVal).coerceAtLeast(0.0f)
+                        val ccmG = (ccm[3] * rVal + ccm[4] * gVal + ccm[5] * bVal).coerceAtLeast(0.0f)
+                        val ccmB = (ccm[6] * rVal + ccm[7] * gVal + ccm[8] * bVal).coerceAtLeast(0.0f)
+
+                        // Smoothly protect near-clipped sensor pixels from negative off-diagonal CCM tinting
+                        if (localRawMax > 0.88f) {
+                            val clipT = ((localRawMax - 0.88f) / 0.11f).coerceIn(0.0f, 1.0f)
+                            val neutralLuma = (0.2126f * ccmR + 0.7152f * ccmG + 0.0722f * ccmB).coerceAtMost(1.0f)
+                            outR = ccmR * (1.0f - clipT) + neutralLuma * clipT
+                            outG = ccmG * (1.0f - clipT) + neutralLuma * clipT
+                            outB = ccmB * (1.0f - clipT) + neutralLuma * clipT
+                        } else {
+                            outR = ccmR
+                            outG = ccmG
+                            outB = ccmB
+                        }
+                    }
+
+                    val pIdx = idx * 3
+                    rgbLinear[pIdx] = (outR * postBoostScale).coerceIn(0.0f, 4.0f)
+                    rgbLinear[pIdx + 1] = (outG * postBoostScale).coerceIn(0.0f, 4.0f)
+                    rgbLinear[pIdx + 2] = (outB * postBoostScale).coerceIn(0.0f, 4.0f)
+                }
             }
         }
 

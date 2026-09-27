@@ -56,22 +56,24 @@ class HdrPlusPredictor {
         // 1. Detect bright sky, clouds, and highlight pressure
         val p95 = stats?.p95 ?: 0.82f
         val p99 = stats?.p99 ?: 0.92f
+        val p5 = stats?.p5 ?: 0.12f
         val dynamicRange = stats?.dynamicRange ?: 0.70f
         val isOutdoorSky = stats?.isOutdoorSkyWithDarkForeground ?: false
-        val hasClippedHighlights = p99 > 0.90f || (p95 > 0.85f && dynamicRange > 0.65f)
+        val hasClippedHighlights = p99 > 0.88f || (p95 > 0.80f && dynamicRange > 0.60f) || isOutdoorSky
 
         // 2. Determine target EV offsets for underexposed and overexposed frames
+        // Stronger underexposure (-2.5 to -2.0 EV) guarantees unclipped bright skies, walls, and clouds
         val underEvOffset: Float = when {
-            isOutdoorSky || p99 > 0.94f -> -2.33f
-            p95 > 0.88f -> -2.0f
-            hasClippedHighlights -> -1.85f
-            else -> -1.67f
+            isOutdoorSky || p99 > 0.94f -> -2.5f
+            p95 > 0.86f || hasClippedHighlights -> -2.2f
+            else -> -1.8f
         }
 
+        // Balanced overexposure (+1.0 to +1.5 EV) lifts shadows cleanly without blowing out midtones or slowing capture
         val overEvOffset: Float = when {
-            dynamicRange > 0.75f || (stats?.p5 ?: 0.15f) < 0.08f -> 2.0f
-            dynamicRange > 0.60f -> 1.75f
-            else -> 1.5f
+            p5 < 0.06f && dynamicRange > 0.75f -> 1.5f
+            p5 < 0.12f || dynamicRange > 0.60f -> 1.25f
+            else -> 1.0f
         }
 
         // 3. Compute Frame 1: Normal Reference Exposure (0 EV - Base AE)
@@ -83,8 +85,8 @@ class HdrPlusPredictor {
             aeCompIndex = userAeCompensation
         )
 
-        // 4. Compute Frame 2: Underexposed Frame (-2 EV for Highlights)
-        val underRatio = 2.0.pow(underEvOffset.toDouble()).toFloat() // e.g. 0.25x for -2 EV
+        // 4. Compute Frame 2: Underexposed Frame (-EV for Highlights)
+        val underRatio = 2.0.pow(underEvOffset.toDouble()).toFloat()
         val (underExpNs, underIso) = computeUnderExposurePair(
             targetRatio = underRatio,
             baseExpNs = baseExposureTimeNs,
@@ -94,7 +96,7 @@ class HdrPlusPredictor {
             minIso = minIso,
             maxIso = maxIso
         )
-        val underAeComp = calculateAeCompensationIndex(underEvOffset, caps)
+        val underAeComp = calculateAeCompensationIndex(underEvOffset, caps, userAeCompensation)
 
         val underSpec = HdrPlusExposureSpec(
             role = HdrPlusRole.UNDER_EXPOSED,
@@ -104,8 +106,8 @@ class HdrPlusPredictor {
             aeCompIndex = underAeComp
         )
 
-        // 5. Compute Frame 3: Overexposed Frame (+2 EV for Shadows)
-        val overRatio = 2.0.pow(overEvOffset.toDouble()).toFloat() // e.g. 4.0x for +2 EV
+        // 5. Compute Frame 3: Overexposed Frame (+EV for Shadows)
+        val overRatio = 2.0.pow(overEvOffset.toDouble()).toFloat()
         val (overExpNs, overIso) = computeOverExposurePair(
             targetRatio = overRatio,
             baseExpNs = baseExposureTimeNs,
@@ -115,7 +117,7 @@ class HdrPlusPredictor {
             minIso = minIso,
             maxIso = maxIso
         )
-        val overAeComp = calculateAeCompensationIndex(overEvOffset, caps)
+        val overAeComp = calculateAeCompensationIndex(overEvOffset, caps, userAeCompensation)
 
         val overSpec = HdrPlusExposureSpec(
             role = HdrPlusRole.OVER_EXPOSED,
@@ -169,8 +171,8 @@ class HdrPlusPredictor {
         minIso: Int,
         maxIso: Int
     ): Pair<Long, Int> {
-        // Limit handheld overexposed shutter to 66ms (1/15s) to avoid motion blur, boost ISO if needed
-        val maxHandheldExpNs = 66_666_666L.coerceAtMost(maxExpNs)
+        // Limit handheld overexposed shutter to 50ms (1/20s) for faster 3-frame capture and zero motion blur
+        val maxHandheldExpNs = 50_000_000L.coerceAtMost(maxExpNs)
         val idealExpNs = (baseExpNs * targetRatio).toLong()
 
         return if (idealExpNs <= maxHandheldExpNs) {
@@ -183,9 +185,13 @@ class HdrPlusPredictor {
         }
     }
 
-    private fun calculateAeCompensationIndex(evOffset: Float, caps: HardwareCapabilities): Int {
+    private fun calculateAeCompensationIndex(
+        evOffset: Float,
+        caps: HardwareCapabilities,
+        baseAeComp: Int = 0
+    ): Int {
         val step = if (caps.exposureCompensationStep > 0.001f) caps.exposureCompensationStep else 0.333f
-        val idx = (evOffset / step).roundToInt()
+        val idx = baseAeComp + (evOffset / step).roundToInt()
         return idx.coerceIn(caps.minExposureCompensation, caps.maxExposureCompensation)
     }
 
@@ -198,20 +204,20 @@ class HdrPlusPredictor {
         )
         val frameUnder = HdrPlusExposureSpec(
             role = HdrPlusRole.UNDER_EXPOSED,
-            exposureTimeNs = 8_333_333L,
+            exposureTimeNs = 6_666_666L,
             iso = 100,
-            evDelta = -2.0f
+            evDelta = -2.2f
         )
         val frameOver = HdrPlusExposureSpec(
             role = HdrPlusRole.OVER_EXPOSED,
-            exposureTimeNs = 66_666_666L,
-            iso = 200,
-            evDelta = 2.0f
+            exposureTimeNs = 50_000_000L,
+            iso = 160,
+            evDelta = 1.25f
         )
         val specs = listOf(frameNormal, frameUnder, frameOver)
         return HdrPlusPrediction(
             specs = specs,
-            summary = "3-Frame Exposure Fusion Default (-2EV / 0EV / +2EV)"
+            summary = "3-Frame Exposure Fusion Default (-2.2EV / 0EV / +1.25EV)"
         )
     }
 }
