@@ -72,6 +72,10 @@ fun SettingsDrawer(
     photoMegapixelMode: PhotoMegapixelMode = PhotoMegapixelMode.M12,
     isRefocusPhotoEnabled: Boolean = false,
     refocusFrameCount: Int = 5,
+    isMotionPhotoEnabled: Boolean = false,
+    motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration = com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS,
+    onMotionPhotoToggle: (Boolean) -> Unit = {},
+    onMotionPhotoDurationSelect: (com.example.camera.motionphoto.MotionPhotoDuration) -> Unit = {},
     isUltraFastShutterEnabled: Boolean = false,
     ultraFastShutterFps: Int = 15,
     onUltraFastShutterToggle: (Boolean) -> Unit = {},
@@ -345,6 +349,10 @@ fun SettingsDrawer(
                             onRefocusPhotoToggle = onRefocusPhotoToggle,
                             refocusFrameCount = refocusFrameCount,
                             onRefocusFrameCountChange = onRefocusFrameCountChange,
+                            isMotionPhotoEnabled = isMotionPhotoEnabled,
+                            motionPhotoDuration = motionPhotoDuration,
+                            onMotionPhotoToggle = onMotionPhotoToggle,
+                            onMotionPhotoDurationSelect = onMotionPhotoDurationSelect,
                             isUltraFastShutterEnabled = isUltraFastShutterEnabled,
                             onUltraFastShutterToggle = onUltraFastShutterToggle,
                             ultraFastShutterFps = ultraFastShutterFps,
@@ -558,6 +566,10 @@ private fun PhotoSettingsPage(
     onRefocusPhotoToggle: (Boolean) -> Unit,
     refocusFrameCount: Int,
     onRefocusFrameCountChange: (Int) -> Unit,
+    isMotionPhotoEnabled: Boolean = false,
+    motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration = com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS,
+    onMotionPhotoToggle: (Boolean) -> Unit = {},
+    onMotionPhotoDurationSelect: (com.example.camera.motionphoto.MotionPhotoDuration) -> Unit = {},
     isUltraFastShutterEnabled: Boolean,
     onUltraFastShutterToggle: (Boolean) -> Unit,
     ultraFastShutterFps: Int,
@@ -653,6 +665,31 @@ private fun PhotoSettingsPage(
                 onCheckedChange = onSaveSelfieAsPreviewedToggle,
                 tag = "toggle_save_selfie"
             )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Motion Photo",
+                description = "Captures a continuous motion video synchronized around the shutter press, saved as a single Google Photos compatible Motion Photo.",
+                isChecked = isMotionPhotoEnabled,
+                onCheckedChange = onMotionPhotoToggle,
+                tag = "toggle_motion_photo"
+            )
+        }
+
+        if (isMotionPhotoEnabled) {
+            item {
+                SettingsSegmentedCard(
+                    title = "Motion Photo Duration",
+                    description = "Duration of motion captured before and after the shutter moment.",
+                    options = listOf(
+                        com.example.camera.motionphoto.MotionPhotoDuration.ONE_SECOND to "1 Second (0.5s + 0.5s)",
+                        com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS to "2 Seconds (1s + 1s)"
+                    ),
+                    selectedOption = motionPhotoDuration,
+                    onOptionSelected = onMotionPhotoDurationSelect
+                )
+            }
         }
 
         item {

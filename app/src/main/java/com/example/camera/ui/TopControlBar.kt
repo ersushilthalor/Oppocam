@@ -142,6 +142,8 @@ fun TopControlBar(
     onGridClick: () -> Unit,
     onRawClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    isMotionPhotoEnabled: Boolean = false,
+    onMotionPhotoClick: () -> Unit = {},
     isProActive: Boolean = false,
     onToggleProClick: () -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
@@ -624,6 +626,23 @@ fun TopControlBar(
             }
         }
 
+        val motionPhotoButton = @Composable {
+            IconButton(
+                onClick = onMotionPhotoClick,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(layoutConfig, activeColor = if (isMotionPhotoEnabled) accentColor else null)
+                    .testTag("motion_photo_button")
+            ) {
+                Icon(
+                    imageVector = if (isMotionPhotoEnabled) Icons.Filled.MotionPhotosOn else Icons.Outlined.MotionPhotosOff,
+                    contentDescription = if (isMotionPhotoEnabled) "Motion Photo: ON" else "Motion Photo: OFF",
+                    tint = if (isMotionPhotoEnabled) accentColor else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
         val pipelineButton = @Composable {
             IconButton(
                 onClick = onPipelineClick,
@@ -749,6 +768,8 @@ fun TopControlBar(
                             TopControlItem.SETTINGS -> {
                                 if (cameraMode == CameraMode.PHOTO) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        motionPhotoButton()
+                                        Spacer(modifier = Modifier.width(layoutConfig.topControlsSpacingDp.dp))
                                         pipelineButton()
                                         Spacer(modifier = Modifier.width(layoutConfig.topControlsSpacingDp.dp))
                                         settingsButton()

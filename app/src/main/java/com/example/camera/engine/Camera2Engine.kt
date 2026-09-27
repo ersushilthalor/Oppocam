@@ -107,6 +107,29 @@ class Camera2Engine(private val context: Context) {
     }
 
     private val preferences by lazy { com.example.camera.data.CameraPreferences(context) }
+    val motionPhotoEngine by lazy { com.example.camera.motionphoto.MotionPhotoEngine(context) }
+    var isMotionPhotoEnabled: Boolean = false
+        get() = preferences.isMotionPhotoEnabled
+        set(value) {
+            field = value
+            preferences.isMotionPhotoEnabled = value
+        }
+    var motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration = com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS
+        get() = preferences.motionPhotoDuration
+        set(value) {
+            field = value
+            preferences.motionPhotoDuration = value
+        }
+
+    fun onPreviewBitmapFrame(bitmap: Bitmap) {
+        val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        motionPhotoEngine.onPreviewFrame(
+            bitmap = bitmap,
+            orientationDegrees = getCaptureJpegOrientation(),
+            isFrontCamera = isFront,
+            isEnabled = isMotionPhotoEnabled && currentMode == CameraMode.PHOTO
+        )
+    }
 
     // State Flows
     private val _availableLenses = MutableStateFlow<List<LensInfo>>(emptyList())
@@ -3507,9 +3530,126 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
+     * Captures a Google Photos-compatible Motion Photo:
+     * - Continues recording pre-shutter frames and gathers post-shutter motion frames.
+     * - Captures full-resolution still JPEG from camera.
+     * - Encodes motion frames with hardware-accelerated MediaCodec H.264 into MP4.
+     * - Embeds Google Photos XMP metadata (GCamera:MotionPhoto="1", GCamera:MicroVideo="1", MicroVideoOffset, Container directory).
+     * - Appends MP4 bytes to the end of the JPEG.
+     * - Saves as a single JPEG-based Motion Photo in DCIM/Camera via MediaStore.
+     */
+    fun takeMotionPhoto(onComplete: (Uri?) -> Unit) {
+        val camera = cameraDevice ?: run {
+            onComplete(null)
+            return
+        }
+        val session = captureSession ?: run {
+            onComplete(null)
+            return
+        }
+        val readerJpeg = imageReaderJpeg ?: run {
+            onComplete(null)
+            return
+        }
+
+        _isCapturing.value = true
+        val shutterTimestampNs = System.nanoTime()
+        val duration = motionPhotoDuration
+        val orientation = getCaptureJpegOrientation()
+
+        val postShutterDone = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val stillJpegDone = kotlinx.coroutines.CompletableDeferred<ByteArray?>()
+
+        // 1. Begin post-shutter motion frame collection
+        motionPhotoEngine.beginMotionCapture(
+            duration = duration,
+            shutterTimestampNs = shutterTimestampNs
+        ) {
+            postShutterDone.complete(Unit)
+        }
+
+        // 2. Submit still capture request
+        try {
+            val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+                addTarget(readerJpeg.surface)
+                applyCommonSettings(this)
+                set(CaptureRequest.JPEG_ORIENTATION, orientation)
+                set(CaptureRequest.JPEG_QUALITY, 98.toByte())
+            }
+
+            readerJpeg.setOnImageAvailableListener({ reader ->
+                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                try {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining())
+                    buffer.get(bytes)
+                    stillJpegDone.complete(bytes)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error acquiring still image for motion photo", e)
+                    stillJpegDone.complete(null)
+                } finally {
+                    image.close()
+                }
+            }, backgroundHandler)
+
+            session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    Log.i(TAG, "[MOTION_PHOTO] Still photo frame captured")
+                }
+            }, backgroundHandler)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed submitting still capture request for Motion Photo", e)
+            stillJpegDone.complete(null)
+        }
+
+        // 3. Process, encode, and pack Motion Photo asynchronously
+        engineScope.launch(Dispatchers.IO) {
+            var finalUri: Uri? = null
+            try {
+                withTimeoutOrNull(6000L) {
+                    postShutterDone.await()
+                }
+                val stillBytes = withTimeoutOrNull(6000L) {
+                    stillJpegDone.await()
+                }
+
+                if (stillBytes != null && stillBytes.isNotEmpty()) {
+                    val packedBytes = motionPhotoEngine.finalizeMotionPhoto(
+                        stillJpegBytes = stillBytes,
+                        duration = duration,
+                        orientationDegrees = orientation
+                    )
+                    finalUri = saveJpegBytesToMediaStore(packedBytes, skipPipeline = false)
+                    Log.i(TAG, "[MOTION_PHOTO] Saved to MediaStore: $finalUri (${packedBytes.size} bytes)")
+                } else {
+                    Log.e(TAG, "Motion photo failed: still image bytes were null")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error finalizing Motion Photo capture", e)
+            } finally {
+                _isCapturing.value = false
+                updateStorageStats()
+                withContext(Dispatchers.Main) {
+                    onComplete(finalUri)
+                }
+            }
+        }
+    }
+
+    /**
      * Take still photo (JPEG + optional RAW). In 50M mode, triggers single-frame computational 50MP capture.
      */
     fun takePhoto(onComplete: (Uri?) -> Unit) {
+        if (isMotionPhotoEnabled && currentMode == CameraMode.PHOTO) {
+            takeMotionPhoto(onComplete)
+            return
+        }
+
         if (photoMegapixelMode == PhotoMegapixelMode.M50) {
             takePhoto50M(onComplete)
             return

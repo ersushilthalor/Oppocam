@@ -51,7 +51,20 @@ class CameraPreferences(context: Context) {
         private const val KEY_HAS_PROMPTED_GALLERY = "pref_has_prompted_gallery"
         private const val KEY_ZOOM_PRESETS_MODE = "pref_zoom_presets_mode"
         private const val KEY_CUSTOM_ZOOM_PRESETS = "pref_custom_zoom_presets"
+        private const val KEY_MOTION_PHOTO_ENABLED = "pref_motion_photo_enabled"
+        private const val KEY_MOTION_PHOTO_DURATION = "pref_motion_photo_duration"
     }
+
+    var isMotionPhotoEnabled: Boolean
+        get() = prefs.getBoolean(KEY_MOTION_PHOTO_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_MOTION_PHOTO_ENABLED, value).apply()
+
+    var motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration
+        get() {
+            val name = prefs.getString(KEY_MOTION_PHOTO_DURATION, com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS.name)
+            return com.example.camera.motionphoto.MotionPhotoDuration.fromName(name)
+        }
+        set(value) = prefs.edit().putString(KEY_MOTION_PHOTO_DURATION, value.name).apply()
 
     var zoomPresetsMode: String
         get() = prefs.getString(KEY_ZOOM_PRESETS_MODE, "STANDARD") ?: "STANDARD"

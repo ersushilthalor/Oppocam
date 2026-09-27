@@ -209,6 +209,41 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _hdrPlusFrameCount = MutableStateFlow(preferences.getModeHdrPlusFrameCount(preferences.cameraMode))
     val hdrPlusFrameCount: StateFlow<com.example.camera.engine.hdrplus.HdrPlusFrameCount> = _hdrPlusFrameCount.asStateFlow()
 
+    // Google Photos Compatible Motion Photo
+    private val _isMotionPhotoEnabled = MutableStateFlow(preferences.isMotionPhotoEnabled)
+    val isMotionPhotoEnabled: StateFlow<Boolean> = _isMotionPhotoEnabled.asStateFlow()
+
+    private val _motionPhotoDuration = MutableStateFlow(preferences.motionPhotoDuration)
+    val motionPhotoDuration: StateFlow<com.example.camera.motionphoto.MotionPhotoDuration> = _motionPhotoDuration.asStateFlow()
+
+    val isMotionPhotoRecording: StateFlow<Boolean> = engine.motionPhotoEngine.isRecordingPostShutter
+
+    fun toggleMotionPhoto() {
+        val next = !_isMotionPhotoEnabled.value
+        _isMotionPhotoEnabled.value = next
+        preferences.isMotionPhotoEnabled = next
+        engine.isMotionPhotoEnabled = next
+        showToast(if (next) "Motion Photo: ON (${_motionPhotoDuration.value.label})" else "Motion Photo: OFF")
+    }
+
+    fun setMotionPhotoEnabled(enabled: Boolean) {
+        _isMotionPhotoEnabled.value = enabled
+        preferences.isMotionPhotoEnabled = enabled
+        engine.isMotionPhotoEnabled = enabled
+        showToast(if (enabled) "Motion Photo: ON (${_motionPhotoDuration.value.label})" else "Motion Photo: OFF")
+    }
+
+    fun setMotionPhotoDuration(duration: com.example.camera.motionphoto.MotionPhotoDuration) {
+        _motionPhotoDuration.value = duration
+        preferences.motionPhotoDuration = duration
+        engine.motionPhotoDuration = duration
+        showToast("Motion Photo Duration: ${duration.title}")
+    }
+
+    fun onMotionPhotoPreviewFrame(bitmap: Bitmap) {
+        engine.onPreviewBitmapFrame(bitmap)
+    }
+
     fun setHdrPlusEnabled(enabled: Boolean) {
         val caps = engine.capabilities.value
         if (enabled && (!caps.supportsRaw || caps.supportedRawResolutions.isEmpty())) {

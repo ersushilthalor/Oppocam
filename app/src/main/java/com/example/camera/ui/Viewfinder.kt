@@ -104,6 +104,8 @@ fun Viewfinder(
     onToggleLock: () -> Unit = {},
     currentExposureCompensation: Int = 0,
     onFrameLuminanceStats: ((com.example.camera.engine.FrameLuminanceStats) -> Unit)? = null,
+    isMotionPhotoEnabled: Boolean = false,
+    onMotionPhotoPreviewFrame: ((Bitmap) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -203,6 +205,8 @@ fun Viewfinder(
                     factory = { context ->
                         var lastLumaSampleTime = 0L
                         var lumaSampleBitmap: Bitmap? = null
+                        var lastMotionSampleTime = 0L
+                        var motionSampleBitmap: Bitmap? = null
                         TextureView(context).apply {
                             addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
                                 val newW = right - left
@@ -227,12 +231,36 @@ fun Viewfinder(
                                         lumaSampleBitmap?.recycle()
                                         lumaSampleBitmap = null
                                     } catch (ignored: Exception) {}
+                                    try {
+                                        motionSampleBitmap?.recycle()
+                                        motionSampleBitmap = null
+                                    } catch (ignored: Exception) {}
                                     return true
                                 }
                                 override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
                                     // Real-time backdrop blur sampling for all floating windows & popups across the app
                                     if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive) {
                                         com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(this@apply, floatingWindowBlurStrength)
+                                    }
+
+                                    // Real-time Motion Photo frame buffering (30 FPS)
+                                    if (isMotionPhotoEnabled && cameraMode == CameraMode.PHOTO && onMotionPhotoPreviewFrame != null) {
+                                        val nowMs = android.os.SystemClock.uptimeMillis()
+                                        if (nowMs - lastMotionSampleTime >= 33L) {
+                                            lastMotionSampleTime = nowMs
+                                            try {
+                                                val aspect = currentTargetRatio.takeIf { it > 0 } ?: (4f / 3f)
+                                                val sampleW = if (aspect > 1.3f) 1280 else if (aspect in 0.95f..1.05f) 720 else 960
+                                                val sampleH = 720
+                                                if (motionSampleBitmap == null || motionSampleBitmap?.width != sampleW || motionSampleBitmap?.height != sampleH || motionSampleBitmap?.isRecycled == true) {
+                                                    motionSampleBitmap = Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888)
+                                                }
+                                                motionSampleBitmap?.let { bmp ->
+                                                    getBitmap(bmp)
+                                                    onMotionPhotoPreviewFrame.invoke(bmp)
+                                                }
+                                            } catch (ignored: Exception) {}
+                                        }
                                     }
 
                                     if ((cameraMode == CameraMode.CINEMA || cameraMode == CameraMode.PHOTO) && onFrameLuminanceStats != null) {

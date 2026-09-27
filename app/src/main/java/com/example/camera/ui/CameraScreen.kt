@@ -211,6 +211,9 @@ fun CameraScreen(
     val isBeforeAfterOpen by viewModel.isBeforeAfterOpen.collectAsStateWithLifecycle()
     val latestPipelineCapture by viewModel.latestPipelineCapture.collectAsStateWithLifecycle()
 
+    val isMotionPhotoEnabled by viewModel.isMotionPhotoEnabled.collectAsStateWithLifecycle()
+    val isMotionPhotoRecording by viewModel.isMotionPhotoRecording.collectAsStateWithLifecycle()
+
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
     var shutterAreaHeightDp by remember { mutableStateOf(216.dp) }
@@ -321,6 +324,10 @@ fun CameraScreen(
                 onFrameLuminanceStats = { stats ->
                     viewModel.engine.onFrameLuminanceStats(stats)
                 },
+                isMotionPhotoEnabled = isMotionPhotoEnabled,
+                onMotionPhotoPreviewFrame = { bmp ->
+                    viewModel.onMotionPhotoPreviewFrame(bmp)
+                },
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -371,12 +378,43 @@ fun CameraScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 1g. Fast Shutter Live Frame Counter Overlay (Exact center of Viewfinder)
+        // Fast Shutter Live Frame Counter Overlay (Exact center of Viewfinder)
         FastShutterLiveCounter(
             visible = isUltraFastShutterEnabled && isFastShutterHolding && cameraMode == CameraMode.PHOTO,
             frameCount = fastShutterFrameCount,
             modifier = Modifier.align(Alignment.Center)
         )
+
+        // Motion Photo post-shutter recording pill
+        if (isMotionPhotoRecording) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xCC0F172A),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 74.dp)
+                    .testTag("motion_photo_recording_indicator")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(Color(0xFF38BDF8), CircleShape)
+                    )
+                    Text(
+                        text = "Recording motion...",
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
 
 
         // Subtle High-Quality Zoom / AI Reconstruction processing pill (non-blocking indicator)
@@ -526,6 +564,8 @@ fun CameraScreen(
             onTimerClick = { viewModel.cycleTimerMode() },
             onGridClick = { viewModel.cycleGridType() },
             onRawClick = { viewModel.toggleRawCapture() },
+            isMotionPhotoEnabled = isMotionPhotoEnabled,
+            onMotionPhotoClick = { viewModel.toggleMotionPhoto() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             isProActive = isManualProOpen,
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },

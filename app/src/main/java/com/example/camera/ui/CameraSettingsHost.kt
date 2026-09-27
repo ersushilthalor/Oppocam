@@ -31,6 +31,8 @@ fun CameraSettingsHost(
     val photoMegapixelMode by viewModel.photoMegapixelMode.collectAsStateWithLifecycle()
     val isRefocusPhotoEnabled by viewModel.isRefocusPhotoEnabled.collectAsStateWithLifecycle()
     val refocusFrameCount by viewModel.refocusFrameCount.collectAsStateWithLifecycle()
+    val isMotionPhotoEnabled by viewModel.isMotionPhotoEnabled.collectAsStateWithLifecycle()
+    val motionPhotoDuration by viewModel.motionPhotoDuration.collectAsStateWithLifecycle()
     val isUltraFastShutterEnabled by viewModel.isUltraFastShutterEnabled.collectAsStateWithLifecycle()
     val ultraFastShutterFps by viewModel.ultraFastShutterFps.collectAsStateWithLifecycle()
     val isHighQualityZoomEnabled by viewModel.isHighQualityZoomEnabled.collectAsStateWithLifecycle()
@@ -103,6 +105,10 @@ fun CameraSettingsHost(
         photoMegapixelMode = photoMegapixelMode,
         isRefocusPhotoEnabled = isRefocusPhotoEnabled,
         refocusFrameCount = refocusFrameCount,
+        isMotionPhotoEnabled = isMotionPhotoEnabled,
+        motionPhotoDuration = motionPhotoDuration,
+        onMotionPhotoToggle = { viewModel.setMotionPhotoEnabled(it) },
+        onMotionPhotoDurationSelect = { viewModel.setMotionPhotoDuration(it) },
         isUltraFastShutterEnabled = isUltraFastShutterEnabled,
         ultraFastShutterFps = ultraFastShutterFps,
         onUltraFastShutterToggle = { viewModel.setUltraFastShutterEnabled(it) },
