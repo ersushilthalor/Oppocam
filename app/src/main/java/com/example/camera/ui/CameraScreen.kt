@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material3.*
@@ -190,6 +191,8 @@ fun CameraScreen(
 
     val isZoomProcessing by viewModel.isZoomProcessing.collectAsStateWithLifecycle()
     val zoomProgress by viewModel.zoomProgress.collectAsStateWithLifecycle()
+    val zoomProcessingLabel by viewModel.zoomProcessingLabel.collectAsStateWithLifecycle()
+    val zoomAiErrorMessage by viewModel.zoomAiErrorMessage.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
 
     val isUsingRearMainLens = remember(selectedLens, currentZoom) {
@@ -376,7 +379,7 @@ fun CameraScreen(
         )
 
 
-        // Subtle High-Quality Zoom processing pill (non-blocking indicator)
+        // Subtle High-Quality Zoom / AI Reconstruction processing pill (non-blocking indicator)
         if (isZoomProcessing) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
@@ -398,11 +401,62 @@ fun CameraScreen(
                         strokeWidth = 2.dp
                     )
                     Text(
-                        text = "Enhancing Zoom Clarity ${(zoomProgress * 100).toInt()}%",
+                        text = "$zoomProcessingLabel ${(zoomProgress * 100).toInt()}%",
                         color = Color.White,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium
                     )
+                }
+            }
+        }
+
+        // Clear Error Banner if HAT/BSRGAN model is missing or GPU/NPU acceleration fails
+        if (!zoomAiErrorMessage.isNullOrBlank()) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xEE3B1219),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.7f)),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = if (isZoomProcessing) 114.dp else 74.dp, start = 16.dp, end = 16.dp)
+                    .testTag("zoom_ai_error_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = zoomAiErrorMessage ?: "",
+                        color = Color(0xFFFECACA),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = {
+                            viewModel.clearZoomAiError()
+                            viewModel.setSettingsOpen(true)
+                        }
+                    ) {
+                        Text(
+                            text = "SETTINGS",
+                            color = Color(0xFFFFD54F),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    IconButton(
+                        onClick = { viewModel.clearZoomAiError() },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.Close,
+                            contentDescription = "Dismiss Zoom AI Error",
+                            tint = Color.White,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                 }
             }
         }

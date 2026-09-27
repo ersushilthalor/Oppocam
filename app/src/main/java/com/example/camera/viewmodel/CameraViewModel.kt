@@ -289,7 +289,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.stopUltraFastContinuousCapture()
     }
 
-    // High-Quality Zoom Engine (Multi-Frame Lanczos-3 & Micro-Detail Recovery)
+    // High-Quality Zoom Engine (Multi-Frame Lanczos-3, HAT AI & BSRGAN AI Reconstruction)
+    val zoomAiRepository: com.example.camera.zoom.ai.ZoomAiModelRepository =
+        engine.highQualityZoomEngine.aiModelRepository
+
     private val _isHighQualityZoomEnabled = MutableStateFlow(preferences.getModeHqZoomEnabled(preferences.cameraMode))
     val isHighQualityZoomEnabled: StateFlow<Boolean> = _isHighQualityZoomEnabled.asStateFlow()
 
@@ -298,6 +301,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val isZoomProcessing: StateFlow<Boolean> = engine.isZoomProcessing
     val zoomProgress: StateFlow<Float> = engine.zoomProgress
+    val zoomProcessingLabel: StateFlow<String> = engine.zoomProcessingLabel
+    val zoomAiErrorMessage: StateFlow<String?> = engine.zoomAiErrorMessage
+
+    fun clearZoomAiError() {
+        engine.clearZoomAiError()
+    }
 
     fun setHighQualityZoomEnabled(enabled: Boolean) {
         _isHighQualityZoomEnabled.value = enabled
@@ -305,9 +314,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.setModeHqZoomEnabled(_cameraMode.value, enabled)
         engine.isHighQualityZoomEnabled = enabled
         if (enabled) {
-            showToast("HQ Zoom Engine: ON (Lanczos-3 + Multi-Frame)")
+            val mode = zoomAiRepository.reconstructionMode.value
+            showToast("Zoom Enhanced: ON (${mode.title})")
         } else {
-            showToast("HQ Zoom Engine: OFF")
+            showToast("Zoom Enhanced: OFF")
         }
     }
 

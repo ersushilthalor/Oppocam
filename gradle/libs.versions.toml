@@ -43,6 +43,8 @@ credentials = "1.5.0"
 googleid = "1.1.1"
 mlkitSegmentationSelfie = "16.0.0-beta6"
 mlkitObjectDetection = "17.0.2"
+onnxruntimeAndroid = "1.19.0"
+tflite = "2.16.1"
 
 
 [libraries]
@@ -102,6 +104,10 @@ androidx-credentials-play-services = { group = "androidx.credentials", name = "c
 googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 mlkit-segmentation-selfie = { group = "com.google.mlkit", name = "segmentation-selfie", version.ref = "mlkitSegmentationSelfie" }
 mlkit-objectdetector = { group = "com.google.mlkit", name = "object-detection", version.ref = "mlkitObjectDetection" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntimeAndroid" }
+tensorflow-lite = { group = "org.tensorflow", name = "tensorflow-lite", version.ref = "tflite" }
+tensorflow-lite-gpu = { group = "org.tensorflow", name = "tensorflow-lite-gpu", version.ref = "tflite" }
+tensorflow-lite-gpu-api = { group = "org.tensorflow", name = "tensorflow-lite-gpu-api", version.ref = "tflite" }
 
 
 [plugins]

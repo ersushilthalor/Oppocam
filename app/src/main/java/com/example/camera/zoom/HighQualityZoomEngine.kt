@@ -65,6 +65,9 @@ enum class ZoomProcessingQuality(
  */
 class HighQualityZoomEngine(private val context: Context) {
 
+    val aiModelRepository: com.example.camera.zoom.ai.ZoomAiModelRepository =
+        com.example.camera.zoom.ai.ZoomAiModelRepository.getInstance(context)
+
     companion object {
         private const val TAG = "HighQualityZoomEngine"
         private const val LANCZOS_RADIUS = 3.0f
@@ -76,6 +79,72 @@ class HighQualityZoomEngine(private val context: Context) {
             return instance ?: synchronized(this) {
                 instance ?: HighQualityZoomEngine(context.applicationContext).also { instance = it }
             }
+        }
+    }
+
+    /**
+     * Unified entry point for Zoom Enhanced reconstruction.
+     * Routes the zoomed burst to either:
+     * - HAT AI Reconstruction (GPU/NPU accelerated)
+     * - BSRGAN AI Reconstruction (GPU/NPU accelerated)
+     * - Traditional Multi-Frame Lanczos-3 Reconstruction
+     *
+     * Does NOT silently fall back to CPU or conventional sharpening if AI mode is selected
+     * and the model or GPU/NPU accelerator is unavailable; throws a descriptive exception instead.
+     */
+    suspend fun processZoomedBurstWithSelectedMode(
+        burstBitmaps: List<Bitmap>,
+        zoomRatio: Float,
+        quality: ZoomProcessingQuality,
+        onProgress: (Float) -> Unit
+    ): Bitmap = withContext(Dispatchers.Default) {
+        if (burstBitmaps.isEmpty()) {
+            throw IllegalArgumentException("Empty burst bitmaps provided to zoom engine")
+        }
+
+        val activeMode = aiModelRepository.reconstructionMode.value
+        if (activeMode == com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL) {
+            return@withContext processZoomedBurst(burstBitmaps, zoomRatio, quality, onProgress)
+        }
+
+        val targetArch = when (activeMode) {
+            com.example.camera.zoom.ai.ZoomReconstructionMode.HAT ->
+                com.example.camera.zoom.ai.ZoomAiModelArchitecture.HAT
+            com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN ->
+                com.example.camera.zoom.ai.ZoomAiModelArchitecture.BSRGAN
+            else -> com.example.camera.zoom.ai.ZoomAiModelArchitecture.HAT
+        }
+
+        val baseBitmap = burstBitmaps[0]
+        val numFrames = min(burstBitmaps.size, quality.burstCount)
+
+        // Pre-align burst frames if multiple exposures were captured to feed a low-noise base into HAT/BSRGAN
+        val mergedBase: Bitmap = if (numFrames > 1) {
+            alignAndMergeFrames(burstBitmaps.take(numFrames)) { p ->
+                onProgress((p * 0.25f).coerceIn(0.02f, 0.20f))
+            }
+        } else {
+            baseBitmap
+        }
+
+        try {
+            val aiResult = aiModelRepository.reconstructWithSelectedAiModel(
+                inputBitmap = mergedBase,
+                zoomRatio = zoomRatio,
+                architecture = targetArch,
+                onProgress = { aiProg ->
+                    onProgress((0.20f + aiProg * 0.80f).coerceIn(0.20f, 1.0f))
+                }
+            )
+            if (mergedBase !== baseBitmap && mergedBase !== aiResult.reconstructedBitmap) {
+                mergedBase.recycle()
+            }
+            aiResult.reconstructedBitmap
+        } catch (e: Throwable) {
+            if (mergedBase !== baseBitmap) {
+                try { mergedBase.recycle() } catch (_: Throwable) {}
+            }
+            throw e
         }
     }
 
@@ -567,12 +636,15 @@ class HighQualityZoomEngine(private val context: Context) {
     }
 
     /**
-     * Saves the processed zoomed bitmap to MediaStore as a final JPEG.
+     * Saves the processed or original zoomed bitmap to MediaStore as a final JPEG.
      */
-    suspend fun saveZoomImageToMediaStore(bitmap: Bitmap): Uri? = withContext(Dispatchers.IO) {
+    suspend fun saveZoomImageToMediaStore(
+        bitmap: Bitmap,
+        prefix: String = "ZOOM"
+    ): Uri? = withContext(Dispatchers.IO) {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
         val seq = ((System.currentTimeMillis() % 1000).toInt()).toString().padStart(3, '0')
-        val fileName = "ZOOM_${timeStamp}_${seq}.jpg"
+        val fileName = "${prefix}_${timeStamp}_${seq}.jpg"
 
         val values = android.content.ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)

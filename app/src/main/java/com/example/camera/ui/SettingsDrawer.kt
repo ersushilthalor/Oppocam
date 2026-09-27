@@ -39,12 +39,12 @@ import kotlin.math.roundToInt
  * Dedicated Settings Pages.
  */
 enum class SettingsPage(val title: String, val subtitle: String, val icon: ImageVector) {
-    PHOTO("Photo Settings", "Resolutions, HDR, RAW, 50MP & Burst", Icons.Outlined.CameraAlt),
+    PHOTO("Photo Settings", "Resolutions, HDR, RAW, 50MP & Zoom AI (HAT/BSRGAN)", Icons.Outlined.CameraAlt),
     VIDEO("Video Settings", "Resolution, Frame Rate, Codec & Bitrate", Icons.Outlined.Videocam),
     CINEMA("Cinema Settings", "Log profiles, LUTs, Bit depth & Assist tools", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
     NIGHT_MODE("Night Mode Settings", "Multi-Frame Fusion, Exposure & Tripod", Icons.Outlined.NightsStay),
-    CAMERA_LENS("Camera & Lens Settings", "Hardware lenses, Deep scan & Viewfinder", Icons.Outlined.Lens),
+    CAMERA_LENS("Camera & Lens Settings", "Hardware lenses, Zoom Enhanced AI (HAT/BSRGAN) & Viewfinder", Icons.Outlined.Lens),
     STABILIZATION("Stabilization & Audio", "Hybrid OIS/EIS, Gyro & Wind reduction", Icons.Outlined.VideoStable),
     UI_LAYOUT("UI & Layout Settings", "Templates, Floating windows & Custom studio", Icons.Outlined.DashboardCustomize),
     GENERAL("General Settings", "Volume key, Double tap, Feedback & Thermal", Icons.Outlined.Settings),
@@ -352,7 +352,11 @@ fun SettingsDrawer(
                             jpegQuality = jpegQuality,
                             onJpegQualitySelected = onJpegQualitySelected,
                             selectedPhotoFilter = selectedPhotoFilter,
-                            onPhotoFilterSelected = onPhotoFilterSelected
+                            onPhotoFilterSelected = onPhotoFilterSelected,
+                            isHighQualityZoomEnabled = isHighQualityZoomEnabled,
+                            onHighQualityZoomToggle = onHighQualityZoomToggle,
+                            zoomProcessingQuality = zoomProcessingQuality,
+                            onZoomProcessingQualitySelect = onZoomProcessingQualitySelect
                         )
                         SettingsPage.VIDEO -> VideoSettingsPage(
                             selectedVideoResolution = selectedVideoResolution,
@@ -561,13 +565,29 @@ private fun PhotoSettingsPage(
     jpegQuality: Int,
     onJpegQualitySelected: (Int) -> Unit,
     selectedPhotoFilter: PhotoFilter,
-    onPhotoFilterSelected: (PhotoFilter) -> Unit
+    onPhotoFilterSelected: (PhotoFilter) -> Unit,
+    isHighQualityZoomEnabled: Boolean = true,
+    onHighQualityZoomToggle: (Boolean) -> Unit = {},
+    zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality = com.example.camera.zoom.ZoomProcessingQuality.BALANCED,
+    onZoomProcessingQualitySelect: (com.example.camera.zoom.ZoomProcessingQuality) -> Unit = {}
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val zoomAiRepo = remember(context) { com.example.camera.zoom.ai.ZoomAiModelRepository.getInstance(context) }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        item {
+            com.example.camera.ui.components.ZoomAiModelSettingsSection(
+                isHighQualityZoomEnabled = isHighQualityZoomEnabled,
+                onHighQualityZoomToggle = onHighQualityZoomToggle,
+                zoomProcessingQuality = zoomProcessingQuality,
+                onZoomProcessingQualitySelect = onZoomProcessingQualitySelect,
+                repository = zoomAiRepo
+            )
+        }
         item {
             SettingsSwitchCard(
                 title = "HDR+",
@@ -1113,12 +1133,14 @@ private fun CameraLensSettingsPage(
         }
 
         item {
-            SettingsSwitchCard(
-                title = "High-Quality Zoom Enhancement",
-                description = "Multi-frame super-resolution processing on digital zoom crops.",
-                isChecked = isHighQualityZoomEnabled,
-                onCheckedChange = onHighQualityZoomToggle,
-                tag = "toggle_hq_zoom"
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val zoomAiRepo = remember(context) { com.example.camera.zoom.ai.ZoomAiModelRepository.getInstance(context) }
+            com.example.camera.ui.components.ZoomAiModelSettingsSection(
+                isHighQualityZoomEnabled = isHighQualityZoomEnabled,
+                onHighQualityZoomToggle = onHighQualityZoomToggle,
+                zoomProcessingQuality = zoomProcessingQuality,
+                onZoomProcessingQualitySelect = onZoomProcessingQualitySelect,
+                repository = zoomAiRepo
             )
         }
     }

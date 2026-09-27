@@ -309,6 +309,14 @@ class Camera2Engine(private val context: Context) {
     val isZoomProcessing: StateFlow<Boolean> = _isZoomProcessing.asStateFlow()
     private val _zoomProgress = MutableStateFlow(0f)
     val zoomProgress: StateFlow<Float> = _zoomProgress.asStateFlow()
+    private val _zoomProcessingLabel = MutableStateFlow("Enhancing Zoom Clarity")
+    val zoomProcessingLabel: StateFlow<String> = _zoomProcessingLabel.asStateFlow()
+    private val _zoomAiErrorMessage = MutableStateFlow<String?>(null)
+    val zoomAiErrorMessage: StateFlow<String?> = _zoomAiErrorMessage.asStateFlow()
+
+    fun clearZoomAiError() {
+        _zoomAiErrorMessage.value = null
+    }
 
     // Ultra Fast Shutter System
     val ultraFastShutterEngine = com.example.camera.ultrafast.engine.UltraFastShutterEngine(
@@ -4405,16 +4413,53 @@ class Camera2Engine(private val context: Context) {
         onComplete: (Uri?) -> Unit
     ) {
         engineScope.launch(Dispatchers.Default) {
+            val aiRepo = highQualityZoomEngine.aiModelRepository
+            val activeMode = aiRepo.reconstructionMode.value
+            val keepOriginal = aiRepo.keepOriginalImage.value
+            val baseFrame = frames.firstOrNull()
+
+            // Set descriptive processing label showing active model and GPU/NPU accelerator
+            _zoomProcessingLabel.value = when (activeMode) {
+                com.example.camera.zoom.ai.ZoomReconstructionMode.HAT ->
+                    "HAT AI Reconstructing (${aiRepo.hardwareStatus.value.activeProvider.shortLabel})"
+                com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN ->
+                    "BSRGAN AI Reconstructing (${aiRepo.hardwareStatus.value.activeProvider.shortLabel})"
+                com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL ->
+                    "Enhancing Zoom Clarity"
+            }
+
+            // Preserve the original captured zoomed image alongside the reconstructed output
+            var savedOriginalUri: Uri? = null
+            if (baseFrame != null && (keepOriginal || activeMode.isAiModel)) {
+                try {
+                    savedOriginalUri = highQualityZoomEngine.saveZoomImageToMediaStore(
+                        bitmap = baseFrame,
+                        prefix = "ZOOM_ORIG"
+                    )
+                } catch (origErr: Throwable) {
+                    Log.w(TAG, "Could not save original zoomed image alongside reconstructed output", origErr)
+                }
+            }
+
             try {
                 _zoomProgress.value = 0.15f
-                val enhancedBitmap = highQualityZoomEngine.processZoomedBurst(
+                val enhancedBitmap = highQualityZoomEngine.processZoomedBurstWithSelectedMode(
                     burstBitmaps = frames,
                     zoomRatio = zoomRatio,
                     quality = quality,
                     onProgress = { p -> _zoomProgress.value = p }
                 )
 
-                val finalUri = highQualityZoomEngine.saveZoomImageToMediaStore(enhancedBitmap)
+                val outPrefix = when (activeMode) {
+                    com.example.camera.zoom.ai.ZoomReconstructionMode.HAT -> "ZOOM_HAT"
+                    com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN -> "ZOOM_BSRGAN"
+                    com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL -> "ZOOM"
+                }
+
+                val finalUri = highQualityZoomEngine.saveZoomImageToMediaStore(
+                    bitmap = enhancedBitmap,
+                    prefix = outPrefix
+                )
                 if (enhancedBitmap !in frames) {
                     enhancedBitmap.recycle()
                 }
@@ -4425,31 +4470,43 @@ class Camera2Engine(private val context: Context) {
                 _isZoomProcessing.value = false
                 _zoomProgress.value = 1.0f
 
-                if (finalUri != null) {
+                val resultUri = finalUri ?: savedOriginalUri
+                if (resultUri != null) {
                     _lastCapturedMedia.value = CapturedMedia(
-                        uri = finalUri,
+                        uri = resultUri,
                         isVideo = false,
                         timestamp = System.currentTimeMillis(),
-                        displayName = "ZOOM_${System.currentTimeMillis()}.jpg"
+                        displayName = "${outPrefix}_${System.currentTimeMillis()}.jpg"
                     )
                 }
 
                 withContext(Dispatchers.Main) {
-                    onComplete(finalUri)
+                    onComplete(resultUri)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "High-Quality Zoom processing failed, falling back to base burst frame", e)
-                val fallbackBmp = frames.firstOrNull()
-                val fallbackUri = if (fallbackBmp != null) {
+                Log.e(TAG, "Zoom reconstruction failed (${activeMode.name}): ${e.message}", e)
+                // Surface explicit error message if HAT/BSRGAN model or GPU/NPU acceleration failed
+                if (activeMode.isAiModel) {
+                    _zoomAiErrorMessage.value = e.message ?: "${activeMode.title} failed on GPU/NPU."
+                }
+                val fallbackUri = savedOriginalUri ?: if (baseFrame != null && !baseFrame.isRecycled) {
                     try {
-                        saveBitmapToMediaStore(fallbackBmp, 0)
+                        saveBitmapToMediaStore(baseFrame, 0)
                     } catch (t2: Throwable) {
                         null
                     }
                 } else null
                 _isCapturing.value = false
                 _isZoomProcessing.value = false
-                frames.forEach { it.recycle() }
+                frames.forEach { if (!it.isRecycled) it.recycle() }
+                if (fallbackUri != null) {
+                    _lastCapturedMedia.value = CapturedMedia(
+                        uri = fallbackUri,
+                        isVideo = false,
+                        timestamp = System.currentTimeMillis(),
+                        displayName = "ZOOM_ORIG_${System.currentTimeMillis()}.jpg"
+                    )
+                }
                 withContext(Dispatchers.Main) {
                     onComplete(fallbackUri)
                 }
