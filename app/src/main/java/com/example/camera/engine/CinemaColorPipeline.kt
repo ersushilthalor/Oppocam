@@ -45,7 +45,7 @@ object CinemaColorPipeline {
         rec2020Params: Rec2020AutoToneParams? = null,
         includeCreativeLut: Boolean = true
     ): ColorMatrix? {
-        if (config == null || config.logBitDepth == LogBitDepth.OFF) return null
+        if (config == null) return null
 
         val masterMatrix = ColorMatrix()
         var hasTransform = false
@@ -53,10 +53,12 @@ object CinemaColorPipeline {
         // =========================================================================
         // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
         // =========================================================================
-        val technicalTransform = computeTechnicalInputTransform(config.colorProfile, rec2020Params)
-        if (technicalTransform != null) {
-            masterMatrix.postConcat(technicalTransform)
-            hasTransform = true
+        if (config.logBitDepth != LogBitDepth.OFF) {
+            val technicalTransform = computeTechnicalInputTransform(config.colorProfile, rec2020Params)
+            if (technicalTransform != null) {
+                masterMatrix.postConcat(technicalTransform)
+                hasTransform = true
+            }
         }
 
         // =========================================================================

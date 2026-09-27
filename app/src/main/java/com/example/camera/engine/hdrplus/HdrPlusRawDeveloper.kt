@@ -420,7 +420,6 @@ class HdrPlusRawDeveloper {
         // Step 0: Build white-balanced normalized Bayer plane and track raw sensor saturation
         val totalPixels = width * height
         val wbBayer = FloatArray(totalPixels)
-        val rawPreWb = FloatArray(totalPixels)
 
         for (y in 0 until height) {
             val srcRow = y * rowStep
@@ -431,7 +430,6 @@ class HdrPlusRawDeveloper {
                 val ch = cfaChannelAt(x, y, cfa)
                 val linearNorm = ((sample - blPattern[ch]) * invRanges[ch]).coerceAtLeast(0.0f)
                 val dstIdx = dstRow + x
-                rawPreWb[dstIdx] = linearNorm.coerceAtMost(1.2f)
                 wbBayer[dstIdx] = linearNorm * channelWbGains[ch]
             }
         }
@@ -568,12 +566,8 @@ class HdrPlusRawDeveloper {
                 }
 
                 // Step 3: Sensor saturation & highlight neutrality protection
-                // Check local 2x2 maximum pre-WB raw sensor level to detect physical photodiode clipping
-                val localRawMax = maxOf(
-                    rawPreWb[idx],
-                    rawPreWb[rowOff + xm1],
-                    rawPreWb[ym1 + x]
-                )
+                // Estimate raw sensor saturation level to detect physical photodiode clipping
+                val localRawMax = maxOf(rVal / rGain, gVal, bVal / bGain)
 
                 // Apply sensor-to-sRGB CCM if available
                 var outR = rVal

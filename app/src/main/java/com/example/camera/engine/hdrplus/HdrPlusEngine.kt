@@ -1,9 +1,7 @@
 package com.example.camera.engine.hdrplus
 
 import android.content.Context
-import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
-import android.media.Image
 import android.util.Log
 import com.example.camera.engine.FrameLuminanceStats
 import com.example.camera.model.HardwareCapabilities
@@ -12,9 +10,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 
 /**
- * Master coordinator for the advanced 2-frame / 3-frame RAW HDR+ photography system.
- * Connects continuous background predictive exposure calculation, Camera2 RAW burst capture,
- * consistent color/white-balance developing, motion-aware alignment, and highlight-only merging.
+ * Master coordinator for the 3-Frame Exposure Fusion RAW photography system.
+ * Connects continuous background predictive exposure calculation, Camera2 RAW bracket capture
+ * (Underexposed, Normal, Overexposed), color-consistent RAW development, motion-aware alignment,
+ * and multi-scale Exposure Fusion blending.
  */
 class HdrPlusEngine(private val context: Context) {
 
@@ -41,7 +40,7 @@ class HdrPlusEngine(private val context: Context) {
         stats: FrameLuminanceStats?,
         lastResult: CaptureResult?,
         caps: HardwareCapabilities,
-        frameCount: HdrPlusFrameCount,
+        frameCount: HdrPlusFrameCount = HdrPlusFrameCount.THREE_FRAMES,
         userIso: Int? = null,
         userExpNs: Long? = null,
         userAeComp: Int = 0
@@ -58,7 +57,8 @@ class HdrPlusEngine(private val context: Context) {
     }
 
     /**
-     * Processes captured RAW frames into a final high-dynamic-range native-resolution JPEG.
+     * Processes captured RAW frames into a final high-dynamic-range native-resolution JPEG
+     * using the 3-Frame Exposure Fusion algorithm.
      */
     suspend fun processHdrPlusRawCapture(
         rawFrames: List<HdrPlusRawFrame>,
@@ -69,70 +69,121 @@ class HdrPlusEngine(private val context: Context) {
             throw IllegalArgumentException("No RAW frames provided to HDR+ engine")
         }
 
-        val baseRaw = rawFrames.firstOrNull { it.role == HdrPlusRole.BASE_PRIMARY } ?: rawFrames.first()
-        val secondaries = rawFrames.filter { it !== baseRaw }
+        // 1. Identify the 3 bracket roles: Normal, Underexposed, Overexposed
+        val normalRaw = rawFrames.firstOrNull { it.role == HdrPlusRole.NORMAL_EXPOSURE }
+            ?: rawFrames.first()
 
-        // Use base frame white-balance gains and CCM as the reference for all frames to guarantee color consistency
-        val refGains = Triple(baseRaw.rGain, baseRaw.gGain, baseRaw.bGain)
-        val refCcm = baseRaw.colorCorrectionMatrix
+        val underRaw = rawFrames.firstOrNull { it.role == HdrPlusRole.UNDER_EXPOSED }
+            ?: rawFrames.firstOrNull { it !== normalRaw && it.evDelta < 0f }
+            ?: rawFrames.minByOrNull { it.exposureProduct }
+            ?: normalRaw
 
-        // Estimate baseline exposure normalization from base RAW green channel so main-frame exposure
-        // matches natural ISP brightness while preventing black crush or midtone clipping
-        val baseExpGain = estimateBaselineExposureGain(baseRaw)
+        val overRaw = rawFrames.firstOrNull { it.role == HdrPlusRole.OVER_EXPOSED }
+            ?: rawFrames.firstOrNull { it !== normalRaw && it !== underRaw }
+            ?: rawFrames.maxByOrNull { it.exposureProduct }
+            ?: normalRaw
 
-        // Develop RAW frames with consistent reference calibration
-        val baseDeveloped = developer.developRawToLinearRgb(
-            frame = baseRaw,
+        // 2. Use Normal reference frame white-balance gains and CCM to guarantee color consistency
+        val refGains = Triple(normalRaw.rGain, normalRaw.gGain, normalRaw.bGain)
+        val refCcm = normalRaw.colorCorrectionMatrix
+
+        // Estimate baseline exposure gain from normal RAW green channel
+        val baseExpGain = estimateBaselineExposureGain(normalRaw)
+
+        // 3. Develop all 3 RAW frames to Linear RGB with consistent reference calibration
+        val normalDeveloped = developer.developRawToLinearRgb(
+            frame = normalRaw,
             referenceGains = refGains,
             referenceCcm = refCcm,
             baseExposureGain = baseExpGain
         )
-        val secondaryDeveloped = secondaries.map { sec ->
+
+        val underDeveloped = if (underRaw === normalRaw) {
+            normalDeveloped
+        } else {
             developer.developRawToLinearRgb(
-                frame = sec,
+                frame = underRaw,
                 referenceGains = refGains,
                 referenceCcm = refCcm,
                 baseExposureGain = baseExpGain
             )
         }
 
-        // Downsampled luminance thumbnail for base frame alignment
-        val baseThumb = developer.createLumaThumbnail(baseDeveloped)
+        val overDeveloped = if (overRaw === normalRaw) {
+            normalDeveloped
+        } else {
+            developer.developRawToLinearRgb(
+                frame = overRaw,
+                referenceGains = refGains,
+                referenceCcm = refCcm,
+                baseExposureGain = baseExpGain
+            )
+        }
 
-        // Parallelize coarse + full-resolution subpixel alignment of secondary frames against Frame 1
-        val alignedPairs = secondaryDeveloped.map { sec ->
-            async {
-                val secThumb = developer.createLumaThumbnail(sec)
-                val coarseAlignment = aligner.calculateAlignment(
-                    baseThumb = baseThumb,
-                    secThumb = secThumb,
-                    baseExpProduct = baseDeveloped.exposureProduct,
-                    secExpProduct = sec.exposureProduct,
-                    fullWidth = baseDeveloped.width,
-                    fullHeight = baseDeveloped.height
+        // 4. Downsampled luminance thumbnail for normal frame alignment
+        val normalThumb = developer.createLumaThumbnail(normalDeveloped)
+
+        // 5. Parallel alignment of Underexposed and Overexposed frames against Normal reference
+        val underAlignDeferred = async {
+            if (underRaw === normalRaw) {
+                HdrPlusAlignmentResult()
+            } else {
+                val thumb = developer.createLumaThumbnail(underDeveloped)
+                val coarse = aligner.calculateAlignment(
+                    baseThumb = normalThumb,
+                    secThumb = thumb,
+                    baseExpProduct = normalDeveloped.exposureProduct,
+                    secExpProduct = underDeveloped.exposureProduct,
+                    fullWidth = normalDeveloped.width,
+                    fullHeight = normalDeveloped.height
                 )
-                val refinedAlignment = aligner.refineAlignmentFullRes(
-                    baseImage = baseDeveloped,
-                    secImage = sec,
-                    coarse = coarseAlignment
+                aligner.refineAlignmentFullRes(
+                    baseImage = normalDeveloped,
+                    secImage = underDeveloped,
+                    coarse = coarse
                 )
-                Pair(sec, refinedAlignment)
             }
-        }.map { it.await() }
+        }
 
-        // Highlight-aware selective merging with subpixel sampling, motion detection, and tone mapping
-        merger.mergeFrames(
-            baseFrame = baseDeveloped,
-            secondaryFrames = alignedPairs,
+        val overAlignDeferred = async {
+            if (overRaw === normalRaw) {
+                HdrPlusAlignmentResult()
+            } else {
+                val thumb = developer.createLumaThumbnail(overDeveloped)
+                val coarse = aligner.calculateAlignment(
+                    baseThumb = normalThumb,
+                    secThumb = thumb,
+                    baseExpProduct = normalDeveloped.exposureProduct,
+                    secExpProduct = overDeveloped.exposureProduct,
+                    fullWidth = normalDeveloped.width,
+                    fullHeight = normalDeveloped.height
+                )
+                aligner.refineAlignmentFullRes(
+                    baseImage = normalDeveloped,
+                    secImage = overDeveloped,
+                    coarse = coarse
+                )
+            }
+        }
+
+        val underAlignment = underAlignDeferred.await()
+        val overAlignment = overAlignDeferred.await()
+
+        // 6. Run 3-Frame Exposure Fusion merging (Mertens et al.)
+        merger.merge3FramesExposureFusion(
+            underFrame = underDeveloped,
+            normalFrame = normalDeveloped,
+            overFrame = overDeveloped,
+            underAlignment = underAlignment,
+            overAlignment = overAlignment,
             jpegQuality = jpegQuality,
             orientationDegrees = orientationDegrees
         )
     }
 
     /**
-     * Estimates an exposure normalization gain for the base RAW frame so that normal AE exposures
-     * (which leave 0.5-1.2 EV of sensor headroom below whiteLevel) maintain natural midtone brightness
-     * and shadow detail without crushing blacks or clipping unclipped midtones.
+     * Estimates an exposure normalization gain for the normal RAW frame so that normal AE exposures
+     * maintain natural midtone brightness and shadow detail without crushing blacks.
      */
     private fun estimateBaselineExposureGain(baseRaw: HdrPlusRawFrame): Float {
         val w = baseRaw.width
@@ -166,7 +217,6 @@ class HdrPlusEngine(private val context: Context) {
         val avgLinear = sumLuma / count
         val highRatio = highCount.toFloat() / count
 
-        // If the base frame has dark midtones and headroom before saturation, apply a gentle baseline lift
         return if (avgLinear in 0.015f..0.14f && highRatio < 0.15f) {
             (0.16f / avgLinear.coerceAtLeast(0.06f)).coerceIn(1.0f, 1.85f)
         } else {

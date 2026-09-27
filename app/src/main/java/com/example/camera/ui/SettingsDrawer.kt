@@ -110,7 +110,7 @@ fun SettingsDrawer(
     thermalProtection: Boolean = true,
     isAutoHdrEnabled: Boolean = true,
     isHdrPlusEnabled: Boolean = false,
-    hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount = com.example.camera.engine.hdrplus.HdrPlusFrameCount.TWO_FRAMES,
+    hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount = com.example.camera.engine.hdrplus.HdrPlusFrameCount.THREE_FRAMES,
     isAiAutoFramingEnabled: Boolean = false,
     currentZoom: Float = 1.0f,
     exposureCompensation: Int = 0,
@@ -571,7 +571,7 @@ private fun PhotoSettingsPage(
         item {
             SettingsSwitchCard(
                 title = "HDR+",
-                description = "Advanced 2-frame / 3-frame RAW computational photography with predictive exposure and natural highlight recovery.",
+                description = "3-Frame Exposure Fusion RAW computational photography with predictive exposure and natural highlight recovery.",
                 isChecked = isHdrPlusEnabled,
                 onCheckedChange = onHdrPlusToggle,
                 tag = "toggle_hdr_plus"
@@ -581,10 +581,9 @@ private fun PhotoSettingsPage(
         if (isHdrPlusEnabled) {
             item {
                 SettingsSegmentedCard(
-                    title = "HDR+ Frame Count",
-                    description = "2 Frames for ultra-fast capture or 3 Frames for extreme dynamic range scenes.",
+                    title = "HDR+ Frame Mode",
+                    description = "3-Frame Exposure Fusion (Underexposed, Normal, Overexposed).",
                     options = listOf(
-                        com.example.camera.engine.hdrplus.HdrPlusFrameCount.TWO_FRAMES to "2 Frames",
                         com.example.camera.engine.hdrplus.HdrPlusFrameCount.THREE_FRAMES to "3 Frames"
                     ),
                     selectedOption = hdrPlusFrameCount,

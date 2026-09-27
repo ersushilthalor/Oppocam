@@ -307,9 +307,21 @@ fun Viewfinder(
                                 hasFilter = true
                             }
                         } else if (cameraMode == CameraMode.CINEMA) {
-                            // Cinema mode renders the authentic 3D LUT and color grading directly
-                            // on the GPU in CameraStreamCompositor. No UI-layer ColorMatrix RenderEffect is applied.
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                            val effectiveConfig = if (activeLut != null && activeLut != cinemaConfig?.selectedLut) {
+                                cinemaConfig?.copy(selectedLut = activeLut)
+                            } else {
+                                cinemaConfig
+                            }
+                            val cinemaMatrix = com.example.camera.engine.CinemaColorPipeline.computeCinemaColorMatrix(
+                                config = effectiveConfig,
+                                rec2020Params = rec2020AutoToneParams,
+                                includeCreativeLut = effectiveConfig?.isLutPreviewEnabled ?: true
+                            )
+                            if (cinemaMatrix != null) {
+                                colorMatrix.postConcat(cinemaMatrix)
+                                hasFilter = true
+                            }
                         } else if (cameraMode == CameraMode.PORTRAIT && portraitConfig != null) {
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             val style = portraitConfig.selectedStyle
@@ -342,12 +354,30 @@ fun Viewfinder(
                         }
 
                         if (hasFilter) {
-                            val paint = android.graphics.Paint()
-                            paint.colorFilter = android.graphics.ColorMatrixColorFilter(colorMatrix)
-                            textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+                            val filter = android.graphics.ColorMatrixColorFilter(colorMatrix)
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                try {
+                                    textureView.setRenderEffect(android.graphics.RenderEffect.createColorFilterEffect(filter))
+                                    if (textureView.layerType != android.view.View.LAYER_TYPE_NONE) {
+                                        textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+                                    }
+                                } catch (e: Exception) {
+                                    val paint = android.graphics.Paint().apply { colorFilter = filter }
+                                    textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+                                }
+                            } else {
+                                val paint = android.graphics.Paint().apply { colorFilter = filter }
+                                textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+                            }
                         } else {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                try {
+                                    textureView.setRenderEffect(null)
+                                } catch (ignored: Exception) {}
+                            }
                             textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
                         }
+                        textureView.invalidate()
                     },
                     modifier = Modifier.fillMaxSize()
                 )

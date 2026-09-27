@@ -69,7 +69,7 @@ data class CinemaConfig(
     val isRawSensorLogPipeline: Boolean = false, // Clean cinematic video pipeline without raw JPEG sensor simulation
     val isFocusPeakingEnabled: Boolean = false,
     val isWaveformEnabled: Boolean = false,
-    val zebraThreshold: ZebraThreshold = ZebraThreshold.IRE_70,
+    val zebraThreshold: ZebraThreshold = ZebraThreshold.OFF,
     val videoFps: Int = 24, // 24 fps cinematic standard
     val selectedResolution: CameraResolution? = null,
     // Real Cinema Advanced ISP Parameters

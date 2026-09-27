@@ -356,9 +356,9 @@ class CameraPreferences(context: Context) {
 
     var cinemaZebraThreshold: com.example.camera.model.ZebraThreshold
         get() {
-            val name = prefs.getString("pref_cinema_zebra_threshold", com.example.camera.model.ZebraThreshold.IRE_70.name)
-                ?: com.example.camera.model.ZebraThreshold.IRE_70.name
-            return try { com.example.camera.model.ZebraThreshold.valueOf(name) } catch (e: Exception) { com.example.camera.model.ZebraThreshold.IRE_70 }
+            val name = prefs.getString("pref_cinema_zebra_threshold", com.example.camera.model.ZebraThreshold.OFF.name)
+                ?: com.example.camera.model.ZebraThreshold.OFF.name
+            return try { com.example.camera.model.ZebraThreshold.valueOf(name) } catch (e: Exception) { com.example.camera.model.ZebraThreshold.OFF }
         }
         set(value) = prefs.edit().putString("pref_cinema_zebra_threshold", value.name).apply()
 
@@ -711,7 +711,7 @@ class CameraPreferences(context: Context) {
 
     var hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount
         get() {
-            val count = prefs.getInt("pref_hdr_plus_frame_count", 2)
+            val count = prefs.getInt("pref_hdr_plus_frame_count", 3)
             return com.example.camera.engine.hdrplus.HdrPlusFrameCount.fromInt(count)
         }
         set(value) = prefs.edit().putInt("pref_hdr_plus_frame_count", value.count).apply()

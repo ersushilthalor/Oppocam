@@ -221,7 +221,7 @@ class Camera2Engine(private val context: Context) {
     val hdrPlusEngine by lazy { com.example.camera.engine.hdrplus.HdrPlusEngine(context) }
 
     var isHdrPlusEnabled: Boolean = false
-    var hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount = com.example.camera.engine.hdrplus.HdrPlusFrameCount.TWO_FRAMES
+    var hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount = com.example.camera.engine.hdrplus.HdrPlusFrameCount.THREE_FRAMES
 
     fun refreshCaptureSessionForRaw() {
         val lens = _selectedLens.value ?: return
@@ -3016,9 +3016,9 @@ class Camera2Engine(private val context: Context) {
                 override fun onOrientationChanged(orientation: Int) {
                     if (orientation == ORIENTATION_UNKNOWN) return
                     physicalOrientationDegrees = when (orientation) {
-                        in 45..134 -> 90
+                        in 45..134 -> 270
                         in 135..224 -> 180
-                        in 225..314 -> 270
+                        in 225..314 -> 90
                         else -> 0
                     }
                 }
@@ -3934,7 +3934,21 @@ class Camera2Engine(private val context: Context) {
                             onComplete(uri)
                         }
                     } catch (e: Throwable) {
-                        Log.e(TAG, "[HDR+] Error processing RAW HDR+ capture", e)
+                        Log.e(TAG, "[HDR+] Error processing RAW HDR+ capture, falling back to base frame", e)
+                        try {
+                            val baseRaw = framesToProcess.firstOrNull { it.role == com.example.camera.engine.hdrplus.HdrPlusRole.NORMAL_EXPOSURE }
+                                ?: framesToProcess.firstOrNull()
+                            if (baseRaw != null) {
+                                val developed = hdrPlusEngine.developer.developRawToLinearRgb(baseRaw)
+                                val fallbackJpeg = hdrPlusEngine.merger.encodeSingleFrame(developed, preferences.jpegQuality, captureOrientation)
+                                val uri = saveJpegBytesToMediaStore(fallbackJpeg, skipPipeline = true)
+                                updateStorageStats()
+                                withContext(Dispatchers.Main) { onComplete(uri) }
+                                return@launch
+                            }
+                        } catch (fallbackError: Throwable) {
+                            Log.e(TAG, "[HDR+] Fallback save also failed", fallbackError)
+                        }
                         _isCapturing.value = false
                         withContext(Dispatchers.Main) {
                             onComplete(null)
@@ -6038,7 +6052,7 @@ class Camera2Engine(private val context: Context) {
         val photoFilter = selectedPhotoFilter
         val isFilterActive = (photoFilter != PhotoFilter.ORIGINAL && currentMode == CameraMode.PHOTO)
         val isProAdjusted = (proSaturation.value != 0f || proContrast.value != 1.0f || proHighlights.value != 0f || proShadows.value != 0f)
-        val needsProcessing = isFilterActive || isProAdjusted
+        val needsProcessing = !skipPipeline && (isFilterActive || isProAdjusted)
 
         var wasFilterApplied = false
         val outputBytes = if (needsProcessing) {
@@ -6166,11 +6180,23 @@ class Camera2Engine(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         val nowSec = nowMs / 1000
 
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(outputBytes, 0, outputBytes.size, boundsOptions)
+        val imageW = boundsOptions.outWidth
+        val imageH = boundsOptions.outHeight
+
         val contentValues = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             put(MediaStore.Images.Media.DATE_ADDED, nowSec)
             put(MediaStore.Images.Media.DATE_MODIFIED, nowSec)
+            if (imageW > 0 && imageH > 0) {
+                put(MediaStore.Images.Media.WIDTH, imageW)
+                put(MediaStore.Images.Media.HEIGHT, imageH)
+            }
+            if (skipPipeline) {
+                put(MediaStore.Images.Media.ORIENTATION, 0)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Images.Media.IS_PENDING, 1)

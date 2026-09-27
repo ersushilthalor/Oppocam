@@ -28,43 +28,13 @@ class HdrPlusEngineTest {
     )
 
     @Test
-    fun testPredictorTwoFrameMode() {
+    fun testPredictorThreeFrameExposureFusion() {
         val predictor = HdrPlusPredictor()
         val baseExpNs = 30_000_000L
         val baseIso = 100
 
         predictor.updatePrediction(
             stats = FrameLuminanceStats(p95 = 0.85f, p99 = 0.92f, dynamicRange = 0.70f),
-            lastResult = null,
-            caps = defaultCaps,
-            frameCount = HdrPlusFrameCount.TWO_FRAMES,
-            userSelectedIso = baseIso,
-            userSelectedExposureTimeNs = baseExpNs
-        )
-
-        val prediction = predictor.getLatestPrediction(HdrPlusFrameCount.TWO_FRAMES)
-        assertEquals(2, prediction.specs.size)
-
-        val frame1 = prediction.specs[0]
-        assertEquals(HdrPlusRole.BASE_PRIMARY, frame1.role)
-        assertEquals(baseExpNs, frame1.exposureTimeNs)
-        assertEquals(baseIso, frame1.iso)
-        assertEquals(0.0f, frame1.evDelta, 0.001f)
-
-        val frame2 = prediction.specs[1]
-        assertEquals(HdrPlusRole.SECONDARY_MODERATE_HIGHLIGHT, frame2.role)
-        assertTrue("Frame 2 must be darker than Frame 1", (frame2.exposureTimeNs * frame2.iso) < (frame1.exposureTimeNs * frame1.iso))
-        assertTrue("Frame 2 EV offset must be negative", frame2.evDelta < 0f)
-    }
-
-    @Test
-    fun testPredictorThreeFrameMode() {
-        val predictor = HdrPlusPredictor()
-        val baseExpNs = 40_000_000L
-        val baseIso = 200
-
-        predictor.updatePrediction(
-            stats = FrameLuminanceStats(p95 = 0.90f, p99 = 0.98f, isOutdoorSkyWithDarkForeground = true),
             lastResult = null,
             caps = defaultCaps,
             frameCount = HdrPlusFrameCount.THREE_FRAMES,
@@ -75,21 +45,21 @@ class HdrPlusEngineTest {
         val prediction = predictor.getLatestPrediction(HdrPlusFrameCount.THREE_FRAMES)
         assertEquals(3, prediction.specs.size)
 
-        val frame1 = prediction.specs[0]
-        val frame2 = prediction.specs[1]
-        val frame3 = prediction.specs[2]
+        val frameNormal = prediction.specs[0]
+        assertEquals(HdrPlusRole.NORMAL_EXPOSURE, frameNormal.role)
+        assertEquals(baseExpNs, frameNormal.exposureTimeNs)
+        assertEquals(baseIso, frameNormal.iso)
+        assertEquals(0.0f, frameNormal.evDelta, 0.001f)
 
-        assertEquals(HdrPlusRole.BASE_PRIMARY, frame1.role)
-        assertEquals(HdrPlusRole.SECONDARY_MODERATE_HIGHLIGHT, frame2.role)
-        assertEquals(HdrPlusRole.SECONDARY_EXTREME_HIGHLIGHT, frame3.role)
+        val frameUnder = prediction.specs[1]
+        assertEquals(HdrPlusRole.UNDER_EXPOSED, frameUnder.role)
+        assertTrue("Under-exposed frame must be darker than Normal frame", (frameUnder.exposureTimeNs * frameUnder.iso) < (frameNormal.exposureTimeNs * frameNormal.iso))
+        assertTrue("Under-exposed frame EV offset must be negative", frameUnder.evDelta < 0f)
 
-        val p1 = frame1.exposureTimeNs.toDouble() * frame1.iso.toDouble()
-        val p2 = frame2.exposureTimeNs.toDouble() * frame2.iso.toDouble()
-        val p3 = frame3.exposureTimeNs.toDouble() * frame3.iso.toDouble()
-
-        assertTrue("Frame 2 must be darker than Frame 1", p2 < p1)
-        assertTrue("Frame 3 must be strictly darker than Frame 2", p3 < p2)
-        assertTrue("Frame 3 EV delta must be more negative than Frame 2", frame3.evDelta < frame2.evDelta)
+        val frameOver = prediction.specs[2]
+        assertEquals(HdrPlusRole.OVER_EXPOSED, frameOver.role)
+        assertTrue("Over-exposed frame must be brighter than Normal frame", (frameOver.exposureTimeNs * frameOver.iso) > (frameNormal.exposureTimeNs * frameNormal.iso))
+        assertTrue("Over-exposed frame EV offset must be positive", frameOver.evDelta > 0f)
     }
 
     @Test
@@ -101,18 +71,18 @@ class HdrPlusEngineTest {
             stats = FrameLuminanceStats(p95 = 0.60f, p99 = 0.75f, isOutdoorSkyWithDarkForeground = false),
             lastResult = null,
             caps = defaultCaps,
-            frameCount = HdrPlusFrameCount.TWO_FRAMES
+            frameCount = HdrPlusFrameCount.THREE_FRAMES
         )
-        val normalPred = predictor.getLatestPrediction(HdrPlusFrameCount.TWO_FRAMES)
+        val normalPred = predictor.getLatestPrediction(HdrPlusFrameCount.THREE_FRAMES)
 
         // Outdoor sky high contrast scene
         predictor.updatePrediction(
             stats = FrameLuminanceStats(p95 = 0.96f, p99 = 0.99f, isOutdoorSkyWithDarkForeground = true),
             lastResult = null,
             caps = defaultCaps,
-            frameCount = HdrPlusFrameCount.TWO_FRAMES
+            frameCount = HdrPlusFrameCount.THREE_FRAMES
         )
-        val skyPred = predictor.getLatestPrediction(HdrPlusFrameCount.TWO_FRAMES)
+        val skyPred = predictor.getLatestPrediction(HdrPlusFrameCount.THREE_FRAMES)
 
         assertTrue(
             "Outdoor sky should demand greater EV underexposure than normal scene",
@@ -326,5 +296,82 @@ class HdrPlusEngineTest {
             "Expected yellow surface to remain yellow (R > B + 60 and G > B + 60), got R=$r, G=$g, B=$b",
             r > b + 60 && g > b + 60
         )
+    }
+
+    @Test
+    fun testThreeFrameExposureFusionFullPipelineAndRotation() = runBlocking {
+        val merger = HdrPlusMerger()
+        val width = 64
+        val height = 48
+        val totalPixels = width * height
+
+        // 1. Normal Frame (0 EV): High contrast scene with bright sky at top (luma ~1.0) and dark shadow at bottom (luma ~0.05)
+        val normalRgb = FloatArray(totalPixels * 3)
+        for (y in 0 until height) {
+            val yNorm = y.toFloat() / (height - 1).toFloat()
+            val luma = (1.0f - yNorm).coerceIn(0.05f, 1.0f)
+            for (x in 0 until width) {
+                val idx = (y * width + x) * 3
+                normalRgb[idx] = luma
+                normalRgb[idx + 1] = luma
+                normalRgb[idx + 2] = luma
+            }
+        }
+        val normalFrame = HdrPlusDevelopedImage(
+            rgbLinear = normalRgb,
+            width = width,
+            height = height,
+            exposureTimeNs = 33_333_333L,
+            iso = 100,
+            role = HdrPlusRole.NORMAL_EXPOSURE,
+            evDelta = 0.0f
+        )
+
+        // 2. Underexposed Frame (-2 EV): Highlights in the sky are preserved without sensor saturation
+        val underRgb = FloatArray(totalPixels * 3) { idx ->
+            (normalRgb[idx] * 0.25f).coerceIn(0.0f, 1.0f)
+        }
+        val underFrame = HdrPlusDevelopedImage(
+            rgbLinear = underRgb,
+            width = width,
+            height = height,
+            exposureTimeNs = 8_333_333L,
+            iso = 100,
+            role = HdrPlusRole.UNDER_EXPOSED,
+            evDelta = -2.0f
+        )
+
+        // 3. Overexposed Frame (+2 EV): Shadows at the bottom are boosted and clear
+        val overRgb = FloatArray(totalPixels * 3) { idx ->
+            (normalRgb[idx] * 4.0f).coerceIn(0.0f, 2.0f)
+        }
+        val overFrame = HdrPlusDevelopedImage(
+            rgbLinear = overRgb,
+            width = width,
+            height = height,
+            exposureTimeNs = 133_333_333L,
+            iso = 100,
+            role = HdrPlusRole.OVER_EXPOSED,
+            evDelta = 2.0f
+        )
+
+        // Merge with 90° rotation (Portrait capture on standard 90° landscape sensor)
+        val mergedJpeg = merger.merge3FramesExposureFusion(
+            underFrame = underFrame,
+            normalFrame = normalFrame,
+            overFrame = overFrame,
+            jpegQuality = 98,
+            orientationDegrees = 90
+        )
+
+        assertNotNull(mergedJpeg)
+        assertTrue(mergedJpeg.isNotEmpty())
+
+        val bitmap = BitmapFactory.decodeByteArray(mergedJpeg, 0, mergedJpeg.size)
+        assertNotNull(bitmap)
+        // With 90° rotation, width and height must swap correctly: original 64x48 -> 48x64 upright
+        assertEquals("Width must be rotated from 64 to 48", height, bitmap.width)
+        assertEquals("Height must be rotated from 48 to 64", width, bitmap.height)
+        bitmap.recycle()
     }
 }

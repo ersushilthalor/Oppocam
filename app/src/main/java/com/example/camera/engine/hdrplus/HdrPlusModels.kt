@@ -1,47 +1,52 @@
 package com.example.camera.engine.hdrplus
 
 /**
- * User-configurable frame count for the advanced RAW HDR+ pipeline.
+ * Frame count configuration for the 3-Frame Exposure Fusion pipeline.
+ * Exclusively uses exactly 3 frames: Underexposed (-2 EV), Normal (0 EV), and Overexposed (+2 EV).
  */
 enum class HdrPlusFrameCount(val count: Int, val label: String) {
-    TWO_FRAMES(2, "2 Frames"),
-    THREE_FRAMES(3, "3 Frames");
+    THREE_FRAMES(3, "3-Frame Exposure Fusion");
 
     companion object {
         fun fromInt(value: Int): HdrPlusFrameCount {
-            return when (value) {
-                3 -> THREE_FRAMES
-                else -> TWO_FRAMES
-            }
+            return THREE_FRAMES
         }
     }
 }
 
 /**
- * Role of each exposure in the RAW HDR+ capture bracket.
+ * Role of each exposure in the 3-Frame Exposure Fusion bracket.
+ * Exactly 3 frames: Underexposed, Normal exposure, and Overexposed.
  */
 enum class HdrPlusRole {
     /**
-     * Primary reference exposure captured at user's selected main exposure (or AE metering).
-     * Provides geometry, shadows, midtones, skin tones, and overall scene aesthetics.
+     * Underexposed frame (-1.5 to -2.5 EV) for recovering sky, bright clouds, specular highlights,
+     * sun disks, and light sources without sensor clipping.
      */
-    BASE_PRIMARY,
+    UNDER_EXPOSED,
 
     /**
-     * Secondary underexposed frame (-1.5 to -2.0 EV) capturing cloud texture, sky gradient,
-     * and moderate highlights without clipping.
+     * Normal reference exposure (0 EV / metered AE) for midtones, base scene structure,
+     * skin tones, and overall natural geometry.
      */
-    SECONDARY_MODERATE_HIGHLIGHT,
+    NORMAL_EXPOSURE,
 
     /**
-     * Strongly underexposed frame (-3.0 to -4.0 EV) in 3-frame mode for extreme highlights,
-     * bright sun disks, specular glints, and direct light sources.
+     * Overexposed frame (+1.5 to +2.5 EV) for lifting deep shadows, revealing dark textures,
+     * and boosting low-light signal-to-noise ratio.
      */
-    SECONDARY_EXTREME_HIGHLIGHT
+    OVER_EXPOSED;
+
+    companion object {
+        // Backwards-compatible aliases
+        val BASE_PRIMARY get() = NORMAL_EXPOSURE
+        val SECONDARY_MODERATE_HIGHLIGHT get() = UNDER_EXPOSED
+        val SECONDARY_EXTREME_HIGHLIGHT get() = OVER_EXPOSED
+    }
 }
 
 /**
- * Planned exposure specification for an individual RAW frame.
+ * Planned exposure specification for an individual RAW frame in the 3-frame bracket.
  */
 data class HdrPlusExposureSpec(
     val role: HdrPlusRole,

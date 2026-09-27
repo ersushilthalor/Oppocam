@@ -867,6 +867,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             engine.setPreviewAspectRatio(16f / 9f)
         }
 
+        if (mode == CameraMode.CINEMA) {
+            // Set Zebra feature to OFF by default whenever Cinema Mode is opened
+            val curCinema = engine.cinemaConfig.value
+            if (curCinema.zebraThreshold != com.example.camera.model.ZebraThreshold.OFF) {
+                updateCinemaConfig(curCinema.copy(zebraThreshold = com.example.camera.model.ZebraThreshold.OFF))
+            }
+        }
+
         if (mode != CameraMode.VIDEO) {
             _isVideoAdjustmentsOpen.value = false
         }
