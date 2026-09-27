@@ -102,7 +102,14 @@ class HighQualityZoomEngine(private val context: Context) {
             throw IllegalArgumentException("Empty burst bitmaps provided to zoom engine")
         }
 
-        val activeMode = aiModelRepository.reconstructionMode.value
+        var activeMode = aiModelRepository.reconstructionMode.value
+        if (activeMode == com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL) {
+            if (aiModelRepository.selectedHatModel.value != null) {
+                activeMode = com.example.camera.zoom.ai.ZoomReconstructionMode.HAT
+            } else if (aiModelRepository.selectedBsrganModel.value != null) {
+                activeMode = com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN
+            }
+        }
         if (activeMode == com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL) {
             return@withContext processZoomedBurst(burstBitmaps, zoomRatio, quality, onProgress)
         }

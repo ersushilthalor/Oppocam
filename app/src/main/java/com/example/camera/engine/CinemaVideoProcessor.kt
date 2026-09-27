@@ -68,16 +68,14 @@ object CinemaVideoProcessor {
             includeCreativeLut = true
         )
         val normalizedRot = ((orientationDegrees % 360) + 360) % 360
-        val needsGrading = (colorMatrix != null)
-        val needsRotation = (normalizedRot != 0)
 
-        // If neither grading nor rotation is needed, return original file directly
-        if (!needsGrading && !needsRotation) {
-            Log.d(TAG, "Video does not need grading or rotation, skipping post-processing")
+        // If no grading transform is needed, return original file directly
+        if (colorMatrix == null) {
+            Log.d(TAG, "Video does not need grading, skipping post-processing")
             return inputFile
         }
 
-        Log.i(TAG, "Starting cinema video processing: rot=$normalizedRot, needsGrading=$needsGrading, lut=${config.selectedLut}")
+        Log.i(TAG, "Starting cinema video processing: rot=$normalizedRot, lut=${config.selectedLut}, profile=${config.colorProfile}")
 
         try {
             outputFile.parentFile?.mkdirs()
@@ -94,7 +92,7 @@ object CinemaVideoProcessor {
             )
 
             if (success && outputFile.exists() && outputFile.length() > 0L) {
-                Log.i(TAG, "Cinema video processed successfully: ${outputFile.length()} bytes")
+                Log.i(TAG, "Cinema video processed successfully with LUT & color profile: ${outputFile.length()} bytes")
                 return outputFile
             } else {
                 Log.w(TAG, "Video processing did not produce output, falling back to input file")
@@ -160,10 +158,9 @@ object CinemaVideoProcessor {
                 videoFormat.getInteger(MediaFormat.KEY_FRAME_RATE)
             } else 30
 
-            // Determine upright dimensions
-            val isSwapped = (rotationDegrees == 90 || rotationDegrees == 270)
-            val outWidth = (if (isSwapped) inHeight else inWidth) and 1.inv()
-            val outHeight = (if (isSwapped) inWidth else inHeight) and 1.inv()
+            // Preserve natural encoder dimensions so hardware encoders operate within compliant bounds
+            val outWidth = inWidth and 1.inv()
+            val outHeight = inHeight and 1.inv()
 
             // Setup MediaCodec Video Encoder
             val encoderMime = MediaFormat.MIMETYPE_VIDEO_AVC
@@ -254,9 +251,16 @@ object CinemaVideoProcessor {
             decoder.configure(videoFormat, decoderSurface, null, 0)
             decoder.start()
 
-            // Setup MediaMuxer
+            // Setup MediaMuxer and preserve the recorded orientation hint metadata
+            val inputRotation = if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                videoFormat.getInteger(MediaFormat.KEY_ROTATION)
+            } else {
+                rotationDegrees
+            }
+            val finalOrientationHint = if (inputRotation != 0) inputRotation else rotationDegrees
+
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            muxer.setOrientationHint(0) // Physical buffer is rendered upright
+            muxer.setOrientationHint(finalOrientationHint)
 
             // Prepare geometry & uniforms
             val vertexBuffer = createFloatBuffer(floatArrayOf(
@@ -272,11 +276,9 @@ object CinemaVideoProcessor {
                 1.0f, 1.0f
             ))
 
+            // Keep identity MVP matrix to prevent accidental 90° rotation or aspect ratio distortion
             val mvpMatrix = FloatArray(16)
             Matrix.setIdentityM(mvpMatrix, 0)
-            if (rotationDegrees != 0) {
-                Matrix.rotateM(mvpMatrix, 0, -rotationDegrees.toFloat(), 0f, 0f, 1f)
-            }
 
             val stMatrix = FloatArray(16)
 

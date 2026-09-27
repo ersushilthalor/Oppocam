@@ -2,6 +2,7 @@ package com.example.camera.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -107,6 +108,18 @@ fun CameraScreen(
 
     // Engine & VM States
     val cameraMode by viewModel.cameraMode.collectAsStateWithLifecycle()
+
+    if (cameraMode == CameraMode.AI_SUBJECT_TRACKING) {
+        BackHandler {
+            viewModel.setCameraMode(CameraMode.PHOTO)
+        }
+        com.example.camera.tracking.ui.AiSubjectTrackingScreen(
+            onBack = {
+                viewModel.setCameraMode(CameraMode.PHOTO)
+            }
+        )
+        return
+    }
     val capabilities by viewModel.engine.capabilities.collectAsStateWithLifecycle()
     val selectedPhotoResolution by viewModel.engine.selectedPhotoResolution.collectAsStateWithLifecycle()
     val selectedVideoResolution by viewModel.engine.selectedVideoResolution.collectAsStateWithLifecycle()

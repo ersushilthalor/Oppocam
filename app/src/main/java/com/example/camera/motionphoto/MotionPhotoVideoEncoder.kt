@@ -99,6 +99,9 @@ class MotionPhotoVideoEncoder {
             var isMuxerStarted = false
             val bufferInfo = MediaCodec.BufferInfo()
 
+            var sampleIndex = 0L
+            val frameIntervalUs = (1_000_000L / FRAME_RATE)
+
             fun drainEncoder(endOfStream: Boolean) {
                 val codec = mediaCodec ?: return
                 val muxer = mediaMuxer ?: return
@@ -112,10 +115,9 @@ class MotionPhotoVideoEncoder {
                 }
 
                 while (true) {
-                    val status = codec.dequeueOutputBuffer(bufferInfo, if (endOfStream) 10000L else 2000L)
+                    val status = codec.dequeueOutputBuffer(bufferInfo, if (endOfStream) 15000L else 2000L)
                     if (status == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        if (!endOfStream) break
-                        else break
+                        break
                     } else if (status == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         if (!isMuxerStarted) {
                             val newFormat = codec.outputFormat
@@ -133,6 +135,8 @@ class MotionPhotoVideoEncoder {
                             if (bufferInfo.size != 0 && isMuxerStarted) {
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                // Assign strictly sequential 30 fps presentation timestamps
+                                bufferInfo.presentationTimeUs = sampleIndex++ * frameIntervalUs
                                 muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
                             }
                             codec.releaseOutputBuffer(status, false)
@@ -144,10 +148,7 @@ class MotionPhotoVideoEncoder {
                 }
             }
 
-            // Render each frame into inputSurface
-            val firstTimestampNs = frames.first().timestampNs
-            val frameIntervalUs = (1_000_000L / FRAME_RATE)
-
+            // Render each frame into inputSurface with hardware pacing
             for (i in frames.indices) {
                 val frame = frames[i]
                 val canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -169,6 +170,10 @@ class MotionPhotoVideoEncoder {
                 }
 
                 drainEncoder(endOfStream = false)
+                // Pacing to prevent hardware encoder queue overflow
+                try {
+                    Thread.sleep(6)
+                } catch (ignored: Exception) {}
             }
 
             // Finish stream

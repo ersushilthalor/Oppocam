@@ -126,6 +126,25 @@ class MotionPhotoEngine(private val context: Context) {
             allFrames.addAll(activePreShutterFrames)
             allFrames.addAll(postShutterFrames)
 
+            val preCount = activePreShutterFrames.size
+
+            if (allFrames.isEmpty()) {
+                val stillBmp = android.graphics.BitmapFactory.decodeByteArray(stillJpegBytes, 0, stillJpegBytes.size)
+                if (stillBmp != null) {
+                    val frameCount = (duration.totalDurationMs * 30 / 1000).toInt().coerceAtLeast(30)
+                    val baseNs = System.nanoTime()
+                    for (i in 0 until frameCount) {
+                        allFrames.add(
+                            MotionFrame(
+                                bitmap = stillBmp,
+                                timestampNs = baseNs + i * 33_333_333L,
+                                orientationDegrees = orientationDegrees
+                            )
+                        )
+                    }
+                }
+            }
+
             if (allFrames.isEmpty()) {
                 Log.w(TAG, "No motion frames captured, returning plain still photo")
                 return@withContext stillJpegBytes
@@ -134,9 +153,8 @@ class MotionPhotoEngine(private val context: Context) {
             // Sort by timestamp
             allFrames.sortBy { it.timestampNs }
 
-            val firstTimestampNs = allFrames.first().timestampNs
-            val shutterNs = activeShutterTimestampNs.coerceAtLeast(firstTimestampNs)
-            val presentationTimestampUs = ((shutterNs - firstTimestampNs) / 1000L).coerceAtLeast(0L)
+            val frameIntervalUs = 1_000_000L / 30L
+            val presentationTimestampUs = (preCount.toLong() * frameIntervalUs).coerceIn(0L, (allFrames.size.toLong() * frameIntervalUs))
 
             val tempVideoFile = File(context.cacheDir, "motion_temp_${System.currentTimeMillis()}.mp4")
             val firstBmp = allFrames.first().bitmap

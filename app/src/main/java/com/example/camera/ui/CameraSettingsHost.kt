@@ -76,8 +76,6 @@ fun CameraSettingsHost(
     val viewfinderFps by viewModel.viewfinderFps.collectAsStateWithLifecycle()
     val thermalProtection by viewModel.thermalProtection.collectAsStateWithLifecycle()
     val isAutoHdrEnabled by viewModel.isAutoHdrEnabled.collectAsStateWithLifecycle()
-    val isHdrPlusEnabled by viewModel.isHdrPlusEnabled.collectAsStateWithLifecycle()
-    val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsStateWithLifecycle()
     val isAiAutoFramingEnabled by viewModel.isAiAutoFramingEnabled.collectAsStateWithLifecycle()
     val currentZoom by viewModel.currentZoom.collectAsStateWithLifecycle()
     val exposureCompensation by viewModel.exposureCompensation.collectAsStateWithLifecycle()
@@ -167,10 +165,6 @@ fun CameraSettingsHost(
         onViewfinderFpsSelected = { viewModel.setViewfinderFps(it) },
         onThermalProtectionToggle = { viewModel.setThermalProtection(it) },
         onAutoHdrToggle = { viewModel.setAutoHdrEnabled(it) },
-        isHdrPlusEnabled = isHdrPlusEnabled,
-        hdrPlusFrameCount = hdrPlusFrameCount,
-        onHdrPlusToggle = { viewModel.setHdrPlusEnabled(it) },
-        onHdrPlusFrameCountSelected = { viewModel.setHdrPlusFrameCount(it) },
         onAiAutoFramingToggle = { viewModel.setAiAutoFramingEnabled(it) },
         onZoomChange = { viewModel.setZoom(it, isPresetTap = false) },
         onExposureCompensationChange = { viewModel.setExposureCompensation(it) },

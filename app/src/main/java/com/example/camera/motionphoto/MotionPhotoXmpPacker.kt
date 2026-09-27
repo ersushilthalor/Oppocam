@@ -40,24 +40,42 @@ object MotionPhotoXmpPacker {
                 "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n" +
                 "    <rdf:Description rdf:about=\"\"\n" +
                 "        xmlns:GCamera=\"http://ns.google.com/photos/1.0/camera/\"\n" +
+                "        xmlns:Camera=\"http://ns.google.com/photos/1.0/camera/\"\n" +
                 "        xmlns:Container=\"http://ns.google.com/photos/1.0/container/\"\n" +
                 "        xmlns:Item=\"http://ns.google.com/photos/1.0/container/item/\"\n" +
                 "        GCamera:MotionPhoto=\"1\"\n" +
                 "        GCamera:MotionPhotoVersion=\"1\"\n" +
                 "        GCamera:MotionPhotoPresentationTimestampUs=\"$presentationTimestampUs\"\n" +
+                "        Camera:MotionPhoto=\"1\"\n" +
+                "        Camera:MotionPhotoVersion=\"1\"\n" +
+                "        Camera:MotionPhotoPresentationTimestampUs=\"$presentationTimestampUs\"\n" +
                 "        GCamera:MicroVideo=\"1\"\n" +
                 "        GCamera:MicroVideoVersion=\"1\"\n" +
                 "        GCamera:MicroVideoOffset=\"$videoLengthBytes\"\n" +
-                "        GCamera:MicroVideoPresentationTimestampUs=\"$presentationTimestampUs\">\n" +
+                "        GCamera:MicroVideoPresentationTimestampUs=\"$presentationTimestampUs\"\n" +
+                "        Camera:MicroVideo=\"1\"\n" +
+                "        Camera:MicroVideoVersion=\"1\"\n" +
+                "        Camera:MicroVideoOffset=\"$videoLengthBytes\"\n" +
+                "        Camera:MicroVideoPresentationTimestampUs=\"$presentationTimestampUs\">\n" +
                 "      <Container:Directory>\n" +
                 "        <rdf:Seq>\n" +
                 "          <rdf:li rdf:parseType=\"Resource\">\n" +
+                "            <Container:Item\n" +
+                "                Item:Mime=\"image/jpeg\"\n" +
+                "                Item:Semantic=\"Primary\"\n" +
+                "                Item:Length=\"0\"\n" +
+                "                Item:Padding=\"0\"/>\n" +
                 "            <Item:Mime>image/jpeg</Item:Mime>\n" +
                 "            <Item:Semantic>Primary</Item:Semantic>\n" +
                 "            <Item:Length>0</Item:Length>\n" +
                 "            <Item:Padding>0</Item:Padding>\n" +
                 "          </rdf:li>\n" +
                 "          <rdf:li rdf:parseType=\"Resource\">\n" +
+                "            <Container:Item\n" +
+                "                Item:Mime=\"video/mp4\"\n" +
+                "                Item:Semantic=\"MotionPhoto\"\n" +
+                "                Item:Length=\"$videoLengthBytes\"\n" +
+                "                Item:Padding=\"0\"/>\n" +
                 "            <Item:Mime>video/mp4</Item:Mime>\n" +
                 "            <Item:Semantic>MotionPhoto</Item:Semantic>\n" +
                 "            <Item:Length>$videoLengthBytes</Item:Length>\n" +
@@ -73,8 +91,9 @@ object MotionPhotoXmpPacker {
 
     /**
      * Injects the XMP metadata into the JPEG byte stream within an APP1 (0xFFE1) marker segment.
-     * Preserves existing EXIF metadata intact by inserting the XMP segment immediately after
-     * the EXIF APP1 segment (or after SOI if no EXIF segment exists).
+     * Preserves existing EXIF metadata intact, removes any pre-existing XMP segments to avoid
+     * duplicate headers, and inserts the Motion Photo XMP segment right after EXIF APP1
+     * (or after SOI if no EXIF segment exists).
      */
     fun injectXmpIntoJpeg(
         jpegBytes: ByteArray,
@@ -93,13 +112,21 @@ object MotionPhotoXmpPacker {
             return jpegBytes
         }
 
-        // Look for existing EXIF APP1 or XMP APP1
-        var insertPos = 2
+        // Parse existing JPEG segments
+        val out = ByteArrayOutputStream(jpegBytes.size + segmentLength + 4)
+        out.write(0xFF)
+        out.write(0xD8) // SOI
+
         var pos = 2
+        var xmpInserted = false
+
         while (pos + 4 <= jpegBytes.size) {
-            if (jpegBytes[pos] != 0xFF.toByte()) break
+            if (jpegBytes[pos] != 0xFF.toByte()) {
+                // Not a marker boundary, copy the rest of scan data
+                break
+            }
             val marker = jpegBytes[pos + 1].toInt() and 0xFF
-            // SOS (Start of Scan) or EOI (End of Image) -> stop searching headers
+            // SOS (0xDA) or EOI (0xD9) signals start of image scan data / end
             if (marker == 0xDA || marker == 0xD9) {
                 break
             }
@@ -109,38 +136,71 @@ object MotionPhotoXmpPacker {
                 break
             }
 
-            // If this is an APP1 (0xE1) marker
-            if (marker == 0xE1) {
-                val app1Start = pos + 4
-                // Check if it's EXIF ("Exif\0\0")
+            val isApp1 = (marker == 0xE1)
+            val app1Start = pos + 4
+            var isExif = false
+            var isExistingXmp = false
+
+            if (isApp1) {
                 if (pos + 10 <= jpegBytes.size &&
                     jpegBytes[app1Start] == 'E'.code.toByte() &&
                     jpegBytes[app1Start + 1] == 'x'.code.toByte() &&
                     jpegBytes[app1Start + 2] == 'i'.code.toByte() &&
                     jpegBytes[app1Start + 3] == 'f'.code.toByte()
                 ) {
-                    // Place XMP right after EXIF APP1
-                    insertPos = pos + 2 + length
+                    isExif = true
+                } else if (pos + 4 + XMP_HEADER.size <= jpegBytes.size) {
+                    var matchesXmp = true
+                    for (k in XMP_HEADER.indices) {
+                        if (jpegBytes[app1Start + k] != XMP_HEADER[k]) {
+                            matchesXmp = false
+                            break
+                        }
+                    }
+                    if (matchesXmp) {
+                        isExistingXmp = true
+                    }
                 }
             }
 
+            if (isExistingXmp) {
+                // Skip pre-existing XMP segment to avoid duplicates
+                pos += 2 + length
+                continue
+            }
+
+            // Write this segment (e.g. EXIF APP1 or APP0 or DQT/DHT)
+            out.write(jpegBytes, pos, 2 + length)
             pos += 2 + length
+
+            if (isExif && !xmpInserted) {
+                // Insert our complete Motion Photo XMP segment right after EXIF APP1
+                writeXmpSegment(out, segmentLength, xmpPayload)
+                xmpInserted = true
+            }
         }
 
-        val out = ByteArrayOutputStream(jpegBytes.size + segmentLength + 2)
-        out.write(jpegBytes, 0, insertPos)
+        // If no EXIF was present, insert XMP now before image scan data
+        if (!xmpInserted) {
+            writeXmpSegment(out, segmentLength, xmpPayload)
+            xmpInserted = true
+        }
 
-        // Write XMP APP1 Marker (0xFF, 0xE1)
+        // Copy remaining bytes (SOS marker and compressed image data through EOI)
+        if (pos < jpegBytes.size) {
+            out.write(jpegBytes, pos, jpegBytes.size - pos)
+        }
+
+        return out.toByteArray()
+    }
+
+    private fun writeXmpSegment(out: ByteArrayOutputStream, segmentLength: Int, xmpPayload: ByteArray) {
         out.write(0xFF)
         out.write(0xE1)
         out.write((segmentLength shr 8) and 0xFF)
         out.write(segmentLength and 0xFF)
         out.write(XMP_HEADER)
         out.write(xmpPayload)
-
-        // Write remainder of JPEG
-        out.write(jpegBytes, insertPos, jpegBytes.size - insertPos)
-        return out.toByteArray()
     }
 
     /**

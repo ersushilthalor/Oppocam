@@ -202,13 +202,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Refocus: $clamped Focus Planes")
     }
 
-    // Advanced RAW HDR+ System
-    private val _isHdrPlusEnabled = MutableStateFlow(preferences.getModeHdrPlusEnabled(preferences.cameraMode))
-    val isHdrPlusEnabled: StateFlow<Boolean> = _isHdrPlusEnabled.asStateFlow()
-
-    private val _hdrPlusFrameCount = MutableStateFlow(preferences.getModeHdrPlusFrameCount(preferences.cameraMode))
-    val hdrPlusFrameCount: StateFlow<com.example.camera.engine.hdrplus.HdrPlusFrameCount> = _hdrPlusFrameCount.asStateFlow()
-
     // Google Photos Compatible Motion Photo
     private val _isMotionPhotoEnabled = MutableStateFlow(preferences.isMotionPhotoEnabled)
     val isMotionPhotoEnabled: StateFlow<Boolean> = _isMotionPhotoEnabled.asStateFlow()
@@ -242,28 +235,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onMotionPhotoPreviewFrame(bitmap: Bitmap) {
         engine.onPreviewBitmapFrame(bitmap)
-    }
-
-    fun setHdrPlusEnabled(enabled: Boolean) {
-        val caps = engine.capabilities.value
-        if (enabled && (!caps.supportsRaw || caps.supportedRawResolutions.isEmpty())) {
-            showToast("RAW capture not supported on this sensor")
-            return
-        }
-        _isHdrPlusEnabled.value = enabled
-        preferences.isHdrPlusEnabled = enabled
-        preferences.setModeHdrPlusEnabled(_cameraMode.value, enabled)
-        engine.isHdrPlusEnabled = enabled
-        engine.refreshCaptureSessionForRaw()
-        showToast(if (enabled) "HDR+ Enabled (${_hdrPlusFrameCount.value.label})" else "HDR+ Disabled")
-    }
-
-    fun setHdrPlusFrameCount(count: com.example.camera.engine.hdrplus.HdrPlusFrameCount) {
-        _hdrPlusFrameCount.value = count
-        preferences.hdrPlusFrameCount = count
-        preferences.setModeHdrPlusFrameCount(_cameraMode.value, count)
-        engine.hdrPlusFrameCount = count
-        showToast("HDR+ Mode: ${count.label}")
     }
 
     // Ultra Fast Shutter System
@@ -784,8 +755,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.ultraFastShutterFps = preferences.getModeUltraFastShutterFps(initialMode)
         engine.isHighQualityZoomEnabled = preferences.getModeHqZoomEnabled(initialMode)
         engine.zoomProcessingQuality = preferences.getModeZoomQuality(initialMode)
-        engine.isHdrPlusEnabled = preferences.getModeHdrPlusEnabled(initialMode)
-        engine.hdrPlusFrameCount = preferences.getModeHdrPlusFrameCount(initialMode)
         engine.setMode(initialMode)
         engine.restoreInitialVideoResolution(CameraResolution(preferences.videoWidth, preferences.videoHeight))
         engine.setCinemaConfig(preferences.getCinemaConfig())
@@ -927,6 +896,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 4. Switch engine mode early to synchronize preview buffer and session
         engine.setMode(mode)
 
+        if (mode == CameraMode.AI_SUBJECT_TRACKING) {
+            engine.closeCamera()
+        } else if (previousMode == CameraMode.AI_SUBJECT_TRACKING) {
+            safeInitializeCamera()
+        }
+
         // 5. Restore mode-specific lens and zoom if available
         val modeZoom = preferences.getModeZoom(mode)
         val modeLens = preferences.getModeLens(mode, engine.availableLenses.value)
@@ -1005,14 +980,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val mAutoHdr = preferences.getModeAutoHdr(mode)
         _autoHdrEnabled.value = mAutoHdr
-
-        val mHdrPlus = preferences.getModeHdrPlusEnabled(mode)
-        _isHdrPlusEnabled.value = mHdrPlus
-        engine.isHdrPlusEnabled = mHdrPlus
-
-        val mHdrPlusFrames = preferences.getModeHdrPlusFrameCount(mode)
-        _hdrPlusFrameCount.value = mHdrPlusFrames
-        engine.hdrPlusFrameCount = mHdrPlusFrames
 
         val mAutoFraming = preferences.getModeAutoFraming(mode)
         _autoFramingEnabled.value = mAutoFraming

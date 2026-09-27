@@ -556,12 +556,17 @@ class CameraTrackingViewModel(application: Application) : AndroidViewModel(appli
         _uiState.update { it.copy(isSettingsOpen = isOpen) }
     }
 
+    fun releaseCamera() {
+        digitalGimbalEngine.stop()
+        cameraXManager?.release()
+        cameraXManager = null
+    }
+
     override fun onCleared() {
         super.onCleared()
         smoothingLoopJob?.cancel()
         recordingTimerJob?.cancel()
         subjectTracker.close()
-        digitalGimbalEngine.stop()
-        cameraXManager?.release()
+        releaseCamera()
     }
 }

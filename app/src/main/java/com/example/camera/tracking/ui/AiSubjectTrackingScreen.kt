@@ -30,7 +30,9 @@ fun AiSubjectTrackingScreen(
 
     DisposableEffect(lifecycleOwner) {
         viewModel.initCamera(lifecycleOwner, context)
-        onDispose { }
+        onDispose {
+            viewModel.releaseCamera()
+        }
     }
 
     Box(

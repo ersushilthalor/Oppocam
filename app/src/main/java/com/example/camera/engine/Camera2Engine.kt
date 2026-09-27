@@ -220,6 +220,8 @@ class Camera2Engine(private val context: Context) {
     var selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL
     private val cinemaSoftwareRecorder by lazy { CinemaSoftwareRecordingEngine(context) }
     private var isSoftwareCinemaRecording: Boolean = false
+    private var recordingCinemaConfig: CinemaConfig? = null
+    private var recordingRec2020Params: Rec2020AutoToneParams? = null
 
     private val _previewBufferSize = MutableStateFlow<Size?>(null)
     val previewBufferSize: StateFlow<Size?> = _previewBufferSize.asStateFlow()
@@ -241,16 +243,12 @@ class Camera2Engine(private val context: Context) {
     val nightFusionProcessor by lazy { NightFusionProcessor() }
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
-    val hdrPlusEngine by lazy { com.example.camera.engine.hdrplus.HdrPlusEngine(context) }
-
-    var isHdrPlusEnabled: Boolean = false
-    var hdrPlusFrameCount: com.example.camera.engine.hdrplus.HdrPlusFrameCount = com.example.camera.engine.hdrplus.HdrPlusFrameCount.THREE_FRAMES
 
     fun refreshCaptureSessionForRaw() {
         val lens = _selectedLens.value ?: return
         val caps = _capabilities.value
         if (!caps.supportsRaw) return
-        val needsRaw = isRawCaptureEnabled || isHdrPlusEnabled
+        val needsRaw = isRawCaptureEnabled
         val hasRaw = imageReaderRaw != null
         if (needsRaw != hasRaw) {
             setupImageReaders(lens.cameraId)
@@ -1987,7 +1985,7 @@ class Camera2Engine(private val context: Context) {
             imageReaderYuv = null
         }
 
-        if (caps.supportsRaw && (isRawCaptureEnabled || isHdrPlusEnabled) && caps.supportedRawResolutions.isNotEmpty()) {
+        if (caps.supportsRaw && isRawCaptureEnabled && caps.supportedRawResolutions.isNotEmpty()) {
             val rawRes = caps.supportedRawResolutions.first()
             try {
                 imageReaderRaw = ImageReader.newInstance(
@@ -2338,17 +2336,6 @@ class Camera2Engine(private val context: Context) {
         cinemaEngine.naturalLogEngine.onFrameLuminanceAnalyzed(stats)
         if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.FLAT_LOG) {
             onNaturalLogAutoToneFrame()
-        }
-        if (currentMode == CameraMode.PHOTO && isHdrPlusEnabled) {
-            hdrPlusEngine.onViewfinderFrame(
-                stats = stats,
-                lastResult = lastCaptureResult,
-                caps = _capabilities.value,
-                frameCount = hdrPlusFrameCount,
-                userIso = manualIso,
-                userExpNs = manualExposureTimeNs,
-                userAeComp = exposureCompensationIndex
-            )
         }
     }
 
@@ -3619,12 +3606,13 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 if (stillBytes != null && stillBytes.isNotEmpty()) {
+                    val (processedStillBytes, _) = processStillJpegBytes(stillBytes, skipPipeline = false)
                     val packedBytes = motionPhotoEngine.finalizeMotionPhoto(
-                        stillJpegBytes = stillBytes,
+                        stillJpegBytes = processedStillBytes,
                         duration = duration,
                         orientationDegrees = orientation
                     )
-                    finalUri = saveJpegBytesToMediaStore(packedBytes, skipPipeline = false)
+                    finalUri = saveMotionPhotoBytesToMediaStore(packedBytes)
                     Log.i(TAG, "[MOTION_PHOTO] Saved to MediaStore: $finalUri (${packedBytes.size} bytes)")
                 } else {
                     Log.e(TAG, "Motion photo failed: still image bytes were null")
@@ -3660,19 +3648,13 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
-        if (isHighQualityZoomEnabled && currentZoom > 1.2f && currentMode == CameraMode.PHOTO) {
+        val isAiModelActive = (highQualityZoomEngine.aiModelRepository.reconstructionMode.value.isAiModel &&
+            (highQualityZoomEngine.aiModelRepository.selectedHatModel.value != null ||
+             highQualityZoomEngine.aiModelRepository.selectedBsrganModel.value != null))
+
+        if ((isHighQualityZoomEnabled || isAiModelActive) && (currentZoom > 1.2f || isAiModelActive) && currentMode == CameraMode.PHOTO) {
             takePhotoHighQualityZoom(onComplete)
             return
-        }
-
-        if (isHdrPlusEnabled && currentMode == CameraMode.PHOTO) {
-            val caps = _capabilities.value
-            if (caps.supportsRaw && imageReaderRaw != null) {
-                takePhotoHdrPlusRaw(onComplete)
-                return
-            } else {
-                Log.w(TAG, "[HDR+] Hardware does not support RAW stream or reader not armed, falling back to standard capture")
-            }
         }
 
         val camera = cameraDevice ?: return
@@ -3946,249 +3928,6 @@ class Camera2Engine(private val context: Context) {
             Log.e(TAG, "Error taking photo", e)
             _isCapturing.value = false
             onComplete(null)
-        }
-    }
-
-    /**
-     * Executes advanced RAW HDR+ capture (2-frame or 3-frame) using Camera2 manual sensor controls,
-     * ultra-fast hardware sequential burst, and background highlight-only computational fusion.
-     */
-    private fun takePhotoHdrPlusRaw(onComplete: (Uri?) -> Unit) {
-        val camera = cameraDevice ?: run {
-            _isCapturing.value = false
-            mainHandler.post { onComplete(null) }
-            return
-        }
-        val session = captureSession ?: run {
-            _isCapturing.value = false
-            mainHandler.post { onComplete(null) }
-            return
-        }
-        val readerRaw = imageReaderRaw ?: run {
-            _isCapturing.value = false
-            mainHandler.post { onComplete(null) }
-            return
-        }
-        val activeLens = _selectedLens.value
-        val chars = activeLens?.let { getCharacteristics(it.cameraId) }
-
-        Log.i(TAG, "[HDR+] Initiating advanced RAW HDR+ capture (${hdrPlusFrameCount.label})")
-        _isCapturing.value = true
-
-        val prediction = hdrPlusEngine.predictor.getLatestPrediction(hdrPlusFrameCount)
-        Log.i(TAG, "[HDR+] Precomputed Plan: ${prediction.summary}")
-
-        try {
-            val requests = ArrayList<CaptureRequest>()
-            for (idx in prediction.specs.indices) {
-                val spec = prediction.specs[idx]
-                val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                builder.addTarget(readerRaw.surface)
-
-                applyCommonSettings(builder)
-                builder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
-
-                if (spec.role == com.example.camera.engine.hdrplus.HdrPlusRole.BASE_PRIMARY) {
-                    if (manualIso != null || manualExposureTimeNs != null) {
-                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                        manualIso?.let { builder.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
-                        manualExposureTimeNs?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
-                    } else {
-                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                        builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, spec.aeCompIndex)
-                    }
-                } else {
-                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                    builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, spec.exposureTimeNs)
-                    builder.set(CaptureRequest.SENSOR_SENSITIVITY, spec.iso)
-                }
-                builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                builder.setTag(idx)
-                requests.add(builder.build())
-            }
-
-            val expectedCount = requests.size
-            val captureOrientation = getCaptureJpegOrientation()
-            val capturedRawFramesByIndex = java.util.concurrent.ConcurrentHashMap<Int, com.example.camera.engine.hdrplus.HdrPlusRawFrame>()
-            val receivedCount = java.util.concurrent.atomic.AtomicInteger(0)
-            val completedResultCount = java.util.concurrent.atomic.AtomicInteger(0)
-            val isProcessingTriggered = java.util.concurrent.atomic.AtomicBoolean(false)
-            val captureResultsByIndex = java.util.concurrent.ConcurrentHashMap<Int, TotalCaptureResult>()
-            val captureResultsByTimestamp = java.util.concurrent.ConcurrentHashMap<Long, TotalCaptureResult>()
-
-            fun triggerHdrPlusProcessingIfReady(force: Boolean = false) {
-                val haveAllImages = receivedCount.get() >= expectedCount
-                val haveAllResults = completedResultCount.get() >= expectedCount
-                if ((!force && (!haveAllImages || !haveAllResults)) || capturedRawFramesByIndex.isEmpty()) {
-                    return
-                }
-                if (!isProcessingTriggered.compareAndSet(false, true)) {
-                    return
-                }
-                _isCapturing.value = false
-
-                // Ensure every RAW frame is enriched with its exact per-frame TotalCaptureResult metadata
-                val framesToProcess = ArrayList<com.example.camera.engine.hdrplus.HdrPlusRawFrame>(expectedCount)
-                for (i in 0 until expectedCount) {
-                    val rawFrame = capturedRawFramesByIndex[i] ?: continue
-                    val spec = prediction.specs.getOrNull(i) ?: prediction.specs.first()
-                    val matchedResult = captureResultsByTimestamp[rawFrame.timestampNs]
-                        ?: captureResultsByIndex[i]
-                        ?: lastCaptureResult
-                    val enrichedFrame = if (matchedResult != null) {
-                        hdrPlusEngine.developer.buildRawFrameWithMetadata(
-                            rawData = rawFrame.rawData,
-                            width = rawFrame.width,
-                            height = rawFrame.height,
-                            rowStride = rawFrame.rowStride,
-                            pixelStride = rawFrame.pixelStride,
-                            timestampNs = rawFrame.timestampNs,
-                            result = matchedResult,
-                            chars = chars,
-                            role = spec.role,
-                            evDelta = spec.evDelta,
-                            fallbackExpTimeNs = spec.exposureTimeNs,
-                            fallbackIso = spec.iso
-                        )
-                    } else {
-                        rawFrame
-                    }
-                    framesToProcess.add(enrichedFrame)
-                }
-
-                if (framesToProcess.isEmpty()) {
-                    for (rawFrame in capturedRawFramesByIndex.values) {
-                        framesToProcess.add(rawFrame)
-                    }
-                }
-
-                if (framesToProcess.isEmpty()) {
-                    Log.e(TAG, "[HDR+] No RAW frames captured to process")
-                    _isCapturing.value = false
-                    mainHandler.post { onComplete(null) }
-                    return
-                }
-
-                engineScope.launch(Dispatchers.Default) {
-                    try {
-                        val mergedJpeg = hdrPlusEngine.processHdrPlusRawCapture(
-                            rawFrames = framesToProcess,
-                            jpegQuality = preferences.jpegQuality,
-                            orientationDegrees = captureOrientation
-                        )
-                        val uri = saveJpegBytesToMediaStore(mergedJpeg, skipPipeline = true)
-                        updateStorageStats()
-                        withContext(Dispatchers.Main) {
-                            onComplete(uri)
-                        }
-                    } catch (e: Throwable) {
-                        Log.e(TAG, "[HDR+] Error processing RAW HDR+ capture, falling back to base frame", e)
-                        try {
-                            val baseRaw = framesToProcess.firstOrNull { it.role == com.example.camera.engine.hdrplus.HdrPlusRole.NORMAL_EXPOSURE }
-                                ?: framesToProcess.firstOrNull()
-                            if (baseRaw != null) {
-                                val developed = hdrPlusEngine.developer.developRawToLinearRgb(baseRaw)
-                                val fallbackJpeg = hdrPlusEngine.merger.encodeSingleFrame(developed, preferences.jpegQuality, captureOrientation)
-                                val uri = saveJpegBytesToMediaStore(fallbackJpeg, skipPipeline = true)
-                                updateStorageStats()
-                                withContext(Dispatchers.Main) { onComplete(uri) }
-                                return@launch
-                            }
-                        } catch (fallbackError: Throwable) {
-                            Log.e(TAG, "[HDR+] Fallback save also failed", fallbackError)
-                        }
-                        _isCapturing.value = false
-                        withContext(Dispatchers.Main) {
-                            onComplete(null)
-                        }
-                    }
-                }
-            }
-
-            readerRaw.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireNextImage()
-                if (image != null) {
-                    val count = receivedCount.incrementAndGet()
-                    val frameIdx = count - 1
-                    val spec = prediction.specs.getOrNull(frameIdx) ?: prediction.specs.first()
-                    val ts = image.timestamp
-                    val result = captureResultsByTimestamp[ts] ?: captureResultsByIndex[frameIdx]
-
-                    try {
-                        val rawFrame = hdrPlusEngine.developer.extractRawFrame(
-                            image = image,
-                            result = result,
-                            chars = chars,
-                            role = spec.role,
-                            evDelta = spec.evDelta,
-                            fallbackExpTimeNs = spec.exposureTimeNs,
-                            fallbackIso = spec.iso,
-                            fallbackResult = lastCaptureResult
-                        )
-                        capturedRawFramesByIndex[frameIdx] = rawFrame
-                    } catch (t: Throwable) {
-                        Log.e(TAG, "[HDR+] Error extracting RAW frame $frameIdx", t)
-                    } finally {
-                        image.close()
-                    }
-
-                    if (count >= expectedCount) {
-                        if (completedResultCount.get() >= expectedCount) {
-                            triggerHdrPlusProcessingIfReady(force = true)
-                        } else {
-                            // Wait briefly (up to 120ms) for any trailing onCaptureCompleted metadata
-                            backgroundHandler?.postDelayed({
-                                triggerHdrPlusProcessingIfReady(force = true)
-                            }, 120L)
-                        }
-                    }
-                }
-            }, backgroundHandler)
-
-            // Failsafe timeout in case HAL drops a frame
-            backgroundHandler?.postDelayed({
-                if (capturedRawFramesByIndex.isNotEmpty()) {
-                    triggerHdrPlusProcessingIfReady(force = true)
-                } else if (isProcessingTriggered.compareAndSet(false, true)) {
-                    _isCapturing.value = false
-                    mainHandler.post { onComplete(null) }
-                }
-            }, 3000L)
-
-            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    val tag = request.tag as? Int ?: 0
-                    captureResultsByIndex[tag] = result
-                    val ts = result.get(CaptureResult.SENSOR_TIMESTAMP)
-                    if (ts != null) {
-                        captureResultsByTimestamp[ts] = result
-                    }
-                    if (completedResultCount.incrementAndGet() >= expectedCount && receivedCount.get() >= expectedCount) {
-                        triggerHdrPlusProcessingIfReady(force = true)
-                    }
-                }
-
-                override fun onCaptureFailed(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    failure: CaptureFailure
-                ) {
-                    Log.w(TAG, "[HDR+] Capture burst frame failed: reason=${failure.reason}")
-                    completedResultCount.incrementAndGet()
-                    if (receivedCount.get() >= expectedCount) {
-                        triggerHdrPlusProcessingIfReady(force = true)
-                    }
-                }
-            }, backgroundHandler)
-
-        } catch (e: Throwable) {
-            Log.e(TAG, "[HDR+] Failed to trigger RAW HDR+ burst", e)
-            _isCapturing.value = false
-            mainHandler.post { onComplete(null) }
         }
     }
 
@@ -4554,7 +4293,14 @@ class Camera2Engine(private val context: Context) {
     ) {
         engineScope.launch(Dispatchers.Default) {
             val aiRepo = highQualityZoomEngine.aiModelRepository
-            val activeMode = aiRepo.reconstructionMode.value
+            var activeMode = aiRepo.reconstructionMode.value
+            if (activeMode == com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL) {
+                if (aiRepo.selectedHatModel.value != null) {
+                    activeMode = com.example.camera.zoom.ai.ZoomReconstructionMode.HAT
+                } else if (aiRepo.selectedBsrganModel.value != null) {
+                    activeMode = com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN
+                }
+            }
             val keepOriginal = aiRepo.keepOriginalImage.value
             val baseFrame = frames.firstOrNull()
 
@@ -5106,6 +4852,8 @@ class Camera2Engine(private val context: Context) {
             videoRecordingFileDescriptor?.close()
         } catch (ignored: Throwable) {}
         videoRecordingFileDescriptor = null
+        recordingCinemaConfig = null
+        recordingRec2020Params = null
 
         currentRecordingTempFile?.let { f ->
             try { f.delete() } catch (ignored: Throwable) {}
@@ -5241,6 +4989,14 @@ class Camera2Engine(private val context: Context) {
             val extension = if (isSoftwareCinema && cinemaCodec == CinemaCodec.VP9) "webm" else "mp4"
             val mimeType = if (extension == "webm") "video/webm" else "video/mp4"
             val fileName = "${prefix}$timeStamp.$extension"
+
+            if (isCinema) {
+                recordingCinemaConfig = cinemaConfig.value.copy()
+                recordingRec2020Params = rec2020AutoToneParams.value
+            } else {
+                recordingCinemaConfig = null
+                recordingRec2020Params = null
+            }
 
             currentVideoFileName = fileName
             currentVideoMimeType = mimeType
@@ -5740,6 +5496,11 @@ class Camera2Engine(private val context: Context) {
         val wasSoftwareCinema = isSoftwareCinemaRecording
         isSoftwareCinemaRecording = false
 
+        val snapCinemaConfig = recordingCinemaConfig ?: cinemaConfig.value.copy()
+        val snapRec2020Params = recordingRec2020Params ?: rec2020AutoToneParams.value
+        recordingCinemaConfig = null
+        recordingRec2020Params = null
+
         // Dispatch stop and resource cleanup to background IO so UI thread never freezes
         engineScope.launch(Dispatchers.IO) {
             try {
@@ -5753,9 +5514,31 @@ class Camera2Engine(private val context: Context) {
                     currentRecordingTempFile = null
 
                     if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0) {
+                        var fileToSave = recordedFile
+                        var gradedFile: File? = null
+                        if (isCinema) {
+                            try {
+                                val orientationHint = getVideoOrientationHint()
+                                val procDest = File(recordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.${recordedFile.extension}")
+                                val processed = CinemaVideoProcessor.processCinemaVideo(
+                                    inputFile = recordedFile,
+                                    outputFile = procDest,
+                                    config = snapCinemaConfig,
+                                    orientationDegrees = orientationHint,
+                                    rec2020Params = snapRec2020Params
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != recordedFile) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Cinema LUT to final video", e)
+                            }
+                        }
+
                         try {
                             val savedUri = saveVideoToGallery(
-                                tempFile = recordedFile,
+                                tempFile = fileToSave,
                                 fileName = fileName,
                                 mimeType = mimeType,
                                 isCinema = isCinema,
@@ -5769,11 +5552,12 @@ class Camera2Engine(private val context: Context) {
                                     displayName = if (isCinema) "Cinema Video" else "Video",
                                     isFrontCamera = isFrontFacing
                                 )
-                                Log.i(TAG, "Cinema software video successfully saved: size=${recordedFile.length()} bytes, uri=$savedUri")
+                                Log.i(TAG, "Cinema software video successfully saved: size=${fileToSave.length()} bytes, uri=$savedUri")
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed saving cinema recording", e)
                         } finally {
+                            try { gradedFile?.delete() } catch (ignored: Exception) {}
                             try { recordedFile.delete() } catch (ignored: Exception) {}
                             updateStorageStats()
                         }
@@ -5798,9 +5582,31 @@ class Camera2Engine(private val context: Context) {
                     currentRecordingTempFile = null
 
                     if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
+                        var fileToSave = tempFile
+                        var gradedFile: File? = null
+                        if (isCinema) {
+                            try {
+                                val orientationHint = getVideoOrientationHint()
+                                val procDest = File(tempFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.${tempFile.extension}")
+                                val processed = CinemaVideoProcessor.processCinemaVideo(
+                                    inputFile = tempFile,
+                                    outputFile = procDest,
+                                    config = snapCinemaConfig,
+                                    orientationDegrees = orientationHint,
+                                    rec2020Params = snapRec2020Params
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != tempFile) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Cinema LUT to final video", e)
+                            }
+                        }
+
                         try {
                             val savedUri = saveVideoToGallery(
-                                tempFile = tempFile,
+                                tempFile = fileToSave,
                                 fileName = fileName,
                                 mimeType = mimeType,
                                 isCinema = isCinema,
@@ -5814,12 +5620,13 @@ class Camera2Engine(private val context: Context) {
                                     displayName = if (isCinema) "Cinema Video" else "Video",
                                     isFrontCamera = isFrontFacing
                                 )
-                                Log.i(TAG, "Hardware recorded video successfully saved: size=${tempFile.length()} bytes, uri=$savedUri")
+                                Log.i(TAG, "Hardware recorded video successfully saved: size=${fileToSave.length()} bytes, uri=$savedUri")
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Error finalizing recorded video", e)
                         } finally {
-                            try { tempFile.delete() } catch (ignored: Throwable) {}
+                            try { gradedFile?.delete() } catch (ignored: Exception) {}
+                            try { tempFile.delete() } catch (ignored: Exception) {}
                             updateStorageStats()
                         }
                     }
