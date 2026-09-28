@@ -64,22 +64,24 @@ object MotionPhotoXmpPacker {
                 "                Item:Mime=\"image/jpeg\"\n" +
                 "                Item:Semantic=\"Primary\"\n" +
                 "                Item:Length=\"0\"\n" +
-                "                Item:Padding=\"0\"/>\n" +
-                "            <Item:Mime>image/jpeg</Item:Mime>\n" +
-                "            <Item:Semantic>Primary</Item:Semantic>\n" +
-                "            <Item:Length>0</Item:Length>\n" +
-                "            <Item:Padding>0</Item:Padding>\n" +
+                "                Item:Padding=\"0\">\n" +
+                "              <Item:Mime>image/jpeg</Item:Mime>\n" +
+                "              <Item:Semantic>Primary</Item:Semantic>\n" +
+                "              <Item:Length>0</Item:Length>\n" +
+                "              <Item:Padding>0</Item:Padding>\n" +
+                "            </Container:Item>\n" +
                 "          </rdf:li>\n" +
                 "          <rdf:li rdf:parseType=\"Resource\">\n" +
                 "            <Container:Item\n" +
                 "                Item:Mime=\"video/mp4\"\n" +
                 "                Item:Semantic=\"MotionPhoto\"\n" +
                 "                Item:Length=\"$videoLengthBytes\"\n" +
-                "                Item:Padding=\"0\"/>\n" +
-                "            <Item:Mime>video/mp4</Item:Mime>\n" +
-                "            <Item:Semantic>MotionPhoto</Item:Semantic>\n" +
-                "            <Item:Length>$videoLengthBytes</Item:Length>\n" +
-                "            <Item:Padding>0</Item:Padding>\n" +
+                "                Item:Padding=\"0\">\n" +
+                "              <Item:Mime>video/mp4</Item:Mime>\n" +
+                "              <Item:Semantic>MotionPhoto</Item:Semantic>\n" +
+                "              <Item:Length>$videoLengthBytes</Item:Length>\n" +
+                "              <Item:Padding>0</Item:Padding>\n" +
+                "            </Container:Item>\n" +
                 "          </rdf:li>\n" +
                 "        </rdf:Seq>\n" +
                 "      </Container:Directory>\n" +

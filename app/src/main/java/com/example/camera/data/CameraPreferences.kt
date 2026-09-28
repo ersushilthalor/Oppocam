@@ -85,7 +85,7 @@ class CameraPreferences(context: Context) {
                     .sorted()
                 if (parsed.isNotEmpty()) parsed else if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 4.0f, 8.0f) else listOf(1.0f, 2.0f, 4.0f, 8.0f)
             }
-            else -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+            else -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f) else listOf(1.0f, 2.0f, 3.0f)
         }
     }
 

@@ -129,24 +129,7 @@ class MotionPhotoEngine(private val context: Context) {
             val preCount = activePreShutterFrames.size
 
             if (allFrames.isEmpty()) {
-                val stillBmp = android.graphics.BitmapFactory.decodeByteArray(stillJpegBytes, 0, stillJpegBytes.size)
-                if (stillBmp != null) {
-                    val frameCount = (duration.totalDurationMs * 30 / 1000).toInt().coerceAtLeast(30)
-                    val baseNs = System.nanoTime()
-                    for (i in 0 until frameCount) {
-                        allFrames.add(
-                            MotionFrame(
-                                bitmap = stillBmp,
-                                timestampNs = baseNs + i * 33_333_333L,
-                                orientationDegrees = orientationDegrees
-                            )
-                        )
-                    }
-                }
-            }
-
-            if (allFrames.isEmpty()) {
-                Log.w(TAG, "No motion frames captured, returning plain still photo")
+                Log.w(TAG, "No actual motion footage frames captured, returning plain still photo")
                 return@withContext stillJpegBytes
             }
 

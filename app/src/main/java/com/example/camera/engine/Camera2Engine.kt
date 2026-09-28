@@ -5882,15 +5882,15 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun saveMotionPhotoBytesToMediaStore(packedBytes: ByteArray): Uri? {
-        return saveJpegBytesToMediaStore(packedBytes, skipPipeline = true)
+        return saveJpegBytesToMediaStore(packedBytes, skipPipeline = true, filePrefix = "MVIMG")
     }
 
-    private fun saveJpegBytesToMediaStore(bytes: ByteArray, skipPipeline: Boolean = false): Uri? {
+    private fun saveJpegBytesToMediaStore(bytes: ByteArray, skipPipeline: Boolean = false, filePrefix: String = "IMG"): Uri? {
         val activeLens = _selectedLens.value
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         val (outputBytes, wasFilterApplied) = processStillJpegBytes(bytes, skipPipeline)
 
-        val fileName = generateUniqueImageFileName("IMG", "jpg")
+        val fileName = generateUniqueImageFileName(filePrefix, "jpg")
         val nowMs = System.currentTimeMillis()
         val nowSec = nowMs / 1000
 

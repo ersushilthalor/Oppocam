@@ -246,12 +246,7 @@ object CinemaVideoProcessor {
             }
             decoderSurface = Surface(surfaceTexture)
 
-            // Setup MediaCodec Video Decoder
-            decoder = MediaCodec.createDecoderByType(inMime)
-            decoder.configure(videoFormat, decoderSurface, null, 0)
-            decoder.start()
-
-            // Setup MediaMuxer and preserve the recorded orientation hint metadata
+            // Extract the original recording orientation hint metadata before decoding
             val inputRotation = if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
                 videoFormat.getInteger(MediaFormat.KEY_ROTATION)
             } else {
@@ -259,6 +254,20 @@ object CinemaVideoProcessor {
             }
             val finalOrientationHint = if (inputRotation != 0) inputRotation else rotationDegrees
 
+            // CRITICAL: Disable automatic hardware decoder rotation to the output surface.
+            // On Android 6+, MediaCodec video decoders automatically rotate the decoded frames
+            // onto the SurfaceTexture when KEY_ROTATION is non-zero, resulting in frame squashing/stretching
+            // into the encoder and double-rotation during playback. Setting KEY_ROTATION to 0 ensures
+            // pristine unrotated frames match the surface dimensions 1:1, while the MediaMuxer
+            // orientation hint preserves the correct playback rotation metadata.
+            videoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
+
+            // Setup MediaCodec Video Decoder
+            decoder = MediaCodec.createDecoderByType(inMime)
+            decoder.configure(videoFormat, decoderSurface, null, 0)
+            decoder.start()
+
+            // Setup MediaMuxer and preserve the recorded orientation hint metadata
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             muxer.setOrientationHint(finalOrientationHint)
 

@@ -45,7 +45,7 @@ import kotlin.math.roundToInt
 /**
  * Master Bottom Control Bar matching the reference UI design.
  * Structure:
- * 1. Floating Master Zoom Capsule directly over the viewfinder: [0.5] [(1x)] [2] [3] [5] [10]
+ * 1. Floating Master Zoom Capsule directly over the viewfinder: [0.5] [(1x)] [2] [3]
  * 2. Solid Pure Black Bottom Panel:
  *    - Shutter row: [Gallery]  [Shutter Button]  [Flip Camera]
  *    - Mode carousel: [PHOTO ●]  [PORTRAIT]  [VIDEO]  [CINEMA]  [MORE]
@@ -997,9 +997,9 @@ fun MasterZoomCapsule(
             if (hasRealUltraWide) listOf(0.5f, 1.0f) else listOf(1.0f)
         } else {
             customPresets?.takeIf { it.isNotEmpty() } ?: if (hasRealUltraWide) {
-                listOf(0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+                listOf(0.5f, 1.0f, 2.0f, 3.0f)
             } else {
-                listOf(1.0f, 2.0f, 3.0f, 5.0f, 10.0f)
+                listOf(1.0f, 2.0f, 3.0f)
             }
         }
     }
