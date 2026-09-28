@@ -12,13 +12,13 @@ enum class UiTemplateType(
     val accentHex: String
 ) {
     STOCK_PIXEL("Stock Pixel Camera", "Google Pixel layout with dual exposure slider, zoom pill & bottom switch dock", "#8AB4F8"),
+    SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
+    IPHONE("iPhone (iOS)", "Clean, minimal Apple iPhone layout with yellow accents & top pill indicators", "#FFD54F"),
+    VIVO("Vivo OriginOS", "Vivo OriginOS/Funtouch camera layout with circular icons, gimbal cues & vivid shutter ring", "#FF7043"),
     MINIMAL_PRO("Minimal Pro / Leica", "Monochrome precision layout with live EV telemetry, exposure dial & red dot trigger", "#E53935"),
     FUTURISTIC_GLASS("Cyber Glass HUD", "Frosted glowing glass pods, cyber brackets, digital gyro & holographic ring", "#00E5FF"),
     DSLR_PRO("DSLR Mirrorless", "Pro camera OLED info band, tactical ISO/WB micro-dials & knurled metal shutter", "#FFB300"),
     IMMERSIVE_EDGE("Immersive Edge-Control", "Ultra-clean full-screen preview with dual edge sliders & floating thumb shutter", "#69F0AE"),
-    IPHONE("iPhone Style", "Clean, minimal Apple-inspired layout with yellow accents & top pill indicators", "#FFD54F"),
-    SAMSUNG("Samsung Style", "One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
-    VIVO("Vivo Style", "OriginOS/Funtouch camera layout with circular icons, gimbal cues & vivid shutter ring", "#FF7043"),
     CUSTOM("Custom UI", "Completely personalized layout, spacing, typography & controls", "#64B5F6")
 }
 

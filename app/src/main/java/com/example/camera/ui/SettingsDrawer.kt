@@ -315,6 +315,8 @@ fun SettingsDrawer(
                 if (targetPage == null) {
                     // 1. Categories Overview
                     SettingsOverviewPage(
+                        selectedTemplate = uiCustomizationState.selectedTemplate,
+                        onSelectTemplate = onSelectTemplate,
                         onSelectPage = { currentPage = it },
                         onResetAll = onResetAllSettings
                     )
@@ -473,14 +475,112 @@ fun SettingsDrawer(
  */
 @Composable
 private fun SettingsOverviewPage(
+    selectedTemplate: UiTemplateType,
+    onSelectTemplate: (UiTemplateType) -> Unit,
     onSelectPage: (SettingsPage) -> Unit,
     onResetAll: () -> Unit
 ) {
+    val quickTemplates = remember {
+        listOf(
+            UiTemplateType.STOCK_PIXEL to "Pixel",
+            UiTemplateType.SAMSUNG to "One UI",
+            UiTemplateType.IPHONE to "iPhone",
+            UiTemplateType.VIVO to "Vivo",
+            UiTemplateType.MINIMAL_PRO to "Leica Pro",
+            UiTemplateType.FUTURISTIC_GLASS to "Cyber Glass",
+            UiTemplateType.DSLR_PRO to "DSLR",
+            UiTemplateType.IMMERSIVE_EDGE to "Immersive",
+            UiTemplateType.CUSTOM to "Custom UI"
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 8.dp)
     ) {
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color(0x33FFD54F)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Camera UI Template",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Active: ${selectedTemplate.title}",
+                                color = Color(0xFFFFD54F),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        TextButton(
+                            onClick = { onSelectPage(SettingsPage.UI_LAYOUT) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "Floating Windows & More →",
+                                color = Color(0xFF8AB4F8),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Multi-row grid so One UI, iPhone, Vivo, Pixel, etc. are all immediately visible
+                    quickTemplates.chunked(3).forEach { rowItems ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowItems.forEach { (template, shortName) ->
+                                val isSelected = selectedTemplate == template
+                                Surface(
+                                    onClick = { onSelectTemplate(template) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.07f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .testTag("quick_template_${template.name.lowercase()}")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = shortName,
+                                            color = if (isSelected) Color.Black else Color.White,
+                                            fontSize = 11.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         items(SettingsPage.entries.toTypedArray()) { page ->
             CategoryCard(
                 title = page.title,
@@ -1179,26 +1279,110 @@ private fun UiLayoutSettingsPage(
     onFloatingWindowAppearanceChange: (FloatingWindowAppearanceConfig) -> Unit,
     onResetFloatingWindowAppearance: () -> Unit
 ) {
+    val allTemplates = remember {
+        listOf(
+            UiTemplateType.STOCK_PIXEL to "Pixel",
+            UiTemplateType.SAMSUNG to "One UI",
+            UiTemplateType.IPHONE to "iPhone",
+            UiTemplateType.VIVO to "Vivo",
+            UiTemplateType.MINIMAL_PRO to "Pro Clean",
+            UiTemplateType.FUTURISTIC_GLASS to "Glass",
+            UiTemplateType.DSLR_PRO to "DSLR",
+            UiTemplateType.IMMERSIVE_EDGE to "Immersive",
+            UiTemplateType.CUSTOM to "Custom UI"
+        )
+    }
+
+    val scalePresets = remember {
+        listOf(
+            0.75f to "75% Compact",
+            0.85f to "85% Small",
+            1.00f to "100% Normal",
+            1.12f to "112% Large",
+            1.25f to "125% XL"
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 24.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 28.dp)
     ) {
+        // 1. UI Template Style Selector (Multi-row grid with all templates visible: Pixel, One UI, iPhone, Vivo, etc.)
         item {
-            SettingsSegmentedCard(
-                title = "UI Template Style",
-                description = "Choose primary camera layout aesthetic and controls arrangement.",
-                options = listOf(
-                    UiTemplateType.STOCK_PIXEL to "Pixel",
-                    UiTemplateType.MINIMAL_PRO to "Pro Clean",
-                    UiTemplateType.FUTURISTIC_GLASS to "Glass",
-                    UiTemplateType.DSLR_PRO to "DSLR"
-                ),
-                selectedOption = uiCustomizationState.selectedTemplate,
-                onOptionSelected = onSelectTemplate
-            )
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "UI Template Style",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Choose primary camera layout aesthetic (Pixel, Samsung One UI, iPhone iOS, Vivo OriginOS, Leica, Cyber Glass, DSLR).",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    allTemplates.chunked(3).forEach { rowItems ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowItems.forEach { (template, label) ->
+                                val isSelected = uiCustomizationState.selectedTemplate == template
+                                Surface(
+                                    onClick = { onSelectTemplate(template) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.08f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(44.dp)
+                                        .testTag("ui_template_option_${template.name.lowercase()}")
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(horizontal = 6.dp)
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (isSelected) Color.Black else Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Selected: ${uiCustomizationState.selectedTemplate.title} — ${uiCustomizationState.selectedTemplate.subtitle}",
+                        color = Color(0xFFFFD54F).copy(alpha = 0.9f),
+                        fontSize = 11.5.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
         }
 
+        // 2. Custom UI Studio Action
         item {
             SettingsActionCard(
                 title = "Custom UI Studio",
@@ -1208,20 +1392,492 @@ private fun UiLayoutSettingsPage(
             )
         }
 
+        // 3. All Floating Windows Size (Scale) Control
         item {
-            SettingsSegmentedCard(
-                title = "Floating Window Appearance",
-                description = "Visual backdrop effect for popups and drawers.",
-                options = listOf(
-                    FloatingWindowAppearanceConfig.GLASSMORPHISM to "Glass",
-                    FloatingWindowAppearanceConfig.SUBTLE_FROST to "Subtle",
-                    FloatingWindowAppearanceConfig.DEEP_FROST to "Deep",
-                    FloatingWindowAppearanceConfig.SOLID_DARK to "Dark"
-                ),
-                selectedOption = floatingWindowAppearance,
-                onOptionSelected = onFloatingWindowAppearanceChange
-            )
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "All Floating Windows Size",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Scale the size of all floating settings windows (Video, Portrait, Cinema, Pipeline).",
+                                color = Color.White.copy(alpha = 0.6f),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0x26FFD54F)
+                        ) {
+                            Text(
+                                text = "${(floatingWindowAppearance.windowScale * 100).roundToInt()}%",
+                                color = Color(0xFFFFD54F),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Slider(
+                        value = floatingWindowAppearance.windowScale.coerceIn(0.75f, 1.25f),
+                        onValueChange = { newScale ->
+                            onFloatingWindowAppearanceChange(
+                                floatingWindowAppearance.copy(windowScale = newScale.coerceIn(0.75f, 1.25f))
+                            )
+                        },
+                        valueRange = 0.75f..1.25f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFFFFD54F),
+                            activeTrackColor = Color(0xFFFFD54F),
+                            inactiveTrackColor = Color.White.copy(alpha = 0.18f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("slider_floating_window_size")
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        scalePresets.forEach { (scaleValue, label) ->
+                            val isSelected = kotlin.math.abs(floatingWindowAppearance.windowScale - scaleValue) < 0.03f
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    onFloatingWindowAppearanceChange(
+                                        floatingWindowAppearance.copy(windowScale = scaleValue)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color.White.copy(alpha = 0.08f),
+                                    labelColor = Color.White
+                                )
+                            )
+                        }
+                    }
+                }
+            }
         }
+
+        // 4. Floating Window Backdrop Blur & Transparency
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Floating Window Blur & Glass",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Real-time 1:1 optical backdrop blur and frosted glass transparency.",
+                                color = Color.White.copy(alpha = 0.6f),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                        TextButton(onClick = onResetFloatingWindowAppearance) {
+                            Text(
+                                text = "RESET",
+                                color = Color(0xFFFFD54F),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val stylePresets = listOf(
+                        FloatingWindowAppearanceConfig.GLASSMORPHISM to "Glass",
+                        FloatingWindowAppearanceConfig.SUBTLE_FROST to "Subtle",
+                        FloatingWindowAppearanceConfig.DEEP_FROST to "Deep Blur",
+                        FloatingWindowAppearanceConfig.SOLID_DARK to "Solid Dark"
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        stylePresets.forEach { (preset, label) ->
+                            val isSelected =
+                                kotlin.math.abs(floatingWindowAppearance.transparency - preset.transparency) < 0.04f &&
+                                    kotlin.math.abs(floatingWindowAppearance.blurStrength - preset.blurStrength) < 1.5f
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    onFloatingWindowAppearanceChange(
+                                        floatingWindowAppearance.copy(
+                                            transparency = preset.transparency,
+                                            blurStrength = preset.blurStrength
+                                        )
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color.White.copy(alpha = 0.08f),
+                                    labelColor = Color.White
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Blur Strength Slider (0..50 dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Backdrop Blur Strength",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "${floatingWindowAppearance.blurStrengthDp} dp",
+                            color = Color(0xFFFFD54F),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Slider(
+                        value = floatingWindowAppearance.blurStrength.coerceIn(0f, 50f),
+                        onValueChange = onFloatingWindowBlurStrengthChange,
+                        valueRange = 0f..50f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFFFFD54F),
+                            activeTrackColor = Color(0xFFFFD54F),
+                            inactiveTrackColor = Color.White.copy(alpha = 0.18f)
+                        )
+                    )
+
+                    // Transparency Slider
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Glass Transparency",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "${floatingWindowAppearance.transparencyPercent}%",
+                            color = Color(0xFFFFD54F),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Slider(
+                        value = floatingWindowAppearance.transparency.coerceIn(0f, 1f),
+                        onValueChange = onFloatingWindowTransparencyChange,
+                        valueRange = 0f..1f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFFFFD54F),
+                            activeTrackColor = Color(0xFFFFD54F),
+                            inactiveTrackColor = Color.White.copy(alpha = 0.18f)
+                        )
+                    )
+                }
+            }
+        }
+
+        // 5. Floating Window Settings & Content Customization ("Choose which settings appear in Floating Windows")
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Floating Window Controls & Content",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Choose which settings and controls are displayed inside each floating window.",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Video Floating Window Section
+                    Text(
+                        text = "VIDEO FLOATING WINDOW",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FloatingContentToggleRow(
+                        label = "Video Resolution (HD / FHD / 4K / 8K)",
+                        checked = floatingWindowAppearance.showVideoResolution,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoResolution = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Frame Rate (24 / 30 / 60 / 120 FPS)",
+                        checked = floatingWindowAppearance.showVideoFps,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoFps = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Video Stabilization Mode",
+                        checked = floatingWindowAppearance.showVideoStabilization,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoStabilization = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Video Color & Tone Sliders",
+                        checked = floatingWindowAppearance.showVideoAdjustmentsColorTone,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoAdjustmentsColorTone = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Video Effects & Sharpening Sliders",
+                        checked = floatingWindowAppearance.showVideoAdjustmentsEffects,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoAdjustmentsEffects = it))
+                        }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.08f),
+                        modifier = Modifier.padding(vertical = 10.dp)
+                    )
+
+                    // Portrait Floating Window Section
+                    Text(
+                        text = "PORTRAIT FLOATING WINDOW",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FloatingContentToggleRow(
+                        label = "Simulated Aperture & Blur Strength",
+                        checked = floatingWindowAppearance.showPortraitApertureBlur,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitApertureBlur = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Bokeh Lens Styles (Creamy / Swirly / Anamorphic)",
+                        checked = floatingWindowAppearance.showPortraitBokehStyle,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitBokehStyle = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Portrait Skin Retouching & Beauty",
+                        checked = floatingWindowAppearance.showPortraitBeautySkin,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitBeautySkin = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Optical Depth & Edge Precision",
+                        checked = floatingWindowAppearance.showPortraitOpticalDepth,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitOpticalDepth = it))
+                        }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.08f),
+                        modifier = Modifier.padding(vertical = 10.dp)
+                    )
+
+                    // Cinema Floating Window Section
+                    Text(
+                        text = "CINEMA FLOATING WINDOW",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FloatingContentToggleRow(
+                        label = "Hollywood 3D LUTs & Intensity",
+                        checked = floatingWindowAppearance.showCinemaLutControls,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaLutControls = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Log Color Profile & Bit Depth",
+                        checked = floatingWindowAppearance.showCinemaColorProfile,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaColorProfile = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Cinema Resolution, Aspect & FPS",
+                        checked = floatingWindowAppearance.showCinemaResolutionFps,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaResolutionFps = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Cinema Gimbal & Stabilization",
+                        checked = floatingWindowAppearance.showCinemaStabilization,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaStabilization = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Assist Tools (Waveform / Peaking / Zebra)",
+                        checked = floatingWindowAppearance.showCinemaAssistTools,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaAssistTools = it))
+                        }
+                    )
+
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.08f),
+                        modifier = Modifier.padding(vertical = 10.dp)
+                    )
+
+                    // Pro & Pipeline Floating Windows Section
+                    Text(
+                        text = "PRO MANUAL & PIPELINE FLOATING WINDOWS",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FloatingContentToggleRow(
+                        label = "Pro Manual Exposure (ISO / Shutter / Focus / WB)",
+                        checked = floatingWindowAppearance.showProExposureControls,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showProExposureControls = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Pro Fine-Tuning (Tone / Sharpness / Saturation)",
+                        checked = floatingWindowAppearance.showProToneAdjustments,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showProToneAdjustments = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Pipeline Master ON/OFF Switch",
+                        checked = floatingWindowAppearance.showPipelineMasterToggle,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPipelineMasterToggle = it))
+                        }
+                    )
+                    FloatingContentToggleRow(
+                        label = "Pipeline Preset Cards List",
+                        checked = floatingWindowAppearance.showPipelinePresetList,
+                        onCheckedChange = {
+                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPipelinePresetList = it))
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloatingContentToggleRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f).padding(end = 12.dp)
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.Black,
+                checkedTrackColor = Color(0xFFFFD54F),
+                uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
+                uncheckedTrackColor = Color.White.copy(alpha = 0.15f)
+            )
+        )
     }
 }
 

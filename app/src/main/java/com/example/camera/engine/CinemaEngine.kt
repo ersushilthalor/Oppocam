@@ -44,6 +44,35 @@ class CinemaEngine(private val context: Context) {
     companion object {
         private const val TAG = "CinemaEngine"
         private const val CURVE_POINTS = 64
+
+        private val cachedHevc10BitSupported: Boolean by lazy {
+            var supported = false
+            try {
+                val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
+                for (codecInfo in codecList.codecInfos) {
+                    if (!codecInfo.isEncoder) continue
+                    for (type in codecInfo.supportedTypes) {
+                        if (type.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)) {
+                            val caps = codecInfo.getCapabilitiesForType(type)
+                            for (pl in caps.profileLevels) {
+                                if (pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
+                                    pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
+                                    pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus
+                                ) {
+                                    supported = true
+                                    break
+                                }
+                            }
+                        }
+                        if (supported) break
+                    }
+                    if (supported) break
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "HEVC 10-bit codec inspection error", e)
+            }
+            supported
+        }
     }
 
     var config: CinemaConfig = CinemaConfig()
@@ -175,32 +204,8 @@ class CinemaEngine(private val context: Context) {
             }
         }
 
-        // 2. Check MediaCodec HEVC Main 10 hardware encoder
-        var hevc10BitSupported = false
-        try {
-            val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
-            for (codecInfo in codecList.codecInfos) {
-                if (!codecInfo.isEncoder) continue
-                for (type in codecInfo.supportedTypes) {
-                    if (type.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)) {
-                        val caps = codecInfo.getCapabilitiesForType(type)
-                        for (pl in caps.profileLevels) {
-                            if (pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
-                                pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
-                                pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus
-                            ) {
-                                hevc10BitSupported = true
-                                break
-                            }
-                        }
-                    }
-                    if (hevc10BitSupported) break
-                }
-                if (hevc10BitSupported) break
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "HEVC 10-bit codec inspection error", e)
-        }
+        // 2. Check cached MediaCodec HEVC Main 10 hardware encoder support
+        val hevc10BitSupported = cachedHevc10BitSupported
 
         val supports10Bit = dynamicRange10Bit || hevc10BitSupported
 

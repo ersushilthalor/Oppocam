@@ -299,6 +299,8 @@ class Camera2Engine(private val context: Context) {
     private val isStartingRecording = java.util.concurrent.atomic.AtomicBoolean(false)
     private val isStoppingRecording = java.util.concurrent.atomic.AtomicBoolean(false)
     private val isSwitchingLens = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile
+    private var lastLensSwitchStartTimeMs: Long = 0L
     private val lensSwitchGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val sessionConfigGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile
@@ -559,57 +561,22 @@ class Camera2Engine(private val context: Context) {
             val availableAf = chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
             val afModes = FocusMode.entries.filter { availableAf.contains(it.camera2Mode) }
 
-            // Photo JPEG Resolutions (incorporates native high-resolution & sensor remosaic modes)
+            // Photo JPEG Resolutions: use standard SCALER_STREAM_CONFIGURATION_MAP sizes
+            // (SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION sizes are illegal in standard SESSION_REGULAR
+            // preview sessions without SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION and cause HAL hangs/failures on back cameras)
             val standardSizes = map?.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
-            val highResSizes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                try {
-                    map?.getHighResolutionOutputSizes(ImageFormat.JPEG) ?: emptyArray()
-                } catch (e: Exception) {
-                    emptyArray()
-                }
-            } else emptyArray()
-
-            val maxResSizes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    val maxResMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
-                    val m1 = maxResMap?.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
-                    val m2 = maxResMap?.getHighResolutionOutputSizes(ImageFormat.JPEG) ?: emptyArray()
-                    m1 + m2
-                } catch (e: Exception) {
-                    emptyArray()
-                }
-            } else emptyArray()
-
-            val allJpegSizes = (standardSizes + highResSizes + maxResSizes).distinctBy { "${it.width}x${it.height}" }
+            val allJpegSizes = standardSizes.distinctBy { "${it.width}x${it.height}" }
             val photoResolutions = allJpegSizes
-                .sortedByDescending { it.width * it.height }
+                .sortedByDescending { it.width.toLong() * it.height.toLong() }
                 .map { CameraResolution(it.width, it.height, ImageFormat.JPEG, isRaw = false) }
 
             // RAW Resolutions
             val standardRawSizes = if (hasRaw) {
                 map?.getOutputSizes(ImageFormat.RAW_SENSOR) ?: emptyArray()
             } else emptyArray()
-            val highResRawSizes = if (hasRaw && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                try {
-                    map?.getHighResolutionOutputSizes(ImageFormat.RAW_SENSOR) ?: emptyArray()
-                } catch (e: Exception) {
-                    emptyArray()
-                }
-            } else emptyArray()
-            val maxResRawSizes = if (hasRaw && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    val maxResMap = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
-                    val m1 = maxResMap?.getOutputSizes(ImageFormat.RAW_SENSOR) ?: emptyArray()
-                    val m2 = maxResMap?.getHighResolutionOutputSizes(ImageFormat.RAW_SENSOR) ?: emptyArray()
-                    m1 + m2
-                } catch (e: Exception) {
-                    emptyArray()
-                }
-            } else emptyArray()
-
-            val allRawSizes = (standardRawSizes + highResRawSizes + maxResRawSizes).distinctBy { "${it.width}x${it.height}" }
+            val allRawSizes = standardRawSizes.distinctBy { "${it.width}x${it.height}" }
             val rawResolutions = allRawSizes
-                .sortedByDescending { it.width * it.height }
+                .sortedByDescending { it.width.toLong() * it.height.toLong() }
                 .map { CameraResolution(it.width, it.height, ImageFormat.RAW_SENSOR, isRaw = true) }
 
             // Video Resolutions: strictly validate against camera sensor's supported sizes
@@ -832,15 +799,22 @@ class Camera2Engine(private val context: Context) {
             pendingZoomWhileSwitching = effectiveTargetZoom
             return
         }
+        val nowMs = android.os.SystemClock.uptimeMillis()
         if (!isSwitchingLens.compareAndSet(false, true)) {
-            Log.d(TAG, "Lens switch already in progress, coalescing target lens=${lens.lensType} zoom=$effectiveTargetZoom")
-            currentZoom = effectiveTargetZoom
-            _currentZoom.value = effectiveTargetZoom
-            preferences.currentZoom = effectiveTargetZoom
-            pendingLensWhileSwitching = lens
-            pendingZoomWhileSwitching = effectiveTargetZoom
-            return
+            if (nowMs - lastLensSwitchStartTimeMs > 1800L) {
+                Log.w(TAG, "Previous lens switch timed out (>1800ms), forcing new switch to ${lens.lensType}")
+                isSwitchingLens.set(true)
+            } else {
+                Log.d(TAG, "Lens switch already in progress, coalescing target lens=${lens.lensType} zoom=$effectiveTargetZoom")
+                currentZoom = effectiveTargetZoom
+                _currentZoom.value = effectiveTargetZoom
+                preferences.currentZoom = effectiveTargetZoom
+                pendingLensWhileSwitching = lens
+                pendingZoomWhileSwitching = effectiveTargetZoom
+                return
+            }
         }
+        lastLensSwitchStartTimeMs = nowMs
 
         try {
             val switchGen = lensSwitchGeneration.incrementAndGet()
@@ -903,12 +877,10 @@ class Camera2Engine(private val context: Context) {
                             reconfigureSessionForPhysicalLens(lens, switchGen)
                         }
                     } else {
-                        inspectCapabilities(lens.cameraId)
                         restartCamera()
                     }
                 }
                 LensSwitchStrategy.INDEPENDENT_DEVICE -> {
-                    inspectCapabilities(lens.cameraId)
                     restartCamera()
                 }
             }
@@ -1692,8 +1664,19 @@ class Camera2Engine(private val context: Context) {
         }
 
         try {
-            val chars = getCharacteristics(lens.cameraId) ?: return
-            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
+            // Inspect target lens capabilities on background thread (avoids blocking UI thread during Front <-> Back switch)
+            inspectCapabilities(lens.cameraId)
+
+            val chars = getCharacteristics(lens.cameraId) ?: run {
+                synchronized(cameraLifecycleLock) { isStartingCamera = false }
+                completeLensSwitch(lens)
+                return
+            }
+            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: run {
+                synchronized(cameraLifecycleLock) { isStartingCamera = false }
+                completeLensSwitch(lens)
+                return
+            }
 
             // Pick optimal preview size matching selected aspect ratio and viewfinderResolution level
             val targetRatio = getTargetAspectRatioForMode(currentMode)
@@ -1703,17 +1686,16 @@ class Camera2Engine(private val context: Context) {
             val sensorOrient = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             _sensorOrientation.value = sensorOrient
             _previewBufferSize.value = optimalPreviewSize
-            val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT || currentMode == CameraMode.NIGHT)
-            val targetW = if (viewfinderWidth > 0) viewfinderWidth else 1080
-            val targetH = if (viewfinderHeight > 0) viewfinderHeight else if (isPhotoOrPortrait) 1440 else 1920
             val cameraW = max(optimalPreviewSize.width, optimalPreviewSize.height)
             val cameraH = min(optimalPreviewSize.width, optimalPreviewSize.height)
             texture.setDefaultBufferSize(cameraW, cameraH)
 
-            try {
-                previewSurface?.release()
-            } catch (ignored: Throwable) {}
-            previewSurface = Surface(texture)
+            if (previewSurface == null || !previewSurface!!.isValid) {
+                try {
+                    previewSurface?.release()
+                } catch (ignored: Throwable) {}
+                previewSurface = Surface(texture)
+            }
 
             // Setup ImageReader for Photo mode
             setupImageReaders(lens.cameraId)
@@ -1734,21 +1716,7 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
-                    camera.close()
-                    cameraDevice = null
-                    _isCameraReady.value = false
-                    synchronized(cameraLifecycleLock) {
-                        isStartingCamera = false
-                        if (restartPending) {
-                            restartPending = false
-                            backgroundHandler?.post { restartCamera() }
-                        }
-                    }
-                }
-
-                override fun onError(camera: CameraDevice, error: Int) {
-                    Log.e(TAG, "Camera open error: $error (attempt $cameraOpenRetryCount)")
-                    camera.close()
+                    try { camera.close() } catch (ignored: Throwable) {}
                     cameraDevice = null
                     _isCameraReady.value = false
                     synchronized(cameraLifecycleLock) {
@@ -1759,6 +1727,23 @@ class Camera2Engine(private val context: Context) {
                             return
                         }
                     }
+                    completeLensSwitch(_selectedLens.value)
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    Log.e(TAG, "Camera open error: $error (attempt $cameraOpenRetryCount)")
+                    try { camera.close() } catch (ignored: Throwable) {}
+                    cameraDevice = null
+                    _isCameraReady.value = false
+                    synchronized(cameraLifecycleLock) {
+                        isStartingCamera = false
+                        if (restartPending) {
+                            restartPending = false
+                            backgroundHandler?.post { restartCamera() }
+                            return
+                        }
+                    }
+                    completeLensSwitch(_selectedLens.value)
                     // Auto-recover from transient HAL contention or device busy error with bounded retries
                     if (cameraOpenRetryCount < MAX_CAMERA_OPEN_RETRIES &&
                         (error == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE ||
@@ -1776,6 +1761,7 @@ class Camera2Engine(private val context: Context) {
             synchronized(cameraLifecycleLock) {
                 isStartingCamera = false
             }
+            completeLensSwitch(_selectedLens.value)
             _isCameraReady.value = false
         }
     }
@@ -1786,61 +1772,68 @@ class Camera2Engine(private val context: Context) {
      * Never reuses the main camera resolution.
      */
     fun getOptimalPhotoSizeForLens(lens: LensInfo?, cameraId: String): Size {
-        val targetId = lens?.physicalCameraId ?: cameraId
+        val targetId = if (lens?.physicalCameraId != null && lens.supportsPhysicalStream) {
+            lens.physicalCameraId
+        } else {
+            cameraId
+        }
         val chars = try {
             getCharacteristics(targetId) ?: getCharacteristics(cameraId)
         } catch (e: Exception) {
             null
         }
         val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        // Strictly use standard getOutputSizes(ImageFormat.JPEG) for SESSION_REGULAR.
+        // Do NOT include SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION or stall-only HighResolutionOutputSizes
+        // in regular multi-stream sessions, as they cause onConfigureFailed / HAL hangs on Back Cameras!
         val jpegSizes = map?.getOutputSizes(ImageFormat.JPEG)?.toList() ?: emptyList()
-        val highResSizes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try { map?.getHighResolutionOutputSizes(ImageFormat.JPEG)?.toList() ?: emptyList() } catch (e: Exception) { emptyList() }
-        } else emptyList()
-        val maxResSizes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                val maxResMap = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
-                val m1 = maxResMap?.getOutputSizes(ImageFormat.JPEG)?.toList() ?: emptyList()
-                val m2 = maxResMap?.getHighResolutionOutputSizes(ImageFormat.JPEG)?.toList() ?: emptyList()
-                m1 + m2
-            } catch (e: Exception) { emptyList() }
-        } else emptyList()
-
-        val allSizes = (jpegSizes + highResSizes + maxResSizes).distinctBy { "${it.width}x${it.height}" }
+        val allSizes = jpegSizes.distinctBy { "${it.width}x${it.height}" }
 
         val isUltraWide = lens?.lensType == LensType.ULTRAWIDE
         val is50MMode = photoMegapixelMode == PhotoMegapixelMode.M50
+
+        // Standard 12MP–16MP binned ceiling for fast, zero-lag session creation and multi-stream compatibility
+        val maxStandardPixels = 16_500_000L
 
         // 4:3 aspect ratio filter (~1.333)
         val fourThreeSizes = allSizes.filter { size ->
             val ratio = maxOf(size.width, size.height).toFloat() / minOf(size.width, size.height).toFloat()
             kotlin.math.abs(ratio - (4f / 3f)) < 0.05f
         }
+        val standardFourThreeSizes = fourThreeSizes.filter {
+            (it.width.toLong() * it.height.toLong()) <= maxStandardPixels
+        }.ifEmpty { fourThreeSizes }
+
         // 16:9 aspect ratio filter (~1.777)
         val sixteenNineSizes = allSizes.filter { size ->
             val ratio = maxOf(size.width, size.height).toFloat() / minOf(size.width, size.height).toFloat()
             kotlin.math.abs(ratio - (16f / 9f)) < 0.05f
         }
+        val standardSixteenNineSizes = sixteenNineSizes.filter {
+            (it.width.toLong() * it.height.toLong()) <= maxStandardPixels
+        }.ifEmpty { sixteenNineSizes }
 
         val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT || currentMode == CameraMode.NIGHT)
 
         return when {
             isPhotoOrPortrait -> {
                 if (isUltraWide) {
-                    // For 0.5x Ultra-Wide, select highest native 4:3 resolution supported (around 8MP, e.g. 3264x2448)
-                    fourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                    standardFourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
                         ?: allSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
                         ?: Size(3264, 2448)
                 } else if (is50MMode) {
-                    allSizes.maxByOrNull { it.width.toLong() * it.height.toLong() } ?: Size(4000, 3000)
-                } else {
                     fourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                        ?: allSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                        ?: Size(4000, 3000)
+                } else {
+                    standardFourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                        ?: fourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
                         ?: allSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
                         ?: Size(4000, 3000)
                 }
             }
             else -> {
-                sixteenNineSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                standardSixteenNineSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
                     ?: allSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
                     ?: Size(1920, 1080)
             }
@@ -1848,13 +1841,15 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Resolves the maximum supported native resolution (12MP) for BurstEngine.
-     * Selects camera's maximum supported native YUV_420_888 resolution matching the photo aspect ratio
-     * (up to native binned 12MP, e.g. 4000x3000 or 4032x3024) directly from the camera sensor stream
-     * without any artificial 1080p/1440p cap or low-resolution preview upscaling.
+     * Resolves a hardware-compatible YUV_420_888 resolution for BurstEngine that complies with
+     * Android Camera2's mandatory stream combinations (PRIV PREVIEW + YUV RECORD + JPEG MAXIMUM).
      */
     fun getOptimalBurstYuvSize(lens: LensInfo?, cameraId: String, targetSize: Size): Size {
-        val targetId = lens?.physicalCameraId ?: cameraId
+        val targetId = if (lens?.physicalCameraId != null && lens.supportsPhysicalStream) {
+            lens.physicalCameraId
+        } else {
+            cameraId
+        }
         val chars = try {
             getCharacteristics(targetId) ?: getCharacteristics(cameraId)
         } catch (e: Exception) {
@@ -1863,29 +1858,27 @@ class Camera2Engine(private val context: Context) {
         val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val yuvSizes = map?.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: emptyList()
         if (yuvSizes.isEmpty()) {
-            return targetSize
+            return Size(1920, 1440)
         }
 
-        // Direct match with native target photo size if supported
-        if (yuvSizes.contains(targetSize)) {
-            return targetSize
-        }
-
-        val targetAspect = targetSize.width.toFloat() / targetSize.height.toFloat()
+        val targetAspect = maxOf(targetSize.width, targetSize.height).toFloat() /
+                minOf(targetSize.width, targetSize.height).toFloat()
         val aspectMatches = yuvSizes.filter { size ->
-            val aspect = size.width.toFloat() / size.height.toFloat()
-            kotlin.math.abs(aspect - targetAspect) < 0.05f
+            val aspect = maxOf(size.width, size.height).toFloat() / minOf(size.width, size.height).toFloat()
+            kotlin.math.abs(aspect - targetAspect) < 0.06f
         }
 
-        // Target up to 12.5MP maximum native sensor resolution (4000x3000 = 12MP, 4032x3024 = 12.19MP)
-        val max12MpPixels = 12_500_000L
-        val native12MpSizes = aspectMatches.filter { (it.width.toLong() * it.height.toLong()) <= max12MpPixels }
+        // Cap YUV stream to <= 3.0MP (e.g. 1920x1440 or 1920x1080) so PRIV + YUV + JPEG
+        // is guaranteed to succeed on all LIMITED / FULL / LEVEL_3 Camera2 HALs without session failure.
+        val maxSafeYuvPixels = 3_000_000L
+        val safeAspectSizes = aspectMatches.filter { (it.width.toLong() * it.height.toLong()) <= maxSafeYuvPixels }
 
-        return native12MpSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
-            ?: aspectMatches.maxByOrNull { it.width.toLong() * it.height.toLong() }
-            ?: yuvSizes.filter { (it.width.toLong() * it.height.toLong()) <= max12MpPixels }.maxByOrNull { it.width.toLong() * it.height.toLong() }
-            ?: yuvSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
-            ?: targetSize
+        return safeAspectSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: yuvSizes.filter { (it.width.toLong() * it.height.toLong()) <= maxSafeYuvPixels }
+                .maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: aspectMatches.minByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: yuvSizes.minByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: Size(1920, 1440)
     }
 
     private fun setupImageReaders(cameraId: String) {
@@ -1914,7 +1907,7 @@ class Camera2Engine(private val context: Context) {
                 targetSize.width,
                 targetSize.height,
                 ImageFormat.JPEG,
-                6
+                3
             )
             val mp = (targetSize.width.toLong() * targetSize.height.toLong()) / 1_000_000f
             Log.i(TAG, "[PHOTO_RES] Recreated ImageReader for ${activeLens?.lensType} (cameraId=$cameraId): JPEG=${targetSize.width}x${targetSize.height} (~${mp}MP)")
@@ -1922,7 +1915,7 @@ class Camera2Engine(private val context: Context) {
             Log.e(TAG, "Failed to create ImageReader with ${targetSize.width}x${targetSize.height}, falling back to largest supported", t)
             val fallback = caps.supportedPhotoResolutions.firstOrNull() ?: CameraResolution(1920, 1080)
             try {
-                imageReaderJpeg = ImageReader.newInstance(fallback.width, fallback.height, ImageFormat.JPEG, 6)
+                imageReaderJpeg = ImageReader.newInstance(fallback.width, fallback.height, ImageFormat.JPEG, 3)
             } catch (t2: Throwable) {
                 Log.e(TAG, "Failed fallback ImageReader", t2)
             }
@@ -1938,7 +1931,7 @@ class Camera2Engine(private val context: Context) {
                     yuvWidth,
                     yuvHeight,
                     ImageFormat.YUV_420_888,
-                    8
+                    4
                 )
                 ultraFastShutterEngine.configureFramePool(yuvWidth, yuvHeight)
                 imageReaderYuv?.setOnImageAvailableListener({ reader ->
@@ -1977,7 +1970,7 @@ class Camera2Engine(private val context: Context) {
                     rawRes.width,
                     rawRes.height,
                     ImageFormat.RAW_SENSOR,
-                    8
+                    2
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to create RAW ImageReader", t)
@@ -2226,14 +2219,19 @@ class Camera2Engine(private val context: Context) {
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                         onSessionConfigurationFinished()
-                        completeLensSwitch(_selectedLens.value)
-                        Log.e(TAG, "Camera capture session configuration failed, scheduling recovery")
-                        _isCameraReady.value = false
-                        if (!_isRecordingVideo.value) {
-                            backgroundHandler?.postDelayed({
-                                restartCamera()
-                            }, 250)
+                        // If auxiliary YUV/RAW streams caused session rejection, drop them and retry immediately on the open camera
+                        if (imageReaderYuv != null || imageReaderRaw != null) {
+                            Log.w(TAG, "Capture session rejected with auxiliary YUV/RAW streams; retrying with Preview + JPEG only")
+                            try { imageReaderYuv?.close() } catch (ignored: Throwable) {}
+                            imageReaderYuv = null
+                            try { imageReaderRaw?.close() } catch (ignored: Throwable) {}
+                            imageReaderRaw = null
+                            createCameraCaptureSession(forceLogicalStream = true)
+                            return
                         }
+                        completeLensSwitch(_selectedLens.value)
+                        Log.e(TAG, "Camera capture session configuration failed")
+                        _isCameraReady.value = false
                     }
                 },
                 backgroundHandler
@@ -6301,6 +6299,9 @@ class Camera2Engine(private val context: Context) {
             pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
             pendingZoomRunnable = null
             activeSessionPhysicalCameraId = null
+            try {
+                captureSession?.stopRepeating()
+            } catch (ignored: Throwable) {}
             captureSession?.close()
             captureSession = null
         } catch (e: Exception) {
@@ -6311,6 +6312,9 @@ class Camera2Engine(private val context: Context) {
     private fun closeCameraInternal() {
         CameraPerformanceMonitor.stop()
         _isCameraReady.value = false
+        sessionConfigGeneration.incrementAndGet()
+        isConfiguringSession = false
+        pendingReconfigureSession = false
         gyroStabilizationEngine.stop()
         ultraFastShutterEngine.reset()
         lastStabilizedCrop = null
@@ -6321,13 +6325,12 @@ class Camera2Engine(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error closing camera device", e)
         }
-        // Only release previewSurface if texture was destroyed or surface is invalid
-        if (previewSurfaceTexture == null || previewSurface?.isValid != true) {
-            try {
-                previewSurface?.release()
-                previewSurface = null
-            } catch (ignored: Throwable) {}
-        }
+        // Release previewSurface when closing CameraDevice so the old ANativeWindow producer
+        // disconnects cleanly from SurfaceTexture before the next camera sets buffer size
+        try {
+            previewSurface?.release()
+            previewSurface = null
+        } catch (ignored: Throwable) {}
         try {
             previewRequestBuilder = null
         } catch (ignored: Throwable) {}

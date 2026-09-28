@@ -41,14 +41,28 @@ object BackdropBlurManager {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var processingJob: Job? = null
 
-    // Downsampled sampling resolution: 180x320 provides optimal frosted-glass diffusion with minimal memory (<230KB)
-    const val SAMPLE_WIDTH = 180
-    const val SAMPLE_HEIGHT = 320
+    // High-definition sampling resolution for silky-smooth, zero-pixelation optical frosted glass
+    const val SAMPLE_WIDTH = 360
+    const val SAMPLE_HEIGHT = 640
 
-    // Live blurred backdrop consumed by FrostedGlassBox
+    // Live blurred backdrop consumed by FrostedGlassBox (aligned 1:1 with root window coordinates)
     val blurredBackdropState = mutableStateOf<Bitmap?>(null)
 
-    // Cached raw frame for instant re-blurring when user moves the Blur Strength slider in Settings
+    // Exact bounds of the TextureView in root coordinates so backdrop blur is never zoomed-in or shifted
+    @Volatile
+    var viewfinderBoundsInRoot: androidx.compose.ui.geometry.Rect? = null
+    @Volatile
+    var rootWindowSize: androidx.compose.ui.unit.IntSize? = null
+
+    fun updateViewfinderGeometry(
+        boundsInRoot: androidx.compose.ui.geometry.Rect,
+        rootSize: androidx.compose.ui.unit.IntSize
+    ) {
+        viewfinderBoundsInRoot = boundsInRoot
+        rootWindowSize = rootSize
+    }
+
+    // Cached raw root-aligned frame for instant re-blurring when user moves the Blur Strength slider in Settings
     private var lastRawSampleBitmap: Bitmap? = null
     private var currentBlurStrength = 24.0f
     private var lastSampleTime = 0L
@@ -56,8 +70,9 @@ object BackdropBlurManager {
     // Sampling rate: ~15 fps (every 66ms) is butter-smooth for background blur without taxing the camera pipeline
     private const val MIN_SAMPLE_INTERVAL_MS = 66L
 
-    // Reusable sampling bitmap to avoid heap allocations
-    private var reusableCaptureBitmap: Bitmap? = null
+    // Reusable bitmaps to avoid heap churn
+    private var reusableTextureBitmap: Bitmap? = null
+    private var reusableRootAlignedBitmap: Bitmap? = null
 
     /**
      * Flag indicating whether any floating window, popup, or settings panel is open.
@@ -67,6 +82,8 @@ object BackdropBlurManager {
 
     /**
      * Called from Viewfinder TextureView on every frame when a floating window is open.
+     * Accurately maps the TextureView (including its crop transform matrix and exact position in root)
+     * into a root-screen-aligned bitmap so floating windows show a 1:1 un-zoomed, pixel-free blur.
      */
     fun onViewfinderFrame(textureView: TextureView, blurStrength: Float) {
         if (!isWindowActive) return
@@ -75,23 +92,100 @@ object BackdropBlurManager {
         if (now - lastSampleTime < MIN_SAMPLE_INTERVAL_MS) return
         if (processingJob?.isActive == true) return
 
+        val tvW = textureView.width
+        val tvH = textureView.height
+        if (tvW <= 0 || tvH <= 0) return
+
         lastSampleTime = now
         currentBlurStrength = blurStrength
 
         try {
-            if (reusableCaptureBitmap == null || reusableCaptureBitmap?.isRecycled == true) {
-                reusableCaptureBitmap = Bitmap.createBitmap(SAMPLE_WIDTH, SAMPLE_HEIGHT, Bitmap.Config.ARGB_8888)
-            }
-            val target = reusableCaptureBitmap ?: return
-            // Hardware copy from TextureView directly into downscaled bitmap (takes < 0.5ms)
-            textureView.getBitmap(target)
+            val rSize = rootWindowSize
+            val vfBounds = viewfinderBoundsInRoot
+            val rootW = (rSize?.width?.takeIf { it > 0 } ?: textureView.rootView?.width?.takeIf { it > 0 } ?: tvW).toFloat()
+            val rootH = (rSize?.height?.takeIf { it > 0 } ?: textureView.rootView?.height?.takeIf { it > 0 } ?: tvH).toFloat()
 
-            val rawCopy = Bitmap.createBitmap(target)
+            val sampleRootW = SAMPLE_WIDTH
+            val sampleRootH = ((rootH / rootW) * sampleRootW).roundToInt().coerceIn(320, 800)
+
+            // Calculate exact TextureView rectangle within the root-aligned sample canvas
+            val vfLeft: Float
+            val vfTop: Float
+            val vfRight: Float
+            val vfBottom: Float
+            if (vfBounds != null && vfBounds.width > 0f && vfBounds.height > 0f) {
+                vfLeft = (vfBounds.left / rootW) * sampleRootW
+                vfTop = (vfBounds.top / rootH) * sampleRootH
+                vfRight = (vfBounds.right / rootW) * sampleRootW
+                vfBottom = (vfBounds.bottom / rootH) * sampleRootH
+            } else {
+                val loc = IntArray(2)
+                textureView.getLocationInWindow(loc)
+                vfLeft = (loc[0] / rootW) * sampleRootW
+                vfTop = (loc[1] / rootH) * sampleRootH
+                vfRight = ((loc[0] + tvW) / rootW) * sampleRootW
+                vfBottom = ((loc[1] + tvH) / rootH) * sampleRootH
+            }
+
+            val dstVfW = (vfRight - vfLeft).roundToInt().coerceAtLeast(64)
+            val dstVfH = (vfBottom - vfTop).roundToInt().coerceAtLeast(64)
+
+            if (reusableTextureBitmap == null ||
+                reusableTextureBitmap?.isRecycled == true ||
+                reusableTextureBitmap?.width != dstVfW ||
+                reusableTextureBitmap?.height != dstVfH
+            ) {
+                reusableTextureBitmap?.recycle()
+                reusableTextureBitmap = Bitmap.createBitmap(dstVfW, dstVfH, Bitmap.Config.ARGB_8888)
+            }
+            val rawTexBmp = reusableTextureBitmap ?: return
+            // Hardware copy from TextureView into downscaled texture bitmap
+            textureView.getBitmap(rawTexBmp)
+
+            if (reusableRootAlignedBitmap == null ||
+                reusableRootAlignedBitmap?.isRecycled == true ||
+                reusableRootAlignedBitmap?.width != sampleRootW ||
+                reusableRootAlignedBitmap?.height != sampleRootH
+            ) {
+                reusableRootAlignedBitmap?.recycle()
+                reusableRootAlignedBitmap = Bitmap.createBitmap(sampleRootW, sampleRootH, Bitmap.Config.ARGB_8888)
+            }
+            val rootBmp = reusableRootAlignedBitmap ?: return
+
+            // Draw the TextureView into its exact root position with its exact aspect-ratio transform matrix
+            val canvas = Canvas(rootBmp)
+            canvas.drawColor(-0xF7F6F0) // #080910 dark surround outside viewfinder
+            canvas.save()
+            val vfRect = android.graphics.RectF(vfLeft, vfTop, vfRight, vfBottom)
+            canvas.clipRect(vfRect)
+            canvas.translate(vfLeft, vfTop)
+
+            // Replicate TextureView's active transform matrix (scaled from tvW x tvH to dstVfW x dstVfH)
+            val tvMatrix = android.graphics.Matrix()
+            textureView.getTransform(tvMatrix)
+            val values = FloatArray(9)
+            tvMatrix.getValues(values)
+            val scaleX = dstVfW.toFloat() / tvW.toFloat()
+            val scaleY = dstVfH.toFloat() / tvH.toFloat()
+            values[android.graphics.Matrix.MTRANS_X] *= scaleX
+            values[android.graphics.Matrix.MTRANS_Y] *= scaleY
+            tvMatrix.setValues(values)
+
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG)
+            canvas.drawBitmap(rawTexBmp, tvMatrix, paint)
+            canvas.restore()
+
+            val rawCopy = Bitmap.createBitmap(rootBmp)
             lastRawSampleBitmap?.recycle()
             lastRawSampleBitmap = rawCopy
 
             processingJob = scope.launch {
-                val blurred = applyFastStackBlur(rawCopy, blurStrength)
+                // Two-pass StackBlur produces a true smooth Gaussian kernel with zero blockiness or pixelation
+                val pass1 = applyFastStackBlur(rawCopy, blurStrength * 0.85f)
+                val blurred = applyFastStackBlur(pass1, blurStrength * 0.65f)
+                if (pass1 != blurred && !pass1.isRecycled) {
+                    pass1.recycle()
+                }
                 withContext(Dispatchers.Main) {
                     val old = blurredBackdropState.value
                     blurredBackdropState.value = blurred
@@ -114,7 +208,11 @@ object BackdropBlurManager {
         if (raw.isRecycled) return
 
         scope.launch {
-            val blurred = applyFastStackBlur(raw, newStrength)
+            val pass1 = applyFastStackBlur(raw, newStrength * 0.85f)
+            val blurred = applyFastStackBlur(pass1, newStrength * 0.65f)
+            if (pass1 != blurred && !pass1.isRecycled) {
+                pass1.recycle()
+            }
             withContext(Dispatchers.Main) {
                 val old = blurredBackdropState.value
                 blurredBackdropState.value = blurred

@@ -105,10 +105,33 @@ class CameraPreferences(context: Context) {
         get() = prefs.getFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, 24.0f)
         set(value) = prefs.edit().putFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, value).apply()
 
+    var floatingWindowScale: Float
+        get() = prefs.getFloat("floating_window_scale", 1.0f).coerceIn(0.75f, 1.25f)
+        set(value) = prefs.edit().putFloat("floating_window_scale", value.coerceIn(0.75f, 1.25f)).apply()
+
     fun getFloatingWindowAppearance(): com.example.camera.model.FloatingWindowAppearanceConfig {
         return com.example.camera.model.FloatingWindowAppearanceConfig(
             transparency = floatingWindowTransparency,
-            blurStrength = floatingWindowBlurStrength
+            blurStrength = floatingWindowBlurStrength,
+            windowScale = floatingWindowScale,
+            showVideoResolution = prefs.getBoolean("fw_show_video_res", true),
+            showVideoFps = prefs.getBoolean("fw_show_video_fps", true),
+            showVideoStabilization = prefs.getBoolean("fw_show_video_stab", true),
+            showPortraitApertureBlur = prefs.getBoolean("fw_show_portrait_aperture", true),
+            showPortraitBokehStyle = prefs.getBoolean("fw_show_portrait_bokeh", true),
+            showPortraitBeautySkin = prefs.getBoolean("fw_show_portrait_beauty", true),
+            showPortraitOpticalDepth = prefs.getBoolean("fw_show_portrait_optical", true),
+            showCinemaColorProfile = prefs.getBoolean("fw_show_cinema_profile", true),
+            showCinemaLutControls = prefs.getBoolean("fw_show_cinema_lut", true),
+            showCinemaResolutionFps = prefs.getBoolean("fw_show_cinema_res_fps", true),
+            showCinemaStabilization = prefs.getBoolean("fw_show_cinema_stab", true),
+            showCinemaAssistTools = prefs.getBoolean("fw_show_cinema_assist", true),
+            showProExposureControls = prefs.getBoolean("fw_show_pro_exposure", true),
+            showProToneAdjustments = prefs.getBoolean("fw_show_pro_tone", true),
+            showVideoAdjustmentsColorTone = prefs.getBoolean("fw_show_vadj_color", true),
+            showVideoAdjustmentsEffects = prefs.getBoolean("fw_show_vadj_effects", true),
+            showPipelineMasterToggle = prefs.getBoolean("fw_show_pipe_toggle", true),
+            showPipelinePresetList = prefs.getBoolean("fw_show_pipe_list", true)
         )
     }
 
@@ -116,6 +139,25 @@ class CameraPreferences(context: Context) {
         prefs.edit()
             .putFloat(KEY_FLOATING_WINDOW_TRANSPARENCY, config.transparency)
             .putFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, config.blurStrength)
+            .putFloat("floating_window_scale", config.windowScale.coerceIn(0.75f, 1.25f))
+            .putBoolean("fw_show_video_res", config.showVideoResolution)
+            .putBoolean("fw_show_video_fps", config.showVideoFps)
+            .putBoolean("fw_show_video_stab", config.showVideoStabilization)
+            .putBoolean("fw_show_portrait_aperture", config.showPortraitApertureBlur)
+            .putBoolean("fw_show_portrait_bokeh", config.showPortraitBokehStyle)
+            .putBoolean("fw_show_portrait_beauty", config.showPortraitBeautySkin)
+            .putBoolean("fw_show_portrait_optical", config.showPortraitOpticalDepth)
+            .putBoolean("fw_show_cinema_profile", config.showCinemaColorProfile)
+            .putBoolean("fw_show_cinema_lut", config.showCinemaLutControls)
+            .putBoolean("fw_show_cinema_res_fps", config.showCinemaResolutionFps)
+            .putBoolean("fw_show_cinema_stab", config.showCinemaStabilization)
+            .putBoolean("fw_show_cinema_assist", config.showCinemaAssistTools)
+            .putBoolean("fw_show_pro_exposure", config.showProExposureControls)
+            .putBoolean("fw_show_pro_tone", config.showProToneAdjustments)
+            .putBoolean("fw_show_vadj_color", config.showVideoAdjustmentsColorTone)
+            .putBoolean("fw_show_vadj_effects", config.showVideoAdjustmentsEffects)
+            .putBoolean("fw_show_pipe_toggle", config.showPipelineMasterToggle)
+            .putBoolean("fw_show_pipe_list", config.showPipelinePresetList)
             .apply()
     }
 

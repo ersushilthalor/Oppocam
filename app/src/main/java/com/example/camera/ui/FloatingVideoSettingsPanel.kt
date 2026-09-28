@@ -119,158 +119,166 @@ fun FloatingVideoSettingsPanel(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
 
-                // Section 1: Resolution Selector
-                VideoPanelSectionHeader(
-                    title = "RESOLUTION",
-                    badge = when {
-                        currentResolution?.width == 3840 || currentResolution?.height == 3840 -> "4K UHD"
-                        currentResolution?.width == 7680 || currentResolution?.height == 7680 -> "8K MAX"
-                        currentResolution?.width == 1920 || currentResolution?.height == 1920 -> "1080p FHD"
-                        currentResolution?.width == 1280 || currentResolution?.height == 1280 -> "720p HD"
-                        else -> "4K UHD"
-                    }
-                )
+                if (appearance.showVideoResolution) {
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                Spacer(modifier = Modifier.height(8.dp))
+                    // Section 1: Resolution Selector
+                    VideoPanelSectionHeader(
+                        title = "RESOLUTION",
+                        badge = when {
+                            currentResolution?.width == 3840 || currentResolution?.height == 3840 -> "4K UHD"
+                            currentResolution?.width == 7680 || currentResolution?.height == 7680 -> "8K MAX"
+                            currentResolution?.width == 1920 || currentResolution?.height == 1920 -> "1080p FHD"
+                            currentResolution?.width == 1280 || currentResolution?.height == 1280 -> "720p HD"
+                            else -> "4K UHD"
+                        }
+                    )
 
-                val resolutionOptions = listOf(
-                    "720p" to CameraResolution(1280, 720),
-                    "1080p" to CameraResolution(1920, 1080),
-                    "4K" to CameraResolution(3840, 2160),
-                    "8K" to CameraResolution(7680, 4320)
-                )
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    resolutionOptions.forEach { (label, res) ->
-                        val isSelected = currentResolution?.let {
-                            (it.width == res.width && it.height == res.height) ||
-                            (it.width == res.height && it.height == res.width)
-                        } ?: (label == "4K")
+                    val resolutionOptions = listOf(
+                        "720p" to CameraResolution(1280, 720),
+                        "1080p" to CameraResolution(1920, 1080),
+                        "4K" to CameraResolution(3840, 2160),
+                        "8K" to CameraResolution(7680, 4320)
+                    )
 
-                        VideoGlassChip(
-                            label = label,
-                            isSelected = isSelected,
-                            accentColor = accentColor,
-                            onClick = { onResolutionSelected(res) },
-                            testTag = "res_option_$label"
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Section 2: Frame Rate Selector
-                VideoPanelSectionHeader(
-                    title = "FRAME RATE",
-                    badge = "${currentFps} fps"
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                val fpsOptions = listOf(
-                    "24fps" to 24,
-                    "30fps" to 30,
-                    "60fps" to 60,
-                    "120fps" to 120
-                )
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    fpsOptions.forEach { (label, fps) ->
-                        val isSelected = currentFps == fps
-
-                        VideoGlassChip(
-                            label = label,
-                            isSelected = isSelected,
-                            accentColor = accentColor,
-                            onClick = { onFpsSelected(fps) },
-                            testTag = "fps_option_$label"
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Section 3: Ultra Steady Gyro Stabilization
-                VideoPanelSectionHeader(
-                    title = "STABILIZATION",
-                    badge = if (isUltraStabilizationEnabled) "ULTRA GYRO" else "STANDARD"
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            if (isUltraStabilizationEnabled) {
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        accentColor.copy(alpha = 0.16f),
-                                        accentColor.copy(alpha = 0.06f)
-                                    )
-                                )
-                            } else {
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.White.copy(alpha = 0.05f),
-                                        Color.White.copy(alpha = 0.02f)
-                                    )
-                                )
-                            }
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = if (isUltraStabilizationEnabled) accentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
-                            shape = RoundedCornerShape(14.dp)
-                        )
-                        .clickable { onUltraStabilizationToggle() }
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                        .testTag("ultra_stab_toggle")
-                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Ultra Steady Gimbal Mode",
-                                color = if (isUltraStabilizationEnabled) accentColor else Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = if (isUltraStabilizationEnabled) "Hardware OIS + Gyroscopic EIS anti-shake active" else "Standard optical image stabilization",
-                                color = Color.White.copy(alpha = 0.60f),
-                                fontSize = 11.sp
+                        resolutionOptions.forEach { (label, res) ->
+                            val isSelected = currentResolution?.let {
+                                (it.width == res.width && it.height == res.height) ||
+                                (it.width == res.height && it.height == res.width)
+                            } ?: (label == "4K")
+
+                            VideoGlassChip(
+                                label = label,
+                                isSelected = isSelected,
+                                accentColor = accentColor,
+                                onClick = { onResolutionSelected(res) },
+                                testTag = "res_option_$label"
                             )
                         }
+                    }
+                }
 
-                        Switch(
-                            checked = isUltraStabilizationEnabled,
-                            onCheckedChange = { onUltraStabilizationToggle() },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = accentColor,
-                                checkedTrackColor = accentColor.copy(alpha = 0.35f),
-                                uncheckedThumbColor = Color.White.copy(alpha = 0.65f),
-                                uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
+                if (appearance.showVideoFps) {
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Section 2: Frame Rate Selector
+                    VideoPanelSectionHeader(
+                        title = "FRAME RATE",
+                        badge = "${currentFps} fps"
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val fpsOptions = listOf(
+                        "24fps" to 24,
+                        "30fps" to 30,
+                        "60fps" to 60,
+                        "120fps" to 120
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        fpsOptions.forEach { (label, fps) ->
+                            val isSelected = currentFps == fps
+
+                            VideoGlassChip(
+                                label = label,
+                                isSelected = isSelected,
+                                accentColor = accentColor,
+                                onClick = { onFpsSelected(fps) },
+                                testTag = "fps_option_$label"
                             )
-                        )
+                        }
+                    }
+                }
+
+                if (appearance.showVideoStabilization) {
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Section 3: Ultra Steady Gyro Stabilization
+                    VideoPanelSectionHeader(
+                        title = "STABILIZATION",
+                        badge = if (isUltraStabilizationEnabled) "ULTRA GYRO" else "STANDARD"
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (isUltraStabilizationEnabled) {
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            accentColor.copy(alpha = 0.16f),
+                                            accentColor.copy(alpha = 0.06f)
+                                        )
+                                    )
+                                } else {
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.White.copy(alpha = 0.05f),
+                                            Color.White.copy(alpha = 0.02f)
+                                        )
+                                    )
+                                }
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (isUltraStabilizationEnabled) accentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
+                                shape = RoundedCornerShape(14.dp)
+                            )
+                            .clickable { onUltraStabilizationToggle() }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .testTag("ultra_stab_toggle")
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Ultra Steady Gimbal Mode",
+                                    color = if (isUltraStabilizationEnabled) accentColor else Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (isUltraStabilizationEnabled) "Hardware OIS + Gyroscopic EIS anti-shake active" else "Standard optical image stabilization",
+                                    color = Color.White.copy(alpha = 0.60f),
+                                    fontSize = 11.sp
+                                )
+                            }
+
+                            Switch(
+                                checked = isUltraStabilizationEnabled,
+                                onCheckedChange = { onUltraStabilizationToggle() },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = accentColor,
+                                    checkedTrackColor = accentColor.copy(alpha = 0.35f),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.65f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
+                                )
+                            )
+                        }
                     }
                 }
             }

@@ -139,67 +139,157 @@ fun PortraitControlBar(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
 
-            // Section 1: Simulated Aperture Chips
-            PortraitSectionHeader(
-                title = "SIMULATED APERTURE",
-                badge = config.simulatedAperture
-            )
+            if (appearance.showPortraitApertureBlur) {
+                Spacer(modifier = Modifier.height(14.dp))
 
-            Spacer(modifier = Modifier.height(8.dp))
+                // Section 1: Simulated Aperture Chips
+                PortraitSectionHeader(
+                    title = "SIMULATED APERTURE",
+                    badge = config.simulatedAperture
+                )
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                apertures.forEach { aperture ->
-                    val isSelected = config.simulatedAperture == aperture
+                Spacer(modifier = Modifier.height(8.dp))
 
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (isSelected) {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            accentColor.copy(alpha = 0.25f),
-                                            accentColor.copy(alpha = 0.10f)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    apertures.forEach { aperture ->
+                        val isSelected = config.simulatedAperture == aperture
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) {
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                accentColor.copy(alpha = 0.25f),
+                                                accentColor.copy(alpha = 0.10f)
+                                            )
                                         )
-                                    )
-                                } else {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.White.copy(alpha = 0.06f),
-                                            Color.White.copy(alpha = 0.02f)
+                                    } else {
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.White.copy(alpha = 0.06f),
+                                                Color.White.copy(alpha = 0.02f)
+                                            )
                                         )
-                                    )
-                                }
-                            )
-                            .border(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable { onApertureSelected(aperture) }
-                            .padding(horizontal = 14.dp, vertical = 8.dp)
-                            .testTag("aperture_chip_$aperture"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                    }
+                                )
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable { onApertureSelected(aperture) }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                                .testTag("aperture_chip_$aperture"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "f",
+                                    color = if (isSelected) accentColor else Color.White.copy(alpha = 0.70f),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontStyle = FontStyle.Italic,
+                                    fontFamily = FontFamily.Serif
+                                )
+                                Text(
+                                    text = aperture.removePrefix("f"),
+                                    color = if (isSelected) accentColor else Color.White.copy(alpha = 0.85f),
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Section 2: Blur Intensity Slider
+                PortraitSectionHeader(
+                    title = "BLUR INTENSITY",
+                    badge = "${config.blurStrength.toInt()}%"
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Slider(
+                    value = config.blurStrength,
+                    onValueChange = onBlurStrengthChanged,
+                    valueRange = 0f..100f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("portrait_blur_slider"),
+                    colors = SliderDefaults.colors(
+                        thumbColor = accentColor,
+                        activeTrackColor = accentColor,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.15f)
+                    )
+                )
+            }
+
+            if (appearance.showPortraitBokehStyle) {
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Section 3: Cinematic Bokeh Character
+                PortraitSectionHeader(
+                    title = "BOKEH CHARACTER",
+                    badge = config.bokehStyle.label
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BokehStyle.entries.forEach { style ->
+                        val isSelected = config.bokehStyle == style
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) {
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                accentColor.copy(alpha = 0.25f),
+                                                accentColor.copy(alpha = 0.10f)
+                                            )
+                                        )
+                                    } else {
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.White.copy(alpha = 0.06f),
+                                                Color.White.copy(alpha = 0.02f)
+                                            )
+                                        )
+                                    }
+                                )
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable { onBokehStyleSelected(style) }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                                .testTag("bokeh_style_${style.name.lowercase()}"),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Text(
-                                text = "f",
-                                color = if (isSelected) accentColor else Color.White.copy(alpha = 0.70f),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontStyle = FontStyle.Italic,
-                                fontFamily = FontFamily.Serif
-                            )
-                            Text(
-                                text = aperture.removePrefix("f"),
+                                text = style.label,
                                 color = if (isSelected) accentColor else Color.White.copy(alpha = 0.85f),
                                 fontSize = 12.sp,
                                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
@@ -209,155 +299,73 @@ fun PortraitControlBar(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            if (appearance.showPortraitOpticalDepth) {
+                Spacer(modifier = Modifier.height(14.dp))
 
-            // Section 2: Blur Intensity Slider
-            PortraitSectionHeader(
-                title = "BLUR INTENSITY",
-                badge = "${config.blurStrength.toInt()}%"
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Slider(
-                value = config.blurStrength,
-                onValueChange = onBlurStrengthChanged,
-                valueRange = 0f..100f,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("portrait_blur_slider"),
-                colors = SliderDefaults.colors(
-                    thumbColor = accentColor,
-                    activeTrackColor = accentColor,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.15f)
-                )
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Section 3: Cinematic Bokeh Character
-            PortraitSectionHeader(
-                title = "BOKEH CHARACTER",
-                badge = config.bokehStyle.label
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                BokehStyle.entries.forEach { style ->
-                    val isSelected = config.bokehStyle == style
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (isSelected) {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            accentColor.copy(alpha = 0.25f),
-                                            accentColor.copy(alpha = 0.10f)
-                                        )
+                // Section 4: Optical Blur Guidance Toggle Card
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            if (config.opticalBlurGuided) {
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        accentColor.copy(alpha = 0.16f),
+                                        accentColor.copy(alpha = 0.06f)
                                     )
-                                } else {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.White.copy(alpha = 0.06f),
-                                            Color.White.copy(alpha = 0.02f)
-                                        )
+                                )
+                            } else {
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.White.copy(alpha = 0.05f),
+                                        Color.White.copy(alpha = 0.02f)
                                     )
-                                }
-                            )
-                            .border(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable { onBokehStyleSelected(style) }
-                            .padding(horizontal = 14.dp, vertical = 8.dp)
-                            .testTag("bokeh_style_${style.name.lowercase()}"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = style.label,
-                            color = if (isSelected) accentColor else Color.White.copy(alpha = 0.85f),
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                )
+                            }
                         )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Section 4: Optical Blur Guidance Toggle Card
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        if (config.opticalBlurGuided) {
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    accentColor.copy(alpha = 0.16f),
-                                    accentColor.copy(alpha = 0.06f)
-                                )
+                        .border(
+                            width = 1.dp,
+                            color = if (config.opticalBlurGuided) accentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                        .clickable { onToggleOpticalBlurGuided() }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .testTag("optical_blur_guided_toggle")
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Optical Blur Guidance",
+                                color = if (config.opticalBlurGuided) accentColor else Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
                             )
-                        } else {
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = 0.05f),
-                                    Color.White.copy(alpha = 0.02f)
-                                )
+                            Text(
+                                text = if (config.opticalBlurGuided)
+                                    "Physical lens defocus + fine depth & hair matting"
+                                else
+                                    "Standard synthetic portrait blur",
+                                color = Color.White.copy(alpha = 0.60f),
+                                fontSize = 11.sp
                             )
                         }
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = if (config.opticalBlurGuided) accentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
-                        shape = RoundedCornerShape(14.dp)
-                    )
-                    .clickable { onToggleOpticalBlurGuided() }
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                    .testTag("optical_blur_guided_toggle")
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Optical Blur Guidance",
-                            color = if (config.opticalBlurGuided) accentColor else Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = if (config.opticalBlurGuided)
-                                "Physical lens defocus + fine depth & hair matting"
-                            else
-                                "Standard synthetic portrait blur",
-                            color = Color.White.copy(alpha = 0.60f),
-                            fontSize = 11.sp
+
+                        Switch(
+                            checked = config.opticalBlurGuided,
+                            onCheckedChange = { onToggleOpticalBlurGuided() },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = accentColor,
+                                checkedTrackColor = accentColor.copy(alpha = 0.35f),
+                                uncheckedThumbColor = Color.White.copy(alpha = 0.65f),
+                                uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
+                            )
                         )
                     }
-
-                    Switch(
-                        checked = config.opticalBlurGuided,
-                        onCheckedChange = { onToggleOpticalBlurGuided() },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = accentColor,
-                            checkedTrackColor = accentColor.copy(alpha = 0.35f),
-                            uncheckedThumbColor = Color.White.copy(alpha = 0.65f),
-                            uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
-                        )
-                    )
                 }
             }
         }

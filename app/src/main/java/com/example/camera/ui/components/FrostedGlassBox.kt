@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,9 +50,18 @@ fun FrostedGlassBox(
     borderColor: Color? = null,
     showTopHighlightRim: Boolean = true,
     blurStrengthOverride: Float? = null,
+    applyWindowScale: Boolean = true,
     content: @Composable BoxScope.() -> Unit
 ) {
     val appearance = LocalFloatingWindowAppearance.current
+    val baseDensity = androidx.compose.ui.platform.LocalDensity.current
+    val effectiveScale = if (applyWindowScale) appearance.windowScale.coerceIn(0.75f, 1.25f) else 1.0f
+    val scaledDensity = remember(baseDensity, effectiveScale) {
+        androidx.compose.ui.unit.Density(
+            density = baseDensity.density * effectiveScale,
+            fontScale = baseDensity.fontScale * effectiveScale
+        )
+    }
 
     // Transparency: 0.0 (solid/opaque) -> 1.0 (crystal clear / maximum background visibility)
     val effectiveTransparency = baseAlpha ?: appearance.transparency
@@ -72,108 +82,133 @@ fun FrostedGlassBox(
         )
     }
 
-    Box(
-        modifier = modifier
-            .onGloballyPositioned { coordinates ->
-                val pos = coordinates.positionInRoot()
-                val size = coordinates.size
-                windowBoundsInRoot = Rect(pos.x, pos.y, pos.x + size.width, pos.y + size.height)
-                rootSize = coordinates.findRootCoordinates().size
-            }
-            .shadow(
-                elevation = elevation,
-                shape = shape,
-                clip = false,
-                ambientColor = Color.Black.copy(alpha = 0.45f),
-                spotColor = Color.Black.copy(alpha = 0.75f)
-            )
-            .clip(shape)
-            // Physical glass refractive border
-            .border(
-                width = borderWidth,
-                brush = borderBrush,
-                shape = shape
-            )
+    val compactHorizontalInset = if (applyWindowScale && effectiveScale < 1.0f) {
+        ((1.0f - effectiveScale) * 96f).dp
+    } else {
+        0.dp
+    }
+
+    CompositionLocalProvider(
+        androidx.compose.ui.platform.LocalDensity provides scaledDensity
     ) {
-        // 1. Live Backdrop Blur Layer:
-        // Renders the live blurred background corresponding strictly to this window's screen rect.
-        val backdropBitmap = BackdropBlurManager.blurredBackdropState.value
-        if (backdropBitmap != null && !backdropBitmap.isRecycled && windowBoundsInRoot != null && rootSize != null) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val bounds = windowBoundsInRoot ?: return@Canvas
-                val rSize = rootSize ?: return@Canvas
-                if (rSize.width > 0 && rSize.height > 0) {
-                    val srcLeft = ((bounds.left / rSize.width.toFloat()) * backdropBitmap.width).toInt().coerceIn(0, backdropBitmap.width - 1)
-                    val srcTop = ((bounds.top / rSize.height.toFloat()) * backdropBitmap.height).toInt().coerceIn(0, backdropBitmap.height - 1)
-                    val srcRight = ((bounds.right / rSize.width.toFloat()) * backdropBitmap.width).toInt().coerceIn(srcLeft + 1, backdropBitmap.width)
-                    val srcBottom = ((bounds.bottom / rSize.height.toFloat()) * backdropBitmap.height).toInt().coerceIn(srcTop + 1, backdropBitmap.height)
+        Box(
+            modifier = modifier
+                .then(
+                    if (compactHorizontalInset > 0.dp) {
+                        Modifier.padding(horizontal = compactHorizontalInset)
+                    } else {
+                        Modifier
+                    }
+                )
+                .onGloballyPositioned { coordinates ->
+                    val pos = coordinates.positionInRoot()
+                    val size = coordinates.size
+                    windowBoundsInRoot = Rect(pos.x, pos.y, pos.x + size.width, pos.y + size.height)
+                    rootSize = coordinates.findRootCoordinates().size
+                }
+                .shadow(
+                    elevation = elevation,
+                    shape = shape,
+                    clip = false,
+                    ambientColor = Color.Black.copy(alpha = 0.45f),
+                    spotColor = Color.Black.copy(alpha = 0.75f)
+                )
+                .clip(shape)
+                // Physical glass refractive border
+                .border(
+                    width = borderWidth,
+                    brush = borderBrush,
+                    shape = shape
+                )
+        ) {
+            // 1. Live Backdrop Blur Layer:
+            // Uses exact float matrix transformation (zero integer Rect rounding zoom-in or pixel stepping).
+            val backdropBitmap = BackdropBlurManager.blurredBackdropState.value
+            if (backdropBitmap != null && !backdropBitmap.isRecycled && windowBoundsInRoot != null && rootSize != null) {
+                Canvas(modifier = Modifier.matchParentSize()) {
+                    val bounds = windowBoundsInRoot ?: return@Canvas
+                    val rSize = rootSize ?: return@Canvas
+                    if (rSize.width > 0 && rSize.height > 0 && bounds.width > 0f && bounds.height > 0f && size.width > 0f && size.height > 0f) {
+                        val bmpW = backdropBitmap.width.toFloat()
+                        val bmpH = backdropBitmap.height.toFloat()
+                        val rootW = rSize.width.toFloat()
+                        val rootH = rSize.height.toFloat()
 
-                    val srcRect = android.graphics.Rect(srcLeft, srcTop, srcRight, srcBottom)
-                    val dstRect = android.graphics.Rect(0, 0, size.width.toInt(), size.height.toInt())
+                        val srcLeftF = (bounds.left / rootW) * bmpW
+                        val srcTopF = (bounds.top / rootH) * bmpH
+                        val srcWidthF = ((bounds.width / rootW) * bmpW).coerceAtLeast(1f)
+                        val srcHeightF = ((bounds.height / rootH) * bmpH).coerceAtLeast(1f)
 
-                    drawIntoCanvas { canvas ->
-                        val paint = android.graphics.Paint().apply {
-                            isFilterBitmap = true // Hardware-accelerated bilinear filtering
-                            isAntiAlias = true
+                        val drawMatrix = android.graphics.Matrix().apply {
+                            setTranslate(-srcLeftF, -srcTopF)
+                            postScale(size.width / srcWidthF, size.height / srcHeightF)
                         }
-                        canvas.nativeCanvas.drawBitmap(backdropBitmap, srcRect, dstRect, paint)
+
+                        drawIntoCanvas { canvas ->
+                            val paint = android.graphics.Paint(
+                                android.graphics.Paint.FILTER_BITMAP_FLAG or
+                                        android.graphics.Paint.ANTI_ALIAS_FLAG or
+                                        android.graphics.Paint.DITHER_FLAG
+                            )
+                            canvas.nativeCanvas.drawBitmap(backdropBitmap, drawMatrix, paint)
+                        }
                     }
                 }
             }
-        }
 
-        // 2. Tinted Liquid Glass Substrate:
-        // Alpha is inversely proportional to transparency so user slider directly governs show-through.
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            baseTint.copy(alpha = tintAlpha),
-                            Color(0xFF07090F).copy(alpha = (tintAlpha + 0.10f).coerceAtMost(0.96f))
-                        )
-                    )
-                )
-        )
-
-        // 3. Physical specular light sheen refraction across surface
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.14f * (effectiveTransparency + 0.4f).coerceAtMost(1f)),
-                            Color.White.copy(alpha = 0.03f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.22f)
-                        )
-                    )
-                )
-        )
-
-        // 4. Window Content
-        content()
-
-        // 5. Top specular highlight rim (hairline light reflection on cut glass edge)
-        if (showTopHighlightRim) {
+            // 2. Tinted Liquid Glass Substrate:
+            // Alpha is inversely proportional to transparency so user slider directly governs show-through.
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .align(Alignment.TopCenter)
+                    .matchParentSize()
                     .background(
-                        Brush.horizontalGradient(
+                        Brush.verticalGradient(
                             colors = listOf(
-                                Color.Transparent,
-                                Color.White.copy(alpha = 0.50f),
-                                Color.White.copy(alpha = 0.18f),
-                                Color.Transparent
+                                baseTint.copy(alpha = tintAlpha),
+                                Color(0xFF07090F).copy(alpha = (tintAlpha + 0.10f).coerceAtMost(0.96f))
                             )
                         )
                     )
             )
+
+            // 3. Physical specular light sheen refraction across surface
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.14f * (effectiveTransparency + 0.4f).coerceAtMost(1f)),
+                                Color.White.copy(alpha = 0.03f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.22f)
+                            )
+                        )
+                    )
+            )
+
+            // 4. Window Content
+            content()
+
+            // 5. Top specular highlight rim (hairline light reflection on cut glass edge)
+            if (showTopHighlightRim) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .align(Alignment.TopCenter)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.50f),
+                                    Color.White.copy(alpha = 0.18f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
+            }
         }
     }
 }

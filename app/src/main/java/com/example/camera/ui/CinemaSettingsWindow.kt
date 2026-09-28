@@ -163,484 +163,496 @@ fun CinemaSettingsWindow(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
 
-            // SECTION 1: LOOK & LUT (HOLLYWOOD GRADES)
-            CinemaSectionHeader(
-                title = "LOOK & LUT",
-                badge = if (config.selectedLut == CinematicLut.CUSTOM && !config.customLutName.isNullOrBlank()) {
-                    config.customLutName ?: "Custom .cube"
-                } else {
-                    config.selectedLut.label
-                }
-            )
+            if (appearance.showCinemaLutControls) {
+                Spacer(modifier = Modifier.height(14.dp))
 
-            Spacer(modifier = Modifier.height(8.dp))
+                // SECTION 1: LOOK & LUT (HOLLYWOOD GRADES)
+                CinemaSectionHeader(
+                    title = "LOOK & LUT",
+                    badge = if (config.selectedLut == CinematicLut.CUSTOM && !config.customLutName.isNullOrBlank()) {
+                        config.customLutName ?: "Custom .cube"
+                    } else {
+                        config.selectedLut.label
+                    }
+                )
 
-            // LUT Chips Row
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Hollywood & Standard Presets
-                CinematicLut.displayPresets.filter { it != CinematicLut.CUSTOM }.forEach { lut ->
-                    val isSelected = config.selectedLut == lut
-                    CinemaLutChip(
-                        label = lut.label,
-                        accentColor = lut.accentColor,
-                        isSelected = isSelected,
-                        onClick = {
-                            onConfigChange(
-                                config.copy(
-                                    selectedLut = lut,
-                                    customLutPath = null,
-                                    customLutName = null,
-                                    isBakeLutToOutput = true,
-                                    isLutPreviewEnabled = true
-                                )
-                            )
-                        }
-                    )
-                }
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Custom Imported LUTs
-                customLuts.forEach { customItem ->
-                    val isSelected = config.selectedLut == CinematicLut.CUSTOM && config.customLutPath == customItem.filePath
-                    CinemaCustomLutChip(
-                        item = customItem,
-                        isSelected = isSelected,
-                        onSelect = {
-                            onConfigChange(
-                                config.copy(
-                                    selectedLut = CinematicLut.CUSTOM,
-                                    customLutPath = customItem.filePath,
-                                    customLutName = customItem.title,
-                                    isBakeLutToOutput = true,
-                                    isLutPreviewEnabled = true
-                                )
-                            )
-                        },
-                        onDelete = {
-                            customLutRepo.deleteLut(customItem.id)
-                            if (isSelected) {
+                // LUT Chips Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Hollywood & Standard Presets
+                    CinematicLut.displayPresets.filter { it != CinematicLut.CUSTOM }.forEach { lut ->
+                        val isSelected = config.selectedLut == lut
+                        CinemaLutChip(
+                            label = lut.label,
+                            accentColor = lut.accentColor,
+                            isSelected = isSelected,
+                            onClick = {
                                 onConfigChange(
                                     config.copy(
-                                        selectedLut = CinematicLut.REC_709,
+                                        selectedLut = lut,
                                         customLutPath = null,
-                                        customLutName = null
+                                        customLutName = null,
+                                        isBakeLutToOutput = true,
+                                        isLutPreviewEnabled = true
                                     )
                                 )
                             }
+                        )
+                    }
+
+                    // Custom Imported LUTs
+                    customLuts.forEach { customItem ->
+                        val isSelected = config.selectedLut == CinematicLut.CUSTOM && config.customLutPath == customItem.filePath
+                        CinemaCustomLutChip(
+                            item = customItem,
+                            isSelected = isSelected,
+                            onSelect = {
+                                onConfigChange(
+                                    config.copy(
+                                        selectedLut = CinematicLut.CUSTOM,
+                                        customLutPath = customItem.filePath,
+                                        customLutName = customItem.title,
+                                        isBakeLutToOutput = true,
+                                        isLutPreviewEnabled = true
+                                    )
+                                )
+                            },
+                            onDelete = {
+                                customLutRepo.deleteLut(customItem.id)
+                                if (isSelected) {
+                                    onConfigChange(
+                                        config.copy(
+                                            selectedLut = CinematicLut.REC_709,
+                                            customLutPath = null,
+                                            customLutName = null
+                                        )
+                                    )
+                                }
+                            }
+                        )
+                    }
+
+                    // Import .cube Button
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.07f))
+                            .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                            .clickable { filePickerLauncher.launch(arrayOf("*/*")) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .testTag("cinema_import_lut_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Import .cube LUT",
+                                tint = Color(0xFFFFD54F),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Import .cube",
+                                color = Color(0xFFFFD54F),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
-                    )
+                    }
                 }
 
-                // Import .cube Button
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.07f))
-                        .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-                        .clickable { filePickerLauncher.launch(arrayOf("*/*")) }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .testTag("cinema_import_lut_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Import .cube LUT",
-                            tint = Color(0xFFFFD54F),
-                            modifier = Modifier.size(14.dp)
+                // LUT Intensity Slider (0% - 100%) and Bake LUT to Output Toggle
+                if (config.selectedLut != CinematicLut.NONE) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.05f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "LUT Intensity",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "${(config.lutIntensity * 100).toInt()}%",
+                                color = Color(0xFFFFD54F),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Slider(
+                            value = config.lutIntensity,
+                            onValueChange = { newIntensity ->
+                                onConfigChange(config.copy(lutIntensity = newIntensity))
+                            },
+                            valueRange = 0f..1f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFFFFD54F),
+                                activeTrackColor = Color(0xFFFFD54F),
+                                inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("cinema_lut_intensity_slider")
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Import .cube",
-                            color = Color(0xFFFFD54F),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onConfigChange(config.copy(isBakeLutToOutput = !config.isBakeLutToOutput))
+                                }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Bake LUT to Video",
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (config.isBakeLutToOutput) "Baked into recorded video" else "Saves pristine Log for color grading",
+                                    color = Color.White.copy(alpha = 0.55f),
+                                    fontSize = 10.sp
+                                )
+                            }
+                            Switch(
+                                checked = config.isBakeLutToOutput,
+                                onCheckedChange = { checked ->
+                                    onConfigChange(config.copy(isBakeLutToOutput = checked))
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFFFFD54F),
+                                    checkedTrackColor = Color(0xFFFFD54F).copy(alpha = 0.4f),
+                                    uncheckedThumbColor = Color.LightGray,
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
+                                ),
+                                modifier = Modifier
+                                    .height(24.dp)
+                                    .testTag("cinema_bake_lut_switch")
+                            )
+                        }
                     }
                 }
             }
 
-            // LUT Intensity Slider (0% - 100%) and Bake LUT to Output Toggle
-            if (config.selectedLut != CinematicLut.NONE) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Column(
+            if (appearance.showCinemaColorProfile) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 2: LOG & COLOR PROFILE
+                CinemaSectionHeader(title = "COLOR PROFILE & LOG", badge = config.colorProfile.name.replace("_", " "))
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Log Bit Depth Selector
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color.White.copy(alpha = 0.05f))
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "LUT Intensity",
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = "${(config.lutIntensity * 100).toInt()}%",
-                            color = Color(0xFFFFD54F),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Slider(
-                        value = config.lutIntensity,
-                        onValueChange = { newIntensity ->
-                            onConfigChange(config.copy(lutIntensity = newIntensity))
-                        },
-                        valueRange = 0f..1f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFFFFD54F),
-                            activeTrackColor = Color(0xFFFFD54F),
-                            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("cinema_lut_intensity_slider")
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onConfigChange(config.copy(isBakeLutToOutput = !config.isBakeLutToOutput))
-                            }
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Bake LUT to Video",
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = if (config.isBakeLutToOutput) "Baked into recorded video" else "Saves pristine Log for color grading",
-                                color = Color.White.copy(alpha = 0.55f),
-                                fontSize = 10.sp
-                            )
-                        }
-                        Switch(
-                            checked = config.isBakeLutToOutput,
-                            onCheckedChange = { checked ->
-                                onConfigChange(config.copy(isBakeLutToOutput = checked))
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFFFFD54F),
-                                checkedTrackColor = Color(0xFFFFD54F).copy(alpha = 0.4f),
-                                uncheckedThumbColor = Color.LightGray,
-                                uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
-                            ),
+                    LogBitDepth.entries.forEach { depth ->
+                        val isSelected = config.logBitDepth == depth
+                        Box(
                             modifier = Modifier
-                                .height(24.dp)
-                                .testTag("cinema_bake_lut_switch")
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // SECTION 2: LOG & COLOR PROFILE
-            CinemaSectionHeader(title = "COLOR PROFILE & LOG", badge = config.colorProfile.name.replace("_", " "))
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Log Bit Depth Selector
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.05f))
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                LogBitDepth.entries.forEach { depth ->
-                    val isSelected = config.logBitDepth == depth
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(
-                                if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.22f)
-                                else Color.Transparent
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.22f)
+                                    else Color.Transparent
+                                )
+                                .border(
+                                    width = if (isSelected) 1.dp else 0.dp,
+                                    color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f) else Color.Transparent,
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onConfigChange(config.copy(logBitDepth = depth)) }
+                                .padding(vertical = 7.dp)
+                                .testTag("cinema_bit_depth_${depth.name}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = when (depth) {
+                                    LogBitDepth.OFF -> "Off (Linear)"
+                                    LogBitDepth.BIT_8 -> "8-bit Log"
+                                    LogBitDepth.BIT_10 -> "10-bit Log"
+                                },
+                                color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             )
-                            .border(
-                                width = if (isSelected) 1.dp else 0.dp,
-                                color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f) else Color.Transparent,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            .clickable { onConfigChange(config.copy(logBitDepth = depth)) }
-                            .padding(vertical = 7.dp)
-                            .testTag("cinema_bit_depth_${depth.name}"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = when (depth) {
-                                LogBitDepth.OFF -> "Off (Linear)"
-                                LogBitDepth.BIT_8 -> "8-bit Log"
-                                LogBitDepth.BIT_10 -> "10-bit Log"
-                            },
-                            color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.7f),
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Color Profile Chips
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    CinemaColorProfile.NATIVE to "Natural",
-                    CinemaColorProfile.FLAT_LOG to "Flat Log",
-                    CinemaColorProfile.REC_2020 to "Rec.2020 HDR",
-                    CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
-                    CinemaColorProfile.HLG to "HLG Broadcast",
-                    CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log"
-                ).forEach { (profile, label) ->
-                    val isSelected = config.colorProfile == profile
-                    CinemaPillChip(
-                        label = label,
-                        isSelected = isSelected,
-                        onClick = { onConfigChange(config.copy(colorProfile = profile)) }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // SECTION 3: RECORDING FORMAT & CODEC
-            CinemaSectionHeader(title = "RECORDING FORMAT", badge = "${config.videoFps} fps • ${config.codec.name}")
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Resolution Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    CameraResolution(3840, 2160) to "4K UHD",
-                    CameraResolution(1920, 1080) to "1080p FHD",
-                    CameraResolution(1280, 720) to "720p HD"
-                ).forEach { (res, label) ->
-                    val isSelected = config.selectedResolution == null && res.width == 3840 ||
-                            config.selectedResolution?.width == res.width
-                    CinemaPillChip(
-                        label = label,
-                        isSelected = isSelected,
-                        modifier = Modifier.weight(1f),
-                        onClick = { onConfigChange(config.copy(selectedResolution = res)) }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Framerate & Codec Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // FPS
-                listOf(24 to "24 fps", 30 to "30 fps", 60 to "60 fps").forEach { (fps, label) ->
-                    val isSelected = config.videoFps == fps
-                    CinemaPillChip(
-                        label = label,
-                        isSelected = isSelected,
-                        modifier = Modifier.weight(1f),
-                        onClick = { onConfigChange(config.copy(videoFps = fps)) }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Codecs Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    CinemaCodec.H265 to "H.265 (HEVC)",
-                    CinemaCodec.H264 to "H.264 (AVC)",
-                    CinemaCodec.PRORES to "ProRes 422",
-                    CinemaCodec.VP9 to "VP9"
-                ).forEach { (codec, label) ->
-                    val isSelected = config.codec == codec
-                    CinemaPillChip(
-                        label = label,
-                        isSelected = isSelected,
-                        modifier = Modifier.weight(1f),
-                        onClick = { onConfigChange(config.copy(codec = codec)) }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // SECTION 4: CAMERA CONTROLS (Live Noise Reduction with guaranteed persistence)
-            CinemaSectionHeader(title = "CAMERA CONTROLS", badge = "NR: ${config.noiseReduction.label}")
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Live Noise Reduction Row (OFF stays OFF across restarts)
-            Text(
-                text = "Live Noise Reduction",
-                color = Color.White.copy(alpha = 0.7f),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.05f))
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                CinemaNoiseReduction.entries.forEach { nr ->
-                    val isSelected = config.noiseReduction == nr
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(
-                                if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.22f)
-                                else Color.Transparent
-                            )
-                            .border(
-                                width = if (isSelected) 1.dp else 0.dp,
-                                color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f) else Color.Transparent,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            .clickable { onConfigChange(config.copy(noiseReduction = nr)) }
-                            .padding(vertical = 7.dp)
-                            .testTag("cinema_noise_reduction_${nr.name}"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = nr.label,
-                            color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.7f),
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Sharpness Row
-            Text(
-                text = "Sensor Edge Sharpness",
-                color = Color.White.copy(alpha = 0.7f),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.05f))
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                listOf(
-                    CinemaSharpness.OFF to "Filmic (Off)",
-                    CinemaSharpness.NATURAL to "Natural",
-                    CinemaSharpness.CRISP to "Crisp"
-                ).forEach { (sh, label) ->
-                    val isSelected = config.sharpness == sh
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(
-                                if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.22f)
-                                else Color.Transparent
-                            )
-                            .border(
-                                width = if (isSelected) 1.dp else 0.dp,
-                                color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f) else Color.Transparent,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            .clickable { onConfigChange(config.copy(sharpness = sh)) }
-                            .padding(vertical = 7.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = label,
-                            color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.7f),
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // SECTION 5: ASSIST TOOLS
-            CinemaSectionHeader(title = "ASSIST TOOLS", badge = null)
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                CinemaToggleChip(
-                    label = "Focus Peaking",
-                    isActive = config.isFocusPeakingEnabled,
-                    modifier = Modifier.weight(1f),
-                    onToggle = { onConfigChange(config.copy(isFocusPeakingEnabled = !config.isFocusPeakingEnabled)) }
-                )
-                CinemaToggleChip(
-                    label = "Waveform",
-                    isActive = config.isWaveformEnabled,
-                    modifier = Modifier.weight(1f),
-                    onToggle = { onConfigChange(config.copy(isWaveformEnabled = !config.isWaveformEnabled)) }
-                )
-                CinemaPillChip(
-                    label = "Zebras: ${config.zebraThreshold.label}",
-                    isSelected = config.zebraThreshold != ZebraThreshold.OFF,
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        val next = when (config.zebraThreshold) {
-                            ZebraThreshold.OFF -> ZebraThreshold.IRE_70
-                            ZebraThreshold.IRE_70 -> ZebraThreshold.IRE_100
-                            ZebraThreshold.IRE_100 -> ZebraThreshold.OFF
                         }
-                        onConfigChange(config.copy(zebraThreshold = next))
                     }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Color Profile Chips
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        CinemaColorProfile.NATIVE to "Natural",
+                        CinemaColorProfile.FLAT_LOG to "Flat Log",
+                        CinemaColorProfile.REC_2020 to "Rec.2020 HDR",
+                        CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
+                        CinemaColorProfile.HLG to "HLG Broadcast",
+                        CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log"
+                    ).forEach { (profile, label) ->
+                        val isSelected = config.colorProfile == profile
+                        CinemaPillChip(
+                            label = label,
+                            isSelected = isSelected,
+                            onClick = { onConfigChange(config.copy(colorProfile = profile)) }
+                        )
+                    }
+                }
+            }
+
+            if (appearance.showCinemaResolutionFps) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 3: RECORDING FORMAT & CODEC
+                CinemaSectionHeader(title = "RECORDING FORMAT", badge = "${config.videoFps} fps • ${config.codec.name}")
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Resolution Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        CameraResolution(3840, 2160) to "4K UHD",
+                        CameraResolution(1920, 1080) to "1080p FHD",
+                        CameraResolution(1280, 720) to "720p HD"
+                    ).forEach { (res, label) ->
+                        val isSelected = config.selectedResolution == null && res.width == 3840 ||
+                                config.selectedResolution?.width == res.width
+                        CinemaPillChip(
+                            label = label,
+                            isSelected = isSelected,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onConfigChange(config.copy(selectedResolution = res)) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Framerate & Codec Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // FPS
+                    listOf(24 to "24 fps", 30 to "30 fps", 60 to "60 fps").forEach { (fps, label) ->
+                        val isSelected = config.videoFps == fps
+                        CinemaPillChip(
+                            label = label,
+                            isSelected = isSelected,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onConfigChange(config.copy(videoFps = fps)) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Codecs Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        CinemaCodec.H265 to "H.265 (HEVC)",
+                        CinemaCodec.H264 to "H.264 (AVC)",
+                        CinemaCodec.PRORES to "ProRes 422",
+                        CinemaCodec.VP9 to "VP9"
+                    ).forEach { (codec, label) ->
+                        val isSelected = config.codec == codec
+                        CinemaPillChip(
+                            label = label,
+                            isSelected = isSelected,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onConfigChange(config.copy(codec = codec)) }
+                        )
+                    }
+                }
+            }
+
+            if (appearance.showCinemaStabilization) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 4: CAMERA CONTROLS (Live Noise Reduction with guaranteed persistence)
+                CinemaSectionHeader(title = "CAMERA CONTROLS", badge = "NR: ${config.noiseReduction.label}")
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Live Noise Reduction Row (OFF stays OFF across restarts)
+                Text(
+                    text = "Live Noise Reduction",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    CinemaNoiseReduction.entries.forEach { nr ->
+                        val isSelected = config.noiseReduction == nr
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.22f)
+                                    else Color.Transparent
+                                )
+                                .border(
+                                    width = if (isSelected) 1.dp else 0.dp,
+                                    color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f) else Color.Transparent,
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onConfigChange(config.copy(noiseReduction = nr)) }
+                                .padding(vertical = 7.dp)
+                                .testTag("cinema_noise_reduction_${nr.name}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = nr.label,
+                                color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Sharpness Row
+                Text(
+                    text = "Sensor Edge Sharpness",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf(
+                        CinemaSharpness.OFF to "Filmic (Off)",
+                        CinemaSharpness.NATURAL to "Natural",
+                        CinemaSharpness.CRISP to "Crisp"
+                    ).forEach { (sh, label) ->
+                        val isSelected = config.sharpness == sh
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.22f)
+                                    else Color.Transparent
+                                )
+                                .border(
+                                    width = if (isSelected) 1.dp else 0.dp,
+                                    color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f) else Color.Transparent,
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onConfigChange(config.copy(sharpness = sh)) }
+                                .padding(vertical = 7.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (appearance.showCinemaAssistTools) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 5: ASSIST TOOLS
+                CinemaSectionHeader(title = "ASSIST TOOLS", badge = null)
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CinemaToggleChip(
+                        label = "Focus Peaking",
+                        isActive = config.isFocusPeakingEnabled,
+                        modifier = Modifier.weight(1f),
+                        onToggle = { onConfigChange(config.copy(isFocusPeakingEnabled = !config.isFocusPeakingEnabled)) }
+                    )
+                    CinemaToggleChip(
+                        label = "Waveform",
+                        isActive = config.isWaveformEnabled,
+                        modifier = Modifier.weight(1f),
+                        onToggle = { onConfigChange(config.copy(isWaveformEnabled = !config.isWaveformEnabled)) }
+                    )
+                    CinemaPillChip(
+                        label = "Zebras: ${config.zebraThreshold.label}",
+                        isSelected = config.zebraThreshold != ZebraThreshold.OFF,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            val next = when (config.zebraThreshold) {
+                                ZebraThreshold.OFF -> ZebraThreshold.IRE_70
+                                ZebraThreshold.IRE_70 -> ZebraThreshold.IRE_100
+                                ZebraThreshold.IRE_100 -> ZebraThreshold.OFF
+                            }
+                            onConfigChange(config.copy(zebraThreshold = next))
+                        }
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))

@@ -527,18 +527,45 @@ data class MotorolaInstantSwitchState(
 )
 
 /**
- * Floating Window Appearance Configuration:
- * Controls the live backdrop blur strength and transparency across all floating windows & popups.
+ * Floating Window Appearance & Content Configuration:
+ * Controls the live backdrop blur strength, transparency, window scale (size),
+ * and which settings/controls are displayed inside floating windows across the app.
  *
  * @param transparency 0.0f (opaque/solid glass) to 1.0f (crystal clear / maximum backdrop visibility)
  * @param blurStrength 0.0f (sharp/no blur) to 50.0f (deep creamy optical frosted diffusion)
+ * @param windowScale 0.75f (75% compact) to 1.25f (125% large) size multiplier for all floating windows
  */
 data class FloatingWindowAppearanceConfig(
     val transparency: Float = 0.50f, // Default 50% transparency
-    val blurStrength: Float = 24.0f   // Default 24 dp blur
+    val blurStrength: Float = 24.0f,  // Default 24 dp blur
+    val windowScale: Float = 1.0f,    // Default 100% size scale (0.75f .. 1.25f)
+    // Configurable settings inside Floating Windows:
+    // 1. Video Settings Floating Window
+    val showVideoResolution: Boolean = true,
+    val showVideoFps: Boolean = true,
+    val showVideoStabilization: Boolean = true,
+    // 2. Portrait Settings Floating Window
+    val showPortraitApertureBlur: Boolean = true,
+    val showPortraitBokehStyle: Boolean = true,
+    val showPortraitBeautySkin: Boolean = true,
+    val showPortraitOpticalDepth: Boolean = true,
+    // 3. Cinema Settings Floating Window
+    val showCinemaColorProfile: Boolean = true,
+    val showCinemaLutControls: Boolean = true,
+    val showCinemaResolutionFps: Boolean = true,
+    val showCinemaStabilization: Boolean = true,
+    val showCinemaAssistTools: Boolean = true,
+    // 4. Pro Manual & Video Adjustments & Pipeline Floating Windows
+    val showProExposureControls: Boolean = true,
+    val showProToneAdjustments: Boolean = true,
+    val showVideoAdjustmentsColorTone: Boolean = true,
+    val showVideoAdjustmentsEffects: Boolean = true,
+    val showPipelineMasterToggle: Boolean = true,
+    val showPipelinePresetList: Boolean = true
 ) {
     val transparencyPercent: Int get() = kotlin.math.round((transparency * 100f)).toInt().coerceIn(0, 100)
     val blurStrengthDp: Int get() = kotlin.math.round(blurStrength).toInt().coerceIn(0, 50)
+    val windowScalePercent: Int get() = kotlin.math.round((windowScale * 100f)).toInt().coerceIn(75, 125)
 
     companion object {
         val GLASSMORPHISM = FloatingWindowAppearanceConfig(transparency = 0.50f, blurStrength = 24.0f)

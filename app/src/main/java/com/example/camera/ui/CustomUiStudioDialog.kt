@@ -212,7 +212,74 @@ fun CustomUiStudioDialog(
                         photoWallpaperOpacity = photoWallpaperOpacity
                     )
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Quick Base Template Bar (Pixel, One UI, iPhone, Vivo, Leica, Glass, DSLR, Immersive)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = "QUICK APPLY TEMPLATE",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.8.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val studioQuickTemplates = remember {
+                            listOf(
+                                UiTemplateType.STOCK_PIXEL to "Pixel",
+                                UiTemplateType.SAMSUNG to "One UI",
+                                UiTemplateType.IPHONE to "iPhone",
+                                UiTemplateType.VIVO to "Vivo",
+                                UiTemplateType.MINIMAL_PRO to "Leica",
+                                UiTemplateType.FUTURISTIC_GLASS to "Glass",
+                                UiTemplateType.DSLR_PRO to "DSLR",
+                                UiTemplateType.IMMERSIVE_EDGE to "Edge"
+                            )
+                        }
+                        studioQuickTemplates.chunked(4).forEach { rowTemplates ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                rowTemplates.forEach { (tmpl, shortLabel) ->
+                                    val isCurrent = config.shutterStyle == CameraUiTemplates.getTemplateConfig(tmpl).shutterStyle &&
+                                        config.accentColorHex.equals(tmpl.accentHex, ignoreCase = true)
+                                    Surface(
+                                        onClick = {
+                                            config = CameraUiTemplates.getTemplateConfig(tmpl)
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isCurrent) config.getComposeAccentColor() else Color(0xFF1A1E2B),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isCurrent) config.getComposeAccentColor() else Color.White.copy(alpha = 0.12f)
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(32.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = shortLabel,
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isCurrent) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                                color = if (isCurrent) Color.Black else Color.White,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // 2. STUDIO NAVIGATION TABS
                     StudioCategoryTabs(
@@ -2004,23 +2071,32 @@ private fun SavedPresetsTabContent(
         ) {
             val baseTemplates = listOf(
                 UiTemplateType.STOCK_PIXEL,
+                UiTemplateType.SAMSUNG,
+                UiTemplateType.IPHONE,
+                UiTemplateType.VIVO,
                 UiTemplateType.MINIMAL_PRO,
                 UiTemplateType.FUTURISTIC_GLASS,
                 UiTemplateType.DSLR_PRO,
-                UiTemplateType.IPHONE,
-                UiTemplateType.SAMSUNG,
-                UiTemplateType.VIVO
+                UiTemplateType.IMMERSIVE_EDGE
             )
 
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(baseTemplates) { t ->
-                    Button(
-                        onClick = { onResetToTemplate(t) },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E2433)),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Text(t.title, fontSize = 11.5.sp, color = Color.White)
+            baseTemplates.chunked(2).forEach { rowItems ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowItems.forEach { t ->
+                        Button(
+                            onClick = { onResetToTemplate(t) },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E2433)),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(t.title, fontSize = 11.5.sp, color = Color.White, maxLines = 1)
+                        }
                     }
                 }
             }

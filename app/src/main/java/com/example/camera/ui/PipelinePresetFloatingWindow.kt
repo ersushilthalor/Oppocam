@@ -90,45 +90,49 @@ fun PipelinePresetFloatingWindow(
                     )
                 }
 
+                val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Dedicated ON/OFF Master Toggle
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isPipelineEnabled) accentGold.copy(alpha = 0.20f) else Color(0x22FFFFFF))
-                            .border(
-                                1.dp,
-                                if (isPipelineEnabled) accentGold.copy(alpha = 0.6f) else Color.White.copy(alpha = 0.2f),
-                                RoundedCornerShape(12.dp)
-                            )
-                            .clickable { onToggleEnabled(!isPipelineEnabled) }
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                            .testTag("pipeline_master_toggle")
-                    ) {
-                        Text(
-                            text = if (isPipelineEnabled) "ON" else "OFF",
-                            color = if (isPipelineEnabled) accentGold else Color.White.copy(alpha = 0.65f),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Switch(
-                            checked = isPipelineEnabled,
-                            onCheckedChange = onToggleEnabled,
+                    if (appearance.showPipelineMasterToggle) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .size(width = 36.dp, height = 22.dp)
-                                .testTag("pipeline_enable_switch"),
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = accentGold,
-                                checkedTrackColor = accentGold.copy(alpha = 0.45f),
-                                uncheckedThumbColor = Color(0xFFAAAAAA),
-                                uncheckedTrackColor = Color(0xFF333338)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isPipelineEnabled) accentGold.copy(alpha = 0.20f) else Color(0x22FFFFFF))
+                                .border(
+                                    1.dp,
+                                    if (isPipelineEnabled) accentGold.copy(alpha = 0.6f) else Color.White.copy(alpha = 0.2f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable { onToggleEnabled(!isPipelineEnabled) }
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                .testTag("pipeline_master_toggle")
+                        ) {
+                            Text(
+                                text = if (isPipelineEnabled) "ON" else "OFF",
+                                color = if (isPipelineEnabled) accentGold else Color.White.copy(alpha = 0.65f),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold
                             )
-                        )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Switch(
+                                checked = isPipelineEnabled,
+                                onCheckedChange = onToggleEnabled,
+                                modifier = Modifier
+                                    .size(width = 36.dp, height = 22.dp)
+                                    .testTag("pipeline_enable_switch"),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = accentGold,
+                                    checkedTrackColor = accentGold.copy(alpha = 0.45f),
+                                    uncheckedThumbColor = Color(0xFFAAAAAA),
+                                    uncheckedTrackColor = Color(0xFF333338)
+                                )
+                            )
+                        }
                     }
 
                     // Active preset badge
@@ -167,103 +171,106 @@ fun PipelinePresetFloatingWindow(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
+            if (appearance.showPipelinePresetList) {
+                Spacer(modifier = Modifier.height(10.dp))
 
-            // Presets Horizontal Scroller
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                allPresets.forEach { preset ->
-                    val isSelected = preset.id == activePreset.id
+                // Presets Horizontal Scroller
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    allPresets.forEach { preset ->
+                        val isSelected = preset.id == activePreset.id
 
-                    val presetColor = when (preset.id) {
-                        "preset_natural" -> Color(0xFF81D4FA)
-                        "preset_hasselblad" -> Color(0xFFFFB74D)
-                        "preset_samsung" -> Color(0xFF64B5F6)
-                        "preset_pixel" -> Color(0xFF81C784)
-                        "preset_iphone" -> Color(0xFFFF8A65)
-                        else -> Color(0xFFBA68C8)
-                    }
+                        val presetColor = when (preset.id) {
+                            "preset_natural" -> Color(0xFF81D4FA)
+                            "preset_hasselblad" -> Color(0xFFFFB74D)
+                            "preset_samsung" -> Color(0xFF64B5F6)
+                            "preset_pixel" -> Color(0xFF81C784)
+                            "preset_iphone" -> Color(0xFFFF8A65)
+                            else -> Color(0xFFBA68C8)
+                        }
 
-                    Box(
-                        modifier = Modifier
-                            .width(135.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(
-                                if (isSelected) Color(0x33FFD54F) else Color(0x22FFFFFF)
-                            )
-                            .border(
-                                width = if (isSelected) 1.5.dp else 1.dp,
-                                color = if (isSelected) accentGold else Color.White.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                            .clickable {
-                                onPresetSelected(preset)
-                            }
-                            .padding(10.dp)
-                            .testTag("pipeline_preset_${preset.id}"),
-                        contentAlignment = Alignment.TopStart
-                    ) {
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(10.dp)
-                                        .clip(CircleShape)
-                                        .background(presetColor)
+                        Box(
+                            modifier = Modifier
+                                .width(135.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (isSelected) Color(0x33FFD54F) else Color(0x22FFFFFF)
+                                )
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) accentGold else Color.White.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                .clickable {
+                                    onPresetSelected(preset)
+                                }
+                                .padding(10.dp)
+                                .testTag("pipeline_preset_${preset.id}"),
+                            contentAlignment = Alignment.TopStart
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(presetColor)
+                                    )
+
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = accentGold,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                Text(
+                                    text = preset.name,
+                                    color = if (isSelected) accentGold else Color.White,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
                                 )
 
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Selected",
-                                        tint = accentGold,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+
+                                Text(
+                                    text = preset.subtitle,
+                                    color = if (isSelected) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.5f),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    lineHeight = 12.sp,
+                                    maxLines = 2
+                                )
                             }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Text(
-                                text = preset.name,
-                                color = if (isSelected) accentGold else Color.White,
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
-                            )
-
-                            Spacer(modifier = Modifier.height(2.dp))
-
-                            Text(
-                                text = preset.subtitle,
-                                color = if (isSelected) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.5f),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Normal,
-                                lineHeight = 12.sp,
-                                maxLines = 2
-                            )
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = "Selected pipeline processes uncompressed sensor data directly on capture.",
+                    color = Color.White.copy(alpha = 0.45f),
+                    fontSize = 10.sp,
+                    letterSpacing = 0.2.sp
+                )
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = "Selected pipeline processes uncompressed sensor data directly on capture.",
-                color = Color.White.copy(alpha = 0.45f),
-                fontSize = 10.sp,
-                letterSpacing = 0.2.sp
-            )
         }
     }
 }
