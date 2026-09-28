@@ -78,6 +78,7 @@ fun BottomControlBar(
     onFastShutterHoldEnd: () -> Unit = {},
     onFlipCameraClick: () -> Unit,
     onToggleProClick: () -> Unit = {},
+    onSetManualProOpen: (Boolean) -> Unit = {},
     onGalleryClick: () -> Unit,
     onCinemaModeClick: (() -> Unit)? = null,
     onSettingsClick: () -> Unit = {},
@@ -489,162 +490,259 @@ fun BottomControlBar(
                     }
                 }
 
+                val isPixelVideoGroup = cameraMode == CameraMode.VIDEO ||
+                        cameraMode == CameraMode.CINEMA ||
+                        cameraMode == CameraMode.AI_SUBJECT_TRACKING
+                val isPixelPhotoGroup = !isPixelVideoGroup
+
                 // Mode Carousel Composable
                 val modeCarouselContent = @Composable {
                     if (!isRecordingVideo) {
                         val modeScrollState = rememberScrollState()
-                        // User directive: only Photo, Portrait, and Video in the main bar; all other modes in More Modes
-                        val modesToDisplay = remember(layoutConfig.visibleModes) {
-                            val filtered = layoutConfig.visibleModes.filter {
-                                it == CameraMode.PHOTO || it == CameraMode.PORTRAIT || it == CameraMode.VIDEO || it == CameraMode.MORE
-                            }
-                            if (filtered.isEmpty()) {
-                                listOf(CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.VIDEO, CameraMode.MORE)
-                            } else {
-                                filtered
-                            }
-                        }
+                        if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.PIXEL_PILL) {
+                            // Pixel UI Template:
+                            // First Icon (Photo Modes): Photo, Portrait, Night, Pro Manual
+                            // Second Icon (Video and Special Modes): Video, Cinema, AI Subject Tracing
+                            // "More" option is completely removed from the Pixel UI template.
+                            data class PixelModeEntry(
+                                val tag: String,
+                                val label: String,
+                                val isSelected: Boolean,
+                                val onSelect: () -> Unit
+                            )
 
-                        val isMoreModeActive = (cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.PORTRAIT && cameraMode != CameraMode.VIDEO)
-
-                        LaunchedEffect(cameraMode) {
-                            val targetMode = if (isMoreModeActive) CameraMode.MORE else cameraMode
-                            val index = modesToDisplay.indexOf(targetMode)
-                            if (index >= 0) {
-                                val itemEstimatedWidthPx = 180
-                                val targetScroll = (index * itemEstimatedWidthPx - 140).coerceAtLeast(0)
-                                modeScrollState.animateScrollTo(targetScroll)
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(modeScrollState)
-                                .padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterHorizontally),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            modesToDisplay.forEach { mode ->
-                                val isSelected = if (mode == CameraMode.MORE) isMoreModeActive else (cameraMode == mode)
-                                val targetTextColor = if (isSelected) {
-                                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.MONO_TICKER) Color(0xFFE53935)
-                                    else if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.CYBER_GLOW) Color(0xFF00E5FF)
-                                    else customTextColor
-                                } else {
-                                    customTextColor.copy(alpha = 0.65f)
-                                }
-                                val textColor by animateColorAsState(
-                                    targetTextColor,
-                                    label = "modeTextColor"
-                                )
-
-                                val rawName = if (mode == CameraMode.MORE && isMoreModeActive && cameraMode != CameraMode.MORE) {
-                                    cameraMode.name
-                                } else {
-                                    mode.name
-                                }
-                                val displayText = layoutConfig.formatModeText(rawName)
-                                val modeFontWeight = if (isSelected) layoutConfig.fontWeightOption.weight else FontWeight.Normal
-                                val modeLetterSpacing = layoutConfig.letterSpacingSp.sp
-
-                                Column(
-                                    modifier = Modifier
-                                        .clickable {
-                                            if (mode == CameraMode.MORE) {
-                                                onModeSelected(CameraMode.MORE)
-                                            } else {
-                                                onModeSelected(mode)
-                                            }
+                            val pixelEntries = if (isPixelPhotoGroup) {
+                                listOf(
+                                    PixelModeEntry(
+                                        tag = "mode_photo",
+                                        label = "Photo",
+                                        isSelected = cameraMode == CameraMode.PHOTO && !isManualProOpen,
+                                        onSelect = {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.PHOTO)
                                         }
-                                        .padding(vertical = 4.dp, horizontal = 6.dp)
-                                        .testTag("mode_${mode.name.lowercase()}"),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    when (layoutConfig.modeSelectorStyle) {
-                                        ModeSelectorStyle.CLASSIC_DOT -> {
+                                    ),
+                                    PixelModeEntry(
+                                        tag = "mode_portrait",
+                                        label = "Portrait",
+                                        isSelected = cameraMode == CameraMode.PORTRAIT,
+                                        onSelect = {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.PORTRAIT)
+                                        }
+                                    ),
+                                    PixelModeEntry(
+                                        tag = "mode_night",
+                                        label = "Night",
+                                        isSelected = cameraMode == CameraMode.NIGHT,
+                                        onSelect = {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.NIGHT)
+                                        }
+                                    ),
+                                    PixelModeEntry(
+                                        tag = "mode_pro_manual",
+                                        label = "Pro Manual",
+                                        isSelected = cameraMode == CameraMode.PHOTO && isManualProOpen,
+                                        onSelect = {
+                                            onModeSelected(CameraMode.PHOTO)
+                                            onSetManualProOpen(true)
+                                        }
+                                    )
+                                )
+                            } else {
+                                listOf(
+                                    PixelModeEntry(
+                                        tag = "mode_video",
+                                        label = "Video",
+                                        isSelected = cameraMode == CameraMode.VIDEO,
+                                        onSelect = {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.VIDEO)
+                                        }
+                                    ),
+                                    PixelModeEntry(
+                                        tag = "mode_cinema",
+                                        label = "Cinema",
+                                        isSelected = cameraMode == CameraMode.CINEMA,
+                                        onSelect = {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.CINEMA)
+                                        }
+                                    ),
+                                    PixelModeEntry(
+                                        tag = "mode_ai_subject_tracking",
+                                        label = "AI Subject Tracing",
+                                        isSelected = cameraMode == CameraMode.AI_SUBJECT_TRACKING,
+                                        onSelect = {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.AI_SUBJECT_TRACKING)
+                                        }
+                                    )
+                                )
+                            }
+
+                            val selectedIndex = pixelEntries.indexOfFirst { it.isSelected }
+                            LaunchedEffect(cameraMode, isManualProOpen, isPixelPhotoGroup) {
+                                if (selectedIndex >= 0) {
+                                    val itemEstimatedWidthPx = 180
+                                    val targetScroll = (selectedIndex * itemEstimatedWidthPx - 140).coerceAtLeast(0)
+                                    modeScrollState.animateScrollTo(targetScroll)
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(modeScrollState)
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                pixelEntries.forEach { entry ->
+                                    val displayText = layoutConfig.formatModeText(entry.label)
+                                    val modeFontWeight = if (entry.isSelected) layoutConfig.fontWeightOption.weight else FontWeight.Normal
+                                    val modeLetterSpacing = layoutConfig.letterSpacingSp.sp
+
+                                    Column(
+                                        modifier = Modifier
+                                            .clickable { entry.onSelect() }
+                                            .padding(vertical = 4.dp, horizontal = 4.dp)
+                                            .testTag(entry.tag),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(20.dp),
+                                            color = if (entry.isSelected) Color(0x3DFFFFFF) else Color.Transparent,
+                                            border = if (entry.isSelected) androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)) else null
+                                        ) {
                                             Text(
                                                 text = displayText,
-                                                color = textColor,
+                                                color = if (entry.isSelected) customTextColor else customTextColor.copy(alpha = 0.65f),
                                                 fontSize = layoutConfig.modeTextSizeSp.sp,
                                                 fontWeight = modeFontWeight,
                                                 fontFamily = fontFamily,
                                                 letterSpacing = modeLetterSpacing,
                                                 maxLines = 1,
-                                                softWrap = false
+                                                softWrap = false,
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                                             )
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            if (isSelected) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(5.dp)
-                                                        .clip(CircleShape)
-                                                        .background(accentColor)
-                                                )
-                                            } else {
-                                                Spacer(modifier = Modifier.size(5.dp))
-                                            }
                                         }
-                                        ModeSelectorStyle.CAPSULE_PILL -> {
-                                            Surface(
-                                                shape = CircleShape,
-                                                color = if (isSelected) accentColor else Color.Transparent
-                                            ) {
+                                    }
+                                }
+                            }
+                        } else {
+                            // Non-Pixel UI Templates: preserve original mode carousel behavior
+                            val modesToDisplay = remember(layoutConfig.visibleModes) {
+                                val filtered = layoutConfig.visibleModes.filter {
+                                    it == CameraMode.PHOTO || it == CameraMode.PORTRAIT || it == CameraMode.VIDEO || it == CameraMode.MORE
+                                }
+                                if (filtered.isEmpty()) {
+                                    listOf(CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.VIDEO, CameraMode.MORE)
+                                } else {
+                                    filtered
+                                }
+                            }
+
+                            val isMoreModeActive = (cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.PORTRAIT && cameraMode != CameraMode.VIDEO)
+
+                            LaunchedEffect(cameraMode) {
+                                val targetMode = if (isMoreModeActive) CameraMode.MORE else cameraMode
+                                val index = modesToDisplay.indexOf(targetMode)
+                                if (index >= 0) {
+                                    val itemEstimatedWidthPx = 180
+                                    val targetScroll = (index * itemEstimatedWidthPx - 140).coerceAtLeast(0)
+                                    modeScrollState.animateScrollTo(targetScroll)
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(modeScrollState)
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterHorizontally),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                modesToDisplay.forEach { mode ->
+                                    val isSelected = if (mode == CameraMode.MORE) isMoreModeActive else (cameraMode == mode)
+                                    val targetTextColor = if (isSelected) {
+                                        if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.MONO_TICKER) Color(0xFFE53935)
+                                        else if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.CYBER_GLOW) Color(0xFF00E5FF)
+                                        else customTextColor
+                                    } else {
+                                        customTextColor.copy(alpha = 0.65f)
+                                    }
+                                    val textColor by animateColorAsState(
+                                        targetTextColor,
+                                        label = "modeTextColor"
+                                    )
+
+                                    val rawName = if (mode == CameraMode.MORE && isMoreModeActive && cameraMode != CameraMode.MORE) {
+                                        cameraMode.name
+                                    } else {
+                                        mode.name
+                                    }
+                                    val displayText = layoutConfig.formatModeText(rawName)
+                                    val modeFontWeight = if (isSelected) layoutConfig.fontWeightOption.weight else FontWeight.Normal
+                                    val modeLetterSpacing = layoutConfig.letterSpacingSp.sp
+
+                                    Column(
+                                        modifier = Modifier
+                                            .clickable {
+                                                if (mode == CameraMode.MORE) {
+                                                    onModeSelected(CameraMode.MORE)
+                                                } else {
+                                                    onModeSelected(mode)
+                                                }
+                                            }
+                                            .padding(vertical = 4.dp, horizontal = 6.dp)
+                                            .testTag("mode_${mode.name.lowercase()}"),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        when (layoutConfig.modeSelectorStyle) {
+                                            ModeSelectorStyle.CLASSIC_DOT -> {
                                                 Text(
                                                     text = displayText,
-                                                    color = if (isSelected) Color.Black else customTextColor.copy(alpha = 0.65f),
+                                                    color = textColor,
                                                     fontSize = layoutConfig.modeTextSizeSp.sp,
                                                     fontWeight = modeFontWeight,
                                                     fontFamily = fontFamily,
                                                     letterSpacing = modeLetterSpacing,
                                                     maxLines = 1,
-                                                    softWrap = false,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                                    softWrap = false
                                                 )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                if (isSelected) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(5.dp)
+                                                            .clip(CircleShape)
+                                                            .background(accentColor)
+                                                    )
+                                                } else {
+                                                    Spacer(modifier = Modifier.size(5.dp))
+                                                }
                                             }
-                                        }
-                                        ModeSelectorStyle.UNDERLINE -> {
-                                            Text(
-                                                text = displayText,
-                                                color = if (isSelected) customTextColor else customTextColor.copy(alpha = 0.65f),
-                                                fontSize = layoutConfig.modeTextSizeSp.sp,
-                                                fontWeight = modeFontWeight,
-                                                fontFamily = fontFamily,
-                                                letterSpacing = modeLetterSpacing,
-                                                maxLines = 1,
-                                                softWrap = false
-                                            )
-                                            Spacer(modifier = Modifier.height(3.dp))
-                                            if (isSelected) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .width(22.dp)
-                                                        .height(2.5.dp)
-                                                        .clip(CircleShape)
-                                                        .background(accentColor)
-                                                )
-                                            } else {
-                                                Spacer(modifier = Modifier.height(2.5.dp))
+                                            ModeSelectorStyle.CAPSULE_PILL -> {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = if (isSelected) accentColor else Color.Transparent
+                                                ) {
+                                                    Text(
+                                                        text = displayText,
+                                                        color = if (isSelected) Color.Black else customTextColor.copy(alpha = 0.65f),
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = modeFontWeight,
+                                                        fontFamily = fontFamily,
+                                                        letterSpacing = modeLetterSpacing,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                                    )
+                                                }
                                             }
-                                        }
-                                        ModeSelectorStyle.MINIMAL_TEXT -> {
-                                            Text(
-                                                text = displayText,
-                                                color = textColor,
-                                                fontSize = layoutConfig.modeTextSizeSp.sp,
-                                                fontWeight = modeFontWeight,
-                                                fontFamily = fontFamily,
-                                                letterSpacing = modeLetterSpacing,
-                                                maxLines = 1,
-                                                softWrap = false
-                                            )
-                                        }
-                                        ModeSelectorStyle.PIXEL_PILL -> {
-                                            Surface(
-                                                shape = RoundedCornerShape(20.dp),
-                                                color = if (isSelected) Color(0x3DFFFFFF) else Color.Transparent,
-                                                border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)) else null
-                                            ) {
+                                            ModeSelectorStyle.UNDERLINE -> {
                                                 Text(
                                                     text = displayText,
                                                     color = if (isSelected) customTextColor else customTextColor.copy(alpha = 0.65f),
@@ -653,58 +751,100 @@ fun BottomControlBar(
                                                     fontFamily = fontFamily,
                                                     letterSpacing = modeLetterSpacing,
                                                     maxLines = 1,
-                                                    softWrap = false,
-                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                                    softWrap = false
                                                 )
-                                            }
-                                        }
-                                        ModeSelectorStyle.MONO_TICKER -> {
-                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                Text(
-                                                    text = displayText,
-                                                    color = if (isSelected) Color(0xFFE53935) else Color.White.copy(alpha = 0.6f),
-                                                    fontSize = layoutConfig.modeTextSizeSp.sp,
-                                                    fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
-                                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                                    letterSpacing = 1.5.sp
-                                                )
+                                                Spacer(modifier = Modifier.height(3.dp))
                                                 if (isSelected) {
-                                                    Spacer(modifier = Modifier.height(2.dp))
-                                                    Box(modifier = Modifier.width(16.dp).height(2.dp).background(Color(0xFFE53935)))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .width(22.dp)
+                                                            .height(2.5.dp)
+                                                            .clip(CircleShape)
+                                                            .background(accentColor)
+                                                    )
+                                                } else {
+                                                    Spacer(modifier = Modifier.height(2.5.dp))
                                                 }
                                             }
-                                        }
-                                        ModeSelectorStyle.CYBER_GLOW -> {
-                                            Surface(
-                                                shape = RoundedCornerShape(8.dp),
-                                                color = if (isSelected) Color(0x3300E5FF) else Color.Transparent,
-                                                border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF)) else null
-                                            ) {
+                                            ModeSelectorStyle.MINIMAL_TEXT -> {
                                                 Text(
                                                     text = displayText,
-                                                    color = if (isSelected) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.7f),
+                                                    color = textColor,
                                                     fontSize = layoutConfig.modeTextSizeSp.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                                    letterSpacing = 1.sp,
-                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                                    fontWeight = modeFontWeight,
+                                                    fontFamily = fontFamily,
+                                                    letterSpacing = modeLetterSpacing,
+                                                    maxLines = 1,
+                                                    softWrap = false
                                                 )
                                             }
-                                        }
-                                        ModeSelectorStyle.DSLR_DIAL -> {
-                                            Surface(
-                                                shape = RoundedCornerShape(4.dp),
-                                                color = if (isSelected) Color(0xFF262C36) else Color.Transparent,
-                                                border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB300)) else null
-                                            ) {
-                                                Text(
-                                                    text = displayText,
-                                                    color = if (isSelected) Color(0xFFFFB300) else Color.Gray,
-                                                    fontSize = layoutConfig.modeTextSizeSp.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                                )
+                                            ModeSelectorStyle.PIXEL_PILL -> {
+                                                Surface(
+                                                    shape = RoundedCornerShape(20.dp),
+                                                    color = if (isSelected) Color(0x3DFFFFFF) else Color.Transparent,
+                                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)) else null
+                                                ) {
+                                                    Text(
+                                                        text = displayText,
+                                                        color = if (isSelected) customTextColor else customTextColor.copy(alpha = 0.65f),
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = modeFontWeight,
+                                                        fontFamily = fontFamily,
+                                                        letterSpacing = modeLetterSpacing,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                                    )
+                                                }
+                                            }
+                                            ModeSelectorStyle.MONO_TICKER -> {
+                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                    Text(
+                                                        text = displayText,
+                                                        color = if (isSelected) Color(0xFFE53935) else Color.White.copy(alpha = 0.6f),
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
+                                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                        letterSpacing = 1.5.sp
+                                                    )
+                                                    if (isSelected) {
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                        Box(modifier = Modifier.width(16.dp).height(2.dp).background(Color(0xFFE53935)))
+                                                    }
+                                                }
+                                            }
+                                            ModeSelectorStyle.CYBER_GLOW -> {
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = if (isSelected) Color(0x3300E5FF) else Color.Transparent,
+                                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF)) else null
+                                                ) {
+                                                    Text(
+                                                        text = displayText,
+                                                        color = if (isSelected) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.7f),
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                        letterSpacing = 1.sp,
+                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                                    )
+                                                }
+                                            }
+                                            ModeSelectorStyle.DSLR_DIAL -> {
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = if (isSelected) Color(0xFF262C36) else Color.Transparent,
+                                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB300)) else null
+                                                ) {
+                                                    Text(
+                                                        text = displayText,
+                                                        color = if (isSelected) Color(0xFFFFB300) else Color.Gray,
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -762,37 +902,44 @@ fun BottomControlBar(
                                 modifier = Modifier.padding(3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val isPhotoMode = (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.PORTRAIT)
-                                val isVideoMode = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
-
+                                // First Icon (Photo Modes): Photo, Portrait, Night, Pro Manual
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(18.dp))
-                                        .background(if (isPhotoMode) Color.White else Color.Transparent)
-                                        .clickable { onModeSelected(CameraMode.PHOTO) }
-                                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                                        .background(if (isPixelPhotoGroup) Color.White else Color.Transparent)
+                                        .clickable {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.PHOTO)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                                        .testTag("pixel_dock_photo_modes_icon"),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Outlined.CameraAlt,
-                                        contentDescription = "Photo",
-                                        tint = if (isPhotoMode) Color.Black else Color.White,
+                                        contentDescription = "Photo Modes",
+                                        tint = if (isPixelPhotoGroup) Color.Black else Color.White,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
 
+                                // Second Icon (Video and Special Modes): Video, Cinema, AI Subject Tracing
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(18.dp))
-                                        .background(if (isVideoMode) Color.White else Color.Transparent)
-                                        .clickable { onModeSelected(CameraMode.VIDEO) }
-                                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                                        .background(if (isPixelVideoGroup) Color.White else Color.Transparent)
+                                        .clickable {
+                                            onSetManualProOpen(false)
+                                            onModeSelected(CameraMode.VIDEO)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                                        .testTag("pixel_dock_video_modes_icon"),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Outlined.Videocam,
-                                        contentDescription = "Video",
-                                        tint = if (isVideoMode) Color.Black else Color.White,
+                                        contentDescription = "Video and Special Modes",
+                                        tint = if (isPixelVideoGroup) Color.Black else Color.White,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }

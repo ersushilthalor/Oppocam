@@ -35,8 +35,6 @@ fun CameraSettingsHost(
     val motionPhotoDuration by viewModel.motionPhotoDuration.collectAsStateWithLifecycle()
     val isUltraFastShutterEnabled by viewModel.isUltraFastShutterEnabled.collectAsStateWithLifecycle()
     val ultraFastShutterFps by viewModel.ultraFastShutterFps.collectAsStateWithLifecycle()
-    val isHighQualityZoomEnabled by viewModel.isHighQualityZoomEnabled.collectAsStateWithLifecycle()
-    val zoomProcessingQuality by viewModel.zoomProcessingQuality.collectAsStateWithLifecycle()
     val zoomPresetsMode by viewModel.zoomPresetsMode.collectAsStateWithLifecycle()
     val customZoomPresetsStr by viewModel.customZoomPresetsStr.collectAsStateWithLifecycle()
     val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
@@ -111,8 +109,6 @@ fun CameraSettingsHost(
         ultraFastShutterFps = ultraFastShutterFps,
         onUltraFastShutterToggle = { viewModel.setUltraFastShutterEnabled(it) },
         onUltraFastShutterFpsChange = { viewModel.setUltraFastShutterFps(it) },
-        isHighQualityZoomEnabled = isHighQualityZoomEnabled,
-        zoomProcessingQuality = zoomProcessingQuality,
         zoomPresetsMode = zoomPresetsMode,
         customZoomPresetsStr = customZoomPresetsStr,
         onZoomPresetsModeSelect = { viewModel.setZoomPresetsMode(it) },
@@ -190,8 +186,6 @@ fun CameraSettingsHost(
         onPhotoMegapixelModeSelected = { viewModel.setPhotoMegapixelMode(it) },
         onRefocusPhotoToggle = { viewModel.setRefocusPhotoEnabled(it) },
         onRefocusFrameCountChange = { viewModel.setRefocusFrameCount(it) },
-        onHighQualityZoomToggle = { viewModel.setHighQualityZoomEnabled(it) },
-        onZoomProcessingQualitySelect = { viewModel.setZoomProcessingQuality(it) },
         onVideoResolutionSelected = { viewModel.selectVideoResolution(it) },
         onViewfinderResolutionSelected = { viewModel.setViewfinderResolution(it) },
         onVideoFpsSelected = { viewModel.setVideoFps(it) },

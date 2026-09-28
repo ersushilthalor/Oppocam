@@ -295,46 +295,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.stopUltraFastContinuousCapture()
     }
 
-    // High-Quality Zoom Engine (Multi-Frame Lanczos-3, HAT AI & BSRGAN AI Reconstruction)
-    val zoomAiRepository: com.example.camera.zoom.ai.ZoomAiModelRepository =
-        engine.highQualityZoomEngine.aiModelRepository
-
-    private val _isHighQualityZoomEnabled = MutableStateFlow(preferences.getModeHqZoomEnabled(preferences.cameraMode))
-    val isHighQualityZoomEnabled: StateFlow<Boolean> = _isHighQualityZoomEnabled.asStateFlow()
-
-    private val _zoomProcessingQuality = MutableStateFlow(preferences.getModeZoomQuality(preferences.cameraMode))
-    val zoomProcessingQuality: StateFlow<com.example.camera.zoom.ZoomProcessingQuality> = _zoomProcessingQuality.asStateFlow()
-
-    val isZoomProcessing: StateFlow<Boolean> = engine.isZoomProcessing
-    val zoomProgress: StateFlow<Float> = engine.zoomProgress
-    val zoomProcessingLabel: StateFlow<String> = engine.zoomProcessingLabel
-    val zoomAiErrorMessage: StateFlow<String?> = engine.zoomAiErrorMessage
-
-    fun clearZoomAiError() {
-        engine.clearZoomAiError()
-    }
-
-    fun setHighQualityZoomEnabled(enabled: Boolean) {
-        _isHighQualityZoomEnabled.value = enabled
-        preferences.isHighQualityZoomEnabled = enabled
-        preferences.setModeHqZoomEnabled(_cameraMode.value, enabled)
-        engine.isHighQualityZoomEnabled = enabled
-        if (enabled) {
-            val mode = zoomAiRepository.reconstructionMode.value
-            showToast("Zoom Enhanced: ON (${mode.title})")
-        } else {
-            showToast("Zoom Enhanced: OFF")
-        }
-    }
-
-    fun setZoomProcessingQuality(quality: com.example.camera.zoom.ZoomProcessingQuality) {
-        _zoomProcessingQuality.value = quality
-        preferences.zoomProcessingQuality = quality
-        preferences.setModeZoomQuality(_cameraMode.value, quality)
-        engine.zoomProcessingQuality = quality
-        showToast("Zoom Clarity: ${quality.label}")
-    }
-
     private val _zoomPresetsMode = MutableStateFlow(preferences.zoomPresetsMode)
     val zoomPresetsMode: StateFlow<String> = _zoomPresetsMode.asStateFlow()
 
@@ -753,8 +713,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.refocusFrameCount = preferences.getModeRefocusFrameCount(initialMode)
         engine.isUltraFastShutterEnabled = preferences.getModeUltraFastShutterEnabled(initialMode)
         engine.ultraFastShutterFps = preferences.getModeUltraFastShutterFps(initialMode)
-        engine.isHighQualityZoomEnabled = preferences.getModeHqZoomEnabled(initialMode)
-        engine.zoomProcessingQuality = preferences.getModeZoomQuality(initialMode)
         engine.setMode(initialMode)
         engine.restoreInitialVideoResolution(CameraResolution(preferences.videoWidth, preferences.videoHeight))
         engine.setCinemaConfig(preferences.getCinemaConfig())
@@ -892,6 +850,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (mode != CameraMode.VIDEO) {
             _isVideoAdjustmentsOpen.value = false
         }
+        if (mode != CameraMode.PHOTO) {
+            _isManualProOpen.value = false
+        }
 
         // 4. Switch engine mode early to synchronize preview buffer and session
         engine.setMode(mode)
@@ -953,14 +914,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mFastFps = preferences.getModeUltraFastShutterFps(mode)
         _ultraFastShutterFps.value = mFastFps
         engine.ultraFastShutterFps = mFastFps
-
-        val mHqZoom = preferences.getModeHqZoomEnabled(mode)
-        _isHighQualityZoomEnabled.value = mHqZoom
-        engine.isHighQualityZoomEnabled = mHqZoom
-
-        val mZoomQuality = preferences.getModeZoomQuality(mode)
-        _zoomProcessingQuality.value = mZoomQuality
-        engine.zoomProcessingQuality = mZoomQuality
 
         val mVideoStab = preferences.getModeVideoStabilization(mode)
         _isVideoStabilizationEnabled.value = mVideoStab
@@ -2026,8 +1979,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _viewfinderFps.value = 60
         _isRefocusPhotoEnabled.value = true
         _refocusFrameCount.value = 10
-        _isHighQualityZoomEnabled.value = true
-        _zoomProcessingQuality.value = com.example.camera.zoom.ZoomProcessingQuality.BALANCED
         _photoMegapixelMode.value = PhotoMegapixelMode.M12
         resetFloatingWindowAppearance()
         showToast("All settings reset to defaults")

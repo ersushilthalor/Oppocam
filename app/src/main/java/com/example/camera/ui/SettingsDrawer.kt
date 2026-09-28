@@ -39,12 +39,12 @@ import kotlin.math.roundToInt
  * Dedicated Settings Pages.
  */
 enum class SettingsPage(val title: String, val subtitle: String, val icon: ImageVector) {
-    PHOTO("Photo Settings", "Resolutions, HDR, RAW, 50MP & Zoom AI (HAT/BSRGAN)", Icons.Outlined.CameraAlt),
+    PHOTO("Photo Settings", "Resolutions, HDR, RAW & 50MP", Icons.Outlined.CameraAlt),
     VIDEO("Video Settings", "Resolution, Frame Rate, Codec & Bitrate", Icons.Outlined.Videocam),
     CINEMA("Cinema Settings", "Log profiles, LUTs, Bit depth & Assist tools", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
     NIGHT_MODE("Night Mode Settings", "Multi-Frame Fusion, Exposure & Tripod", Icons.Outlined.NightsStay),
-    CAMERA_LENS("Camera & Lens Settings", "Hardware lenses, Zoom Enhanced AI (HAT/BSRGAN) & Viewfinder", Icons.Outlined.Lens),
+    CAMERA_LENS("Camera & Lens Settings", "Hardware lenses & Viewfinder", Icons.Outlined.Lens),
     STABILIZATION("Stabilization & Audio", "Hybrid OIS/EIS, Gyro & Wind reduction", Icons.Outlined.VideoStable),
     UI_LAYOUT("UI & Layout Settings", "Templates, Floating windows & Custom studio", Icons.Outlined.DashboardCustomize),
     GENERAL("General Settings", "Volume key, Double tap, Feedback & Thermal", Icons.Outlined.Settings),
@@ -80,8 +80,6 @@ fun SettingsDrawer(
     ultraFastShutterFps: Int = 15,
     onUltraFastShutterToggle: (Boolean) -> Unit = {},
     onUltraFastShutterFpsChange: (Int) -> Unit = {},
-    isHighQualityZoomEnabled: Boolean = true,
-    zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality = com.example.camera.zoom.ZoomProcessingQuality.BALANCED,
     zoomPresetsMode: String = "STANDARD",
     customZoomPresetsStr: String = "1, 2, 4, 8",
     onZoomPresetsModeSelect: (String) -> Unit = {},
@@ -161,8 +159,6 @@ fun SettingsDrawer(
     onPhotoMegapixelModeSelected: (PhotoMegapixelMode) -> Unit = {},
     onRefocusPhotoToggle: (Boolean) -> Unit = {},
     onRefocusFrameCountChange: (Int) -> Unit = {},
-    onHighQualityZoomToggle: (Boolean) -> Unit = {},
-    onZoomProcessingQualitySelect: (com.example.camera.zoom.ZoomProcessingQuality) -> Unit = {},
     onVideoResolutionSelected: (CameraResolution) -> Unit = {},
     onViewfinderResolutionSelected: (ViewfinderResolution) -> Unit = {},
     onVideoFpsSelected: (Int) -> Unit = {},
@@ -352,11 +348,7 @@ fun SettingsDrawer(
                             jpegQuality = jpegQuality,
                             onJpegQualitySelected = onJpegQualitySelected,
                             selectedPhotoFilter = selectedPhotoFilter,
-                            onPhotoFilterSelected = onPhotoFilterSelected,
-                            isHighQualityZoomEnabled = isHighQualityZoomEnabled,
-                            onHighQualityZoomToggle = onHighQualityZoomToggle,
-                            zoomProcessingQuality = zoomProcessingQuality,
-                            onZoomProcessingQualitySelect = onZoomProcessingQualitySelect
+                            onPhotoFilterSelected = onPhotoFilterSelected
                         )
                         SettingsPage.VIDEO -> VideoSettingsPage(
                             selectedVideoResolution = selectedVideoResolution,
@@ -423,11 +415,7 @@ fun SettingsDrawer(
                             gridType = gridType,
                             onGridTypeSelected = onGridTypeSelected,
                             horizonLeveler = horizonLeveler,
-                            onHorizonLevelerToggle = onHorizonLevelerToggle,
-                            isHighQualityZoomEnabled = isHighQualityZoomEnabled,
-                            onHighQualityZoomToggle = onHighQualityZoomToggle,
-                            zoomProcessingQuality = zoomProcessingQuality,
-                            onZoomProcessingQualitySelect = onZoomProcessingQualitySelect
+                            onHorizonLevelerToggle = onHorizonLevelerToggle
                         )
                         SettingsPage.STABILIZATION -> StabilizationSettingsPage(
                             mainCameraStabilizationMode = mainCameraStabilizationMode,
@@ -565,30 +553,13 @@ private fun PhotoSettingsPage(
     jpegQuality: Int,
     onJpegQualitySelected: (Int) -> Unit,
     selectedPhotoFilter: PhotoFilter,
-    onPhotoFilterSelected: (PhotoFilter) -> Unit,
-    isHighQualityZoomEnabled: Boolean = true,
-    onHighQualityZoomToggle: (Boolean) -> Unit = {},
-    zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality = com.example.camera.zoom.ZoomProcessingQuality.BALANCED,
-    onZoomProcessingQualitySelect: (com.example.camera.zoom.ZoomProcessingQuality) -> Unit = {}
+    onPhotoFilterSelected: (PhotoFilter) -> Unit
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val zoomAiRepo = remember(context) { com.example.camera.zoom.ai.ZoomAiModelRepository.getInstance(context) }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-        item {
-            com.example.camera.ui.components.ZoomAiModelSettingsSection(
-                isHighQualityZoomEnabled = isHighQualityZoomEnabled,
-                onHighQualityZoomToggle = onHighQualityZoomToggle,
-                zoomProcessingQuality = zoomProcessingQuality,
-                onZoomProcessingQualitySelect = onZoomProcessingQualitySelect,
-                repository = zoomAiRepo
-            )
-        }
-
         item {
             SettingsSwitchCard(
                 title = "Auto HDR",
@@ -1058,11 +1029,7 @@ private fun CameraLensSettingsPage(
     gridType: GridType,
     onGridTypeSelected: (GridType) -> Unit,
     horizonLeveler: Boolean,
-    onHorizonLevelerToggle: (Boolean) -> Unit,
-    isHighQualityZoomEnabled: Boolean,
-    onHighQualityZoomToggle: (Boolean) -> Unit,
-    zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality,
-    onZoomProcessingQualitySelect: (com.example.camera.zoom.ZoomProcessingQuality) -> Unit
+    onHorizonLevelerToggle: (Boolean) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1131,18 +1098,6 @@ private fun CameraLensSettingsPage(
                 options = listOf(30 to "30 FPS", 60 to "60 FPS", 120 to "120 FPS"),
                 selectedOption = viewfinderFps,
                 onOptionSelected = onViewfinderFpsSelected
-            )
-        }
-
-        item {
-            val context = androidx.compose.ui.platform.LocalContext.current
-            val zoomAiRepo = remember(context) { com.example.camera.zoom.ai.ZoomAiModelRepository.getInstance(context) }
-            com.example.camera.ui.components.ZoomAiModelSettingsSection(
-                isHighQualityZoomEnabled = isHighQualityZoomEnabled,
-                onHighQualityZoomToggle = onHighQualityZoomToggle,
-                zoomProcessingQuality = zoomProcessingQuality,
-                onZoomProcessingQualitySelect = onZoomProcessingQualitySelect,
-                repository = zoomAiRepo
             )
         }
     }
@@ -1684,8 +1639,6 @@ fun CameraSettingsScreen(
     val refocusFrameCount by viewModel.refocusFrameCount.collectAsStateWithLifecycle()
     val isUltraFastShutterEnabled by viewModel.isUltraFastShutterEnabled.collectAsStateWithLifecycle()
     val ultraFastShutterFps by viewModel.ultraFastShutterFps.collectAsStateWithLifecycle()
-    val isHighQualityZoomEnabled by viewModel.isHighQualityZoomEnabled.collectAsStateWithLifecycle()
-    val zoomProcessingQuality by viewModel.zoomProcessingQuality.collectAsStateWithLifecycle()
     val zoomPresetsMode by viewModel.zoomPresetsMode.collectAsStateWithLifecycle()
     val customZoomPresetsStr by viewModel.customZoomPresetsStr.collectAsStateWithLifecycle()
     val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
@@ -1755,8 +1708,6 @@ fun CameraSettingsScreen(
         ultraFastShutterFps = ultraFastShutterFps,
         onUltraFastShutterToggle = { viewModel.setUltraFastShutterEnabled(it) },
         onUltraFastShutterFpsChange = { viewModel.setUltraFastShutterFps(it) },
-        isHighQualityZoomEnabled = isHighQualityZoomEnabled,
-        zoomProcessingQuality = zoomProcessingQuality,
         zoomPresetsMode = zoomPresetsMode,
         customZoomPresetsStr = customZoomPresetsStr,
         onZoomPresetsModeSelect = { viewModel.setZoomPresetsMode(it) },
@@ -1834,8 +1785,6 @@ fun CameraSettingsScreen(
         onPhotoMegapixelModeSelected = { viewModel.setPhotoMegapixelMode(it) },
         onRefocusPhotoToggle = { viewModel.setRefocusPhotoEnabled(it) },
         onRefocusFrameCountChange = { viewModel.setRefocusFrameCount(it) },
-        onHighQualityZoomToggle = { viewModel.setHighQualityZoomEnabled(it) },
-        onZoomProcessingQualitySelect = { viewModel.setZoomProcessingQuality(it) },
         onVideoResolutionSelected = { viewModel.selectVideoResolution(it) },
         onViewfinderResolutionSelected = { viewModel.setViewfinderResolution(it) },
         onVideoFpsSelected = { viewModel.setVideoFps(it) },

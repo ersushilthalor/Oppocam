@@ -202,10 +202,6 @@ fun CameraScreen(
     val isPhotoFilterBarOpen by viewModel.isPhotoFilterBarOpen.collectAsStateWithLifecycle()
     val isPortraitStyleBarOpen by viewModel.isPortraitStyleBarOpen.collectAsStateWithLifecycle()
 
-    val isZoomProcessing by viewModel.isZoomProcessing.collectAsStateWithLifecycle()
-    val zoomProgress by viewModel.zoomProgress.collectAsStateWithLifecycle()
-    val zoomProcessingLabel by viewModel.zoomProcessingLabel.collectAsStateWithLifecycle()
-    val zoomAiErrorMessage by viewModel.zoomAiErrorMessage.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
 
     val isUsingRearMainLens = remember(selectedLens, currentZoom) {
@@ -428,92 +424,6 @@ fun CameraScreen(
                 }
             }
         }
-
-
-        // Subtle High-Quality Zoom / AI Reconstruction processing pill (non-blocking indicator)
-        if (isZoomProcessing) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xCC111827),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 74.dp)
-                    .testTag("zoom_processing_indicator")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator(
-                        progress = { zoomProgress },
-                        modifier = Modifier.size(13.dp),
-                        color = Color(0xFF60A5FA),
-                        strokeWidth = 2.dp
-                    )
-                    Text(
-                        text = "$zoomProcessingLabel ${(zoomProgress * 100).toInt()}%",
-                        color = Color.White,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-
-        // Clear Error Banner if HAT/BSRGAN model is missing or GPU/NPU acceleration fails
-        if (!zoomAiErrorMessage.isNullOrBlank()) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color(0xEE3B1219),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.7f)),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = if (isZoomProcessing) 114.dp else 74.dp, start = 16.dp, end = 16.dp)
-                    .testTag("zoom_ai_error_banner")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = zoomAiErrorMessage ?: "",
-                        color = Color(0xFFFECACA),
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(
-                        onClick = {
-                            viewModel.clearZoomAiError()
-                            viewModel.setSettingsOpen(true)
-                        }
-                    ) {
-                        Text(
-                            text = "SETTINGS",
-                            color = Color(0xFFFFD54F),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    IconButton(
-                        onClick = { viewModel.clearZoomAiError() },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = androidx.compose.material.icons.Icons.Default.Close,
-                            contentDescription = "Dismiss Zoom AI Error",
-                            tint = Color.White,
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-
-
 
         // 1g. Motorola Instant Camera Switching Picture-in-Picture Little Preview
         LittlePreviewOverlay(
@@ -814,43 +724,53 @@ fun CameraScreen(
             )
         }
 
-        // 3e. Dedicated More Modes Drawer
-        MoreModesDrawer(
-            isOpen = isMoreModesOpen,
-            onDismissRequest = {
-                viewModel.setMoreModesOpen(false)
-                if (cameraMode == CameraMode.MORE) {
+        // 3e. Dedicated More Modes Drawer (Excluded from Pixel UI Template)
+        val isPixelTemplate = uiCustomizationState.selectedTemplate == UiTemplateType.STOCK_PIXEL ||
+                activeLayoutConfig.modeSelectorStyle == ModeSelectorStyle.PIXEL_PILL
+        LaunchedEffect(isPixelTemplate, cameraMode, isMoreModesOpen) {
+            if (isPixelTemplate) {
+                if (isMoreModesOpen) viewModel.setMoreModesOpen(false)
+                if (cameraMode == CameraMode.MORE) viewModel.setCameraMode(CameraMode.PHOTO)
+            }
+        }
+        if (!isPixelTemplate) {
+            MoreModesDrawer(
+                isOpen = isMoreModesOpen,
+                onDismissRequest = {
+                    viewModel.setMoreModesOpen(false)
+                    if (cameraMode == CameraMode.MORE) {
+                        viewModel.setCameraMode(CameraMode.PHOTO)
+                    }
+                },
+                onSelectProManual = {
+                    viewModel.setMoreModesOpen(false)
                     viewModel.setCameraMode(CameraMode.PHOTO)
-                }
-            },
-            onSelectProManual = {
-                viewModel.setMoreModesOpen(false)
-                viewModel.setCameraMode(CameraMode.PHOTO)
-                viewModel.setManualProOpen(true)
-            },
-            onSelectCinemaLog = {
-                viewModel.setMoreModesOpen(false)
-                viewModel.setCameraMode(CameraMode.CINEMA)
-            },
-            onSelectNight = {
-                viewModel.setMoreModesOpen(false)
-                viewModel.setCameraMode(CameraMode.NIGHT)
-            },
-            onSelectAiSubjectTracking = {
-                viewModel.setMoreModesOpen(false)
-                viewModel.setCameraMode(CameraMode.AI_SUBJECT_TRACKING)
-            },
-            onOpenSettings = {
-                viewModel.setMoreModesOpen(false)
-                if (cameraMode == CameraMode.MORE) {
-                    viewModel.setCameraMode(CameraMode.PHOTO)
-                }
-                viewModel.setSettingsOpen(true)
-            },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 140.dp)
-        )
+                    viewModel.setManualProOpen(true)
+                },
+                onSelectCinemaLog = {
+                    viewModel.setMoreModesOpen(false)
+                    viewModel.setCameraMode(CameraMode.CINEMA)
+                },
+                onSelectNight = {
+                    viewModel.setMoreModesOpen(false)
+                    viewModel.setCameraMode(CameraMode.NIGHT)
+                },
+                onSelectAiSubjectTracking = {
+                    viewModel.setMoreModesOpen(false)
+                    viewModel.setCameraMode(CameraMode.AI_SUBJECT_TRACKING)
+                },
+                onOpenSettings = {
+                    viewModel.setMoreModesOpen(false)
+                    if (cameraMode == CameraMode.MORE) {
+                        viewModel.setCameraMode(CameraMode.PHOTO)
+                    }
+                    viewModel.setSettingsOpen(true)
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 140.dp)
+            )
+        }
 
         // 4. Toast Notification Overlay
         AnimatedVisibility(
@@ -895,6 +815,7 @@ fun CameraScreen(
             videoDurationSeconds = videoDurationSeconds,
             isCapturing = isCapturing,
             nightCaptureProgress = nightProgress,
+            isManualProOpen = isManualProOpen,
             lastCapturedMedia = lastCapturedMedia,
             activeTimerCountdown = activeTimerCountdown,
             onModeSelected = { viewModel.setCameraMode(it) },
@@ -912,6 +833,7 @@ fun CameraScreen(
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             onTimerClick = { viewModel.cycleTimerMode() },
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
+            onSetManualProOpen = { viewModel.setManualProOpen(it) },
             onShutterAreaHeightMeasured = { shutterAreaHeightDp = it },
             selectedPhotoFilter = selectedPhotoFilter,
             onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },

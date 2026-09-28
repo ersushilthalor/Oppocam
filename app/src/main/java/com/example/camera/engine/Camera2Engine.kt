@@ -320,24 +320,9 @@ class Camera2Engine(private val context: Context) {
 
     val ultraRes50MStacker = UltraRes50MStacker(context)
     val refocusEngine = RefocusEngine(context)
-    val highQualityZoomEngine = com.example.camera.zoom.HighQualityZoomEngine.getInstance(context)
     var photoMegapixelMode: PhotoMegapixelMode = PhotoMegapixelMode.M12
     var isRefocusPhotoEnabled: Boolean = false
     var refocusFrameCount: Int = 5
-    var isHighQualityZoomEnabled: Boolean = true
-    var zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality = com.example.camera.zoom.ZoomProcessingQuality.BALANCED
-    private val _isZoomProcessing = MutableStateFlow(false)
-    val isZoomProcessing: StateFlow<Boolean> = _isZoomProcessing.asStateFlow()
-    private val _zoomProgress = MutableStateFlow(0f)
-    val zoomProgress: StateFlow<Float> = _zoomProgress.asStateFlow()
-    private val _zoomProcessingLabel = MutableStateFlow("Enhancing Zoom Clarity")
-    val zoomProcessingLabel: StateFlow<String> = _zoomProcessingLabel.asStateFlow()
-    private val _zoomAiErrorMessage = MutableStateFlow<String?>(null)
-    val zoomAiErrorMessage: StateFlow<String?> = _zoomAiErrorMessage.asStateFlow()
-
-    fun clearZoomAiError() {
-        _zoomAiErrorMessage.value = null
-    }
 
     // Ultra Fast Shutter System
     val ultraFastShutterEngine = com.example.camera.ultrafast.engine.UltraFastShutterEngine(
@@ -3648,15 +3633,6 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
-        val isAiModelActive = (highQualityZoomEngine.aiModelRepository.reconstructionMode.value.isAiModel &&
-            (highQualityZoomEngine.aiModelRepository.selectedHatModel.value != null ||
-             highQualityZoomEngine.aiModelRepository.selectedBsrganModel.value != null))
-
-        if ((isHighQualityZoomEnabled || isAiModelActive) && (currentZoom > 1.2f || isAiModelActive) && currentMode == CameraMode.PHOTO) {
-            takePhotoHighQualityZoom(onComplete)
-            return
-        }
-
         val camera = cameraDevice ?: return
         val session = captureSession ?: return
         val readerJpeg = imageReaderJpeg ?: return
@@ -4122,281 +4098,6 @@ class Camera2Engine(private val context: Context) {
             Log.e(TAG, "Failed submitting refocus burst, falling back to standard capture", e)
             tempPlaneFiles.forEach { runCatching { it.delete() } }
             takePhoto(onComplete)
-        }
-    }
-
-    /**
-     * High-Quality Traditional Zoom Photo Capture:
-     * Captures a rapid burst of frames at the active zoom ratio with fixed AE/AWB locks,
-     * aligns the frames with sub-pixel precision to boost SNR and cancel noise,
-     * and performs edge-preserving Lanczos-3 reconstruction, deblur, and halo-clamped detail recovery.
-     * The final output is ONLY the processed, high-clarity zoomed photo (no intermediate frames).
-     */
-    fun takePhotoHighQualityZoom(onComplete: (Uri?) -> Unit) {
-        val camera = cameraDevice
-        val session = captureSession
-        val readerJpeg = imageReaderJpeg
-        if (camera == null || session == null || readerJpeg == null) {
-            takePhoto(onComplete)
-            return
-        }
-
-        _isCapturing.value = true
-        _isZoomProcessing.value = true
-        _zoomProgress.value = 0.05f
-
-        val quality = zoomProcessingQuality
-        val burstCount = quality.burstCount
-        val zoomRatio = currentZoom.coerceAtLeast(1.0f)
-        val rotationDeg = getCaptureJpegOrientation()
-
-        val capturedBitmaps = mutableListOf<Bitmap>()
-        val isCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
-
-        readerJpeg.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
-            val buffer = image.planes[0].buffer
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            image.close()
-
-            engineScope.launch(Dispatchers.IO) {
-                try {
-                    val options = BitmapFactory.Options().apply {
-                        inMutable = true
-                        inSampleSize = 1
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
-                    }
-                    val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                    if (rawBitmap != null) {
-                        val activeLens = _selectedLens.value
-                        val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-
-                        val exif = try {
-                            android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
-                        } catch (e: Exception) {
-                            null
-                        }
-                        val exifOrientation = exif?.getAttributeInt(
-                            android.media.ExifInterface.TAG_ORIENTATION,
-                            android.media.ExifInterface.ORIENTATION_UNDEFINED
-                        ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
-
-                        val matrix = Matrix()
-                        when (exifOrientation) {
-                            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                            android.media.ExifInterface.ORIENTATION_NORMAL -> {
-                                // Already physically oriented upright by the camera HAL / JPEG encoder. Do not rotate again.
-                            }
-                            else -> {
-                                // Only when EXIF orientation tag is not present or undefined:
-                                if (rawBitmap.width > rawBitmap.height && rotationDeg != 0) {
-                                    matrix.postRotate(rotationDeg.toFloat())
-                                } else if (rawBitmap.width > rawBitmap.height) {
-                                    val rot = if (isFrontFacing) 270f else 90f
-                                    matrix.postRotate(rot)
-                                }
-                            }
-                        }
-
-                        if (isFrontFacing && saveSelfieAsPreviewed) {
-                            matrix.postScale(-1f, 1f)
-                        }
-
-                        val orientedBitmap = if (!matrix.isIdentity) {
-                            val transformed = Bitmap.createBitmap(
-                                rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
-                            )
-                            if (transformed != rawBitmap) {
-                                rawBitmap.recycle()
-                            }
-                            transformed
-                        } else {
-                            rawBitmap
-                        }
-
-                        synchronized(capturedBitmaps) {
-                            capturedBitmaps.add(orientedBitmap)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed decoding zoom burst frame", e)
-                }
-
-                val currentCount = synchronized(capturedBitmaps) { capturedBitmaps.size }
-                if (currentCount >= burstCount) {
-                    if (isCompleted.compareAndSet(false, true)) {
-                        readerJpeg.setOnImageAvailableListener(null, null)
-                        val frames = synchronized(capturedBitmaps) { ArrayList(capturedBitmaps) }
-                        executeZoomProcessing(frames, zoomRatio, quality, onComplete)
-                    }
-                }
-            }
-        }, backgroundHandler)
-
-        try {
-            val requests = mutableListOf<CaptureRequest>()
-            for (i in 0 until burstCount) {
-                val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                applyCommonSettings(builder)
-                builder.set(CaptureRequest.CONTROL_AE_LOCK, true)
-                builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                builder.set(CaptureRequest.JPEG_ORIENTATION, rotationDeg)
-                builder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
-                builder.addTarget(readerJpeg.surface)
-                requests.add(builder.build())
-            }
-
-            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    Log.d(TAG, "High-Quality Zoom burst frame completed")
-                }
-            }, backgroundHandler)
-
-            // Watchdog fallback in case frames are dropped by Camera2
-            engineScope.launch {
-                kotlinx.coroutines.delay(4500)
-                if (isCompleted.compareAndSet(false, true)) {
-                    Log.w(TAG, "Zoom capture watchdog triggered")
-                    readerJpeg.setOnImageAvailableListener(null, null)
-                    val frames = synchronized(capturedBitmaps) { ArrayList(capturedBitmaps) }
-                    if (frames.isNotEmpty()) {
-                        executeZoomProcessing(frames, zoomRatio, quality, onComplete)
-                    } else {
-                        _isCapturing.value = false
-                        _isZoomProcessing.value = false
-                        takePhoto(onComplete)
-                    }
-                }
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error executing High-Quality Zoom capture burst", e)
-            _isCapturing.value = false
-            _isZoomProcessing.value = false
-            takePhoto(onComplete)
-        }
-    }
-
-    private fun executeZoomProcessing(
-        frames: List<Bitmap>,
-        zoomRatio: Float,
-        quality: com.example.camera.zoom.ZoomProcessingQuality,
-        onComplete: (Uri?) -> Unit
-    ) {
-        engineScope.launch(Dispatchers.Default) {
-            val aiRepo = highQualityZoomEngine.aiModelRepository
-            var activeMode = aiRepo.reconstructionMode.value
-            if (activeMode == com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL) {
-                if (aiRepo.selectedHatModel.value != null) {
-                    activeMode = com.example.camera.zoom.ai.ZoomReconstructionMode.HAT
-                } else if (aiRepo.selectedBsrganModel.value != null) {
-                    activeMode = com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN
-                }
-            }
-            val keepOriginal = aiRepo.keepOriginalImage.value
-            val baseFrame = frames.firstOrNull()
-
-            // Set descriptive processing label showing active model and GPU/NPU accelerator
-            _zoomProcessingLabel.value = when (activeMode) {
-                com.example.camera.zoom.ai.ZoomReconstructionMode.HAT ->
-                    "HAT AI Reconstructing (${aiRepo.hardwareStatus.value.activeProvider.shortLabel})"
-                com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN ->
-                    "BSRGAN AI Reconstructing (${aiRepo.hardwareStatus.value.activeProvider.shortLabel})"
-                com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL ->
-                    "Enhancing Zoom Clarity"
-            }
-
-            // Preserve the original captured zoomed image alongside the reconstructed output
-            var savedOriginalUri: Uri? = null
-            if (baseFrame != null && (keepOriginal || activeMode.isAiModel)) {
-                try {
-                    savedOriginalUri = highQualityZoomEngine.saveZoomImageToMediaStore(
-                        bitmap = baseFrame,
-                        prefix = "ZOOM_ORIG"
-                    )
-                } catch (origErr: Throwable) {
-                    Log.w(TAG, "Could not save original zoomed image alongside reconstructed output", origErr)
-                }
-            }
-
-            try {
-                _zoomProgress.value = 0.15f
-                val enhancedBitmap = highQualityZoomEngine.processZoomedBurstWithSelectedMode(
-                    burstBitmaps = frames,
-                    zoomRatio = zoomRatio,
-                    quality = quality,
-                    onProgress = { p -> _zoomProgress.value = p }
-                )
-
-                val outPrefix = when (activeMode) {
-                    com.example.camera.zoom.ai.ZoomReconstructionMode.HAT -> "ZOOM_HAT"
-                    com.example.camera.zoom.ai.ZoomReconstructionMode.BSRGAN -> "ZOOM_BSRGAN"
-                    com.example.camera.zoom.ai.ZoomReconstructionMode.TRADITIONAL -> "ZOOM"
-                }
-
-                val finalUri = highQualityZoomEngine.saveZoomImageToMediaStore(
-                    bitmap = enhancedBitmap,
-                    prefix = outPrefix
-                )
-                if (enhancedBitmap !in frames) {
-                    enhancedBitmap.recycle()
-                }
-                frames.forEach { it.recycle() }
-
-                updateStorageStats()
-                _isCapturing.value = false
-                _isZoomProcessing.value = false
-                _zoomProgress.value = 1.0f
-
-                val resultUri = finalUri ?: savedOriginalUri
-                if (resultUri != null) {
-                    _lastCapturedMedia.value = CapturedMedia(
-                        uri = resultUri,
-                        isVideo = false,
-                        timestamp = System.currentTimeMillis(),
-                        displayName = "${outPrefix}_${System.currentTimeMillis()}.jpg"
-                    )
-                }
-
-                withContext(Dispatchers.Main) {
-                    onComplete(resultUri)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Zoom reconstruction failed (${activeMode.name}): ${e.message}", e)
-                // Surface explicit error message if HAT/BSRGAN model or GPU/NPU acceleration failed
-                if (activeMode.isAiModel) {
-                    _zoomAiErrorMessage.value = e.message ?: "${activeMode.title} failed on GPU/NPU."
-                }
-                val fallbackUri = savedOriginalUri ?: if (baseFrame != null && !baseFrame.isRecycled) {
-                    try {
-                        saveBitmapToMediaStore(baseFrame, 0)
-                    } catch (t2: Throwable) {
-                        null
-                    }
-                } else null
-                _isCapturing.value = false
-                _isZoomProcessing.value = false
-                frames.forEach { if (!it.isRecycled) it.recycle() }
-                if (fallbackUri != null) {
-                    _lastCapturedMedia.value = CapturedMedia(
-                        uri = fallbackUri,
-                        isVideo = false,
-                        timestamp = System.currentTimeMillis(),
-                        displayName = "ZOOM_ORIG_${System.currentTimeMillis()}.jpg"
-                    )
-                }
-                withContext(Dispatchers.Main) {
-                    onComplete(fallbackUri)
-                }
-            }
         }
     }
 
@@ -5972,7 +5673,7 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun saveJpegBytesToMediaStore(bytes: ByteArray, skipPipeline: Boolean = false): Uri? {
+    private fun processStillJpegBytes(bytes: ByteArray, skipPipeline: Boolean = false): Pair<ByteArray, Boolean> {
         val effectiveBytes = if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isCustomPipelineEnabled) {
             processPhotoWithCustomPipeline(bytes)
         } else {
@@ -6179,6 +5880,17 @@ class Camera2Engine(private val context: Context) {
         } else {
             finalBytes
         }
+        return Pair(outputBytes, wasFilterApplied)
+    }
+
+    private fun saveMotionPhotoBytesToMediaStore(packedBytes: ByteArray): Uri? {
+        return saveJpegBytesToMediaStore(packedBytes, skipPipeline = true)
+    }
+
+    private fun saveJpegBytesToMediaStore(bytes: ByteArray, skipPipeline: Boolean = false): Uri? {
+        val activeLens = _selectedLens.value
+        val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        val (outputBytes, wasFilterApplied) = processStillJpegBytes(bytes, skipPipeline)
 
         val fileName = generateUniqueImageFileName("IMG", "jpg")
         val nowMs = System.currentTimeMillis()

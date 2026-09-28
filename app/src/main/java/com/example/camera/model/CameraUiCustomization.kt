@@ -469,6 +469,14 @@ object CameraUiTemplates {
     fun getTemplateConfig(type: UiTemplateType): ModeLayoutConfig {
         return when (type) {
             UiTemplateType.STOCK_PIXEL -> ModeLayoutConfig(
+                visibleModes = listOf(
+                    CameraMode.PHOTO,
+                    CameraMode.PORTRAIT,
+                    CameraMode.NIGHT,
+                    CameraMode.VIDEO,
+                    CameraMode.CINEMA,
+                    CameraMode.AI_SUBJECT_TRACKING
+                ),
                 modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
                 modeSelectorStyle = ModeSelectorStyle.PIXEL_PILL,
                 shutterStyle = ShutterStyle.PIXEL_SOLID,

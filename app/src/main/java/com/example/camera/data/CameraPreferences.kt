@@ -39,8 +39,6 @@ class CameraPreferences(context: Context) {
         private const val KEY_ULTRA_FAST_SHUTTER_ENABLED = "pref_ultra_fast_shutter_enabled"
         private const val KEY_ULTRA_FAST_SHUTTER_FPS = "pref_ultra_fast_shutter_fps"
         private const val KEY_ULTRA_FAST_SHUTTER_BURST_COUNT = "pref_ultra_fast_shutter_burst_count"
-        private const val KEY_HQ_ZOOM_ENABLED = "pref_hq_zoom_enabled"
-        private const val KEY_ZOOM_PROCESSING_QUALITY = "pref_zoom_processing_quality"
         private const val KEY_TRACKING_LENS = "pref_tracking_lens"
         private const val KEY_SHOW_ULTRAWIDE_PREVIEW = "pref_show_ultrawide_preview"
         private const val KEY_KEEP_FRONT_READY = "pref_keep_front_ready"
@@ -144,18 +142,6 @@ class CameraPreferences(context: Context) {
             }
         }
         set(value) = prefs.edit().putString(KEY_TRACKING_LENS, value.name).apply()
-
-    var isHighQualityZoomEnabled: Boolean
-        get() = prefs.getBoolean(KEY_HQ_ZOOM_ENABLED, true)
-        set(value) = prefs.edit().putBoolean(KEY_HQ_ZOOM_ENABLED, value).apply()
-
-    var zoomProcessingQuality: com.example.camera.zoom.ZoomProcessingQuality
-        get() {
-            val name = prefs.getString(KEY_ZOOM_PROCESSING_QUALITY, com.example.camera.zoom.ZoomProcessingQuality.BALANCED.name)
-                ?: com.example.camera.zoom.ZoomProcessingQuality.BALANCED.name
-            return try { com.example.camera.zoom.ZoomProcessingQuality.valueOf(name) } catch (e: Exception) { com.example.camera.zoom.ZoomProcessingQuality.BALANCED }
-        }
-        set(value) = prefs.edit().putString(KEY_ZOOM_PROCESSING_QUALITY, value.name).apply()
 
     var isRefocusPhotoEnabled: Boolean
         get() = prefs.getBoolean(KEY_REFOCUS_PHOTO_ENABLED, false)
@@ -969,27 +955,6 @@ class CameraPreferences(context: Context) {
 
     fun getModeUltraFastShutterBurstCount(mode: CameraMode): Int {
         return prefs.getInt(modeKey(mode, "ultra_fast_shutter_burst_count"), ultraFastShutterBurstCount)
-    }
-
-    fun setModeHqZoomEnabled(mode: CameraMode, enabled: Boolean) {
-        isHighQualityZoomEnabled = enabled
-        prefs.edit().putBoolean(modeKey(mode, "hq_zoom"), enabled).apply()
-    }
-
-    fun getModeHqZoomEnabled(mode: CameraMode): Boolean {
-        return if (prefs.contains(modeKey(mode, "hq_zoom"))) {
-            prefs.getBoolean(modeKey(mode, "hq_zoom"), true)
-        } else isHighQualityZoomEnabled
-    }
-
-    fun setModeZoomQuality(mode: CameraMode, quality: com.example.camera.zoom.ZoomProcessingQuality) {
-        zoomProcessingQuality = quality
-        prefs.edit().putString(modeKey(mode, "zoom_quality"), quality.name).apply()
-    }
-
-    fun getModeZoomQuality(mode: CameraMode): com.example.camera.zoom.ZoomProcessingQuality {
-        val name = prefs.getString(modeKey(mode, "zoom_quality"), null) ?: return zoomProcessingQuality
-        return try { com.example.camera.zoom.ZoomProcessingQuality.valueOf(name) } catch (e: Exception) { zoomProcessingQuality }
     }
 
     fun setModeFocusMode(mode: CameraMode, focus: FocusMode) {
