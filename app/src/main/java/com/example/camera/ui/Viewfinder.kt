@@ -924,10 +924,13 @@ private fun updateTextureViewTransform(
         matrix.postTranslate(shiftX, shiftY)
     } else if (isDollyZoomActive && dollyScale > 1.005f) {
         // Dolly Zoom real-time geometric scaling: zooms in/out centered on the tracked subject
-        // to maintain the subject's constant apparent size.
-        val focalX = (dollyFocusX * viewW).coerceIn(viewW * 0.15f, viewW * 0.85f)
-        val focalY = (dollyFocusY * viewH).coerceIn(viewH * 0.15f, viewH * 0.85f)
+        // to maintain the subject's constant apparent size matching Frame.py.
+        val focalX = (dollyFocusX * viewW).coerceIn(viewW * 0.05f, viewW * 0.95f)
+        val focalY = (dollyFocusY * viewH).coerceIn(viewH * 0.05f, viewH * 0.95f)
         matrix.postScale(dollyScale, dollyScale, focalX, focalY)
+        val shiftX = (viewW / 2f - focalX) * ((dollyScale - 1f) / dollyScale).coerceIn(0f, 1f)
+        val shiftY = (viewH / 2f - focalY) * ((dollyScale - 1f) / dollyScale).coerceIn(0f, 1f)
+        matrix.postTranslate(shiftX, shiftY)
     }
 
     textureView.setTransform(matrix)
@@ -943,10 +946,11 @@ fun DollyZoomReticleOverlay(
         val h = maxHeight
         val density = androidx.compose.ui.platform.LocalDensity.current
 
-        val leftPx = with(density) { (cropState.subjectBoundsNorm.left * w.toPx()) }
-        val topPx = with(density) { (cropState.subjectBoundsNorm.top * h.toPx()) }
-        val widthPx = with(density) { (cropState.subjectBoundsNorm.width() * w.toPx()) }
-        val heightPx = with(density) { (cropState.subjectBoundsNorm.height() * h.toPx()) }
+        val bounds = cropState.postFilterBoxNorm
+        val leftPx = with(density) { (bounds.left * w.toPx()) }
+        val topPx = with(density) { (bounds.top * h.toPx()) }
+        val widthPx = with(density) { (bounds.width() * w.toPx()) }
+        val heightPx = with(density) { (bounds.height() * h.toPx()) }
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val cyanColor = Color(0xFF00E5FF)

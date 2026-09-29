@@ -8,58 +8,67 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.max
-import kotlin.math.min
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Dolly Zoom Engine implementing the computer vision algorithm from:
+ * Dolly Zoom Engine implementing the computer vision algorithm directly adapted from:
  * https://github.com/kailau02/Dolly-Zoom (Frame.py & main.py)
  *
- * Requirements & Features:
- * 1. Tracks the primary face or user-selected subject smoothly and continuously.
- * 2. Employs the reference repository's geometric aspect-ratio equalization equations
- *    to compute a real-time dynamic crop window that holds the subject's apparent size
- *    strictly constant (ZOOM = 0.35) while physical camera distance shifts perspective.
- * 3. 2-tier lerp smoothing (alpha: 0.35 position, 0.25 size) to prevent any jitter, sudden
- *    zoom changes, or framing oscillation.
- * 4. Records high-precision trajectory points during video recording for synchronized
- *    post-processing in the final saved MP4 file.
+ * Algorithm details from ZIP repository:
+ * 1. Face detection identifies face bounding boxes; largestBox(boxes) finds the closest face.
+ * 2. If box is uninitialized (dim == -1), box = boxLrg; else box.lerpShape(boxLrg).
+ *    Position lerp factor = 0.4, dimension lerp factor = 0.7.
+ * 3. Frame.filter() geometric equalized distance calculation:
+ *    - distX1, distY1, distX2, distY2 to screen borders.
+ *    - Equalize distX, distY to shortest length.
+ *    - Trim sides to match original aspect ratio.
+ *    - Enforce constant subject ratio (DEFAULT_ZOOM = 0.25).
+ *    - Crop window [newX, newY, newW, newH] and resize percentage screenWidth / newW.
+ *    - Post-filter box scaled to match output framing with subject size held invariant.
+ * 4. Trajectory recording during video recording for synchronized post-processing.
  */
 class DollyZoomEngine {
 
     companion object {
         private const val TAG = "DollyZoomEngine"
-        // Target ratio of subject size relative to frame dimension (from reference repo ZOOM = 0.25..0.40)
-        private const val DEFAULT_TARGET_SUBJECT_ZOOM = 0.35f
-        private const val MIN_SCALE = 1.0f
-        private const val MAX_SCALE = 5.0f
+        // From reference repository main.py:
+        // ZOOM = 0.25 (Medium = 0.2 to 0.3, Close = 0.35 to 0.5)
+        const val DEFAULT_ZOOM = 0.25f
+        const val MIN_SCALE = 1.0f
+        const val MAX_SCALE = 5.0f
     }
 
     private val _cropStateFlow = MutableStateFlow(DollyCropState())
     val cropStateFlow: StateFlow<DollyCropState> = _cropStateFlow.asStateFlow()
 
-    private val currentBox = DollyBoundingBox(0.35f, 0.30f, 0.30f, 0.40f)
-    private var isTrackingInitialized = false
-    private var isUserLocked = false
-    private var userLockNormX = 0.5f
-    private var userLockNormY = 0.5f
-    private var missedFrames = 0
+    // BoundingBox(-1, -1, -1, -1) from reference repo main.py
+    private var box = DollyBoundingBox(-1f, -1f, -1f, -1f)
 
-    // Video recording trajectory
-    private val isRecordingTrajectory = java.util.concurrent.atomic.AtomicBoolean(false)
-    private val recordedTrajectory = CopyOnWriteArrayList<DollyTrajectoryPoint>()
+    // ZOOM from reference repo main.py
+    private var currentZoomSetting: Float = DEFAULT_ZOOM
 
     @Volatile
     private var isEngineRunning = false
 
+    // Video recording trajectory
+    private val isRecordingTrajectory = AtomicBoolean(false)
+    private val recordedTrajectory = CopyOnWriteArrayList<DollyTrajectoryPoint>()
+
     fun isRunning(): Boolean = isEngineRunning
+
+    fun setZoom(amount: Float) {
+        currentZoomSetting = amount.coerceIn(0.01f, 0.99f)
+        updateCalculations(1080f, 1920f)
+    }
+
+    fun getZoom(): Float = currentZoomSetting
 
     fun start() {
         isEngineRunning = true
-        isTrackingInitialized = false
-        missedFrames = 0
-        Log.i(TAG, "DollyZoomEngine started")
-        _cropStateFlow.value = _cropStateFlow.value.copy(
+        // Reset bounding box to uninitialized state, matching main.py
+        box = DollyBoundingBox(-1f, -1f, -1f, -1f)
+        Log.i(TAG, "DollyZoomEngine started with reference repo algorithms")
+        _cropStateFlow.value = DollyCropState(
             isActive = true,
             statusMessage = "DOLLY ZOOM • ACTIVE"
         )
@@ -67,8 +76,7 @@ class DollyZoomEngine {
 
     fun stop() {
         isEngineRunning = false
-        isUserLocked = false
-        isTrackingInitialized = false
+        box = DollyBoundingBox(-1f, -1f, -1f, -1f)
         isRecordingTrajectory.set(false)
         recordedTrajectory.clear()
         Log.i(TAG, "DollyZoomEngine stopped")
@@ -76,74 +84,102 @@ class DollyZoomEngine {
     }
 
     /**
-     * User tapped a specific point on the viewfinder to manually lock onto that subject.
+     * User tap on viewfinder to lock onto subject or re-initialize detection box.
      */
     fun lockSubjectAt(normX: Float, normY: Float) {
         val safeX = normX.coerceIn(0.1f, 0.9f)
         val safeY = normY.coerceIn(0.1f, 0.9f)
-        isUserLocked = true
-        userLockNormX = safeX
-        userLockNormY = safeY
+        val initialW = currentZoomSetting
+        val initialH = currentZoomSetting
 
-        // Re-center bounding box at tap with initial framing
-        val initialW = 0.28f
-        val initialH = 0.35f
-        currentBox.x = (safeX - initialW / 2f).coerceIn(0.05f, 1f - initialW)
-        currentBox.y = (safeY - initialH / 2f).coerceIn(0.05f, 1f - initialH)
-        currentBox.w = initialW
-        currentBox.h = initialH
-        isTrackingInitialized = true
-        missedFrames = 0
+        box = DollyBoundingBox(
+            x = (safeX - initialW / 2f).coerceIn(0.05f, 0.95f - initialW),
+            y = (safeY - initialH / 2f).coerceIn(0.05f, 0.95f - initialH),
+            w = initialW,
+            h = initialH
+        )
 
         updateCalculations(1080f, 1920f)
-        Log.i(TAG, "Dolly Zoom subject locked at ($safeX, $safeY)")
+        Log.i(TAG, "Dolly Zoom subject anchored at ($safeX, $safeY)")
     }
 
     /**
-     * Feeds camera capture faces from Camera2 hardware capture result.
-     * Mirrors largestBox(boxes) from reference repo main.py.
+     * Feeds camera capture faces from hardware capture result.
+     * Mirrors face detection and largestBox(boxes) + box.lerpShape from reference repo main.py.
      */
-    fun onFrameFaces(faces: Array<Face>, sensorRect: Rect?) {
+    fun onFrameFaces(
+        faces: Array<Face>,
+        sensorRect: Rect?,
+        sensorOrientation: Int = 90,
+        isFrontFacing: Boolean = false
+    ) {
         if (!isEngineRunning) return
 
+        val detectedBoxes = mutableListOf<DollyBoundingBox>()
+
         if (sensorRect != null && sensorRect.width() > 0 && sensorRect.height() > 0 && faces.isNotEmpty()) {
-            // Find largest face (closest to camera, matching reference repo largestBox)
-            val largestFace = faces.maxByOrNull { it.bounds.width() * it.bounds.height() }
-            if (largestFace != null) {
-                val sW = sensorRect.width().toFloat()
-                val sH = sensorRect.height().toFloat()
+            val sW = sensorRect.width().toFloat()
+            val sH = sensorRect.height().toFloat()
 
-                // Sensor to normalized [0..1]
-                val faceBounds = largestFace.bounds
-                val normX = (faceBounds.left.toFloat() / sW).coerceIn(0f, 1f)
-                val normY = (faceBounds.top.toFloat() / sH).coerceIn(0f, 1f)
-                val normW = (faceBounds.width().toFloat() / sW).coerceIn(0.05f, 1f)
-                val normH = (faceBounds.height().toFloat() / sH).coerceIn(0.05f, 1f)
+            for (face in faces) {
+                val b = face.bounds
+                if (b.width() <= 0 || b.height() <= 0) continue
 
-                val targetBox = DollyBoundingBox(normX, normY, normW, normH)
-
-                if (!isTrackingInitialized) {
-                    currentBox.x = targetBox.x
-                    currentBox.y = targetBox.y
-                    currentBox.w = targetBox.w
-                    currentBox.h = targetBox.h
-                    isTrackingInitialized = true
-                } else {
-                    // Smooth tracking using lerpShape from reference repo
-                    currentBox.lerpShape(targetBox, posAlpha = 0.35f, sizeAlpha = 0.20f)
+                // Transform sensor active array coordinates to normalized [0..1] upright frame coordinates
+                val normBox = when (sensorOrientation) {
+                    90 -> {
+                        // Portrait mode on standard back camera (sensor is landscape, rotated 90 deg)
+                        val cropH = sW * 9f / 16f
+                        val topMargin = (sH - cropH) / 2f
+                        val normY = (b.left.toFloat() / sW).coerceIn(0f, 1f)
+                        val normH = (b.width().toFloat() / sW).coerceIn(0.01f, 1f)
+                        val normX = ((sH - topMargin - b.bottom).toFloat() / cropH).coerceIn(0f, 1f)
+                        val normW = (b.height().toFloat() / cropH).coerceIn(0.01f, 1f)
+                        DollyBoundingBox(normX, normY, normW, normH)
+                    }
+                    270 -> {
+                        // Front camera portrait
+                        val cropH = sW * 9f / 16f
+                        val topMargin = (sH - cropH) / 2f
+                        val normY = ((sW - b.right).toFloat() / sW).coerceIn(0f, 1f)
+                        val normH = (b.width().toFloat() / sW).coerceIn(0.01f, 1f)
+                        val normX = ((b.top - topMargin).toFloat() / cropH).coerceIn(0f, 1f)
+                        val normW = (b.height().toFloat() / cropH).coerceIn(0.01f, 1f)
+                        DollyBoundingBox(normX, normY, normW, normH)
+                    }
+                    else -> {
+                        val normX = (b.left.toFloat() / sW).coerceIn(0f, 1f)
+                        val normY = (b.top.toFloat() / sH).coerceIn(0f, 1f)
+                        val normW = (b.width().toFloat() / sW).coerceIn(0.01f, 1f)
+                        val normH = (b.height().toFloat() / sH).coerceIn(0.01f, 1f)
+                        DollyBoundingBox(normX, normY, normW, normH)
+                    }
                 }
-                missedFrames = 0
+                detectedBoxes.add(normBox)
+            }
+        }
+
+        // Logic from reference repo main.py:
+        // if boxes.size > 0:
+        //     boxLrg = largestBox(boxes)
+        //     if box.dim[0] == -1:
+        //         box = boxLrg
+        //     else:
+        //         box.lerpShape(boxLrg)
+        if (detectedBoxes.isNotEmpty()) {
+            val boxLrg = DollyBoundingBox.largestBox(detectedBoxes)
+            if (boxLrg != null) {
+                if (!box.isInitialized) {
+                    box = boxLrg.copy()
+                } else {
+                    box.lerpShape(boxLrg)
+                }
             }
         } else {
-            // If no face was detected in this frame, gently coast with last known position
-            missedFrames++
-            if (!isTrackingInitialized) {
-                // Initialize to center frame
-                currentBox.x = 0.35f
-                currentBox.y = 0.30f
-                currentBox.w = 0.30f
-                currentBox.h = 0.40f
-                isTrackingInitialized = true
+            // If no face was detected in this frame, retain previous box (coasting)
+            if (!box.isInitialized) {
+                // Initial centered framing
+                box = DollyBoundingBox(0.35f, 0.35f, 0.30f, 0.30f)
             }
         }
 
@@ -151,27 +187,24 @@ class DollyZoomEngine {
     }
 
     /**
-     * Updates Dolly Zoom geometric equations matching Frame.py filter() from reference repo:
-     *
-     * 1. Equalize X and Y distances from box edges to screen boundaries.
-     * 2. Trim sides to match original aspect ratio.
-     * 3. Set constant screen-to-box ratio (ZOOM).
-     * 4. Compute crop window (newX, newY, newW, newH) and scaleFactor.
+     * Executes Frame.py filter() algorithm line-for-line adapted for Android.
      */
-    private fun updateCalculations(screenWidth: Float, screenHeight: Float) {
+    fun updateCalculations(screenWidth: Float, screenHeight: Float) {
+        if (!isEngineRunning) return
+
         val screenRatio = screenWidth / screenHeight
 
-        val boxX = currentBox.x * screenWidth
-        val boxY = currentBox.y * screenHeight
-        val boxW = (currentBox.w * screenWidth).coerceAtLeast(10f)
-        val boxH = (currentBox.h * screenHeight).coerceAtLeast(10f)
+        val boxX = box.x * screenWidth
+        val boxY = box.y * screenHeight
+        val boxW = (box.w * screenWidth).coerceAtLeast(10f)
+        val boxH = (box.h * screenHeight).coerceAtLeast(10f)
 
         var distX1 = boxX
         var distY1 = boxY
         val distX2 = screenWidth - distX1 - boxW
         val distY2 = screenHeight - distY1 - boxH
 
-        // Equalize x's and y's to shortest length so box remains centered
+        // Equalize x's and y's to shortest length
         if (distX1 > distX2) distX1 = distX2
         if (distY1 > distY2) distY1 = distY2
 
@@ -191,37 +224,36 @@ class DollyZoomEngine {
             distY -= offset
         }
 
-        distX = distX.coerceAtLeast(0f)
-        distY = distY.coerceAtLeast(0f)
-
-        // Make screen to box ratio constant (DEFAULT_TARGET_SUBJECT_ZOOM = 0.35)
-        val zoom = DEFAULT_TARGET_SUBJECT_ZOOM
+        // Make screen to box ratio constant (ZOOM)
+        val zoom = currentZoomSetting
         if (screenWidth > screenHeight) {
-            distX = min(0.5f * ((boxW / zoom) - boxW), distX)
-            distY = min(((1.0f / screenRatio) * (distX + (boxW / 2.0f))) - (boxH / 2.0f), distY)
+            distX = minOf(0.5f * ((boxW / zoom) - boxW), distX)
+            distY = minOf(((1.0f / screenRatio) * (distX + (boxW / 2.0f))) - (boxH / 2.0f), distY)
         } else {
-            distY = min(0.5f * ((boxH / zoom) - boxH), distY)
-            distX = min((screenRatio * (distY + (boxH / 2.0f))) - (boxW / 2.0f), distX)
+            distY = minOf(0.5f * ((boxH / zoom) - boxH), distY)
+            distX = minOf((screenRatio * (distY + (boxH / 2.0f))) - (boxW / 2.0f), distX)
         }
 
         distX = distX.coerceAtLeast(0f)
         distY = distY.coerceAtLeast(0f)
 
-        // Crop window to match distance values (from Frame.py)
+        // Crop window to match distance values from Frame.py
         val newX = (boxX - distX).coerceIn(0f, screenWidth - 10f)
         val newY = (boxY - distY).coerceIn(0f, screenHeight - 10f)
         val newW = (2f * distX + boxW).coerceIn(10f, screenWidth - newX)
         val newH = (2f * distY + boxH).coerceIn(10f, screenHeight - newY)
 
-        // Desired scale factor = screenWidth / newW (>= 1.0f)
-        val rawScale = (screenWidth / newW).coerceIn(MIN_SCALE, MAX_SCALE)
+        // Resize percentage from Frame.py: float(screenWidth) / newW
+        val resizePercentage = screenWidth / newW
 
-        // Smooth scale approach to eliminate any stepping
-        val prevScale = _cropStateFlow.value.scaleFactor
-        val smoothedScale = prevScale + (rawScale - prevScale) * 0.25f
-
-        val focusNormX = ((newX + newW / 2f) / screenWidth).coerceIn(0.1f, 0.9f)
-        val focusNormY = ((newY + newH / 2f) / screenHeight).coerceIn(0.1f, 0.9f)
+        // postFilterBox from Frame.py:
+        // postFilterBox.dim[0] -= x
+        // postFilterBox.dim[1] -= y
+        // postFilterBox.dim[i] = int(postFilterBox.dim[i] * resizePercentage)
+        val postFilterX = (boxX - newX) * resizePercentage
+        val postFilterY = (boxY - newY) * resizePercentage
+        val postFilterW = boxW * resizePercentage
+        val postFilterH = boxH * resizePercentage
 
         val cropRectNorm = RectF(
             newX / screenWidth,
@@ -230,18 +262,29 @@ class DollyZoomEngine {
             (newY + newH) / screenHeight
         )
 
-        val subjectBoundsNorm = currentBox.toRectF()
+        val postFilterBoxNorm = RectF(
+            (postFilterX / screenWidth).coerceIn(0f, 1f),
+            (postFilterY / screenHeight).coerceIn(0f, 1f),
+            ((postFilterX + postFilterW) / screenWidth).coerceIn(0f, 1f),
+            ((postFilterY + postFilterH) / screenHeight).coerceIn(0f, 1f)
+        )
+
+        val scaleFactor = resizePercentage.coerceIn(MIN_SCALE, MAX_SCALE)
+        val focusNormX = ((newX + newW / 2.0f) / screenWidth).coerceIn(0.05f, 0.95f)
+        val focusNormY = ((newY + newH / 2.0f) / screenHeight).coerceIn(0.05f, 0.95f)
 
         val state = DollyCropState(
             isActive = true,
-            isLocked = isUserLocked || isTrackingInitialized,
-            scaleFactor = smoothedScale,
+            isTracking = box.isInitialized,
+            isLocked = box.isInitialized,
+            scaleFactor = scaleFactor,
             focusNormX = focusNormX,
             focusNormY = focusNormY,
             cropRectNorm = cropRectNorm,
-            subjectBoundsNorm = subjectBoundsNorm,
-            apparentSubjectRatio = currentBox.w * smoothedScale,
-            statusMessage = if (isUserLocked) "DOLLY ZOOM • LOCKED" else "DOLLY ZOOM • TRACKING"
+            subjectBoundsNorm = box.toRectF(),
+            postFilterBoxNorm = postFilterBoxNorm,
+            apparentSubjectRatio = zoom,
+            statusMessage = if (box.isInitialized) "DOLLY ZOOM • TRACKING" else "DOLLY ZOOM • ACTIVE"
         )
         _cropStateFlow.value = state
 
@@ -251,7 +294,7 @@ class DollyZoomEngine {
             recordedTrajectory.add(
                 DollyTrajectoryPoint(
                     timestampUs = nowUs,
-                    scaleFactor = smoothedScale,
+                    scaleFactor = scaleFactor,
                     focusNormX = focusNormX,
                     focusNormY = focusNormY,
                     cropLeft = cropRectNorm.left,
@@ -267,23 +310,6 @@ class DollyZoomEngine {
         recordedTrajectory.clear()
         isRecordingTrajectory.set(true)
         Log.i(TAG, "Started recording Dolly Zoom trajectory for video")
-    }
-
-    fun recordCurrentFrame(timestampUs: Long) {
-        if (!isRecordingTrajectory.get()) return
-        val current = _cropStateFlow.value
-        recordedTrajectory.add(
-            DollyTrajectoryPoint(
-                timestampUs = timestampUs,
-                scaleFactor = current.scaleFactor,
-                focusNormX = current.focusNormX,
-                focusNormY = current.focusNormY,
-                cropLeft = current.cropRectNorm.left,
-                cropTop = current.cropRectNorm.top,
-                cropWidth = current.cropRectNorm.width(),
-                cropHeight = current.cropRectNorm.height()
-            )
-        )
     }
 
     fun stopRecordingTrajectory(): List<DollyTrajectoryPoint> {

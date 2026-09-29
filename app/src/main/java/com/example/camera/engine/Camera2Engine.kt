@@ -269,6 +269,14 @@ class Camera2Engine(private val context: Context) {
         } else {
             dollyZoomEngine.stop()
         }
+        val session = captureSession
+        val builder = previewRequestBuilder
+        if (session != null && builder != null) {
+            try {
+                applyCommonSettings(builder)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (ignored: Exception) {}
+        }
     }
 
     fun setHorizonLockEnabled(enabled: Boolean) {
@@ -2457,7 +2465,9 @@ class Camera2Engine(private val context: Context) {
                 val lens = _selectedLens.value
                 val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
                 val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                dollyZoomEngine.onFrameFaces(faces, activeArray)
+                val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+                val isFront = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+                dollyZoomEngine.onFrameFaces(faces, activeArray, sensorOrientation, isFront)
             }
 
             if (_hybridStabilizationConfig.value.isUltraStabilizationEnabled &&
@@ -2843,6 +2853,17 @@ class Camera2Engine(private val context: Context) {
             cinemaEngine.applyToCaptureRequest(builder)
         }
 
+        // Hardware face detection for Dolly Zoom and Portrait
+        if ((_isDollyZoomActive.value && currentMode == CameraMode.VIDEO) || currentMode == CameraMode.PORTRAIT) {
+            val lens = activeSessionLens ?: _selectedLens.value
+            val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
+            val faceModes = chars?.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES) ?: intArrayOf()
+            if (faceModes.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)) {
+                builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
+            } else if (faceModes.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)) {
+                builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)
+            }
+        }
 
         // Digital Zoom / Crop Region
         applyZoom(builder)
