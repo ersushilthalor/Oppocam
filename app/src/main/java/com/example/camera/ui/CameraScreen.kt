@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.ScreenLockRotation
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -152,6 +153,8 @@ fun CameraScreen(
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
     val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
     val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
+    val isHorizonLockEnabled by viewModel.isHorizonLockEnabled.collectAsStateWithLifecycle()
+    val horizonRollDegrees by viewModel.horizonRollDegrees.collectAsStateWithLifecycle()
 
     val flashMode by viewModel.flashMode.collectAsStateWithLifecycle()
     val timerMode by viewModel.timerMode.collectAsStateWithLifecycle()
@@ -338,9 +341,46 @@ fun CameraScreen(
                 onMotionPhotoPreviewFrame = { bmp ->
                     viewModel.onMotionPhotoPreviewFrame(bmp)
                 },
+                isHorizonLockEnabled = isHorizonLockEnabled,
+                horizonRollDegrees = horizonRollDegrees,
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
                 modifier = Modifier.fillMaxSize()
             )
+
+        // 1b. Dedicated Horizon Lock On-Screen Indicator (Video Mode)
+        if (cameraMode == CameraMode.VIDEO && isHorizonLockEnabled) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 58.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xCC0D0F18))
+                    .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                    .clickable { viewModel.toggleHorizonLock() }
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                    .testTag("horizon_lock_badge")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ScreenLockRotation,
+                        contentDescription = "Horizontal Lock",
+                        tint = Color(0xFFFFD54F),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "HORIZON LOCK",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.6.sp
+                    )
+                }
+            }
+        }
 
         // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
         if (cameraMode == CameraMode.VIDEO) {
@@ -485,6 +525,8 @@ fun CameraScreen(
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
+            isHorizonLockEnabled = isHorizonLockEnabled,
+            onToggleHorizonLock = { viewModel.toggleHorizonLock() },
             onFlashClick = { viewModel.cycleFlashMode() },
             onTimerClick = { viewModel.cycleTimerMode() },
             onGridClick = { viewModel.cycleGridType() },

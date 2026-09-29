@@ -1364,6 +1364,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isVideoSettingsPanelOpen.value = !_isVideoSettingsPanelOpen.value
     }
 
+    val isHorizonLockEnabled: StateFlow<Boolean> = engine.isHorizonLockEnabled
+    val horizonRollDegrees: StateFlow<Float> = engine.stableActionHorizonEngine.rollDegreesFlow
+
+    fun toggleHorizonLock() {
+        val newState = !engine.isHorizonLockEnabled.value
+        setHorizonLockEnabled(newState)
+    }
+
+    fun setHorizonLockEnabled(enabled: Boolean) {
+        engine.setHorizonLockEnabled(enabled)
+        showToast(if (enabled) "Horizontal Lock: ON" else "Horizontal Lock: OFF")
+    }
+
     fun setPreferredGalleryPackage(packageName: String?) {
         _preferredGalleryPackage.value = packageName
         preferences.preferredGalleryPackage = packageName

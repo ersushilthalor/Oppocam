@@ -137,6 +137,8 @@ fun TopControlBar(
     isVideoAdjustmentsOpen: Boolean = false,
     hasActiveVideoAdjustments: Boolean = false,
     onVideoAdjustmentsClick: () -> Unit = {},
+    isHorizonLockEnabled: Boolean = false,
+    onToggleHorizonLock: () -> Unit = {},
     onFlashClick: () -> Unit,
     onTimerClick: () -> Unit,
     onGridClick: () -> Unit,
@@ -715,6 +717,26 @@ fun TopControlBar(
             }
         }
 
+        val horizonLockButton = @Composable {
+            IconButton(
+                onClick = onToggleHorizonLock,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isHorizonLockEnabled) Color(0xFFFFD54F) else null
+                    )
+                    .testTag("video_horizon_lock_button")
+            ) {
+                Icon(
+                    imageVector = if (isHorizonLockEnabled) Icons.Filled.ScreenLockRotation else Icons.Outlined.ScreenLockRotation,
+                    contentDescription = if (isHorizonLockEnabled) "Horizontal Lock Enabled" else "Horizontal Lock Disabled",
+                    tint = if (isHorizonLockEnabled) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
         val isVideoFamily = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
 
         // Render Top Controls according to layoutConfig
@@ -748,6 +770,7 @@ fun TopControlBar(
                 settingsButton()
             } else if (cameraMode == CameraMode.VIDEO) {
                 flashButton()
+                horizonLockButton()
                 videoAdjustmentsButton()
                 primaryBadge()
                 secondaryBadge()

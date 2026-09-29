@@ -115,6 +115,8 @@ fun Viewfinder(
     onFrameLuminanceStats: ((com.example.camera.engine.FrameLuminanceStats) -> Unit)? = null,
     isMotionPhotoEnabled: Boolean = false,
     onMotionPhotoPreviewFrame: ((Bitmap) -> Unit)? = null,
+    isHorizonLockEnabled: Boolean = false,
+    horizonRollDegrees: Float = 0f,
     viewfinderCornerRadiusDp: Int = 0,
     modifier: Modifier = Modifier
 ) {
@@ -188,6 +190,27 @@ fun Viewfinder(
         }
     }
 
+    LaunchedEffect(textureViewInstance, isHorizonLockEnabled, horizonRollDegrees, cameraMode) {
+        textureViewInstance?.let { tv ->
+            if (tv.width > 0 && tv.height > 0) {
+                val isFourThree = when (cameraMode) {
+                    CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> true
+                    CameraMode.VIDEO, CameraMode.CINEMA -> false
+                    else -> if (aspectRatio > 0f) aspectRatio < 1.5f else true
+                }
+                val targetRatio = if (isFourThree) 4f / 3f else 16f / 9f
+                updateTextureViewTransform(
+                    textureView = tv,
+                    previewBufferSize = previewBufferSize,
+                    targetRatio = targetRatio,
+                    sensorOrientation = sensorOrientation,
+                    isHorizonLockEnabled = isHorizonLockEnabled && cameraMode == CameraMode.VIDEO,
+                    horizonRollDegrees = horizonRollDegrees
+                )
+            }
+        }
+    }
+
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -208,6 +231,8 @@ fun Viewfinder(
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
         val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
+        val currentIsHorizonLock by rememberUpdatedState(isHorizonLockEnabled && cameraMode == CameraMode.VIDEO)
+        val currentHorizonRoll by rememberUpdatedState(horizonRollDegrees)
 
         // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame
         val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
@@ -291,17 +316,17 @@ fun Viewfinder(
                                 val newW = right - left
                                 val newH = bottom - top
                                 if (newW > 0 && newH > 0) {
-                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation)
+                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll)
                                 }
                             }
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll)
                                     onSurfaceTextureAvailable(st)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -373,7 +398,7 @@ fun Viewfinder(
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
-                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation)
+                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && cameraMode == CameraMode.VIDEO, horizonRollDegrees)
                         }
 
                         // Outline provider for corner radius clipping on hardware accelerated TextureView
@@ -787,7 +812,9 @@ private fun updateTextureViewTransform(
     textureView: TextureView,
     previewBufferSize: CameraSize?,
     targetRatio: Float,
-    sensorOrientation: Int = 90
+    sensorOrientation: Int = 90,
+    isHorizonLockEnabled: Boolean = false,
+    horizonRollDegrees: Float = 0f
 ) {
     val viewW = textureView.width.toFloat()
     val viewH = textureView.height.toFloat()
@@ -823,6 +850,18 @@ private fun updateTextureViewTransform(
             matrix.setScale(scaleX, scaleY, centerX, centerY)
         }
     }
+
+    if (isHorizonLockEnabled) {
+        // Stable Action Counter-Rotation & Safe Inscribed Crop
+        val angleDeg = -horizonRollDegrees
+        matrix.postRotate(angleDeg, centerX, centerY)
+
+        // Safe crop scale factor so NO black borders appear at any rotation angle (0° to 360°)
+        val aspect = max(viewW, viewH) / min(viewW, viewH)
+        val safeScale = max(kotlin.math.sqrt(1f + aspect * aspect) / 0.90f, 1.8518f)
+        matrix.postScale(safeScale, safeScale, centerX, centerY)
+    }
+
     textureView.setTransform(matrix)
 }
 

@@ -243,6 +243,19 @@ class Camera2Engine(private val context: Context) {
     val nightFusionProcessor by lazy { NightFusionProcessor() }
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
+    val stableActionHorizonEngine by lazy { com.example.camera.stableaction.StableActionHorizonEngine(context) }
+
+    private val _isHorizonLockEnabled = MutableStateFlow(false)
+    val isHorizonLockEnabled: StateFlow<Boolean> = _isHorizonLockEnabled.asStateFlow()
+
+    fun setHorizonLockEnabled(enabled: Boolean) {
+        _isHorizonLockEnabled.value = enabled
+        if (enabled && currentMode == CameraMode.VIDEO) {
+            stableActionHorizonEngine.start()
+        } else {
+            stableActionHorizonEngine.stop()
+        }
+    }
 
     fun refreshCaptureSessionForRaw() {
         val lens = _selectedLens.value ?: return
@@ -1463,6 +1476,12 @@ class Camera2Engine(private val context: Context) {
             lastStabilizedCrop = null
         } else if (isVideoMode && _hybridStabilizationConfig.value.isUltraStabilizationEnabled) {
             gyroStabilizationEngine.start()
+        }
+
+        if (mode == CameraMode.VIDEO && _isHorizonLockEnabled.value) {
+            stableActionHorizonEngine.start()
+        } else {
+            stableActionHorizonEngine.stop()
         }
 
         val needsReconfigure = (kotlin.math.abs(oldRatio - newRatio) > 0.05f) ||
@@ -5125,6 +5144,9 @@ class Camera2Engine(private val context: Context) {
 
     private fun startVideoTimer() {
         _videoDurationSeconds.value = 0
+        if (_isHorizonLockEnabled.value) {
+            stableActionHorizonEngine.startRecordingTrajectory()
+        }
         videoTimerJob?.cancel()
         videoTimerJob = engineScope.launch {
             while (_isRecordingVideo.value) {
@@ -5161,6 +5183,9 @@ class Camera2Engine(private val context: Context) {
         recordingCinemaConfig = null
         recordingRec2020Params = null
 
+        val wasHorizonLockActive = _isHorizonLockEnabled.value
+        val horizonTrajectory = if (wasHorizonLockActive) stableActionHorizonEngine.stopRecordingTrajectory() else emptyList()
+
         // Dispatch stop and resource cleanup to background IO so UI thread never freezes
         engineScope.launch(Dispatchers.IO) {
             try {
@@ -5193,6 +5218,22 @@ class Camera2Engine(private val context: Context) {
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Cinema LUT to final video", e)
+                            }
+                        } else if (wasHorizonLockActive && horizonTrajectory.isNotEmpty()) {
+                            try {
+                                val procDest = File(recordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${recordedFile.extension}")
+                                val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    trajectory = horizonTrajectory,
+                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Stable Action Horizon Lock to final cinema video", e)
                             }
                         }
 
@@ -5261,6 +5302,22 @@ class Camera2Engine(private val context: Context) {
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Cinema LUT to final video", e)
+                            }
+                        } else if (wasHorizonLockActive && horizonTrajectory.isNotEmpty()) {
+                            try {
+                                val procDest = File(tempFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${tempFile.extension}")
+                                val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    trajectory = horizonTrajectory,
+                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Stable Action Horizon Lock to final video", e)
                             }
                         }
 
@@ -6355,6 +6412,7 @@ class Camera2Engine(private val context: Context) {
         isConfiguringSession = false
         pendingReconfigureSession = false
         gyroStabilizationEngine.stop()
+        stableActionHorizonEngine.stop()
         ultraFastShutterEngine.reset()
         lastStabilizedCrop = null
         closeCameraCaptureSession()
