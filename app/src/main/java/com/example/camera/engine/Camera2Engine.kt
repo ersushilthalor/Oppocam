@@ -283,12 +283,6 @@ class Camera2Engine(private val context: Context) {
         _isHorizonLockEnabled.value = enabled
         if (enabled && currentMode == CameraMode.VIDEO) {
             stableActionHorizonEngine.start()
-            // In Action mode, auto-switch to ultra-wide if available for maximum crop buffer (matching Stable Action CameraManager.swift)
-            val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-            val ultraWide = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-            if (ultraWide != null && _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_BACK && _selectedLens.value != ultraWide) {
-                selectLens(ultraWide, preserveZoom = false)
-            }
         } else {
             stableActionHorizonEngine.stop()
         }

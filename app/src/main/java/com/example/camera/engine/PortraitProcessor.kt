@@ -96,16 +96,23 @@ class PortraitProcessor(private val context: Context) {
 
             onProgress(0.25f, "Running CineDepth Pro depth estimation & matting...")
 
-            // Default foreground portrait subject depth is ~64 (0.25 in 0..255 depth space)
-            var focusDepth = 64f
+            // 4. Pin subject focus depth via upfront face detection or manual focus point
+            val focusLocation = if (config.focusPointX != null && config.focusPointY != null) {
+                Pair(config.focusPointX, config.focusPointY)
+            } else {
+                FaceAutoFocus.detectFaceLocation(orientedBitmap)
+            }
+
+            // Subject focus depth in 0..255 space (64f = 0.25f foreground plane)
+            val focusDepth = 64f
 
             val initialParams = BlurPreviewParams(
                 blurStrength = blurStrength,
                 focusDepth = focusDepth,
                 lensEffect = lensEffect,
                 edgeSoftness = 0.35f,
-                edgeExpand = 0.22f,
-                edgeRefine = 0.52f,
+                edgeExpand = 0.20f,
+                edgeRefine = 0.55f,
                 backgroundLight = 0.12f,
                 highlightBoost = highlightBoost,
                 blurFalloff = 0.75f,
@@ -115,7 +122,7 @@ class PortraitProcessor(private val context: Context) {
 
             onProgress(0.55f, "Executing CineDepth Pro GPU AGSL bokeh rendering...")
 
-            // Run CineDepth Pro's depth-aware GPU rendering
+            // Run CineDepth Pro's depth-aware GPU rendering in a single pristine pass
             val renderOutput = depthBlurEngine.renderDepthAware(
                 source = orientedBitmap,
                 params = initialParams,
@@ -124,59 +131,24 @@ class PortraitProcessor(private val context: Context) {
                 fastContourMatte = false
             )
 
-            // If user specified an explicit focus point or if FaceAutoFocus can refine focus:
-            val finalRenderOutput = if (config.focusPointX != null && config.focusPointY != null) {
-                val depthBmp = renderOutput.depthMapBitmap
-                val fx = (config.focusPointX * depthBmp.width).toInt().coerceIn(0, depthBmp.width - 1)
-                val fy = (config.focusPointY * depthBmp.height).toInt().coerceIn(0, depthBmp.height - 1)
-                val pixel = depthBmp.getPixel(fx, fy)
-                val sampledFocus = (pixel and 0xFF).toFloat()
-                if (kotlin.math.abs(sampledFocus - focusDepth) > 10f) {
-                    val refinedParams = initialParams.copy(focusDepth = sampledFocus)
-                    val reRendered = depthBlurEngine.rerenderPreviewFromCache(
-                        sourceBitmap = orientedBitmap,
-                        depthBitmap = renderOutput.depthMapBitmap,
-                        params = refinedParams
-                    )
-                    renderOutput.bitmap.recycle()
-                    renderOutput.copy(bitmap = reRendered)
-                } else {
-                    renderOutput
-                }
-            } else {
-                val faceFocus = FaceAutoFocus.detectAndSampleDepth(orientedBitmap, renderOutput.depthMapBitmap)
-                if (faceFocus != null && kotlin.math.abs(faceFocus.depthValue.toFloat() - focusDepth) > 12f) {
-                    val refinedParams = initialParams.copy(focusDepth = faceFocus.depthValue.toFloat())
-                    val reRendered = depthBlurEngine.rerenderPreviewFromCache(
-                        sourceBitmap = orientedBitmap,
-                        depthBitmap = renderOutput.depthMapBitmap,
-                        params = refinedParams
-                    )
-                    renderOutput.bitmap.recycle()
-                    renderOutput.copy(bitmap = reRendered)
-                } else {
-                    renderOutput
-                }
-            }
-
             onProgress(0.85f, "Saving CineDepth Pro portrait to gallery...")
 
             // Save to DCIM/Camera MediaStore
             val savedUri = depthBlurEngine.saveBitmapToGallery(
                 context = context,
-                bitmap = finalRenderOutput.bitmap,
+                bitmap = renderOutput.bitmap,
                 relativeFolder = "DCIM/Camera"
             )
 
             // Recycle intermediate buffers
-            if (finalRenderOutput.sourceBitmap !== orientedBitmap && !finalRenderOutput.sourceBitmap.isRecycled) {
-                finalRenderOutput.sourceBitmap.recycle()
+            if (renderOutput.sourceBitmap !== orientedBitmap && !renderOutput.sourceBitmap.isRecycled) {
+                renderOutput.sourceBitmap.recycle()
             }
-            if (!finalRenderOutput.depthMapBitmap.isRecycled) {
-                finalRenderOutput.depthMapBitmap.recycle()
+            if (!renderOutput.depthMapBitmap.isRecycled) {
+                renderOutput.depthMapBitmap.recycle()
             }
-            if (!finalRenderOutput.bitmap.isRecycled) {
-                finalRenderOutput.bitmap.recycle()
+            if (!renderOutput.bitmap.isRecycled) {
+                renderOutput.bitmap.recycle()
             }
 
             onProgress(1.0f, "Portrait complete")

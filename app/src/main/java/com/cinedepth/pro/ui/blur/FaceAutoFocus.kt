@@ -87,4 +87,35 @@ object FaceAutoFocus {
                 cont.resume(null)
             }
     }
+
+    /**
+     * Detect faces in [sourceBitmap] and return the normalized center of the primary face.
+     */
+    suspend fun detectFaceLocation(
+        sourceBitmap: Bitmap
+    ): Pair<Float, Float>? = suspendCancellableCoroutine { cont ->
+        val inputImage = InputImage.fromBitmap(sourceBitmap, 0)
+        detector.process(inputImage)
+            .addOnSuccessListener { faces ->
+                if (faces.isEmpty()) {
+                    cont.resume(null)
+                    return@addOnSuccessListener
+                }
+                val largest = faces.maxByOrNull {
+                    it.boundingBox.width() * it.boundingBox.height()
+                } ?: run {
+                    cont.resume(null)
+                    return@addOnSuccessListener
+                }
+                val box = largest.boundingBox
+                val centerX = (box.left + box.right) / 2f
+                val centerY = (box.top + box.bottom) / 2f
+                val normX = (centerX / sourceBitmap.width).coerceIn(0f, 1f)
+                val normY = (centerY / sourceBitmap.height).coerceIn(0f, 1f)
+                cont.resume(Pair(normX, normY))
+            }
+            .addOnFailureListener {
+                cont.resume(null)
+            }
+    }
 }

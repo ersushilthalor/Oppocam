@@ -975,10 +975,18 @@ object DepthBlurEngine {
                 scaled.getPixels(pixels, 0, width, 0, 0, width, height)
                 scaled.recycle()
             }
-            for (i in pixels.indices) {
-                val personConfidence = (pixels[i] and 0xFF) / 255f
-                // Foreground person is near (0.25f depth), background falls off into distance (0.85f depth)
-                depth[i] = 0.85f - (personConfidence * 0.60f)
+            for (y in 0 until height) {
+                val row = y * width
+                // Natural perspective ramp for background: closer near bottom, deeper receding into distance
+                val normY = y.toFloat() / height.toFloat()
+                val bgPerspective = 0.50f + (1.0f - normY) * 0.40f
+                for (x in 0 until width) {
+                    val personConfidence = (pixels[row + x] and 0xFF) / 255f
+                    // Smooth transition from foreground subject (0.25 depth) to realistic receding background depth
+                    val bgWeight = kotlin.math.max(0f, 1f - personConfidence)
+                    val smoothBg = bgWeight * bgWeight
+                    depth[row + x] = 0.25f + smoothBg * (bgPerspective - 0.25f)
+                }
             }
         } else {
             for (y in 0 until height) {
@@ -987,7 +995,7 @@ object DepthBlurEngine {
                 for (x in 0 until width) {
                     val nx = (x.toFloat() / width - 0.5f) * 2f
                     val dist = kotlin.math.sqrt(nx * nx + ny * ny).coerceIn(0f, 1f)
-                    depth[row + x] = 0.35f + dist * 0.50f
+                    depth[row + x] = 0.25f + dist * 0.60f
                 }
             }
         }

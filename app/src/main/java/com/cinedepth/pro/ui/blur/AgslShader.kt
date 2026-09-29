@@ -195,21 +195,12 @@ vec4 main(float2 coord) {
 
     // ── Final seg-mask fusion ──────────────────────────────────
     // At person boundaries (hair), blend the depth-based alpha with
-    // the segmentation confidence. The seg mask is the "truth" for
-    // thin structures; depth is the "truth" for z-ordering.
+    // the segmentation confidence to preserve natural hair edges and fine details.
     if (hasSegMask > 0.5) {
-        // How much are we on a seg boundary?
-        float segBoundaryZone = smoothstep(0.03, 0.30, segEdge);
-        // In boundary zones, trust the seg mask for the alpha shape
-        // but keep depth-based alpha for the overall intensity
-        float segAlpha = smoothstep(0.10, 0.45, centerSeg);
-        // Blend: in boundary zones, seg dominates; away from boundaries, depth dominates
-        float fusionWeight = segBoundaryZone * refineAmount * 0.92;
+        float segBoundaryZone = smoothstep(0.02, 0.35, segEdge);
+        float segAlpha = smoothstep(0.05, 0.85, centerSeg);
+        float fusionWeight = segBoundaryZone * refineAmount * 0.70;
         alpha = mix(alpha, max(alpha, segAlpha), fusionWeight);
-        // Anti-halo: on person side near boundary, clamp alpha to prevent
-        // blurred background from bleeding into the foreground edge
-        float personNearEdge = segBoundaryZone * smoothstep(0.35, 0.65, centerSeg);
-        alpha = mix(alpha, max(alpha, 0.95), personNearEdge * refineAmount * 0.80);
     }
 
     return vec4(alpha, alpha, alpha, 1.0);
@@ -392,20 +383,11 @@ vec4 main(float2 coord) {
             weight *= 0.34;
         }
 
-        // ── Seg-mask occlusion: hard boundary between person and background ──
-        // Reject samples that cross the person/background boundary in BOTH directions
-        // to prevent blur leaking across hair/skin edges (halo artifact).
-        if (hasSegMask > 0.5) {
-            float segDiff = abs(sampleSeg - centerSeg);
-            float segCrossing = smoothstep(0.12, 0.50, segDiff);
-            // Protect person edges: center=person, sample=background
-            float personSide = smoothstep(0.20, 0.55, centerSeg);
-            float personReject = segCrossing * personSide * 0.96;
-            // Protect background edges: center=background, sample=person
-            // (prevents blurred BG from pulling in sharp foreground)
-            float bgSide = smoothstep(0.20, 0.55, 1.0 - centerSeg);
-            float bgReject = segCrossing * bgSide * 0.90;
-            weight *= 1.0 - max(personReject, bgReject);
+        // ── Depth-aware optical occlusion ──
+        // Background blur should NOT bleed over sharp foreground subject,
+        // but bokeh discs spread naturally around subject contours without artificial cutout halos.
+        if (matteProtection > 0.35 && sampleMatte < centerMatte - 0.12) {
+            weight *= mix(1.0, 0.08, nearerReject);
         }
 
         accumColor += applyHighlightBoost(sampleColor, highlightBoost, sampleCoC, r_norm, lensEffectType) * weight;
