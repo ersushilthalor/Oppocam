@@ -2302,6 +2302,11 @@ class Camera2Engine(private val context: Context) {
                 val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
                 cinemaEngine.naturalLogEngine.onFrameCaptured(result, chars)
                 onNaturalLogAutoToneFrame()
+            } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG) {
+                val lens = _selectedLens.value
+                val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
+                cinemaEngine.hlgAutoExposureEngine.onFrameCaptured(result, chars)
+                onHlgAutoToneFrame()
             } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.NATIVE) {
                 val lens = _selectedLens.value
                 val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
@@ -2317,9 +2322,27 @@ class Camera2Engine(private val context: Context) {
     fun onFrameLuminanceStats(stats: FrameLuminanceStats) {
         latestLuminanceStats = stats
         cinemaEngine.naturalLogEngine.onFrameLuminanceAnalyzed(stats)
+        cinemaEngine.hlgAutoExposureEngine.onFrameLuminanceAnalyzed(stats)
         if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.FLAT_LOG) {
             onNaturalLogAutoToneFrame()
+        } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG) {
+            onHlgAutoToneFrame()
         }
+    }
+
+    private var lastHlgIspUpdateTime = 0L
+    private fun onHlgAutoToneFrame() {
+        val now = System.currentTimeMillis()
+        if (now - lastHlgIspUpdateTime < 66L) return // 15fps throttle for repeating ISP tonemap updates
+        if (!cinemaEngine.hlgAutoExposureEngine.hasSignificantChangeSinceLastIspUpdate()) return
+        lastHlgIspUpdateTime = now
+        cinemaEngine.hlgAutoExposureEngine.markIspUpdated()
+        val session = captureSession ?: return
+        val builder = previewRequestBuilder ?: return
+        try {
+            cinemaEngine.applyToCaptureRequest(builder)
+            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+        } catch (ignored: Exception) {}
     }
 
     private var lastNaturalLogIspUpdateTime = 0L
@@ -4747,7 +4770,9 @@ class Camera2Engine(private val context: Context) {
                     codec = cinemaCodec,
                     bitDepth = if (is10BitRequested || cinemaCodec == CinemaCodec.PRORES) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
                     isAudioEnabled = isAudioEnabled,
-                    orientationHint = cinemaOrientationHint
+                    orientationHint = cinemaOrientationHint,
+                    colorProfile = cinemaConfig.value.colorProfile,
+                    colorSpace = cinemaConfig.value.colorSpace
                 )
                 preparedVideoGeometry = PreparedVideoGeometry(
                     width = finalRecordWidth,

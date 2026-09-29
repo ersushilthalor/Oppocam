@@ -446,9 +446,16 @@ fun Viewfinder(
                         }
                 )
 
-                // Clean Cinematic LUT Active Badge
+                // Clean Cinematic LUT Active Badge (Omitted when LOG profile is selected)
+                val isLogProfile = cinemaConfig?.let {
+                    it.colorProfile in listOf(
+                        com.example.camera.model.CinemaColorProfile.FLAT_LOG,
+                        com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
+                        com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
+                    ) || it.isLogMode
+                } ?: false
                 val badgeLut = activeLut ?: cinemaConfig?.selectedLut
-                if (cameraMode == CameraMode.CINEMA && badgeLut != null && badgeLut != CinematicLut.NONE) {
+                if (cameraMode == CameraMode.CINEMA && badgeLut != null && badgeLut != CinematicLut.NONE && !isLogProfile) {
                     val displayLabel = if (badgeLut == CinematicLut.CUSTOM) {
                         cinemaConfig?.customLutName ?: badgeLut.label
                     } else {

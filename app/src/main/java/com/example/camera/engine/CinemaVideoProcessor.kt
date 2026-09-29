@@ -87,6 +87,7 @@ object CinemaVideoProcessor {
             val success = transcodeVideo(
                 inputFile = inputFile,
                 outputFile = outputFile,
+                config = config,
                 colorMatrix = colorMatrix,
                 rotationDegrees = normalizedRot
             )
@@ -107,6 +108,7 @@ object CinemaVideoProcessor {
     private fun transcodeVideo(
         inputFile: File,
         outputFile: File,
+        config: CinemaConfig,
         colorMatrix: ColorMatrix?,
         rotationDegrees: Int
     ): Boolean {
@@ -163,16 +165,49 @@ object CinemaVideoProcessor {
             val outHeight = inHeight and 1.inv()
 
             // Setup MediaCodec Video Encoder
-            val encoderMime = MediaFormat.MIMETYPE_VIDEO_AVC
+            val isHevc = config.codec == com.example.camera.model.CinemaCodec.H265
+            var encoderMime = if (isHevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
             val outFormat = MediaFormat.createVideoFormat(encoderMime, outWidth, outHeight).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, maxOf(inBitrate, 20_000_000))
+                setInteger(MediaFormat.KEY_BIT_RATE, maxOf(inBitrate, 25_000_000))
                 setInteger(MediaFormat.KEY_FRAME_RATE, maxOf(inFps, 24))
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+
+                val colorStandard = if (config.colorProfile == com.example.camera.model.CinemaColorProfile.HLG || config.colorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
+                    MediaFormat.COLOR_STANDARD_BT2020
+                } else {
+                    MediaFormat.COLOR_STANDARD_BT709
+                }
+                val colorTransfer = if (config.colorProfile == com.example.camera.model.CinemaColorProfile.HLG) {
+                    MediaFormat.COLOR_TRANSFER_HLG
+                } else {
+                    MediaFormat.COLOR_TRANSFER_SDR_VIDEO
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        setInteger(MediaFormat.KEY_COLOR_STANDARD, colorStandard)
+                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, colorTransfer)
+                        setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                    } catch (ignored: Exception) {}
+                }
             }
 
-            encoder = MediaCodec.createEncoderByType(encoderMime)
-            encoder.configure(outFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoder = try {
+                MediaCodec.createEncoderByType(encoderMime).apply {
+                    configure(outFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                }
+            } catch (e: Exception) {
+                encoderMime = MediaFormat.MIMETYPE_VIDEO_AVC
+                val fallbackFormat = MediaFormat.createVideoFormat(encoderMime, outWidth, outHeight).apply {
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                    setInteger(MediaFormat.KEY_BIT_RATE, maxOf(inBitrate, 20_000_000))
+                    setInteger(MediaFormat.KEY_FRAME_RATE, maxOf(inFps, 24))
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                }
+                MediaCodec.createEncoderByType(encoderMime).apply {
+                    configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                }
+            }
             encoderSurface = encoder.createInputSurface()
             encoder.start()
 
@@ -291,21 +326,27 @@ object CinemaVideoProcessor {
 
             val stMatrix = FloatArray(16)
 
-            // Compute 4x4 ColorMatrix and offset for shader
+            // Compute 4x4 ColorMatrix and offset for shader matching ColorMatrixColorFilter
             val glColorMat = FloatArray(16)
             val glColorOffset = FloatArray(4)
             if (colorMatrix != null) {
                 val a = colorMatrix.array
                 // OpenGL is column-major:
-                glColorMat[0] = a[0];  glColorMat[1] = a[5];  glColorMat[2] = a[10]; glColorMat[3] = a[15]
-                glColorMat[4] = a[1];  glColorMat[5] = a[6];  glColorMat[6] = a[11]; glColorMat[7] = a[16]
-                glColorMat[8] = a[2];  glColorMat[9] = a[7];  glColorMat[10] = a[12]; glColorMat[11] = a[17]
-                glColorMat[12] = a[3]; glColorMat[13] = a[8]; glColorMat[14] = a[13]; glColorMat[15] = a[18]
+                // Column 0 (Red input multiplier)
+                glColorMat[0] = a[0];  glColorMat[1] = a[5];  glColorMat[2] = a[10]; glColorMat[3] = 0f
+                // Column 1 (Green input multiplier)
+                glColorMat[4] = a[1];  glColorMat[5] = a[6];  glColorMat[6] = a[11]; glColorMat[7] = 0f
+                // Column 2 (Blue input multiplier)
+                glColorMat[8] = a[2];  glColorMat[9] = a[7];  glColorMat[10] = a[12]; glColorMat[11] = 0f
+                // Column 3 (Alpha / translation)
+                glColorMat[12] = 0f;   glColorMat[13] = 0f;   glColorMat[14] = 0f;    glColorMat[15] = 1f
 
-                glColorOffset[0] = a[4] / 255.0f
-                glColorOffset[1] = a[9] / 255.0f
-                glColorOffset[2] = a[14] / 255.0f
-                glColorOffset[3] = a[19] / 255.0f
+                // Translation offsets: a[4], a[9], a[14] in [0, 255] scaled to [0, 1].
+                // If a[3], a[8], a[13] contain alpha contributions (A=1.0), include them:
+                glColorOffset[0] = (a[3] + a[4]) / 255.0f
+                glColorOffset[1] = (a[8] + a[9]) / 255.0f
+                glColorOffset[2] = (a[13] + a[14]) / 255.0f
+                glColorOffset[3] = 0.0f
             } else {
                 Matrix.setIdentityM(glColorMat, 0)
                 glColorOffset.fill(0f)

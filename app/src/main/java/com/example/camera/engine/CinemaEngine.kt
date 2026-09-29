@@ -86,6 +86,7 @@ class CinemaEngine(private val context: Context) {
     val rec2020AutoToneEngine = Rec2020AutoToneEngine()
     val nativeNaturalEngine = NativeNaturalVideoEngine()
     val naturalLogEngine = NaturalLogExposureEngine()
+    val hlgAutoExposureEngine = HlgAutoExposureEngine()
 
     fun updateConfig(newConfig: CinemaConfig) {
         config = newConfig
@@ -111,6 +112,14 @@ class CinemaEngine(private val context: Context) {
         }
         if (config.colorProfile == CinemaColorProfile.REC_2020) {
             return rec2020AutoToneEngine.getTonemapCurve()
+        }
+        if (config.colorProfile == CinemaColorProfile.HLG) {
+            return hlgAutoExposureEngine.getTonemapCurve(
+                userExposure = config.exposure,
+                userShadows = config.shadows,
+                userHighlights = config.highlights,
+                userContrast = config.contrast
+            )
         }
         if (config.colorProfile == CinemaColorProfile.NATIVE) {
             return nativeNaturalEngine.getTonemapCurve(
@@ -298,6 +307,15 @@ class CinemaEngine(private val context: Context) {
                 )
                 builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
                 builder.set(CaptureRequest.TONEMAP_CURVE, tonemapCurve)
+            } else if (config.colorProfile == CinemaColorProfile.HLG && supportsContrastCurve) {
+                val tonemapCurve = hlgAutoExposureEngine.getTonemapCurve(
+                    userExposure = 0.0f, // Camera2 AE handles physical sensor exposure authoritatively
+                    userShadows = config.shadows,
+                    userHighlights = config.highlights,
+                    userContrast = config.contrast
+                )
+                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                builder.set(CaptureRequest.TONEMAP_CURVE, tonemapCurve)
             } else if (supportsContrastCurve) {
                 val tonemapCurve = generateLogTonemapCurve(
                     config.colorProfile,
@@ -439,6 +457,7 @@ class CinemaEngine(private val context: Context) {
         val effectiveExp = when (config.colorProfile) {
             CinemaColorProfile.REC_2020 -> rec2020AutoToneEngine.currentParams.value.exposure
             CinemaColorProfile.FLAT_LOG -> config.exposure + naturalLogEngine.currentParams.value.exposureComp
+            CinemaColorProfile.HLG -> config.exposure + hlgAutoExposureEngine.currentParams.value.exposureComp
             else -> config.exposure
         }
         val exposureSliderSteps = (effectiveExp * 6f).roundToInt()
@@ -632,8 +651,11 @@ class CinemaEngine(private val context: Context) {
                 }
             }
             CinemaColorProfile.HLG -> {
-                // ITU-R BT.2100 Hybrid Log-Gamma transfer function:
-                if (inVal <= (1.0f / 12.0f)) {
+                // Flagship ITU-R BT.2100 Hybrid Log-Gamma with C1-continuous linear/parabolic toe near zero:
+                // Prevents infinite gradient near 0 that causes hardware ISP AE to oscillate
+                if (inVal <= 0.04f) {
+                    (2.45f * inVal + 1.25f * inVal * inVal).coerceIn(0f, 1f)
+                } else if (inVal <= (1.0f / 12.0f)) {
                     kotlin.math.sqrt(3.0f * inVal).coerceIn(0f, 1f)
                 } else {
                     val a = 0.17883277f

@@ -39,6 +39,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     }
 
     private var activeCodec: CinemaCodec? = null
+    private var activeColorProfile: com.example.camera.model.CinemaColorProfile = com.example.camera.model.CinemaColorProfile.NATIVE
+    private var activeColorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709
     private var outputFile: File? = null
 
     private val isRecording = AtomicBoolean(false)
@@ -91,10 +93,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         codec: CinemaCodec,
         bitDepth: LogBitDepth,
         isAudioEnabled: Boolean,
-        orientationHint: Int = 0
+        orientationHint: Int = 0,
+        colorProfile: com.example.camera.model.CinemaColorProfile = com.example.camera.model.CinemaColorProfile.NATIVE,
+        colorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709
     ): Surface {
         outputFile = destFile
         activeCodec = codec
+        activeColorProfile = colorProfile
+        activeColorSpace = colorSpace
 
         isRecording.set(true)
         isStopping.set(false)
@@ -359,14 +365,25 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             } catch (ignored: Exception) {}
 
+            val colorStandard = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG || activeColorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
+                MediaFormat.COLOR_STANDARD_BT2020
+            } else {
+                MediaFormat.COLOR_STANDARD_BT709
+            }
+            val colorTransfer = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG) {
+                MediaFormat.COLOR_TRANSFER_HLG
+            } else {
+                MediaFormat.COLOR_TRANSFER_SDR_VIDEO
+            }
+
             if (mime == MediaFormat.MIMETYPE_VIDEO_VP9) {
                 // VP9 Profiles
                 if (is10BitMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     try {
                         setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.VP9Profile2)
                         supportedLevel?.let { setInteger(MediaFormat.KEY_LEVEL, it) }
-                        setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
-                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_HLG)
+                        setInteger(MediaFormat.KEY_COLOR_STANDARD, colorStandard)
+                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, colorTransfer)
                         setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
                     } catch (ignored: Exception) {}
                 } else {
@@ -380,8 +397,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                         setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
                         val level = supportedLevel ?: MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel51
                         setInteger(MediaFormat.KEY_LEVEL, level)
-                        setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
-                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_HLG)
+                        setInteger(MediaFormat.KEY_COLOR_STANDARD, colorStandard)
+                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, colorTransfer)
                         setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
                     } catch (ignored: Exception) {}
                 }
@@ -404,8 +421,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                         } else if (mime == MediaFormat.MIMETYPE_VIDEO_VP9) {
                             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.VP9Profile2)
                         }
-                        setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
-                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_HLG)
+                        setInteger(MediaFormat.KEY_COLOR_STANDARD, colorStandard)
+                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, colorTransfer)
                         setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
                     } catch (ignored: Exception) {}
                 }

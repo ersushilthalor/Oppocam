@@ -149,31 +149,39 @@ fun CinemaAssistOverlays(
             }
         }
 
-        // 4. Cinema Pipeline Status Badge
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 70.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xCC000000))
-                .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                .padding(horizontal = 8.dp, vertical = 3.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color(0xFFFFD54F))
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "${cinemaConfig.colorProfile.label.uppercase()} · ${cinemaConfig.logBitDepth.label}",
-                    color = Color.White,
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
-                )
+        // 4. Cinema Pipeline Status Badge (Omitted when LOG Profile is selected to keep viewfinder completely free of LOG text overlays)
+        val isLogProfile = cinemaConfig.colorProfile in listOf(
+            com.example.camera.model.CinemaColorProfile.FLAT_LOG,
+            com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
+            com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
+        ) || cinemaConfig.isLogMode
+
+        if (!isLogProfile) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 70.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xCC000000))
+                    .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(Color(0xFFFFD54F))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "${cinemaConfig.colorProfile.label.uppercase()} · ${cinemaConfig.logBitDepth.label}",
+                        color = Color.White,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                }
             }
         }
     }
