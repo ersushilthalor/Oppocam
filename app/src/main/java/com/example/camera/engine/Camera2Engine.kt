@@ -359,6 +359,18 @@ class Camera2Engine(private val context: Context) {
     val ultraRes50MStacker = UltraRes50MStacker(context)
     val refocusEngine = RefocusEngine(context)
     var photoMegapixelMode: PhotoMegapixelMode = PhotoMegapixelMode.M12
+        set(value) {
+            val changed = field != value
+            field = value
+            if (changed && currentMode == CameraMode.PHOTO) {
+                val activeLens = _selectedLens.value
+                val cameraId = activeLens?.physicalCameraId ?: activeLens?.cameraId
+                if (cameraId != null && cameraDevice != null && !isConfiguringSession) {
+                    setupImageReaders(cameraId)
+                    createCameraCaptureSession()
+                }
+            }
+        }
     var isRefocusPhotoEnabled: Boolean = false
     var refocusFrameCount: Int = 5
 
@@ -1815,8 +1827,42 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
+     * Resolves the actual maximum sensor resolution supported by the camera hardware using
+     * super-native-camera's Camera2 API implementation:
+     * 1. SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION (Android 12+ / API 31+) for genuine 50MP/108MP/200MP
+     * 2. High-resolution output sizes (getHighResolutionOutputSizes) from regular map
+     * 3. Standard stream configuration map output sizes (highest available hardware resolution)
+     */
+    fun getMaxResolutionNative(characteristics: CameraCharacteristics, format: Int): Size? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val maxResMap = characteristics.get(
+                    CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION
+                )
+                val ultraSizes = maxResMap?.getOutputSizes(format)
+                val maxUltra = ultraSizes?.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                if (maxUltra != null) return maxUltra
+            } catch (e: Exception) {
+                Log.w(TAG, "Error querying SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION", e)
+            }
+        }
+
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        try {
+            val highResSizes = map?.getHighResolutionOutputSizes(format)
+            val maxHighRes = highResSizes?.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            if (maxHighRes != null) return maxHighRes
+        } catch (e: Exception) {
+            Log.w(TAG, "Error querying getHighResolutionOutputSizes", e)
+        }
+
+        val standardSizes = map?.getOutputSizes(format)
+        return standardSizes?.maxByOrNull { it.width.toLong() * it.height.toLong() }
+    }
+
+    /**
      * Determines the optimal native photo capture resolution for the specified lens.
-     * For 0.5x Ultra-Wide, strictly selects the highest native 4:3 resolution (around 8MP, e.g. 3264x2448).
+     * In 50MP mode, queries the real sensor-supported maximum-resolution output.
      * Never reuses the main camera resolution.
      */
     fun getOptimalPhotoSizeForLens(lens: LensInfo?, cameraId: String): Size {
@@ -1830,15 +1876,22 @@ class Camera2Engine(private val context: Context) {
         } catch (e: Exception) {
             null
         }
+
+        val is50MMode = photoMegapixelMode == PhotoMegapixelMode.M50
+        if (is50MMode && chars != null) {
+            val maxNativeResolution = getMaxResolutionNative(chars, ImageFormat.JPEG)
+            if (maxNativeResolution != null) {
+                val mp = (maxNativeResolution.width.toLong() * maxNativeResolution.height.toLong()) / 1_000_000f
+                Log.i(TAG, "[PHOTO_RES_50M] Native maximum-resolution sensor stream selected: ${maxNativeResolution.width}x${maxNativeResolution.height} (~${mp}MP)")
+                return maxNativeResolution
+            }
+        }
+
         val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        // Strictly use standard getOutputSizes(ImageFormat.JPEG) for SESSION_REGULAR.
-        // Do NOT include SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION or stall-only HighResolutionOutputSizes
-        // in regular multi-stream sessions, as they cause onConfigureFailed / HAL hangs on Back Cameras!
         val jpegSizes = map?.getOutputSizes(ImageFormat.JPEG)?.toList() ?: emptyList()
         val allSizes = jpegSizes.distinctBy { "${it.width}x${it.height}" }
 
         val isUltraWide = lens?.lensType == LensType.ULTRAWIDE
-        val is50MMode = photoMegapixelMode == PhotoMegapixelMode.M50
 
         // Standard 12MP–16MP binned ceiling for fast, zero-lag session creation and multi-stream compatibility
         val maxStandardPixels = 16_500_000L
@@ -2138,6 +2191,17 @@ class Camera2Engine(private val context: Context) {
                 imageReaderJpeg?.surface?.let {
                     val jpegConfig = android.hardware.camera2.params.OutputConfiguration(it)
                     jpegConfig.setPhysicalCameraId(activeLens.physicalCameraId)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && photoMegapixelMode == PhotoMegapixelMode.M50) {
+                        try {
+                            val chars = getCharacteristics(activeLens.physicalCameraId) ?: getCharacteristics(activeLens.cameraId)
+                            val maxResMap = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
+                            val ultraSizes = maxResMap?.getOutputSizes(ImageFormat.JPEG)
+                            val isUltra = ultraSizes?.any { sz -> sz.width == imageReaderJpeg?.width && sz.height == imageReaderJpeg?.height } == true
+                            if (isUltra) {
+                                jpegConfig.addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
+                            }
+                        } catch (ignored: Throwable) {}
+                    }
                     outputConfigs.add(jpegConfig)
                 }
                 imageReaderYuv?.surface?.let {
@@ -2235,6 +2299,82 @@ class Camera2Engine(private val context: Context) {
             }
             synchronized(previewRequestLock) {
                 previewRequestBuilder = builder
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val outputConfigs = mutableListOf<android.hardware.camera2.params.OutputConfiguration>()
+                outputConfigs.add(android.hardware.camera2.params.OutputConfiguration(previewSurf))
+
+                imageReaderJpeg?.surface?.let { surf ->
+                    val jpegConfig = android.hardware.camera2.params.OutputConfiguration(surf)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && photoMegapixelMode == PhotoMegapixelMode.M50) {
+                        try {
+                            val chars = activeLens?.let { getCharacteristics(it.cameraId) } ?: getCharacteristics(camera.id)
+                            val maxResMap = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
+                            val ultraSizes = maxResMap?.getOutputSizes(ImageFormat.JPEG)
+                            val isUltra = ultraSizes?.any { sz -> sz.width == imageReaderJpeg?.width && sz.height == imageReaderJpeg?.height } == true
+                            if (isUltra) {
+                                jpegConfig.addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
+                                Log.i(TAG, "[SESSION_50M] Configured SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION on OutputConfiguration")
+                            }
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "Could not set sensor pixel mode on OutputConfiguration", t)
+                        }
+                    }
+                    outputConfigs.add(jpegConfig)
+                }
+                imageReaderYuv?.surface?.let { outputConfigs.add(android.hardware.camera2.params.OutputConfiguration(it)) }
+                imageReaderRaw?.surface?.let { outputConfigs.add(android.hardware.camera2.params.OutputConfiguration(it)) }
+
+                val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
+                    android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                    outputConfigs,
+                    Executor { command -> backgroundHandler?.post(command) ?: command.run() },
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            onSessionConfigurationFinished()
+                            if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) {
+                                try { session.close() } catch (ignored: Throwable) {}
+                                return
+                            }
+                            captureSession = session
+                            try {
+                                activeSessionPhysicalCameraId = null
+                                synchronized(previewRequestLock) {
+                                    previewRequestBuilder?.let {
+                                        applyCommonSettings(it)
+                                        session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
+                                    }
+                                }
+                                _isCameraReady.value = true
+                                CameraPerformanceMonitor.start()
+                                completeLensSwitch(_selectedLens.value)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to start repeating preview request", e)
+                                completeLensSwitch(_selectedLens.value)
+                            }
+                        }
+
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
+                            onSessionConfigurationFinished()
+                            if (imageReaderYuv != null || imageReaderRaw != null) {
+                                Log.w(TAG, "Capture session rejected with auxiliary streams; retrying with Preview + JPEG only")
+                                try { imageReaderYuv?.close() } catch (ignored: Throwable) {}
+                                imageReaderYuv = null
+                                try { imageReaderRaw?.close() } catch (ignored: Throwable) {}
+                                imageReaderRaw = null
+                                createCameraCaptureSession(forceLogicalStream = true)
+                                return
+                            }
+                            completeLensSwitch(_selectedLens.value)
+                            Log.e(TAG, "Camera capture session configuration failed")
+                            _isCameraReady.value = false
+                        }
+                    }
+                )
+                camera.createCaptureSession(sessionConfig)
+                return
             }
 
             camera.createCaptureSession(
@@ -4192,11 +4332,10 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * 50 Megapixel Computational Ultra-Resolution Capture:
-     * Captures ONLY ONE native-resolution frame from the physical camera with OIS/EIS
-     * stabilization, completely eliminating ghosting, motion blur, and double edges.
-     * The single frame is then processed through an edge-aware, detail-preserving
-     * computational upscaling and adaptive denoising pipeline.
+     * 50 Megapixel Native Maximum-Resolution Sensor Capture (integrated from super-native-camera):
+     * Uses real sensor-supported maximum-resolution output via Camera2 API.
+     * Captures the genuine full-resolution sensor frame directly without software upscaling,
+     * AI enhancement, interpolation, or in-app image processing.
      */
     fun takePhoto50M(onComplete: (Uri?) -> Unit) {
         val camera = cameraDevice ?: run {
@@ -4214,25 +4353,37 @@ class Camera2Engine(private val context: Context) {
 
         _isCapturing.value = true
         val activeLens = _selectedLens.value
-        val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
 
         try {
-            // Build exactly ONE native-resolution capture request
+            // Build native maximum-resolution capture request (from super-native-camera)
             val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             captureBuilder.addTarget(readerJpeg.surface)
+
+            val caps = _capabilities.value
+            val isRaw = isRawCaptureEnabled && caps.supportsRaw && imageReaderRaw != null
+            if (isRaw) {
+                imageReaderRaw?.surface?.let { captureBuilder.addTarget(it) }
+            }
+
             applyCommonSettings(captureBuilder)
             captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
             captureBuilder.set(CaptureRequest.JPEG_QUALITY, 100.toByte())
+            captureBuilder.set(CaptureRequest.CONTROL_ENABLE_ZSL, false)
             captureBuilder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
             captureBuilder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
 
             // Enable ultra-high resolution sensor remosaic mode if physical hardware supports it (Android 12+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 try {
-                    val chars = getCharacteristics(camera.id)
+                    val chars = activeLens?.let { getCharacteristics(it.cameraId) } ?: getCharacteristics(camera.id)
                     val sensorCaps = chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-                    if (sensorCaps.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR)) {
+                    val maxResMap = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
+                    val ultraSizes = maxResMap?.getOutputSizes(ImageFormat.JPEG)
+                    val isFromMaxResMap = ultraSizes?.any { it.width == readerJpeg.width && it.height == readerJpeg.height } == true
+
+                    if (sensorCaps.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR) || isFromMaxResMap) {
                         captureBuilder.set(CaptureRequest.SENSOR_PIXEL_MODE, CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
+                        Log.i(TAG, "[50M_NATIVE] SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION enabled for hardware capture (${readerJpeg.width}x${readerJpeg.height})")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Hardware sensor ultra-high resolution mode not applicable", e)
@@ -4240,8 +4391,6 @@ class Camera2Engine(private val context: Context) {
             }
 
             var frameProcessed = false
-            var capturedIso: Int = manualIso ?: 100
-            var capturedExposureNs: Long = manualExposureTimeNs ?: 20_000_000L
 
             readerJpeg.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
@@ -4256,80 +4405,83 @@ class Camera2Engine(private val context: Context) {
                     val buffer = image.planes[0].buffer
                     val bytes = ByteArray(buffer.remaining())
                     buffer.get(bytes)
+                    val imgW = image.width
+                    val imgH = image.height
                     image.close()
 
-                    val uprightBitmap = decodeUprightBitmapFromJpeg(
-                        jpegBytes = bytes,
-                        captureOrientation = getCaptureJpegOrientation(),
-                        isFrontFacing = isFrontFacing,
-                        mirrorHorizontally = saveSelfieAsPreviewed,
-                        mutable = true
-                    )
+                    Log.i(TAG, "[50M_NATIVE] Captured genuine full-resolution sensor frame: ${imgW}x${imgH} (${bytes.size} bytes)")
 
-                    if (uprightBitmap != null) {
-                        engineScope.launch(Dispatchers.Default) {
-                            val uri = try {
-                                ultraRes50MStacker.processAndSaveSingleFrame50M(
-                                    source = uprightBitmap,
-                                    iso = capturedIso,
-                                    exposureTimeNs = capturedExposureNs,
-                                    isFrontFacing = false, // already transformed & mirrored upright
-                                    saveMirrored = false
-                                )
-                            } catch (t: Throwable) {
-                                Log.e(TAG, "50M computational processing failed, falling back to upright bitmap directly", t)
-                                saveBitmapToMediaStore(uprightBitmap, 0)
-                            }
-                            if (!uprightBitmap.isRecycled) {
-                                uprightBitmap.recycle()
-                            }
-                            _isCapturing.value = false
-                            updateStorageStats()
-                            if (uri != null) {
-                                _lastCapturedMedia.value = CapturedMedia(
-                                    uri = uri,
-                                    isVideo = false,
-                                    timestamp = System.currentTimeMillis(),
-                                    displayName = "50M_COMPUTATIONAL.jpg"
-                                )
-                            }
-                            withContext(Dispatchers.Main) {
-                                onComplete(uri)
-                            }
-                        }
-                    } else {
-                        Log.w(TAG, "50M decode returned null bitmap, falling back to saving raw captured JPEG bytes")
-                        val uri = saveJpegBytesToMediaStore(bytes)
+                    engineScope.launch(Dispatchers.IO) {
+                        val uri = saveJpegBytesToMediaStore(
+                            bytes = bytes,
+                            skipPipeline = true,
+                            filePrefix = "50M_NATIVE"
+                        )
                         _isCapturing.value = false
-                        engineScope.launch(Dispatchers.Main) {
+                        updateStorageStats()
+                        if (uri != null) {
+                            _lastCapturedMedia.value = CapturedMedia(
+                                uri = uri,
+                                isVideo = false,
+                                timestamp = System.currentTimeMillis(),
+                                displayName = "50M_NATIVE.jpg"
+                            )
+                        }
+                        withContext(Dispatchers.Main) {
                             onComplete(uri)
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error acquiring single 50M frame, falling back to standard capture", e)
+                    Log.e(TAG, "Error acquiring native 50M frame", e)
                     try { image.close() } catch (ignored: Exception) {}
                     _isCapturing.value = false
                     engineScope.launch(Dispatchers.Main) {
-                        takePhoto(onComplete)
+                        onComplete(null)
                     }
                 }
             }, backgroundHandler)
 
-            // Capture exactly one frame
+            if (isRaw) {
+                imageReaderRaw?.setOnImageAvailableListener({ reader ->
+                    val rawImage = reader.acquireLatestImage()
+                    if (rawImage != null) {
+                        engineScope.launch(Dispatchers.IO) {
+                            val lens = _selectedLens.value
+                            if (lens != null) {
+                                val characteristics = getCharacteristics(lens.cameraId)
+                                if (characteristics != null) {
+                                    saveRawToMediaStore(rawImage, characteristics)
+                                }
+                            }
+                            rawImage.close()
+                        }
+                    }
+                }, backgroundHandler)
+            }
+
             session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(
                     session: CameraCaptureSession,
                     request: CaptureRequest,
                     result: TotalCaptureResult
                 ) {
-                    capturedIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: manualIso ?: 100
-                    capturedExposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: manualExposureTimeNs ?: 20_000_000L
-                    Log.d(TAG, "50M single frame capture completed (ISO=$capturedIso, Exp=${capturedExposureNs}ns)")
+                    val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+                    val exp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                    Log.d(TAG, "50M native capture completed (ISO=$iso, Exp=${exp}ns)")
+                }
+                override fun onCaptureFailed(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    failure: CaptureFailure
+                ) {
+                    Log.e(TAG, "50M native capture failed: ${failure.reason}")
+                    _isCapturing.value = false
+                    onComplete(null)
                 }
             }, backgroundHandler)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting 50M single-frame capture, falling back to standard capture", e)
+            Log.e(TAG, "Error starting 50M native capture, falling back to standard capture", e)
             _isCapturing.value = false
             takePhoto(onComplete)
         }
