@@ -58,9 +58,10 @@ import androidx.compose.ui.layout.ContentScale
 import android.graphics.Bitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.camera.depth.DepthModelInstallState
-import com.example.camera.depth.DepthModelManager
-import com.example.camera.depth.PhotonVirtualApertureEngine
+import com.cinedepth.pro.ui.BlurPreviewParams
+import com.cinedepth.pro.ui.LensEffect
+import com.cinedepth.pro.ui.blur.DepthBlurEngine
+import com.example.camera.model.BokehStyle
 import com.example.camera.model.CameraMode
 import com.example.camera.model.CinemaColorProfile
 import com.example.camera.model.CinemaConfig
@@ -126,22 +127,13 @@ fun Viewfinder(
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
 
     val context = LocalContext.current
-    val depthModelManager = remember { DepthModelManager.getInstance(context) }
-    val virtualApertureEngine = remember { PhotonVirtualApertureEngine(context) }
-    val modelStatuses by depthModelManager.modelStatuses.collectAsStateWithLifecycle()
-    val hasVerifiedAiModel = remember(modelStatuses) {
-        modelStatuses.values.any { it.state is DepthModelInstallState.Installed }
-    }
-    val activeAiModel = remember(modelStatuses) {
-        depthModelManager.getActiveInstalledModelFile()?.first
-    }
+    val depthEstimator = remember { DepthBlurEngine.getEstimator(context) }
 
     var liveVirtualAperturePreviewBmp by remember { mutableStateOf<Bitmap?>(null) }
     var liveDepthColormapBmp by remember { mutableStateOf<Bitmap?>(null) }
     var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
 
     val isLivePortraitDepthActive = cameraMode == CameraMode.PORTRAIT &&
-            hasVerifiedAiModel &&
             portraitConfig != null &&
             portraitConfig.virtualApertureEnabled &&
             (portraitConfig.liveAperturePreviewEnabled || portraitConfig.showDepthPreview)
@@ -153,8 +145,7 @@ fun Viewfinder(
         portraitConfig?.bokehStyle,
         portraitConfig?.showDepthPreview,
         portraitConfig?.focusPointX,
-        portraitConfig?.focusPointY,
-        activeAiModel
+        portraitConfig?.focusPointY
     ) {
         if (!isLivePortraitDepthActive || portraitConfig == null) {
             liveVirtualAperturePreviewBmp = null
@@ -172,14 +163,39 @@ fun Viewfinder(
                     null
                 }
                 if (frame != null) {
-                    val result = virtualApertureEngine.processRealtimePreviewFrame(frame, portraitConfig)
-                    frame.recycle()
-                    if (result != null) {
-                        liveVirtualAperturePreviewBmp = result.first
-                        liveDepthColormapBmp = result.second
-                    } else {
+                    try {
+                        val lensEffect = when (portraitConfig.bokehStyle) {
+                            BokehStyle.NATURAL_ROUND -> LensEffect.Classic
+                            BokehStyle.SOFT_ELLIPTICAL -> LensEffect.Anamorphic
+                            BokehStyle.POLYGONAL_APERTURE -> LensEffect.Hexagon
+                            BokehStyle.LIGHT_SOURCE -> LensEffect.Bloom
+                            BokehStyle.ZEISS_SWIRL -> LensEffect.Bubble
+                            BokehStyle.LEICA_3D_POP -> LensEffect.Creamy
+                        }
+                        val blurScale = (portraitConfig.blurStrength / 100f).coerceIn(0.05f, 1.0f)
+                        val previewParams = BlurPreviewParams(
+                            blurStrength = blurScale,
+                            focusDepth = 64f,
+                            lensEffect = lensEffect,
+                            edgeSoftness = 0.35f,
+                            edgeExpand = 0.22f,
+                            edgeRefine = 0.50f,
+                            blurFalloff = 0.70f
+                        )
+                        val result = DepthBlurEngine.renderDepthAware(
+                            source = frame,
+                            params = previewParams,
+                            depthEstimator = depthEstimator,
+                            overrideDepth = null,
+                            fastContourMatte = true
+                        )
+                        liveVirtualAperturePreviewBmp = result.bitmap
+                        liveDepthColormapBmp = result.depthMapBitmap
+                    } catch (_: Throwable) {
                         liveVirtualAperturePreviewBmp = null
                         liveDepthColormapBmp = null
+                    } finally {
+                        frame.recycle()
                     }
                 }
             }

@@ -27,7 +27,29 @@ data class PortraitConfig(
     val liveAperturePreviewEnabled: Boolean = true,
     val focusPointX: Float? = null,
     val focusPointY: Float? = null
-)
+) {
+    companion object {
+        val SUPPORTED_APERTURES = listOf(
+            "f/0.95" to 0.95f,
+            "f/1.2" to 1.2f,
+            "f/1.4" to 1.4f,
+            "f/1.8" to 1.8f,
+            "f/2.0" to 2.0f,
+            "f/2.4" to 2.4f,
+            "f/2.8" to 2.8f,
+            "f/4.0" to 4.0f,
+            "f/5.6" to 5.6f,
+            "f/8.0" to 8.0f,
+            "f/11" to 11.0f,
+            "f/16" to 16.0f
+        )
+
+        fun parseFNumber(apertureStr: String): Float {
+            val cleaned = apertureStr.removePrefix("f/").removePrefix("F/").trim()
+            return cleaned.toFloatOrNull()?.coerceIn(0.7f, 22.0f) ?: 1.4f
+        }
+    }
+}
 
 enum class PortraitStyle(
     val title: String,

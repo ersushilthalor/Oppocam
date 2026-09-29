@@ -30,11 +30,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.camera.depth.DepthModelInstallState
-import com.example.camera.depth.DepthModelManager
-import com.example.camera.depth.DepthModelType
-import com.example.camera.depth.PhotonVirtualApertureEngine
+import com.cinedepth.pro.ui.blur.DepthBlurEngine
 import com.example.camera.model.BokehStyle
 import com.example.camera.model.PortraitConfig
 import com.example.camera.model.PortraitProcessingState
@@ -42,12 +38,11 @@ import com.example.camera.ui.components.FrostedGlassBox
 import java.util.Locale
 
 /**
- * Liquid Glass Floating Portrait & Photon Virtual Aperture Settings Window.
+ * Liquid Glass Floating Portrait & CineDepth Pro Settings Window.
  * Exclusively available in Portrait Mode:
  * - Physical Virtual Aperture f-stop selector & continuous f-stop slider (f/0.95 .. f/16)
- * - Depth-aware background blur intensity slider
- * - Bokeh character selector
- * - Real AI Depth Model status & live Virtual Aperture preview toggles (enabled only when a verified model is installed)
+ * - CineDepth Pro depth-aware background blur intensity slider
+ * - CineDepth Pro optical bokeh character selector & AGSL GPU pipeline
  */
 @Composable
 fun PortraitControlBar(
@@ -64,25 +59,15 @@ fun PortraitControlBar(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val modelManager = remember { DepthModelManager.getInstance(context) }
-    val modelStatuses by modelManager.modelStatuses.collectAsStateWithLifecycle()
-    val selectedModel by modelManager.selectedModel.collectAsStateWithLifecycle()
-
-    val hasVerifiedAiModel = remember(modelStatuses) {
-        modelStatuses.values.any { it.state is DepthModelInstallState.Installed }
-    }
-    val activeInstalledModel = remember(modelStatuses, selectedModel) {
-        modelManager.getActiveInstalledModelFile()?.first
-    }
-
+    val estimator = remember { DepthBlurEngine.getEstimator(context) }
     var showInlineModelSheet by remember { mutableStateOf(false) }
 
     val accentColor = Color(0xFFFFD54F) // Master camera gold accent
     val apertures = remember {
-        PhotonVirtualApertureEngine.SUPPORTED_APERTURES.map { it.first }
+        PortraitConfig.SUPPORTED_APERTURES.map { it.first }
     }
     val currentFNumber = remember(config.simulatedAperture) {
-        PhotonVirtualApertureEngine.parseFNumber(config.simulatedAperture)
+        PortraitConfig.parseFNumber(config.simulatedAperture)
     }
 
     FrostedGlassBox(
@@ -174,14 +159,13 @@ fun PortraitControlBar(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // AI Depth Model Status Bar inside Portrait Mode
+            // CineDepth Pro Engine Status Banner inside Portrait Mode
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = if (activeInstalledModel != null) Color(0x1F4CAF50) else Color.White.copy(alpha = 0.05f),
+                color = Color(0x1F4CAF50),
                 border = BorderStroke(
                     1.dp,
-                    if (activeInstalledModel != null) Color(0xFF66BB6A).copy(alpha = 0.45f)
-                    else accentColor.copy(alpha = 0.35f)
+                    Color(0xFF66BB6A).copy(alpha = 0.45f)
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -201,28 +185,20 @@ fun PortraitControlBar(
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(
-                            imageVector = if (activeInstalledModel != null) Icons.Outlined.Layers else Icons.Outlined.CloudDownload,
+                            imageVector = Icons.Outlined.Layers,
                             contentDescription = null,
-                            tint = if (activeInstalledModel != null) Color(0xFF66BB6A) else accentColor,
+                            tint = Color(0xFF66BB6A),
                             modifier = Modifier.size(16.dp)
                         )
                         Column {
                             Text(
-                                text = if (activeInstalledModel != null) {
-                                    "AI Depth: ${activeInstalledModel.displayName}"
-                                } else {
-                                    "AI Depth Model Not Installed"
-                                },
+                                text = "CineDepth Pro Engine: Active",
                                 color = Color.White,
                                 fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (activeInstalledModel != null) {
-                                    "Photon Virtual Aperture Active • Tap to switch/manage"
-                                } else {
-                                    "Tap here or in Settings → Depth Processing to download"
-                                },
+                                text = "Dual-Pass AGSL Shaders • AI Depth & Silhouette Matting",
                                 color = Color.White.copy(alpha = 0.65f),
                                 fontSize = 10.sp
                             )
@@ -230,7 +206,7 @@ fun PortraitControlBar(
                     }
 
                     Text(
-                        text = if (showInlineModelSheet) "HIDE" else "MODELS",
+                        text = if (showInlineModelSheet) "HIDE" else "DETAILS",
                         color = accentColor,
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.ExtraBold
@@ -238,139 +214,40 @@ fun PortraitControlBar(
                 }
             }
 
-            // Expandable Inline AI Model Downloader / Switcher inside Portrait Mode
+            // Expandable CineDepth Pro Pipeline Specs
             AnimatedVisibility(visible = showInlineModelSheet) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    DepthModelType.entries.forEach { modelType ->
-                        val info = modelStatuses[modelType]
-                        val state = info?.state ?: DepthModelInstallState.NotInstalled
-                        val isInstalled = state is DepthModelInstallState.Installed
-                        val isCurrent = (selectedModel == modelType && isInstalled)
+                    val pipelineStages = listOf(
+                        "AI Monocular Depth" to "Depth-Anything-V2 Neural TFLite GPU Delegate",
+                        "Silhouette & Hair Matting" to "ML Kit High-Resolution Raw Size Mask",
+                        "Pass 1: Depth Edge Refine" to "AGSL RuntimeShader Luma-Weighted Bilateral Filter",
+                        "Pass 2: Optical Bokeh" to "AGSL Golden Angle Disc Gather + Anamorphic Flare"
+                    )
 
+                    pipelineStages.forEach { (title, desc) ->
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
                             color = Color(0xFF151926),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isCurrent) accentColor else Color.White.copy(alpha = 0.1f)
-                            ),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = modelType.displayName,
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        val subText = when (state) {
-                                            is DepthModelInstallState.Installed ->
-                                                "Installed (${modelManager.formatBytes(state.fileSizeBytes)}) • ${state.verifiedFormat}"
-                                            is DepthModelInstallState.Downloading ->
-                                                "Downloading ${modelManager.formatBytes(state.downloadedBytes)}..."
-                                            is DepthModelInstallState.Verifying ->
-                                                "Verifying neural network tensors..."
-                                            is DepthModelInstallState.Failed ->
-                                                state.errorMessage
-                                            DepthModelInstallState.NotInstalled ->
-                                                info?.remoteSizeBytes?.let { "Size: ${modelManager.formatBytes(it)}" }
-                                                    ?: "On-Demand Download"
-                                        }
-                                        Text(
-                                            text = subText,
-                                            color = if (state is DepthModelInstallState.Failed) Color(0xFFFF8A80)
-                                            else Color.White.copy(alpha = 0.65f),
-                                            fontSize = 10.5.sp
-                                        )
-                                    }
-
-                                    when (state) {
-                                        is DepthModelInstallState.Installed -> {
-                                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                TextButton(
-                                                    onClick = { modelManager.selectModel(modelType) },
-                                                    enabled = !isCurrent,
-                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                                ) {
-                                                    Text(
-                                                        text = if (isCurrent) "ACTIVE" else "USE",
-                                                        color = if (isCurrent) Color(0xFF66BB6A) else accentColor,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.ExtraBold
-                                                    )
-                                                }
-                                                TextButton(
-                                                    onClick = { modelManager.deleteModel(modelType) },
-                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "DELETE",
-                                                        color = Color(0xFFFF5252),
-                                                        fontSize = 10.5.sp,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        is DepthModelInstallState.Downloading -> {
-                                            TextButton(
-                                                onClick = { modelManager.cancelDownload(modelType) },
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    text = "CANCEL",
-                                                    color = Color(0xFFFF8A80),
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
-                                        is DepthModelInstallState.Verifying -> {
-                                            CircularProgressIndicator(
-                                                color = accentColor,
-                                                strokeWidth = 2.dp,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                        else -> {
-                                            TextButton(
-                                                onClick = { modelManager.startDownload(modelType) },
-                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    text = if (state is DepthModelInstallState.Failed && state.partialBytes > 0L) "RESUME" else "DOWNLOAD",
-                                                    color = accentColor,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.ExtraBold
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (state is DepthModelInstallState.Downloading) {
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    LinearProgressIndicator(
-                                        progress = { state.progressFraction.coerceIn(0.01f, 0.99f) },
-                                        color = accentColor,
-                                        trackColor = Color.White.copy(alpha = 0.14f),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(5.dp)
-                                            .clip(RoundedCornerShape(3.dp))
-                                    )
-                                }
+                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                Text(
+                                    text = title,
+                                    color = accentColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = desc,
+                                    color = Color.White.copy(alpha = 0.70f),
+                                    fontSize = 10.sp
+                                )
                             }
                         }
                     }
@@ -461,7 +338,7 @@ fun PortraitControlBar(
 
                 // Continuous Virtual Aperture Slider (f/0.95 wide open to f/16 stopped down)
                 val apertureIndex = remember(config.simulatedAperture) {
-                    val idx = PhotonVirtualApertureEngine.SUPPORTED_APERTURES.indexOfFirst {
+                    val idx = PortraitConfig.SUPPORTED_APERTURES.indexOfFirst {
                         it.first == config.simulatedAperture
                     }
                     if (idx >= 0) idx.toFloat() else 2f
@@ -469,14 +346,14 @@ fun PortraitControlBar(
                 Slider(
                     value = apertureIndex,
                     onValueChange = { rawIdx ->
-                        val nearestIdx = rawIdx.toInt().coerceIn(0, PhotonVirtualApertureEngine.SUPPORTED_APERTURES.lastIndex)
-                        val selectedAp = PhotonVirtualApertureEngine.SUPPORTED_APERTURES[nearestIdx].first
+                        val nearestIdx = rawIdx.toInt().coerceIn(0, PortraitConfig.SUPPORTED_APERTURES.lastIndex)
+                        val selectedAp = PortraitConfig.SUPPORTED_APERTURES[nearestIdx].first
                         if (selectedAp != config.simulatedAperture) {
                             onApertureSelected(selectedAp)
                         }
                     },
-                    valueRange = 0f..(PhotonVirtualApertureEngine.SUPPORTED_APERTURES.lastIndex).toFloat(),
-                    steps = PhotonVirtualApertureEngine.SUPPORTED_APERTURES.size - 2,
+                    valueRange = 0f..(PortraitConfig.SUPPORTED_APERTURES.lastIndex).toFloat(),
+                    steps = PortraitConfig.SUPPORTED_APERTURES.size - 2,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("virtual_aperture_slider"),
@@ -574,8 +451,8 @@ fun PortraitControlBar(
                 }
             }
 
-            // Section 4: Real-Time Viewfinder Virtual Aperture & Depth Map Preview (ONLY active when AI model is verified)
-            if (hasVerifiedAiModel && onPortraitConfigChanged != null) {
+            // Section 4: Real-Time Viewfinder CineDepth Bokeh & Depth Map Preview
+            if (onPortraitConfigChanged != null) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
