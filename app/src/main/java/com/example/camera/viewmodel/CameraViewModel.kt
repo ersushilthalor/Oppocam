@@ -785,6 +785,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     )
                     if (uri != null) {
                         withContext(Dispatchers.Main) {
+                            engine.setLastCapturedMedia(uri)
                             showToast("Portrait saved to DCIM/Camera")
                             engine.updateStorageStats()
                         }

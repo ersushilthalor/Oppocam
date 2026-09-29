@@ -159,6 +159,16 @@ class Camera2Engine(private val context: Context) {
     private val _lastCapturedMedia = MutableStateFlow<CapturedMedia?>(null)
     val lastCapturedMedia: StateFlow<CapturedMedia?> = _lastCapturedMedia.asStateFlow()
 
+    fun setLastCapturedMedia(uri: Uri) {
+        val now = System.currentTimeMillis()
+        _lastCapturedMedia.value = CapturedMedia(
+            uri = uri,
+            isVideo = false,
+            timestamp = now,
+            displayName = "CineDepth_$now.jpg"
+        )
+    }
+
     private val _isCameraReady = MutableStateFlow(false)
     val isCameraReady: StateFlow<Boolean> = _isCameraReady.asStateFlow()
 
