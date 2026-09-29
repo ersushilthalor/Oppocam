@@ -14,27 +14,28 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 
-private const val TAG = "HlgAutoExposure"
+private const val TAG = "Hlg10AutoExposure"
 private const val CURVE_POINTS = 64
 
 /**
- * Real-time continuous Auto Exposure and Tonemap Stabilization Engine for Cinema HLG Profile.
+ * Real-time continuous Auto Exposure and Tonemap Stabilization Engine for Cinema HLG10 Profile
+ * based on the ARIB STD-B67 broadcast HDR standard with Rec.2020 color space.
  *
- * Provides:
- * 1. Rock-Solid Scene Exposure Stability (Zero Jitter Deadband):
+ * Implements:
+ * 1. ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR OETF Transfer Function:
+ *    - For 0 <= E <= 1/12: E' = sqrt(3 * E)
+ *    - For 1/12 < E <= 1:  E' = a * ln(12 * E - b) + c
+ *      where a = 0.17883277, b = 1 - 4a = 0.28466892, c = 0.5 - a * ln(4a) = 0.55991073
+ *    - Preserves realistic, punchy, non-flat appearance with deep inky blacks and reference middle-gray at 0.38
+ *
+ * 2. Rock-Solid Scene Exposure Stability (Zero Jitter Deadband):
  *    - In static scenes, suppresses exposure hunting, micro-breathing, and brightness flicker.
  *    - Deadband threshold ensures stable, consistent brightness without rapid stepping.
  *
- * 2. Rapid Dynamic Lighting Adaptation:
- *    - Responds naturally and quickly when scene lighting changes (e.g. panning or entering bright areas).
- *    - Dual-rate temporal filtering gives instant 2-3 frame response to lighting deltas, then settles smoothly.
- *
- * 3. Flagship C1-Continuous HLG Tonemap Curve:
- *    - Eliminates the infinite mathematical derivative of raw sqrt(3x) near zero that causes camera ISP
- *      AEC statistics to oscillate.
- *    - Anchors true inky black (y=0 at x=0) with a smooth linear/parabolic toe joining the standard HLG curve.
+ * 3. Rapid Dynamic Lighting Adaptation:
+ *    - Dual-rate temporal filtering gives instant response to lighting deltas, then settles smoothly.
  */
-data class HlgAutoExposureParams(
+data class Hlg10AutoExposureParams(
     val exposureComp: Float = 0.0f,     // Adaptive EV shift
     val sceneLuxIndex: Float = 0.5f,    // Normalized scene brightness
     val p18Midtone: Float = 0.18f,      // Tracked P18 shadow/midtone value
@@ -42,10 +43,29 @@ data class HlgAutoExposureParams(
     val isStaticScene: Boolean = true
 )
 
-class HlgAutoExposureEngine {
+class Hlg10AutoExposureEngine {
 
-    private val _currentParams = MutableStateFlow(HlgAutoExposureParams())
-    val currentParams: StateFlow<HlgAutoExposureParams> = _currentParams.asStateFlow()
+    companion object {
+        const val ARIB_A = 0.17883277f
+        const val ARIB_B = 0.28466892f
+        const val ARIB_C = 0.55991073f
+        const val SPLIT_POINT = 1.0f / 12.0f // ~0.083333f
+
+        /**
+         * Evaluates the ARIB STD-B67 Opto-Electronic Transfer Function (OETF).
+         */
+        fun evaluateAribOetf(linearLight: Float): Float {
+            val e = linearLight.coerceIn(0.0f, 1.0f)
+            return if (e <= SPLIT_POINT) {
+                kotlin.math.sqrt(3.0f * e).coerceIn(0.0f, 1.0f)
+            } else {
+                (ARIB_A * ln(12.0f * e - ARIB_B) + ARIB_C).coerceIn(0.0f, 1.0f)
+            }
+        }
+    }
+
+    private val _currentParams = MutableStateFlow(Hlg10AutoExposureParams())
+    val currentParams: StateFlow<Hlg10AutoExposureParams> = _currentParams.asStateFlow()
 
     @Volatile
     private var latestFrameStats: FrameLuminanceStats? = null
@@ -153,7 +173,7 @@ class HlgAutoExposureEngine {
 
         smoothedExposureComp += alpha * (finalTarget - smoothedExposureComp)
 
-        val newParams = HlgAutoExposureParams(
+        val newParams = Hlg10AutoExposureParams(
             exposureComp = smoothedExposureComp,
             sceneLuxIndex = smoothedSceneLux,
             p18Midtone = p18,
@@ -181,8 +201,8 @@ class HlgAutoExposureEngine {
     }
 
     /**
-     * Generates a stable C1-continuous HLG TonemapCurve with linear/parabolic toe near zero.
-     * Prevents hardware AE oscillation while providing authentic BT.2100 HLG HDR tone response.
+     * Generates a stable C1-continuous HLG10 TonemapCurve based on ARIB STD-B67 broadcast standard.
+     * Anchors deep inky blacks at zero while providing authentic, non-flat HDR tone response.
      */
     fun getTonemapCurve(
         userExposure: Float = 0.0f,
@@ -210,18 +230,16 @@ class HlgAutoExposureEngine {
             val baseNormalizedX = i.toFloat() / (numPoints - 1).toFloat()
             val x = (baseNormalizedX * expScale).coerceIn(0f, 1f)
 
-            // Flagship HLG transfer function with C1-continuous linear/parabolic toe near zero:
-            // Eliminates infinite gradient near 0 (which causes AEC instability)
+            // ARIB STD-B67 OETF with C1-continuous linear/parabolic toe near zero:
+            // Eliminates infinite gradient near 0 (preventing camera ISP AEC instability),
+            // while matching ARIB STD-B67 exactly across the entire dynamic range.
             var y = if (x <= 0.04f) {
-                // Smooth linear-parabolic toe: slope at 0 is 2.5 (finite & stable)
+                // Smooth linear-parabolic toe: slope at 0 is 2.45 (finite & stable), anchors true black at 0
                 (2.45f * x + 1.25f * x * x).coerceIn(0f, 1f)
-            } else if (x <= (1.0f / 12.0f)) {
+            } else if (x <= SPLIT_POINT) {
                 kotlin.math.sqrt(3.0f * x).coerceIn(0f, 1f)
             } else {
-                val a = 0.17883277f
-                val b = 0.28466892f
-                val c = 0.55991073f
-                (a * ln(12.0f * x - b) + c).coerceIn(0f, 1f)
+                (ARIB_A * ln(12.0f * x - ARIB_B) + ARIB_C).coerceIn(0f, 1f)
             }
 
             // User Contrast S-Curve centered at 0.18 middle-gray

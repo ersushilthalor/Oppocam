@@ -315,6 +315,7 @@ fun CameraScreen(
                 proShadows = proShadows,
                 isProModeActive = isManualProOpen,
                 floatingWindowBlurStrength = floatingWindowAppearance.blurStrength,
+                isSettingsOpen = isSettingsOpen,
                 onSurfaceTextureAvailable = { texture ->
                     viewModel.engine.setPreviewSurfaceTexture(texture)
                 },

@@ -27,7 +27,7 @@ enum class CinemaColorProfile(
     NATIVE("Native", "iPhone-style natural video processing with true-to-life colors, balanced sky/ground, and intelligent shadow recovery", "Native"),
     FLAT_LOG("Flat", "Logarithmic dynamic range curve for color grading", "Flat Log"),
     REC_2020("Rec.2020", "ITU-R BT.2020 wide color gamut transfer curve", "BT.2020"),
-    HLG("HLG", "ITU-R BT.2100 Hybrid Log-Gamma HDR profile", "HLG"),
+    HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10"),
     APPLE_LOG_2("Apple Log 2", "Apple Log 2 wide-gamut log transfer curve with extended highlight latitude and parabolic shadow retention", "Apple Log 2"),
     SAMSUNG_APV_LOG("Samsung APV Log", "Samsung Advanced Professional Video (APV) Log profile with high-efficiency mastering curve, wide dynamic range, and clean shadow-to-highlight roll-off", "Samsung APV Log"),
     PROCESSED_JPEG("Processed JPEG", "Smartphone JPEG photo technical transform with natural contrast and saturation", "Processed JPEG")
@@ -77,7 +77,7 @@ data class CinemaConfig(
     val highlights: Float = 0.0f, // -1.0f (compressed/protected) to +1.0f (boosted highlight shoulder)
     val contrast: Float = 0.0f, // -1.0f (flat latitude) to +1.0f (punchy cinematic S-curve)
     val exposure: Float = 0.0f, // -1.0f to +1.0f real-time live exposure slider
-    val washedOut: Float = 0.0f, // 0.0f (pure LOG/HLG) to 1.0f (progressive reduction of washed-out appearance with contrast/saturation recovery)
+    val washedOut: Float = 0.0f, // 0.0f (pure LOG/HLG10) to 1.0f (progressive reduction of washed-out appearance with contrast/saturation recovery)
     val saturation: Float = 1.0f, // 0.0f (monochrome/desaturated) to 2.0f (vibrant) via 3x3 color gamut matrix
     val sharpness: CinemaSharpness = CinemaSharpness.CRISP, // Smartphone-style crisp detail enhancement by default
     val noiseReduction: CinemaNoiseReduction = CinemaNoiseReduction.OFF, // Default OFF on initial install; persists across restarts
@@ -89,6 +89,10 @@ data class CinemaConfig(
     val isLutPreviewEnabled: Boolean = true, // Default true: LUT preview is always active
     val lutIntensity: Float = 1.0f // 0.0f (0% neutral baseline) to 1.0f (100% full LUT grade)
 ) {
+    val isHlg10: Boolean get() = colorProfile == CinemaColorProfile.HLG10
+    val effectiveColorSpace: CinemaColorSpace get() = if (colorProfile == CinemaColorProfile.HLG10) CinemaColorSpace.REC_2020 else colorSpace
+    val effectiveBitDepth: LogBitDepth get() = if (colorProfile == CinemaColorProfile.HLG10) LogBitDepth.BIT_10 else logBitDepth
+    val effectiveCodec: CinemaCodec get() = if (colorProfile == CinemaColorProfile.HLG10 && codec == CinemaCodec.H264) CinemaCodec.H265 else codec
     val isLogMode: Boolean get() = colorProfile != CinemaColorProfile.NATIVE || logBitDepth != LogBitDepth.OFF
     val activeLut: CinematicLut get() = selectedLut
     val shouldBakeLut: Boolean get() = selectedLut != CinematicLut.NONE && isBakeLutToOutput

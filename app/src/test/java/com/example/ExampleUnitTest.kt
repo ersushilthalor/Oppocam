@@ -85,9 +85,50 @@ class ExampleUnitTest {
 
     @Test
     fun testCinemaColorProfilesExactSet() {
-        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "FLAT_LOG", "REC_2020", "HLG", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
+        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "FLAT_LOG", "REC_2020", "HLG10", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
         val actualProfiles = com.example.camera.model.CinemaColorProfile.entries.map { it.name }.toSet()
         assertEquals(expectedProfiles, actualProfiles)
+        assertFalse("Old HLG must be completely removed", actualProfiles.contains("HLG"))
+        assertTrue("HLG10 must exist", actualProfiles.contains("HLG10"))
+    }
+
+    @Test
+    fun testHlg10AribStdB67OetfTransferFunction() {
+        // Test ARIB STD-B67 mathematical boundary conditions:
+        // 1. Black anchor at zero: E=0 -> E'=0
+        val zeroVal = com.example.camera.engine.Hlg10AutoExposureEngine.evaluateAribOetf(0.0f)
+        assertEquals(0.0f, zeroVal, 0.0001f)
+
+        // 2. Split point at 1/12 (approx 0.083333f):
+        // sqrt(3 * 1/12) = sqrt(1/4) = 0.5
+        val splitVal = com.example.camera.engine.Hlg10AutoExposureEngine.evaluateAribOetf(1.0f / 12.0f)
+        assertEquals(0.5f, splitVal, 0.001f)
+
+        // 3. Peak 1.0 (100% video diffuse white level): E=1.0 -> E'=1.0
+        val peakVal = com.example.camera.engine.Hlg10AutoExposureEngine.evaluateAribOetf(1.0f)
+        assertEquals(1.0f, peakVal, 0.001f)
+
+        // 4. Middle gray 18% reference: E=0.18 -> E' in [0.65, 0.70] (log shoulder)
+        val midGray = com.example.camera.engine.Hlg10AutoExposureEngine.evaluateAribOetf(0.18f)
+        assertTrue("Middle gray should be in logarithmic range, got $midGray", midGray in 0.60f..0.75f)
+    }
+
+    @Test
+    fun testHlg10TonemapCurveNonFlatInkyBlacks() {
+        val engine = com.example.camera.engine.Hlg10AutoExposureEngine()
+        val curve = engine.getTonemapCurve()
+        assertNotNull(curve)
+
+        // Black level point at x=0 must be inky black (y=0) to prevent flat/washed-out appearance
+        val pt0 = curve.getPoint(android.hardware.camera2.params.TonemapCurve.CHANNEL_GREEN, 0)
+        assertEquals(0.0f, pt0.x, 0.001f)
+        assertEquals(0.0f, pt0.y, 0.005f)
+
+        // Peak point at x=1.0 must reach 1.0
+        val lastIdx = curve.getPointCount(android.hardware.camera2.params.TonemapCurve.CHANNEL_GREEN) - 1
+        val ptEnd = curve.getPoint(android.hardware.camera2.params.TonemapCurve.CHANNEL_GREEN, lastIdx)
+        assertEquals(1.0f, ptEnd.x, 0.001f)
+        assertEquals(1.0f, ptEnd.y, 0.01f)
     }
 
     @Test

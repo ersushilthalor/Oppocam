@@ -6,6 +6,7 @@ import android.util.Size
 import android.view.TextureView
 import androidx.test.core.app.ApplicationProvider
 import com.example.camera.model.CameraMode
+import com.example.camera.ui.updateTextureViewTransform
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -166,5 +167,50 @@ class ViewfinderAspectRatioTest {
         // View is taller than buffer -> uniform scaleX should be viewAspect / bufAspect
         val transitionScaleX = videoViewAspect / viewAspect
         assertEquals(1.3333f, transitionScaleX, 0.01f)
+    }
+
+    @Test
+    fun testUpdateTextureViewTransformSynchronization() {
+        val tv = TextureView(context)
+        // Attach dimensions
+        tv.layout(0, 0, 1080, 1440)
+
+        // Steady-state Photo mode (4:3 buffer with 4:3 targetRatio)
+        updateTextureViewTransform(
+            textureView = tv,
+            previewBufferSize = Size(1440, 1080),
+            targetRatio = 4f / 3f,
+            viewWidth = 1080,
+            viewHeight = 1440
+        )
+        val matrixPhoto = Matrix()
+        tv.getTransform(matrixPhoto)
+        assertTrue("Steady-state 4:3 transform must be Identity (no stretching)", matrixPhoto.isIdentity)
+
+        // Steady-state Video mode (16:9 buffer with 16:9 targetRatio)
+        tv.layout(0, 0, 1080, 1920)
+        updateTextureViewTransform(
+            textureView = tv,
+            previewBufferSize = Size(1920, 1080),
+            targetRatio = 16f / 9f,
+            viewWidth = 1080,
+            viewHeight = 1920
+        )
+        val matrixVideo = Matrix()
+        tv.getTransform(matrixVideo)
+        assertTrue("Steady-state 16:9 transform must be Identity (no stretching)", matrixVideo.isIdentity)
+
+        // Mode switch transition: view dimensions are still 1080x1440, but targetRatio and buffer are 16:9
+        // Must synchronize with targetRatio and NOT apply an erroneous scale factor based on stale dimensions!
+        updateTextureViewTransform(
+            textureView = tv,
+            previewBufferSize = Size(1920, 1080),
+            targetRatio = 16f / 9f,
+            viewWidth = 1080,
+            viewHeight = 1440
+        )
+        val matrixTransition = Matrix()
+        tv.getTransform(matrixTransition)
+        assertTrue("Transition must not apply false scaling on stale layout dimensions", matrixTransition.isIdentity)
     }
 }

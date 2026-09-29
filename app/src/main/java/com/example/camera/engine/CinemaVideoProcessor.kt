@@ -165,7 +165,8 @@ object CinemaVideoProcessor {
             val outHeight = inHeight and 1.inv()
 
             // Setup MediaCodec Video Encoder
-            val isHevc = config.codec == com.example.camera.model.CinemaCodec.H265
+            val isHlg10 = config.colorProfile == com.example.camera.model.CinemaColorProfile.HLG10
+            val isHevc = config.codec == com.example.camera.model.CinemaCodec.H265 || isHlg10
             var encoderMime = if (isHevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
             val outFormat = MediaFormat.createVideoFormat(encoderMime, outWidth, outHeight).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -173,12 +174,12 @@ object CinemaVideoProcessor {
                 setInteger(MediaFormat.KEY_FRAME_RATE, maxOf(inFps, 24))
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
 
-                val colorStandard = if (config.colorProfile == com.example.camera.model.CinemaColorProfile.HLG || config.colorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
+                val colorStandard = if (isHlg10 || config.colorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
                     MediaFormat.COLOR_STANDARD_BT2020
                 } else {
                     MediaFormat.COLOR_STANDARD_BT709
                 }
-                val colorTransfer = if (config.colorProfile == com.example.camera.model.CinemaColorProfile.HLG) {
+                val colorTransfer = if (isHlg10) {
                     MediaFormat.COLOR_TRANSFER_HLG
                 } else {
                     MediaFormat.COLOR_TRANSFER_SDR_VIDEO
@@ -188,6 +189,9 @@ object CinemaVideoProcessor {
                         setInteger(MediaFormat.KEY_COLOR_STANDARD, colorStandard)
                         setInteger(MediaFormat.KEY_COLOR_TRANSFER, colorTransfer)
                         setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                        if (isHlg10) {
+                            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+                        }
                     } catch (ignored: Exception) {}
                 }
             }

@@ -343,4 +343,68 @@ class CinemaPipelineVerificationTest {
             try { tempDest.delete() } catch (ignored: Exception) {}
         }
     }
+
+    @Test
+    fun testHlg10ProfileTonemapAndRec2020Gamut() {
+        val config = CinemaConfig(
+            colorProfile = CinemaColorProfile.HLG10,
+            colorSpace = CinemaColorSpace.REC_2020,
+            logBitDepth = LogBitDepth.BIT_10,
+            codec = CinemaCodec.H265
+        )
+        cinemaEngine.updateConfig(config)
+        val curve = cinemaEngine.getTonemapCurve()
+        assertNotNull(curve)
+
+        // Anchors inky black at 0 (<= 0.01)
+        val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, 0)
+        assertEquals(0.0f, blackPoint.x, 0.001f)
+        assertTrue("HLG10 black point must be true deep black (<=0.01f), got ${blackPoint.y}", blackPoint.y <= 0.01f)
+
+        // Middle gray and highlight range
+        val count = curve.getPointCount(TonemapCurve.CHANNEL_GREEN)
+        val midPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, count / 2)
+        assertTrue("HLG10 mid-tone should have natural non-flat curve, got ${midPoint.y}", midPoint.y in 0.50f..0.95f)
+    }
+
+    @Test
+    fun testHlg10ColorPipelineViewfinderMatrix() {
+        val config = CinemaConfig(
+            colorProfile = CinemaColorProfile.HLG10,
+            colorSpace = CinemaColorSpace.REC_2020,
+            logBitDepth = LogBitDepth.BIT_10,
+            codec = CinemaCodec.H265
+        )
+        val matrix = CinemaColorPipeline.computeCinemaColorMatrix(config)
+        assertNotNull("HLG10 must produce a non-null ColorMatrix for the live viewfinder and export", matrix)
+        val array = matrix!!.array
+        assertEquals(20, array.size)
+        // Verify non-zero contrast and saturation transform
+        assertTrue("Contrast diagonal should be non-zero", array[0] > 1.0f)
+    }
+
+    @Test
+    fun testHlg10SoftwareRecordingEngineConfiguration() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        val tempDest = File(context.cacheDir, "test_hlg10_rec.mp4")
+
+        try {
+            val surface = recorder.startRecording(
+                destFile = tempDest,
+                width = 1920,
+                height = 1080,
+                fps = 24,
+                bitrate = 60_000_000,
+                codec = CinemaCodec.H265,
+                bitDepth = LogBitDepth.BIT_10,
+                isAudioEnabled = false,
+                colorProfile = CinemaColorProfile.HLG10,
+                colorSpace = CinemaColorSpace.REC_2020
+            )
+            assertNotNull("Surface should be generated for HLG10 10-bit recording", surface)
+            recorder.stopRecording()
+        } finally {
+            try { tempDest.delete() } catch (ignored: Exception) {}
+        }
+    }
 }

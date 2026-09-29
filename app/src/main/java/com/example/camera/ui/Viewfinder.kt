@@ -102,6 +102,7 @@ fun Viewfinder(
     proShadows: Float = 0f,
     isProModeActive: Boolean = false,
     floatingWindowBlurStrength: Float = 24.0f,
+    isSettingsOpen: Boolean = false,
     onSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
     onTapToFocus: (Offset, Float, Float) -> Unit,
@@ -211,19 +212,38 @@ fun Viewfinder(
         }
     }
 
-    LaunchedEffect(textureViewInstance, isHorizonLockEnabled, horizonRollDegrees, horizonNormX, horizonNormY, isDollyZoomActive, dollyCropState, cameraMode) {
+    val isFourThreeMode = when (cameraMode) {
+        CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> true
+        CameraMode.VIDEO, CameraMode.CINEMA -> false
+        else -> if (aspectRatio > 0f) aspectRatio < 1.5f else true
+    }
+    val targetRatioCalc = if (isFourThreeMode) 4f / 3f else 16f / 9f
+
+    var framesSyncedSinceTransition by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(cameraMode, isSettingsOpen, previewBufferSize, targetRatioCalc) {
+        framesSyncedSinceTransition = 0
+    }
+
+    LaunchedEffect(
+        textureViewInstance,
+        isHorizonLockEnabled,
+        horizonRollDegrees,
+        horizonNormX,
+        horizonNormY,
+        isDollyZoomActive,
+        dollyCropState,
+        cameraMode,
+        previewBufferSize,
+        isSettingsOpen,
+        aspectRatio
+    ) {
         textureViewInstance?.let { tv ->
             if (tv.width > 0 && tv.height > 0) {
-                val isFourThree = when (cameraMode) {
-                    CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> true
-                    CameraMode.VIDEO, CameraMode.CINEMA -> false
-                    else -> if (aspectRatio > 0f) aspectRatio < 1.5f else true
-                }
-                val targetRatio = if (isFourThree) 4f / 3f else 16f / 9f
                 updateTextureViewTransform(
                     textureView = tv,
                     previewBufferSize = previewBufferSize,
-                    targetRatio = targetRatio,
+                    targetRatio = targetRatioCalc,
                     sensorOrientation = sensorOrientation,
                     isHorizonLockEnabled = isHorizonLockEnabled && cameraMode == CameraMode.VIDEO,
                     horizonRollDegrees = horizonRollDegrees,
@@ -351,21 +371,70 @@ fun Viewfinder(
                         var motionSampleBitmap: Bitmap? = null
                         TextureView(context).apply {
                             textureViewInstance = this
-                            addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+                            addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                                 val newW = right - left
                                 val newH = bottom - top
-                                if (newW > 0 && newH > 0) {
-                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentHorizonNormX, currentHorizonNormY, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
+                                if (newW > 0 && newH > 0 && (newW != (oldRight - oldLeft) || newH != (oldBottom - oldTop) || framesSyncedSinceTransition < 5)) {
+                                    updateTextureViewTransform(
+                                        textureView = this,
+                                        previewBufferSize = currentPreviewBufferSize,
+                                        targetRatio = currentTargetRatio,
+                                        sensorOrientation = currentSensorOrientation,
+                                        isHorizonLockEnabled = currentIsHorizonLock,
+                                        horizonRollDegrees = currentHorizonRoll,
+                                        horizonNormX = currentHorizonNormX,
+                                        horizonNormY = currentHorizonNormY,
+                                        isDollyZoomActive = currentIsDollyZoom,
+                                        dollyScale = currentDollyScale,
+                                        dollyFocusX = currentDollyFocusX,
+                                        dollyFocusY = currentDollyFocusY,
+                                        viewWidth = newW,
+                                        viewHeight = newH
+                                    )
                                 }
                             }
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentHorizonNormX, currentHorizonNormY, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
+                                    val effectiveW = if (this@apply.width > 0) this@apply.width else w
+                                    val effectiveH = if (this@apply.height > 0) this@apply.height else h
+                                    updateTextureViewTransform(
+                                        textureView = this@apply,
+                                        previewBufferSize = currentPreviewBufferSize,
+                                        targetRatio = currentTargetRatio,
+                                        sensorOrientation = currentSensorOrientation,
+                                        isHorizonLockEnabled = currentIsHorizonLock,
+                                        horizonRollDegrees = currentHorizonRoll,
+                                        horizonNormX = currentHorizonNormX,
+                                        horizonNormY = currentHorizonNormY,
+                                        isDollyZoomActive = currentIsDollyZoom,
+                                        dollyScale = currentDollyScale,
+                                        dollyFocusX = currentDollyFocusX,
+                                        dollyFocusY = currentDollyFocusY,
+                                        viewWidth = effectiveW,
+                                        viewHeight = effectiveH
+                                    )
                                     onSurfaceTextureAvailable(st)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentHorizonNormX, currentHorizonNormY, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
+                                    val effectiveW = if (this@apply.width > 0) this@apply.width else w
+                                    val effectiveH = if (this@apply.height > 0) this@apply.height else h
+                                    updateTextureViewTransform(
+                                        textureView = this@apply,
+                                        previewBufferSize = currentPreviewBufferSize,
+                                        targetRatio = currentTargetRatio,
+                                        sensorOrientation = currentSensorOrientation,
+                                        isHorizonLockEnabled = currentIsHorizonLock,
+                                        horizonRollDegrees = currentHorizonRoll,
+                                        horizonNormX = currentHorizonNormX,
+                                        horizonNormY = currentHorizonNormY,
+                                        isDollyZoomActive = currentIsDollyZoom,
+                                        dollyScale = currentDollyScale,
+                                        dollyFocusX = currentDollyFocusX,
+                                        dollyFocusY = currentDollyFocusY,
+                                        viewWidth = effectiveW,
+                                        viewHeight = effectiveH
+                                    )
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -381,6 +450,26 @@ fun Viewfinder(
                                     return true
                                 }
                                 override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+                                    // Synchronize transformation matrix continuously on initial frames
+                                    // following camera reinitialization, mode transitions, and returning from Settings
+                                    if (framesSyncedSinceTransition < 5) {
+                                        framesSyncedSinceTransition++
+                                        updateTextureViewTransform(
+                                            textureView = this@apply,
+                                            previewBufferSize = currentPreviewBufferSize,
+                                            targetRatio = currentTargetRatio,
+                                            sensorOrientation = currentSensorOrientation,
+                                            isHorizonLockEnabled = currentIsHorizonLock,
+                                            horizonRollDegrees = currentHorizonRoll,
+                                            horizonNormX = currentHorizonNormX,
+                                            horizonNormY = currentHorizonNormY,
+                                            isDollyZoomActive = currentIsDollyZoom,
+                                            dollyScale = currentDollyScale,
+                                            dollyFocusX = currentDollyFocusX,
+                                            dollyFocusY = currentDollyFocusY
+                                        )
+                                    }
+
                                     // Real-time backdrop blur sampling for all floating windows & popups across the app
                                     if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive) {
                                         com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(this@apply, floatingWindowBlurStrength)
@@ -855,7 +944,7 @@ fun CameraGridOverlay(
  * Ensures uniform scaling (center-crop without distortion or non-uniform stretching)
  * and resets to identity when buffer aspect ratio matches the view aspect ratio.
  */
-private fun updateTextureViewTransform(
+internal fun updateTextureViewTransform(
     textureView: TextureView,
     previewBufferSize: CameraSize?,
     targetRatio: Float,
@@ -867,10 +956,12 @@ private fun updateTextureViewTransform(
     isDollyZoomActive: Boolean = false,
     dollyScale: Float = 1.0f,
     dollyFocusX: Float = 0.5f,
-    dollyFocusY: Float = 0.5f
+    dollyFocusY: Float = 0.5f,
+    viewWidth: Int = 0,
+    viewHeight: Int = 0
 ) {
-    val viewW = textureView.width.toFloat()
-    val viewH = textureView.height.toFloat()
+    val viewW = if (viewWidth > 0) viewWidth.toFloat() else textureView.width.toFloat()
+    val viewH = if (viewHeight > 0) viewHeight.toFloat() else textureView.height.toFloat()
     if (viewW <= 0f || viewH <= 0f) return
 
     val matrix = Matrix()
@@ -883,7 +974,15 @@ private fun updateTextureViewTransform(
         targetRatio
     }
 
-    val viewAspect = viewH / viewW
+    val actualViewAspect = viewH / viewW
+    // If the view is undergoing a layout transition (dimensions haven't caught up with targetRatio),
+    // synchronize viewAspect with targetRatio so we never apply a bogus scale factor based on stale dimensions.
+    val viewAspect = if (kotlin.math.abs(actualViewAspect - targetRatio) < 0.08f) {
+        actualViewAspect
+    } else {
+        targetRatio
+    }
+
     val centerX = viewW / 2f
     val centerY = viewH / 2f
 

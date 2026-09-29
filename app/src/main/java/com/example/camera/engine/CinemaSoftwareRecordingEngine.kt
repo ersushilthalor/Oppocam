@@ -97,10 +97,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         colorProfile: com.example.camera.model.CinemaColorProfile = com.example.camera.model.CinemaColorProfile.NATIVE,
         colorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709
     ): Surface {
-        outputFile = destFile
-        activeCodec = codec
+        val isHlg10 = colorProfile == com.example.camera.model.CinemaColorProfile.HLG10
+        val effectiveCodec = if (isHlg10 && codec == CinemaCodec.H264) CinemaCodec.H265 else codec
+        activeCodec = effectiveCodec
         activeColorProfile = colorProfile
-        activeColorSpace = colorSpace
+        activeColorSpace = if (isHlg10) com.example.camera.model.CinemaColorSpace.REC_2020 else colorSpace
 
         isRecording.set(true)
         isStopping.set(false)
@@ -120,7 +121,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             pendingAudioSamples.clear()
         }
 
-        val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (codec == CinemaCodec.PRORES)
+        val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (effectiveCodec == CinemaCodec.PRORES) || isHlg10
         val normWidth = maxOf(width, height)
         val normHeight = minOf(width, height)
 
@@ -173,7 +174,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         // 3. Setup Video MediaCodec
         val inputSurface = try {
-            setupVideoPipeline(normWidth, normHeight, fps, bitrate, codec, is10Bit, isWebm)
+            setupVideoPipeline(normWidth, normHeight, fps, bitrate, effectiveCodec, is10Bit, isWebm)
         } catch (e: Exception) {
             Log.e(TAG, "Video pipeline setup failed", e)
             synchronized(muxerLock) {
@@ -310,10 +311,13 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         is10Bit: Boolean,
         isWebm: Boolean
     ): Surface {
-        val is10BitMode = is10Bit || (codec == CinemaCodec.PRORES)
+        val is10BitMode = is10Bit || (codec == CinemaCodec.PRORES) || (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10)
         val mime = when {
             isWebm -> {
                 MediaFormat.MIMETYPE_VIDEO_VP9
+            }
+            activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10 -> {
+                MediaFormat.MIMETYPE_VIDEO_HEVC
             }
             codec == CinemaCodec.VP9 -> {
                 if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
@@ -354,12 +358,12 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         // Create software/hardware encoder matching 10-bit capabilities
         val (encoder, supportedLevel) = findEncoder(mime, is10BitMode)
 
-        val colorStandard = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG || activeColorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
+        val colorStandard = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10 || activeColorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
             MediaFormat.COLOR_STANDARD_BT2020
         } else {
             MediaFormat.COLOR_STANDARD_BT709
         }
-        val colorTransfer = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG) {
+        val colorTransfer = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10) {
             MediaFormat.COLOR_TRANSFER_HLG
         } else {
             MediaFormat.COLOR_TRANSFER_SDR_VIDEO

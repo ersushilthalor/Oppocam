@@ -423,15 +423,29 @@ fun CinemaSettingsWindow(
                         CinemaColorProfile.NATIVE to "Natural",
                         CinemaColorProfile.FLAT_LOG to "Flat Log",
                         CinemaColorProfile.REC_2020 to "Rec.2020 HDR",
+                        CinemaColorProfile.HLG10 to "HLG10 HDR",
                         CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
-                        CinemaColorProfile.HLG to "HLG Broadcast",
                         CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log"
                     ).forEach { (profile, label) ->
                         val isSelected = config.colorProfile == profile
                         CinemaPillChip(
                             label = label,
                             isSelected = isSelected,
-                            onClick = { onConfigChange(config.copy(colorProfile = profile)) }
+                            onClick = {
+                                if (profile == CinemaColorProfile.HLG10) {
+                                    // ARIB STD-B67 standard: 10-bit HDR with Rec.2020 and HEVC (H.265)
+                                    onConfigChange(
+                                        config.copy(
+                                            colorProfile = CinemaColorProfile.HLG10,
+                                            colorSpace = CinemaColorSpace.REC_2020,
+                                            logBitDepth = LogBitDepth.BIT_10,
+                                            codec = if (config.codec == CinemaCodec.H264) CinemaCodec.H265 else config.codec
+                                        )
+                                    )
+                                } else {
+                                    onConfigChange(config.copy(colorProfile = profile))
+                                }
+                            }
                         )
                     }
                 }

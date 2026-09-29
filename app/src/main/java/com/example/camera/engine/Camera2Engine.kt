@@ -1643,6 +1643,18 @@ class Camera2Engine(private val context: Context) {
             viewfinderWidth = width
             viewfinderHeight = height
         }
+        val targetRatio = getTargetAspectRatioForMode(currentMode)
+        val currentBuf = _previewBufferSize.value
+        val isBufMatching = currentBuf != null && run {
+            val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
+            kotlin.math.abs(r - targetRatio) < 0.08f
+        }
+        val optimalSize = if (isBufMatching && currentBuf != null) currentBuf else getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
+        _previewBufferSize.value = optimalSize
+        val cameraW = max(optimalSize.width, optimalSize.height)
+        val cameraH = min(optimalSize.width, optimalSize.height)
+        texture.setDefaultBufferSize(cameraW, cameraH)
+
         var curSurf = previewSurface
         if (curSurf == null || !curSurf.isValid) {
             try { curSurf?.release() } catch (ignored: Throwable) {}
@@ -1663,7 +1675,12 @@ class Camera2Engine(private val context: Context) {
         }
         if (texture != null) {
             val targetRatio = getTargetAspectRatioForMode(currentMode)
-            val optimalSize = _previewBufferSize.value ?: getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
+            val currentBuf = _previewBufferSize.value
+            val isBufMatching = currentBuf != null && run {
+                val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
+                kotlin.math.abs(r - targetRatio) < 0.08f
+            }
+            val optimalSize = if (isBufMatching && currentBuf != null) currentBuf else getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
             _previewBufferSize.value = optimalSize
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
@@ -2136,7 +2153,8 @@ class Camera2Engine(private val context: Context) {
                     previewRequestBuilder = recBuilder
                 }
 
-                val is10BitMode = currentMode == CameraMode.CINEMA && cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10
+                val is10BitMode = currentMode == CameraMode.CINEMA &&
+                        (cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10 || cinemaConfig.value.colorProfile == CinemaColorProfile.HLG10)
                 createRecordingCaptureSession(
                     camera = camera,
                     previewSurface = previewSurf,
@@ -2508,10 +2526,10 @@ class Camera2Engine(private val context: Context) {
                 val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
                 cinemaEngine.naturalLogEngine.onFrameCaptured(result, chars)
                 onNaturalLogAutoToneFrame()
-            } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG) {
+            } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG10) {
                 val lens = _selectedLens.value
                 val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
-                cinemaEngine.hlgAutoExposureEngine.onFrameCaptured(result, chars)
+                cinemaEngine.hlg10AutoExposureEngine.onFrameCaptured(result, chars)
                 onHlgAutoToneFrame()
             } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.NATIVE) {
                 val lens = _selectedLens.value
@@ -2528,10 +2546,10 @@ class Camera2Engine(private val context: Context) {
     fun onFrameLuminanceStats(stats: FrameLuminanceStats) {
         latestLuminanceStats = stats
         cinemaEngine.naturalLogEngine.onFrameLuminanceAnalyzed(stats)
-        cinemaEngine.hlgAutoExposureEngine.onFrameLuminanceAnalyzed(stats)
+        cinemaEngine.hlg10AutoExposureEngine.onFrameLuminanceAnalyzed(stats)
         if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.FLAT_LOG) {
             onNaturalLogAutoToneFrame()
-        } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG) {
+        } else if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG10) {
             onHlgAutoToneFrame()
         }
     }
@@ -2540,9 +2558,9 @@ class Camera2Engine(private val context: Context) {
     private fun onHlgAutoToneFrame() {
         val now = System.currentTimeMillis()
         if (now - lastHlgIspUpdateTime < 66L) return // 15fps throttle for repeating ISP tonemap updates
-        if (!cinemaEngine.hlgAutoExposureEngine.hasSignificantChangeSinceLastIspUpdate()) return
+        if (!cinemaEngine.hlg10AutoExposureEngine.hasSignificantChangeSinceLastIspUpdate()) return
         lastHlgIspUpdateTime = now
-        cinemaEngine.hlgAutoExposureEngine.markIspUpdated()
+        cinemaEngine.hlg10AutoExposureEngine.markIspUpdated()
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
         try {
@@ -4643,7 +4661,9 @@ class Camera2Engine(private val context: Context) {
             try {
                 val dynamicProfiles = chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
                 val supported = dynamicProfiles?.supportedProfiles ?: emptySet()
+                val isHlg10 = _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG10
                 val targetProfile = when {
+                    isHlg10 && supported.contains(DynamicRangeProfiles.HLG10) -> DynamicRangeProfiles.HLG10
                     supported.contains(DynamicRangeProfiles.HLG10) -> DynamicRangeProfiles.HLG10
                     supported.contains(DynamicRangeProfiles.HDR10) -> DynamicRangeProfiles.HDR10
                     supported.contains(DynamicRangeProfiles.HDR10_PLUS) -> DynamicRangeProfiles.HDR10_PLUS
@@ -4827,7 +4847,14 @@ class Camera2Engine(private val context: Context) {
             val matchedFpsRange = chars?.let { findBestFpsRange(it, targetFps) }
 
             // 3. Dynamic Range & Codec validation
-            val cinemaCodec = if (isCinema) cinemaConfig.value.codec else CinemaCodec.H264
+            val isHlg10Active = isCinema && cinemaConfig.value.colorProfile == CinemaColorProfile.HLG10
+            val cinemaCodec = if (isHlg10Active && cinemaConfig.value.codec == CinemaCodec.H264) {
+                CinemaCodec.H265
+            } else if (isCinema) {
+                cinemaConfig.value.codec
+            } else {
+                CinemaCodec.H264
+            }
             val dynamicProfiles = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
             } else null
@@ -4837,7 +4864,7 @@ class Camera2Engine(private val context: Context) {
                     supportedProfiles.contains(DynamicRangeProfiles.HDR10_PLUS)
 
             val is10BitRequested = isCinema &&
-                    (cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10 || cinemaCodec == CinemaCodec.PRORES) &&
+                    (cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10 || isHlg10Active || cinemaCodec == CinemaCodec.PRORES) &&
                     has10BitDynamicRange
 
             val baseBitrate = if (isCinema) {
@@ -4933,11 +4960,11 @@ class Camera2Engine(private val context: Context) {
                     fps = targetFps,
                     bitrate = bitrate,
                     codec = cinemaCodec,
-                    bitDepth = if (is10BitRequested || cinemaCodec == CinemaCodec.PRORES) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
+                    bitDepth = if (is10BitRequested || isHlg10Active || cinemaCodec == CinemaCodec.PRORES) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
                     isAudioEnabled = isAudioEnabled,
                     orientationHint = cinemaOrientationHint,
                     colorProfile = cinemaConfig.value.colorProfile,
-                    colorSpace = cinemaConfig.value.colorSpace
+                    colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace
                 )
                 preparedVideoGeometry = PreparedVideoGeometry(
                     width = finalRecordWidth,
