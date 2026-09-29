@@ -60,7 +60,10 @@ class RefocusEngine(private val context: Context) {
     suspend fun processAndPersistPlanes(
         photoUri: Uri,
         tempPlaneFiles: List<File>,
-        planeDiopters: List<Float>
+        planeDiopters: List<Float>,
+        captureOrientation: Int = 90,
+        isFrontFacing: Boolean = false,
+        saveMirrored: Boolean = false
     ): RefocusPhotoEntity? = withContext(Dispatchers.Default) {
         var bundleDir: File? = null
         try {
@@ -73,6 +76,7 @@ class RefocusEngine(private val context: Context) {
             for (i in 0 until count) {
                 val dest = File(bundleDir, "plane_$i.jpg")
                 copyFile(tempPlaneFiles[i], dest)
+                ensurePlaneExifOrientation(dest, captureOrientation, isFrontFacing)
                 tempPlaneFiles[i].delete()
                 savedFiles.add(dest)
             }
@@ -88,8 +92,12 @@ class RefocusEngine(private val context: Context) {
             // Read dimensions from mid plane without decoding pixels
             val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(midDest.absolutePath, boundsOptions)
-            val fullWidth = boundsOptions.outWidth.coerceAtLeast(1)
-            val fullHeight = boundsOptions.outHeight.coerceAtLeast(1)
+            val rawWidth = boundsOptions.outWidth.coerceAtLeast(1)
+            val rawHeight = boundsOptions.outHeight.coerceAtLeast(1)
+            val isPortraitTarget = (captureOrientation == 90 || captureOrientation == 270)
+            val needsSwap = isPortraitTarget && rawWidth > rawHeight
+            val fullWidth = if (needsSwap) rawHeight else rawWidth
+            val fullHeight = if (needsSwap) rawWidth else rawHeight
 
             // Determine downsample factor for depth proxy (keeps RAM usage below 1MB)
             val maxEdge = max(fullWidth, fullHeight)
@@ -108,7 +116,13 @@ class RefocusEngine(private val context: Context) {
             var proxyH = 1
             val energyList = ArrayList<FloatArray>(count)
             for (i in 0 until count) {
-                var proxyBmp: Bitmap? = BitmapFactory.decodeFile(savedFiles[i].absolutePath, decodeOptions)
+                var proxyBmp: Bitmap? = decodeOrientedPlaneBitmap(
+                    file = savedFiles[i],
+                    decodeOptions = decodeOptions,
+                    captureOrientation = captureOrientation,
+                    isFrontFacing = isFrontFacing,
+                    saveMirrored = saveMirrored
+                )
                 if (proxyBmp != null) {
                     proxyW = proxyBmp.width
                     proxyH = proxyBmp.height
@@ -308,6 +322,78 @@ class RefocusEngine(private val context: Context) {
             }
         }
         return result
+    }
+
+    private fun ensurePlaneExifOrientation(file: File, captureOrientation: Int, isFrontFacing: Boolean) {
+        try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            val w = bounds.outWidth
+            val h = bounds.outHeight
+            val exif = android.media.ExifInterface(file.absolutePath)
+            val curOrient = exif.getAttributeInt(
+                android.media.ExifInterface.TAG_ORIENTATION,
+                android.media.ExifInterface.ORIENTATION_UNDEFINED
+            )
+            if ((curOrient == android.media.ExifInterface.ORIENTATION_UNDEFINED ||
+                 curOrient == android.media.ExifInterface.ORIENTATION_NORMAL) &&
+                (captureOrientation == 90 || captureOrientation == 270) && w > h
+            ) {
+                val targetExifOrient = if (captureOrientation == 270 || isFrontFacing) {
+                    android.media.ExifInterface.ORIENTATION_ROTATE_270
+                } else {
+                    android.media.ExifInterface.ORIENTATION_ROTATE_90
+                }
+                exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, targetExifOrient.toString())
+                exif.saveAttributes()
+            }
+        } catch (ignored: Throwable) {}
+    }
+
+    private fun decodeOrientedPlaneBitmap(
+        file: File,
+        decodeOptions: BitmapFactory.Options,
+        captureOrientation: Int,
+        isFrontFacing: Boolean,
+        saveMirrored: Boolean
+    ): Bitmap? {
+        val raw = BitmapFactory.decodeFile(file.absolutePath, decodeOptions) ?: return null
+        return try {
+            val exif = android.media.ExifInterface(file.absolutePath)
+            val exifOrient = exif.getAttributeInt(
+                android.media.ExifInterface.TAG_ORIENTATION,
+                android.media.ExifInterface.ORIENTATION_UNDEFINED
+            )
+            val matrix = android.graphics.Matrix()
+            val isPortraitTarget = (captureOrientation == 90 || captureOrientation == 270)
+            val isRawLandscape = raw.width > raw.height
+            when (exifOrient) {
+                android.media.ExifInterface.ORIENTATION_ROTATE_90 -> {
+                    if (!isPortraitTarget || isRawLandscape) matrix.postRotate(90f)
+                }
+                android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                android.media.ExifInterface.ORIENTATION_ROTATE_270 -> {
+                    if (!isPortraitTarget || isRawLandscape) matrix.postRotate(270f)
+                }
+                else -> {
+                    if (isPortraitTarget && isRawLandscape) {
+                        matrix.postRotate(captureOrientation.toFloat())
+                    }
+                }
+            }
+            if (isFrontFacing && saveMirrored) {
+                matrix.postScale(-1f, 1f)
+            }
+            if (!matrix.isIdentity) {
+                val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+                if (rotated != raw) raw.recycle()
+                rotated
+            } else {
+                raw
+            }
+        } catch (e: Throwable) {
+            raw
+        }
     }
 
     private fun copyFile(src: File, dest: File) {

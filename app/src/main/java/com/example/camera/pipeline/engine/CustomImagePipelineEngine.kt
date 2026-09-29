@@ -52,6 +52,7 @@ class CustomImagePipelineEngine(private val context: Context) {
         val width = image.width
         val height = image.height
 
+        var effectiveRotation = rotationDegrees
         val rawBitmap = when (image.format) {
             ImageFormat.YUV_420_888 -> {
                 convertYuv420ToRgbBitmap(image)
@@ -60,19 +61,37 @@ class CustomImagePipelineEngine(private val context: Context) {
                 convertRawSensorToRgbBitmap(image)
             }
             else -> {
-                // Fallback for direct buffer
+                // Fallback for direct JPEG buffer
                 val buffer = image.planes[0].buffer
                 val bytes = ByteArray(buffer.remaining())
                 buffer.get(bytes)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val exifOrient = try {
+                    android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
+                        .getAttributeInt(
+                            android.media.ExifInterface.TAG_ORIENTATION,
+                            android.media.ExifInterface.ORIENTATION_UNDEFINED
+                        )
+                } catch (e: Exception) {
+                    android.media.ExifInterface.ORIENTATION_UNDEFINED
+                }
+                val isPortraitTarget = (rotationDegrees == 90 || rotationDegrees == 270)
+                val isRawLandscape = decoded.width > decoded.height
+                effectiveRotation = when (exifOrient) {
+                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> if (!isPortraitTarget || isRawLandscape) 90 else 0
+                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> if (!isPortraitTarget || isRawLandscape) 270 else 0
+                    else -> if (isPortraitTarget && !isRawLandscape) 0 else rotationDegrees
+                }
+                decoded
             }
         }
 
         // Apply rotation and selfie mirror if needed
         val matrix = Matrix()
-        if (rotationDegrees != 0) {
-            matrix.postRotate(rotationDegrees.toFloat())
+        if (effectiveRotation != 0) {
+            matrix.postRotate(effectiveRotation.toFloat())
         }
         if (isFrontFacing && saveMirrored) {
             matrix.postScale(-1f, 1f)

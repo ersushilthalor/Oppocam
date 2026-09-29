@@ -345,7 +345,7 @@ fun InteractiveRefocusViewer(
 }
 
 /**
- * Memory-safe bitmap decoder that scales images down to max dimension.
+ * Memory-safe bitmap decoder that scales images down to max dimension and applies EXIF orientation.
  */
 private fun decodeScaledBitmap(path: String, maxDimension: Int): Bitmap? {
     val file = File(path)
@@ -367,7 +367,40 @@ private fun decodeScaledBitmap(path: String, maxDimension: Int): Bitmap? {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.RGB_565
         }
-        BitmapFactory.decodeFile(file.absolutePath, decodeOptions)
+        val raw = BitmapFactory.decodeFile(file.absolutePath, decodeOptions) ?: return null
+        val exif = try {
+            android.media.ExifInterface(file.absolutePath)
+        } catch (e: Exception) {
+            null
+        }
+        val exifOrient = exif?.getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_UNDEFINED
+        ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
+
+        val matrix = android.graphics.Matrix()
+        when (exifOrient) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            android.media.ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            android.media.ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+        }
+        if (!matrix.isIdentity) {
+            val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+            if (rotated != raw) raw.recycle()
+            rotated
+        } else {
+            raw
+        }
     } catch (e: Throwable) {
         null
     }

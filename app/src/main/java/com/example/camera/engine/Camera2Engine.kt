@@ -3201,6 +3201,7 @@ class Camera2Engine(private val context: Context) {
         }
 
         val orientation = getCaptureJpegOrientation()
+        val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
 
         readerJpeg.setOnImageAvailableListener({ reader ->
             val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
@@ -3208,7 +3209,13 @@ class Camera2Engine(private val context: Context) {
                 val buffer = image.planes[0].buffer
                 val bytes = ByteArray(buffer.remaining())
                 buffer.get(bytes)
-                var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val bmp = decodeUprightBitmapFromJpeg(
+                    jpegBytes = bytes,
+                    captureOrientation = orientation,
+                    isFrontFacing = isFrontFacing,
+                    mirrorHorizontally = saveSelfieAsPreviewed,
+                    mutable = false
+                )
                 if (bmp != null) {
                     val frameIdx = collectedFrames.size
                     val bracket = bracketFrames.getOrElse(frameIdx) { bracketFrames.last() }
@@ -4025,6 +4032,9 @@ class Camera2Engine(private val context: Context) {
         var framesReceived = 0
         val isCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
 
+        val captureOrientation = getCaptureJpegOrientation()
+        val isFrontFacing = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+
         fun finalizeRefocusCapture() {
             if (!isCompleted.compareAndSet(false, true)) return
             readerJpeg.setOnImageAvailableListener(null, null)
@@ -4041,7 +4051,10 @@ class Camera2Engine(private val context: Context) {
                             refocusEngine.processAndPersistPlanes(
                                 photoUri = finalUri,
                                 tempPlaneFiles = tempPlaneFiles,
-                                planeDiopters = focusPlanes.toList()
+                                planeDiopters = focusPlanes.toList(),
+                                captureOrientation = captureOrientation,
+                                isFrontFacing = isFrontFacing,
+                                saveMirrored = saveSelfieAsPreviewed
                             )
                         }
                     }
@@ -4189,55 +4202,15 @@ class Camera2Engine(private val context: Context) {
                     buffer.get(bytes)
                     image.close()
 
-                    // Ensure maximum photographic quality with zero downsampling
-                    val options = BitmapFactory.Options().apply {
-                        inMutable = true
-                        inSampleSize = 1
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
-                    }
-                    val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                    val uprightBitmap = decodeUprightBitmapFromJpeg(
+                        jpegBytes = bytes,
+                        captureOrientation = getCaptureJpegOrientation(),
+                        isFrontFacing = isFrontFacing,
+                        mirrorHorizontally = saveSelfieAsPreviewed,
+                        mutable = true
+                    )
 
-                    if (rawBitmap != null) {
-                        val exif = try {
-                            android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
-                        } catch (e: Exception) {
-                            null
-                        }
-                        val exifOrientation = exif?.getAttributeInt(
-                            android.media.ExifInterface.TAG_ORIENTATION,
-                            android.media.ExifInterface.ORIENTATION_UNDEFINED
-                        ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
-
-                        val matrix = Matrix()
-                        when (exifOrientation) {
-                            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                            else -> {
-                                if (rawBitmap.width > rawBitmap.height) {
-                                    val rot = if (isFrontFacing) 270f else 90f
-                                    matrix.postRotate(rot)
-                                }
-                            }
-                        }
-
-                        // Front camera viewfinder WYSIWYG mirroring preservation on upright frame
-                        if (isFrontFacing && saveSelfieAsPreviewed) {
-                            matrix.postScale(-1f, 1f)
-                        }
-
-                        val uprightBitmap = if (!matrix.isIdentity) {
-                            val rotated = Bitmap.createBitmap(
-                                rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
-                            )
-                            if (rotated != rawBitmap) {
-                                rawBitmap.recycle()
-                            }
-                            rotated
-                        } else {
-                            rawBitmap
-                        }
-
+                    if (uprightBitmap != null) {
                         engineScope.launch(Dispatchers.Default) {
                             val uri = try {
                                 ultraRes50MStacker.processAndSaveSingleFrame50M(
@@ -4346,52 +4319,15 @@ class Camera2Engine(private val context: Context) {
                             buffer.get(bytes)
                             image.close()
 
-                            val options = BitmapFactory.Options().apply {
-                                inMutable = true
-                            }
-                            val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                            val orientedBitmap = decodeUprightBitmapFromJpeg(
+                                jpegBytes = bytes,
+                                captureOrientation = getCaptureJpegOrientation(),
+                                isFrontFacing = isFrontFacing,
+                                mirrorHorizontally = saveSelfieAsPreviewed,
+                                mutable = true
+                            )
 
-                            if (rawBitmap != null) {
-                                val exif = try {
-                                    android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
-                                } catch (e: Exception) {
-                                    null
-                                }
-                                val exifOrientation = exif?.getAttributeInt(
-                                    android.media.ExifInterface.TAG_ORIENTATION,
-                                    android.media.ExifInterface.ORIENTATION_UNDEFINED
-                                ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
-
-                                val matrix = Matrix()
-                                when (exifOrientation) {
-                                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                                    else -> {
-                                        if (rawBitmap.width > rawBitmap.height) {
-                                            val rot = if (isFrontFacing) 270f else 90f
-                                            matrix.postRotate(rot)
-                                        }
-                                    }
-                                }
-
-                                // Front camera viewfinder WYSIWYG mirroring preservation
-                                if (isFrontFacing && saveSelfieAsPreviewed) {
-                                    matrix.postScale(-1f, 1f)
-                                }
-
-                                val orientedBitmap = if (!matrix.isIdentity) {
-                                    val transformed = Bitmap.createBitmap(
-                                        rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
-                                    )
-                                    if (transformed != rawBitmap) {
-                                        rawBitmap.recycle()
-                                    }
-                                    transformed
-                                } else {
-                                    rawBitmap
-                                }
-
+                            if (orientedBitmap != null) {
                                 _isCapturing.value = false
                                 withContext(Dispatchers.Main) {
                                     onBitmapCaptured(orientedBitmap)
@@ -5536,6 +5472,7 @@ class Camera2Engine(private val context: Context) {
 
     private fun copyAllExifAttributes(srcExif: android.media.ExifInterface, dstExif: android.media.ExifInterface) {
         val standardTags = arrayOf(
+            android.media.ExifInterface.TAG_ORIENTATION,
             android.media.ExifInterface.TAG_DATETIME,
             android.media.ExifInterface.TAG_DATETIME_ORIGINAL,
             android.media.ExifInterface.TAG_DATETIME_DIGITIZED,
@@ -5624,19 +5561,144 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun processPhotoWithCustomPipeline(jpegBytes: ByteArray): ByteArray {
+    /**
+     * Builds the exact transformation Matrix needed to rotate a decoded Camera2 JPEG bitmap
+     * into physically upright orientation (and optionally mirror front-facing captures).
+     *
+     * Handles all Camera2 HAL variations:
+     * 1. HAL leaves pixels in raw sensor orientation (width > height) and writes EXIF TAG_ORIENTATION (6/8/3).
+     * 2. HAL leaves pixels in raw sensor orientation (width > height) and writes TAG_ORIENTATION = 1 or 0
+     *    even when captureOrientation is 90° or 270° (portrait hold).
+     * 3. HAL physically rotates pixels in hardware to portrait (height > width) and writes TAG_ORIENTATION = 1.
+     */
+    private fun buildJpegOrientationMatrix(
+        rawWidth: Int,
+        rawHeight: Int,
+        exifOrientation: Int,
+        captureOrientation: Int,
+        isFrontFacing: Boolean,
+        mirrorHorizontally: Boolean = false
+    ): Matrix {
+        val matrix = Matrix()
+        val isPortraitTarget = (captureOrientation == 90 || captureOrientation == 270)
+        val isRawLandscape = rawWidth > rawHeight
+
+        when (exifOrientation) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> {
+                if (!isPortraitTarget || isRawLandscape) matrix.postRotate(90f)
+            }
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> {
+                matrix.postRotate(180f)
+            }
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> {
+                if (!isPortraitTarget || isRawLandscape) matrix.postRotate(270f)
+            }
+            android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {
+                matrix.postScale(-1f, 1f)
+            }
+            android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
+                matrix.postScale(1f, -1f)
+            }
+            android.media.ExifInterface.ORIENTATION_TRANSPOSE -> {
+                if (!isPortraitTarget || isRawLandscape) matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            android.media.ExifInterface.ORIENTATION_TRANSVERSE -> {
+                if (!isPortraitTarget || isRawLandscape) matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+            else -> {
+                // ORIENTATION_NORMAL (1) or ORIENTATION_UNDEFINED (0):
+                // If the capture was taken in Portrait (90° or 270°) and the decoded bitmap is still
+                // landscape (width > height), the HAL did not rotate the pixel buffer.
+                if (isPortraitTarget && isRawLandscape) {
+                    val rot = if (captureOrientation == 90 || captureOrientation == 270) {
+                        captureOrientation.toFloat()
+                    } else if (isFrontFacing) {
+                        270f
+                    } else {
+                        90f
+                    }
+                    matrix.postRotate(rot)
+                } else if (captureOrientation == 180 && exifOrientation == android.media.ExifInterface.ORIENTATION_UNDEFINED) {
+                    matrix.postRotate(180f)
+                }
+            }
+        }
+
+        if (isFrontFacing && mirrorHorizontally) {
+            matrix.postScale(-1f, 1f)
+        }
+        return matrix
+    }
+
+    private fun decodeUprightBitmapFromJpeg(
+        jpegBytes: ByteArray,
+        captureOrientation: Int = getCaptureJpegOrientation(),
+        isFrontFacing: Boolean = (_selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT),
+        mirrorHorizontally: Boolean = false,
+        mutable: Boolean = true
+    ): Bitmap? {
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inMutable = mutable
+            inSampleSize = 1
+        }
+        val rawBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, options) ?: return null
+        val srcExif = try {
+            android.media.ExifInterface(java.io.ByteArrayInputStream(jpegBytes))
+        } catch (e: Exception) {
+            null
+        }
+        val exifOrientation = srcExif?.getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_UNDEFINED
+        ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
+
+        val matrix = buildJpegOrientationMatrix(
+            rawWidth = rawBitmap.width,
+            rawHeight = rawBitmap.height,
+            exifOrientation = exifOrientation,
+            captureOrientation = captureOrientation,
+            isFrontFacing = isFrontFacing,
+            mirrorHorizontally = mirrorHorizontally
+        )
+
+        return if (!matrix.isIdentity) {
+            val transformed = Bitmap.createBitmap(
+                rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
+            )
+            if (transformed != rawBitmap) {
+                rawBitmap.recycle()
+            }
+            if (mutable && !transformed.isMutable) {
+                val mutableCopy = transformed.copy(Bitmap.Config.ARGB_8888, true)
+                transformed.recycle()
+                mutableCopy
+            } else {
+                transformed
+            }
+        } else {
+            rawBitmap
+        }
+    }
+
+    private fun processPhotoWithCustomPipeline(jpegBytes: ByteArray): Pair<ByteArray, Boolean> {
         try {
             val activePreset = preferences.getActivePipelinePreset()
             val activeParams = preferences.getPipelineParams(activePreset.id)
             val activeLens = _selectedLens.value
             val isFront = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+            val captureOrientation = getCaptureJpegOrientation()
 
-            val options = BitmapFactory.Options().apply {
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-                inMutable = true
-            }
-            val sourceBmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, options)
-                ?: return jpegBytes
+            // Decode and orient to physically upright (and mirror selfie if enabled) BEFORE running pipeline
+            val sourceBmp = decodeUprightBitmapFromJpeg(
+                jpegBytes = jpegBytes,
+                captureOrientation = captureOrientation,
+                isFrontFacing = isFront,
+                mirrorHorizontally = isFront && saveSelfieAsPreviewed,
+                mutable = true
+            ) ?: return Pair(jpegBytes, false)
 
             val processedBytes = kotlinx.coroutines.runBlocking(Dispatchers.Default) {
                 customImagePipelineEngine.processAndEncodeToJpegBytes(
@@ -5662,7 +5724,7 @@ class Camera2Engine(private val context: Context) {
             val captureSource = com.example.camera.pipeline.engine.PipelineCaptureSource(
                 fullResBitmap = sourceBmp,
                 previewBitmap = previewBmp,
-                orientationDegrees = getCaptureJpegOrientation(),
+                orientationDegrees = 0, // Already physically oriented upright
                 isFrontFacing = isFront,
                 lensInfo = activeLens,
                 appliedPreset = activePreset,
@@ -5670,14 +5732,23 @@ class Camera2Engine(private val context: Context) {
             )
             com.example.camera.pipeline.engine.PipelineCaptureCache.setCapture(captureSource)
 
-            return copyExifFromOriginal(srcBytes = jpegBytes, dstBytes = processedBytes)
+            val finalPipelineBytes = copyExifFromOriginal(
+                srcBytes = jpegBytes,
+                dstBytes = processedBytes,
+                forceOrientationNormal = true
+            )
+            return Pair(finalPipelineBytes, true)
         } catch (e: Throwable) {
             Log.e(TAG, "Error applying custom pipeline preset to photo, falling back to original", e)
-            return jpegBytes
+            return Pair(jpegBytes, false)
         }
     }
 
-    private fun copyExifFromOriginal(srcBytes: ByteArray, dstBytes: ByteArray): ByteArray {
+    private fun copyExifFromOriginal(
+        srcBytes: ByteArray,
+        dstBytes: ByteArray,
+        forceOrientationNormal: Boolean = false
+    ): ByteArray {
         return try {
             val srcExif = android.media.ExifInterface(java.io.ByteArrayInputStream(srcBytes))
             val tempFile = File.createTempFile("exif_copy", ".jpg", context.cacheDir)
@@ -5685,6 +5756,12 @@ class Camera2Engine(private val context: Context) {
                 FileOutputStream(tempFile).use { it.write(dstBytes) }
                 val dstExif = android.media.ExifInterface(tempFile.absolutePath)
                 copyAllExifAttributes(srcExif, dstExif)
+                if (forceOrientationNormal) {
+                    dstExif.setAttribute(
+                        android.media.ExifInterface.TAG_ORIENTATION,
+                        android.media.ExifInterface.ORIENTATION_NORMAL.toString()
+                    )
+                }
                 dstExif.saveAttributes()
                 tempFile.readBytes()
             } finally {
@@ -5697,124 +5774,60 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun processStillJpegBytes(bytes: ByteArray, skipPipeline: Boolean = false): Pair<ByteArray, Boolean> {
-        val effectiveBytes = if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isCustomPipelineEnabled) {
+        val (effectiveBytes, wasCustomPipelineApplied) = if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isCustomPipelineEnabled) {
             processPhotoWithCustomPipeline(bytes)
         } else {
-            bytes
+            Pair(bytes, false)
         }
         val activeLens = _selectedLens.value
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-
-        val finalBytes = if (isFrontFacing && saveSelfieAsPreviewed) {
-            try {
-                val rawBitmap = BitmapFactory.decodeByteArray(effectiveBytes, 0, effectiveBytes.size)
-                if (rawBitmap != null) {
-                    val srcExif = try {
-                        android.media.ExifInterface(java.io.ByteArrayInputStream(effectiveBytes))
-                    } catch (e: Exception) { null }
-                    val exifOrientation = srcExif?.getAttributeInt(
-                        android.media.ExifInterface.TAG_ORIENTATION,
-                        android.media.ExifInterface.ORIENTATION_UNDEFINED
-                    ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
-
-                    val matrix = Matrix()
-                    when (exifOrientation) {
-                        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                        android.media.ExifInterface.ORIENTATION_NORMAL -> {
-                            // Already upright! Do NOT rotate!
-                        }
-                        else -> {
-                            if (rawBitmap.width > rawBitmap.height) {
-                                matrix.postRotate(270f)
-                            }
-                        }
-                    }
-                    // Mirror horizontally to save selfie exactly as previewed in viewfinder
-                    matrix.postScale(-1f, 1f)
-
-                    val mirroredBitmap = Bitmap.createBitmap(
-                        rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
-                    )
-                    if (mirroredBitmap != rawBitmap) {
-                        rawBitmap.recycle()
-                    }
-
-                    // Encode with preserved EXIF and ORIENTATION_NORMAL
-                    val tempSelfieFile = File.createTempFile("selfie_mirror", ".jpg", context.cacheDir)
-                    FileOutputStream(tempSelfieFile).use { fos ->
-                        mirroredBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
-                        fos.flush()
-                    }
-                    mirroredBitmap.recycle()
-
-                    try {
-                        val dstExif = android.media.ExifInterface(tempSelfieFile.absolutePath)
-                        if (srcExif != null) {
-                            copyAllExifAttributes(srcExif, dstExif)
-                        }
-                        dstExif.setAttribute(
-                            android.media.ExifInterface.TAG_ORIENTATION,
-                            android.media.ExifInterface.ORIENTATION_NORMAL.toString()
-                        )
-                        dstExif.saveAttributes()
-                    } catch (ex: Throwable) {
-                        Log.w(TAG, "EXIF write warning on mirrored selfie", ex)
-                    }
-
-                    val mirroredBytes = tempSelfieFile.readBytes()
-                    tempSelfieFile.delete()
-                    mirroredBytes
-                } else {
-                    effectiveBytes
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "Failed to mirror selfie JPEG, falling back to original", e)
-                effectiveBytes
-            }
-        } else {
-            effectiveBytes
-        }
+        val captureOrientation = getCaptureJpegOrientation()
 
         val photoFilter = selectedPhotoFilter
         val isFilterActive = (photoFilter != PhotoFilter.ORIGINAL && currentMode == CameraMode.PHOTO)
         val isProAdjusted = (proSaturation.value != 0f || proContrast.value != 1.0f || proHighlights.value != 0f || proShadows.value != 0f)
-        val needsProcessing = !skipPipeline && (isFilterActive || isProAdjusted)
+        val needsColorProcessing = !skipPipeline && (isFilterActive || isProAdjusted)
 
-        var wasFilterApplied = false
-        val outputBytes = if (needsProcessing) {
+        // Check whether effectiveBytes still needs physical rotation or front-camera mirroring
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(effectiveBytes, 0, effectiveBytes.size, boundsOpts)
+        val rawW = boundsOpts.outWidth
+        val rawH = boundsOpts.outHeight
+
+        val srcExif = try {
+            android.media.ExifInterface(java.io.ByteArrayInputStream(effectiveBytes))
+        } catch (e: Exception) {
+            null
+        }
+        val exifOrientation = srcExif?.getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_UNDEFINED
+        ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
+
+        val shouldMirrorHere = !skipPipeline && !wasCustomPipelineApplied && isFrontFacing && saveSelfieAsPreviewed
+        val orientMatrix = if (skipPipeline || wasCustomPipelineApplied) {
+            Matrix()
+        } else {
+            buildJpegOrientationMatrix(
+                rawWidth = rawW,
+                rawHeight = rawH,
+                exifOrientation = exifOrientation,
+                captureOrientation = captureOrientation,
+                isFrontFacing = isFrontFacing,
+                mirrorHorizontally = shouldMirrorHere
+            )
+        }
+
+        val needsBitmapTransform = !orientMatrix.isIdentity || needsColorProcessing
+        var wasTransformed = wasCustomPipelineApplied
+
+        val outputBytes = if (needsBitmapTransform) {
             try {
-                val srcExif = try {
-                    android.media.ExifInterface(java.io.ByteArrayInputStream(finalBytes))
-                } catch (e: Exception) { null }
-                val exifOrientation = srcExif?.getAttributeInt(
-                    android.media.ExifInterface.TAG_ORIENTATION,
-                    android.media.ExifInterface.ORIENTATION_UNDEFINED
-                ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
-
-                val rawBitmap = BitmapFactory.decodeByteArray(finalBytes, 0, finalBytes.size)
+                val rawBitmap = BitmapFactory.decodeByteArray(effectiveBytes, 0, effectiveBytes.size)
                 if (rawBitmap != null) {
-                    val rotMatrix = Matrix()
-                    when (exifOrientation) {
-                        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> rotMatrix.postRotate(90f)
-                        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> rotMatrix.postRotate(180f)
-                        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> rotMatrix.postRotate(270f)
-                        android.media.ExifInterface.ORIENTATION_NORMAL -> {
-                            // Already upright! Do NOT rotate!
-                        }
-                        else -> {
-                            if (isFrontFacing && rawBitmap.width > rawBitmap.height) {
-                                rotMatrix.postRotate(270f)
-                            } else if (!isFrontFacing && rawBitmap.width > rawBitmap.height) {
-                                rotMatrix.postRotate(90f)
-                            }
-                        }
-                    }
-
-                    val uprightBmp = if (!rotMatrix.isIdentity) {
+                    val uprightBmp = if (!orientMatrix.isIdentity) {
                         val rotated = Bitmap.createBitmap(
-                            rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, rotMatrix, true
+                            rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, orientMatrix, true
                         )
                         if (rotated != rawBitmap) {
                             rawBitmap.recycle()
@@ -5824,36 +5837,38 @@ class Camera2Engine(private val context: Context) {
                         rawBitmap
                     }
 
-                    // Apply filter and Pro image adjustments
+                    // Apply filter and Pro image adjustments if active
                     val colorMatrix = android.graphics.ColorMatrix()
                     var hasColorTransform = false
-                    if (isFilterActive) {
-                        photoFilter.toAndroidColorMatrix()?.let {
-                            colorMatrix.postConcat(it)
+                    if (needsColorProcessing) {
+                        if (isFilterActive) {
+                            photoFilter.toAndroidColorMatrix()?.let {
+                                colorMatrix.postConcat(it)
+                                hasColorTransform = true
+                            }
+                        }
+                        if (proSaturation.value != 0f) {
+                            val satMat = android.graphics.ColorMatrix().apply {
+                                setSaturation((1f + proSaturation.value / 100f).coerceIn(0f, 3f))
+                            }
+                            colorMatrix.postConcat(satMat)
+                            hasColorTransform = true
+                        }
+                        if (proContrast.value != 1.0f || proHighlights.value != 0f || proShadows.value != 0f) {
+                            val c = proContrast.value.coerceIn(0.5f, 2.0f)
+                            val b = ((proHighlights.value + proShadows.value) / 4f)
+                            val cm = android.graphics.ColorMatrix(floatArrayOf(
+                                c, 0f, 0f, 0f, b,
+                                0f, c, 0f, 0f, b,
+                                0f, 0f, c, 0f, b,
+                                0f, 0f, 0f, 1f, 0f
+                            ))
+                            colorMatrix.postConcat(cm)
                             hasColorTransform = true
                         }
                     }
-                    if (proSaturation.value != 0f) {
-                        val satMat = android.graphics.ColorMatrix().apply {
-                            setSaturation((1f + proSaturation.value / 100f).coerceIn(0f, 3f))
-                        }
-                        colorMatrix.postConcat(satMat)
-                        hasColorTransform = true
-                    }
-                    if (proContrast.value != 1.0f || proHighlights.value != 0f || proShadows.value != 0f) {
-                        val c = proContrast.value.coerceIn(0.5f, 2.0f)
-                        val b = ((proHighlights.value + proShadows.value) / 4f)
-                        val cm = android.graphics.ColorMatrix(floatArrayOf(
-                            c, 0f, 0f, 0f, b,
-                            0f, c, 0f, 0f, b,
-                            0f, 0f, c, 0f, b,
-                            0f, 0f, 0f, 1f, 0f
-                        ))
-                        colorMatrix.postConcat(cm)
-                        hasColorTransform = true
-                    }
 
-                    val filteredBmp = if (hasColorTransform) {
+                    val finalBmp = if (hasColorTransform) {
                         val fb = Bitmap.createBitmap(uprightBmp.width, uprightBmp.height, Bitmap.Config.ARGB_8888)
                         val canvas = android.graphics.Canvas(fb)
                         val paint = android.graphics.Paint().apply {
@@ -5866,17 +5881,18 @@ class Camera2Engine(private val context: Context) {
                         uprightBmp
                     }
 
-                    val tempFilterFile = File.createTempFile("filter_img", ".jpg", context.cacheDir)
-                    val fos = FileOutputStream(tempFilterFile)
-                    filteredBmp.compress(Bitmap.CompressFormat.JPEG, 98, fos)
-                    fos.flush()
-                    fos.close()
-                    filteredBmp.recycle()
+                    val tempOutFile = File.createTempFile("still_upright", ".jpg", context.cacheDir)
+                    val quality = preferences.jpegQuality.coerceIn(95, 100)
+                    FileOutputStream(tempOutFile).use { fos ->
+                        finalBmp.compress(Bitmap.CompressFormat.JPEG, quality, fos)
+                        fos.flush()
+                    }
+                    finalBmp.recycle()
 
-                    // Copy all original EXIF metadata exactly and mark orientation as NORMAL (1)
-                    // since the bitmap pixels were already physically transformed upright
+                    // Copy all original EXIF metadata and mark orientation as NORMAL (1)
+                    // since the bitmap pixels are now physically upright
                     try {
-                        val dstExif = android.media.ExifInterface(tempFilterFile.absolutePath)
+                        val dstExif = android.media.ExifInterface(tempOutFile.absolutePath)
                         if (srcExif != null) {
                             copyAllExifAttributes(srcExif, dstExif)
                         }
@@ -5886,24 +5902,24 @@ class Camera2Engine(private val context: Context) {
                         )
                         dstExif.saveAttributes()
                     } catch (e: Exception) {
-                        Log.w(TAG, "EXIF preservation on filtered photo warning", e)
+                        Log.w(TAG, "EXIF preservation on upright photo warning", e)
                     }
 
-                    val filteredBytes = tempFilterFile.readBytes()
-                    tempFilterFile.delete()
-                    wasFilterApplied = true
-                    filteredBytes
+                    val transformedBytes = tempOutFile.readBytes()
+                    tempOutFile.delete()
+                    wasTransformed = true
+                    transformedBytes
                 } else {
-                    finalBytes
+                    effectiveBytes
                 }
             } catch (e: Throwable) {
-                Log.w(TAG, "Failed to apply photo filter to saved JPEG", e)
-                finalBytes
+                Log.w(TAG, "Failed to orient/filter still JPEG, falling back", e)
+                effectiveBytes
             }
         } else {
-            finalBytes
+            effectiveBytes
         }
-        return Pair(outputBytes, wasFilterApplied)
+        return Pair(outputBytes, wasTransformed)
     }
 
     private fun saveMotionPhotoBytesToMediaStore(packedBytes: ByteArray): Uri? {
@@ -5933,9 +5949,7 @@ class Camera2Engine(private val context: Context) {
                 put(MediaStore.Images.Media.WIDTH, imageW)
                 put(MediaStore.Images.Media.HEIGHT, imageH)
             }
-            if (skipPipeline) {
-                put(MediaStore.Images.Media.ORIENTATION, 0)
-            }
+            put(MediaStore.Images.Media.ORIENTATION, 0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Images.Media.IS_PENDING, 1)

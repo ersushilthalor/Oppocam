@@ -570,38 +570,64 @@ class BurstEngine(
             "IMG_${dateBase}_BURST${seqStr}.jpg"
         }
 
-        val rotatedBytes: ByteArray = if (isFront && saveMirrored && orientation != 0) {
-            try {
+        val exifDateFormat = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+        val exifDateStr = exifDateFormat.format(Date(frameTimestampMs))
+        val subSecStr = String.format(Locale.US, "%03d", frameTimestampMs % 1000)
+
+        // Physically rotate burst frame to upright orientation (and mirror horizontally for front selfie)
+        // before embedding EXIF + XMP so all galleries display burst frames upright with zero ambiguity.
+        val rotatedBytes: ByteArray = try {
+            val needTransform = (orientation != 0) || (isFront && saveMirrored)
+            val rawBytes = if (needTransform) {
                 val original = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
                 if (original != null) {
                     val matrix = Matrix().apply {
-                        postScale(-1f, 1f)
-                        postRotate(orientation.toFloat())
+                        if (orientation != 0) {
+                            postRotate(orientation.toFloat())
+                        }
+                        if (isFront && saveMirrored) {
+                            postScale(-1f, 1f)
+                        }
                     }
                     val transformed = Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
                     val out = ByteArrayOutputStream()
                     transformed.compress(Bitmap.CompressFormat.JPEG, 95, out)
-                    original.recycle()
+                    if (transformed != original) {
+                        original.recycle()
+                    }
                     transformed.recycle()
                     out.toByteArray()
                 } else jpegBytes
-            } catch (e: Throwable) {
-                jpegBytes
+            } else jpegBytes
+
+            // Write EXIF APP1 header with ORIENTATION_NORMAL before embedding XMP packet
+            val tempExifFile = File.createTempFile("burst_exif_", ".jpg", context.cacheDir)
+            try {
+                FileOutputStream(tempExifFile).use { it.write(rawBytes) }
+                val exif = ExifInterface(tempExifFile.absolutePath)
+                exif.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
+                exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDateStr)
+                exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subSecStr)
+                exif.setAttribute(ExifInterface.TAG_USER_COMMENT, "BurstID=$burstId;BurstIndex=$burstIndex;BurstPrimary=${if (isPrimary) 1 else 0}")
+                exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Burst photo")
+                exif.saveAttributes()
+                tempExifFile.readBytes()
+            } finally {
+                tempExifFile.delete()
             }
-        } else jpegBytes
+        } catch (e: Throwable) {
+            jpegBytes
+        }
 
         // Embed standard Google Camera XMP packet so Google Photos stacks the photos as a single Burst group
         val xmpXml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 5.1.0-jc003"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GCamera="http://ns.google.com/photos/1.0/camera/" GCamera:BurstID="$burstId" GCamera:BurstPrimary="${if (isPrimary) "1" else "0"}" GCamera:BurstIndex="$burstIndex" /></rdf:RDF></x:xmpmeta>"""
         val finalBytes = embedXmpInJpeg(rotatedBytes, xmpXml)
 
-        val exifDateFormat = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
-        val exifDateStr = exifDateFormat.format(Date(frameTimestampMs))
-        val subSecStr = String.format(Locale.US, "%03d", frameTimestampMs % 1000)
-
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val contentValues = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.ORIENTATION, 0)
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
@@ -613,24 +639,6 @@ class BurstEngine(
                     os.write(finalBytes)
                     os.flush()
                 }
-
-                try {
-                    resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
-                        val exif = ExifInterface(pfd.fileDescriptor)
-                        val exifOrientation = when (orientation) {
-                            90 -> ExifInterface.ORIENTATION_ROTATE_90
-                            180 -> ExifInterface.ORIENTATION_ROTATE_180
-                            270 -> ExifInterface.ORIENTATION_ROTATE_270
-                            else -> ExifInterface.ORIENTATION_NORMAL
-                        }
-                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
-                        exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDateStr)
-                        exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subSecStr)
-                        exif.setAttribute(ExifInterface.TAG_USER_COMMENT, "BurstID=$burstId;BurstIndex=$burstIndex;BurstPrimary=${if (isPrimary) 1 else 0}")
-                        exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Burst photo")
-                        exif.saveAttributes()
-                    }
-                } catch (ignored: Exception) {}
 
                 contentValues.clear()
                 contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
@@ -645,21 +653,6 @@ class BurstEngine(
                 os.write(finalBytes)
                 os.flush()
             }
-            try {
-                val exif = ExifInterface(file.absolutePath)
-                val exifOrientation = when (orientation) {
-                    90 -> ExifInterface.ORIENTATION_ROTATE_90
-                    180 -> ExifInterface.ORIENTATION_ROTATE_180
-                    270 -> ExifInterface.ORIENTATION_ROTATE_270
-                    else -> ExifInterface.ORIENTATION_NORMAL
-                }
-                exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
-                exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDateStr)
-                exif.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subSecStr)
-                exif.setAttribute(ExifInterface.TAG_USER_COMMENT, "BurstID=$burstId;BurstIndex=$burstIndex;BurstPrimary=${if (isPrimary) 1 else 0}")
-                exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Burst photo")
-                exif.saveAttributes()
-            } catch (ignored: Exception) {}
 
             Uri.fromFile(file)
         }
