@@ -90,6 +90,7 @@ fun CameraSettingsHost(
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
+    val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
 
     SettingsDrawer(
         isOpen = true,
@@ -117,6 +118,8 @@ fun CameraSettingsHost(
         videoFps = videoFps,
         videoBitrate = videoBitrate,
         isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+        isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
+        onDollyZoomSettingToggle = { viewModel.setDollyZoomSettingEnabled(it) },
         isAudioEnabled = isAudioEnabled,
         isRawEnabled = isRawEnabled,
         saveSelfieAsPreviewed = saveSelfieAsPreviewed,

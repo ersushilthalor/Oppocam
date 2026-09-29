@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ScreenLockRotation
@@ -225,6 +226,9 @@ fun CameraScreen(
 
     val isMotionPhotoEnabled by viewModel.isMotionPhotoEnabled.collectAsStateWithLifecycle()
     val isMotionPhotoRecording by viewModel.isMotionPhotoRecording.collectAsStateWithLifecycle()
+    val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
+    val isDollyZoomActive by viewModel.isDollyZoomActive.collectAsStateWithLifecycle()
+    val dollyCropState by viewModel.dollyCropState.collectAsStateWithLifecycle()
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
@@ -343,6 +347,11 @@ fun CameraScreen(
                 },
                 isHorizonLockEnabled = isHorizonLockEnabled,
                 horizonRollDegrees = horizonRollDegrees,
+                isDollyZoomActive = isDollyZoomActive,
+                dollyCropState = dollyCropState,
+                onTapToLockDollySubject = { normX, normY ->
+                    viewModel.onTapToLockDollySubject(normX, normY)
+                },
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
                 modifier = Modifier.fillMaxSize()
             )
@@ -374,6 +383,41 @@ fun CameraScreen(
                     Text(
                         text = "HORIZON LOCK",
                         color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.6.sp
+                    )
+                }
+            }
+        }
+
+        // 1c. Dedicated Dolly Zoom On-Screen Indicator (Video Mode)
+        if (cameraMode == CameraMode.VIDEO && isDollyZoomActive) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = if (isHorizonLockEnabled) 96.dp else 58.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xCC0D0F18))
+                    .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                    .clickable { viewModel.toggleDollyZoomActive() }
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                    .testTag("dolly_zoom_badge")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CenterFocusStrong,
+                        contentDescription = "Dolly Zoom Active",
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "DOLLY ZOOM • ${String.format(java.util.Locale.US, "%.1fX", dollyCropState.scaleFactor)}",
+                        color = Color(0xFF00E5FF),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.6.sp
@@ -527,6 +571,9 @@ fun CameraScreen(
             onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
             isHorizonLockEnabled = isHorizonLockEnabled,
             onToggleHorizonLock = { viewModel.toggleHorizonLock() },
+            isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
+            isDollyZoomActive = isDollyZoomActive,
+            onToggleDollyZoom = { viewModel.toggleDollyZoomActive() },
             onFlashClick = { viewModel.cycleFlashMode() },
             onTimerClick = { viewModel.cycleTimerMode() },
             onGridClick = { viewModel.cycleGridType() },

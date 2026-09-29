@@ -244,9 +244,22 @@ class Camera2Engine(private val context: Context) {
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
     val stableActionHorizonEngine by lazy { com.example.camera.stableaction.StableActionHorizonEngine(context) }
+    val dollyZoomEngine by lazy { com.example.camera.dollyzoom.DollyZoomEngine() }
 
     private val _isHorizonLockEnabled = MutableStateFlow(false)
     val isHorizonLockEnabled: StateFlow<Boolean> = _isHorizonLockEnabled.asStateFlow()
+
+    private val _isDollyZoomActive = MutableStateFlow(false)
+    val isDollyZoomActive: StateFlow<Boolean> = _isDollyZoomActive.asStateFlow()
+
+    fun setDollyZoomActive(active: Boolean) {
+        _isDollyZoomActive.value = active
+        if (active && currentMode == CameraMode.VIDEO) {
+            dollyZoomEngine.start()
+        } else {
+            dollyZoomEngine.stop()
+        }
+    }
 
     fun setHorizonLockEnabled(enabled: Boolean) {
         _isHorizonLockEnabled.value = enabled
@@ -1484,6 +1497,12 @@ class Camera2Engine(private val context: Context) {
             stableActionHorizonEngine.stop()
         }
 
+        if (mode == CameraMode.VIDEO && _isDollyZoomActive.value) {
+            dollyZoomEngine.start()
+        } else {
+            dollyZoomEngine.stop()
+        }
+
         val needsReconfigure = (kotlin.math.abs(oldRatio - newRatio) > 0.05f) ||
                 (was43 != is43) ||
                 (wasMore && is43) ||
@@ -2276,6 +2295,14 @@ class Camera2Engine(private val context: Context) {
             super.onCaptureCompleted(session, request, result)
             lastCaptureResult = result
             CameraPerformanceMonitor.onPreviewFrame()
+
+            if (_isDollyZoomActive.value && currentMode == CameraMode.VIDEO) {
+                val faces = result.get(CaptureResult.STATISTICS_FACES) ?: emptyArray()
+                val lens = _selectedLens.value
+                val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
+                val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                dollyZoomEngine.onFrameFaces(faces, activeArray)
+            }
 
             if (_hybridStabilizationConfig.value.isUltraStabilizationEnabled &&
                 (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)) {
@@ -5147,6 +5174,9 @@ class Camera2Engine(private val context: Context) {
         if (_isHorizonLockEnabled.value) {
             stableActionHorizonEngine.startRecordingTrajectory()
         }
+        if (_isDollyZoomActive.value) {
+            dollyZoomEngine.startRecordingTrajectory()
+        }
         videoTimerJob?.cancel()
         videoTimerJob = engineScope.launch {
             while (_isRecordingVideo.value) {
@@ -5185,6 +5215,9 @@ class Camera2Engine(private val context: Context) {
 
         val wasHorizonLockActive = _isHorizonLockEnabled.value
         val horizonTrajectory = if (wasHorizonLockActive) stableActionHorizonEngine.stopRecordingTrajectory() else emptyList()
+
+        val wasDollyZoomActive = _isDollyZoomActive.value
+        val dollyTrajectory = if (wasDollyZoomActive) dollyZoomEngine.stopRecordingTrajectory() else emptyList()
 
         // Dispatch stop and resource cleanup to background IO so UI thread never freezes
         engineScope.launch(Dispatchers.IO) {
@@ -5234,6 +5267,22 @@ class Camera2Engine(private val context: Context) {
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Stable Action Horizon Lock to final cinema video", e)
+                            }
+                        } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
+                            try {
+                                val procDest = File(recordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${recordedFile.extension}")
+                                val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    trajectory = dollyTrajectory,
+                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Dolly Zoom to final cinema video", e)
                             }
                         }
 
@@ -5318,6 +5367,22 @@ class Camera2Engine(private val context: Context) {
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Stable Action Horizon Lock to final video", e)
+                            }
+                        } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
+                            try {
+                                val procDest = File(tempFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${tempFile.extension}")
+                                val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    trajectory = dollyTrajectory,
+                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Dolly Zoom to final video", e)
                             }
                         }
 
@@ -6413,6 +6478,7 @@ class Camera2Engine(private val context: Context) {
         pendingReconfigureSession = false
         gyroStabilizationEngine.stop()
         stableActionHorizonEngine.stop()
+        dollyZoomEngine.stop()
         ultraFastShutterEngine.reset()
         lastStabilizedCrop = null
         closeCameraCaptureSession()

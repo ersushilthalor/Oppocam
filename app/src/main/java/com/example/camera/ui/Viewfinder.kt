@@ -118,6 +118,9 @@ fun Viewfinder(
     isHorizonLockEnabled: Boolean = false,
     horizonRollDegrees: Float = 0f,
     viewfinderCornerRadiusDp: Int = 0,
+    isDollyZoomActive: Boolean = false,
+    dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
+    onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -190,7 +193,7 @@ fun Viewfinder(
         }
     }
 
-    LaunchedEffect(textureViewInstance, isHorizonLockEnabled, horizonRollDegrees, cameraMode) {
+    LaunchedEffect(textureViewInstance, isHorizonLockEnabled, horizonRollDegrees, isDollyZoomActive, dollyCropState, cameraMode) {
         textureViewInstance?.let { tv ->
             if (tv.width > 0 && tv.height > 0) {
                 val isFourThree = when (cameraMode) {
@@ -205,7 +208,11 @@ fun Viewfinder(
                     targetRatio = targetRatio,
                     sensorOrientation = sensorOrientation,
                     isHorizonLockEnabled = isHorizonLockEnabled && cameraMode == CameraMode.VIDEO,
-                    horizonRollDegrees = horizonRollDegrees
+                    horizonRollDegrees = horizonRollDegrees,
+                    isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
+                    dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
+                    dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
+                    dollyFocusY = dollyCropState?.focusNormY ?: 0.5f
                 )
             }
         }
@@ -233,6 +240,10 @@ fun Viewfinder(
         val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
         val currentIsHorizonLock by rememberUpdatedState(isHorizonLockEnabled && cameraMode == CameraMode.VIDEO)
         val currentHorizonRoll by rememberUpdatedState(horizonRollDegrees)
+        val currentIsDollyZoom by rememberUpdatedState(isDollyZoomActive && cameraMode == CameraMode.VIDEO)
+        val currentDollyScale by rememberUpdatedState(dollyCropState?.scaleFactor ?: 1.0f)
+        val currentDollyFocusX by rememberUpdatedState(dollyCropState?.focusNormX ?: 0.5f)
+        val currentDollyFocusY by rememberUpdatedState(dollyCropState?.focusNormY ?: 0.5f)
 
         // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame
         val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
@@ -290,11 +301,17 @@ fun Viewfinder(
                             onTap = { offset ->
                                 val normX = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
                                 val normY = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
+                                if (isDollyZoomActive && cameraMode == CameraMode.VIDEO) {
+                                    onTapToLockDollySubject?.invoke(normX, normY)
+                                }
                                 onTapToFocus(offset, normX, normY)
                             },
                             onLongPress = { offset ->
                                 val normX = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
                                 val normY = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
+                                if (isDollyZoomActive && cameraMode == CameraMode.VIDEO) {
+                                    onTapToLockDollySubject?.invoke(normX, normY)
+                                }
                                 onTapToFocus(offset, normX, normY)
                             }
                         )
@@ -316,17 +333,17 @@ fun Viewfinder(
                                 val newW = right - left
                                 val newH = bottom - top
                                 if (newW > 0 && newH > 0) {
-                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll)
+                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
                                 }
                             }
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
                                     onSurfaceTextureAvailable(st)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -398,7 +415,7 @@ fun Viewfinder(
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
-                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && cameraMode == CameraMode.VIDEO, horizonRollDegrees)
+                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && cameraMode == CameraMode.VIDEO, horizonRollDegrees, isDollyZoomActive && cameraMode == CameraMode.VIDEO, dollyCropState?.scaleFactor ?: 1.0f, dollyCropState?.focusNormX ?: 0.5f, dollyCropState?.focusNormY ?: 0.5f)
                         }
 
                         // Outline provider for corner radius clipping on hardware accelerated TextureView
@@ -672,6 +689,14 @@ fun Viewfinder(
                         )
                     }
                 }
+
+                // Dolly Zoom Subject Tracking Reticle & Framing Overlay
+                if (cameraMode == CameraMode.VIDEO && isDollyZoomActive && dollyCropState != null) {
+                    DollyZoomReticleOverlay(
+                        cropState = dollyCropState,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }
@@ -814,7 +839,11 @@ private fun updateTextureViewTransform(
     targetRatio: Float,
     sensorOrientation: Int = 90,
     isHorizonLockEnabled: Boolean = false,
-    horizonRollDegrees: Float = 0f
+    horizonRollDegrees: Float = 0f,
+    isDollyZoomActive: Boolean = false,
+    dollyScale: Float = 1.0f,
+    dollyFocusX: Float = 0.5f,
+    dollyFocusY: Float = 0.5f
 ) {
     val viewW = textureView.width.toFloat()
     val viewH = textureView.height.toFloat()
@@ -838,13 +867,10 @@ private fun updateTextureViewTransform(
     // to strictly preserve original aspect ratio and prevent vertical stretching or distortion.
     if (kotlin.math.abs(bufAspect - viewAspect) > 0.005f) {
         if (viewAspect > bufAspect) {
-            // View is taller than buffer (e.g. 9:16 view with 3:4 sensor buffer):
-            // Scale horizontally around center to center-crop without vertical elongation.
             val scaleX = viewAspect / bufAspect
             val scaleY = 1.0f
             matrix.setScale(scaleX, scaleY, centerX, centerY)
         } else {
-            // View is wider than buffer: scale vertically around center to center-crop.
             val scaleX = 1.0f
             val scaleY = bufAspect / viewAspect
             matrix.setScale(scaleX, scaleY, centerX, centerY)
@@ -860,9 +886,60 @@ private fun updateTextureViewTransform(
         val aspect = max(viewW, viewH) / min(viewW, viewH)
         val safeScale = max(kotlin.math.sqrt(1f + aspect * aspect) / 0.90f, 1.8518f)
         matrix.postScale(safeScale, safeScale, centerX, centerY)
+    } else if (isDollyZoomActive && dollyScale > 1.005f) {
+        // Dolly Zoom real-time geometric scaling: zooms in/out centered on the tracked subject
+        // to maintain the subject's constant apparent size.
+        val focalX = (dollyFocusX * viewW).coerceIn(viewW * 0.15f, viewW * 0.85f)
+        val focalY = (dollyFocusY * viewH).coerceIn(viewH * 0.15f, viewH * 0.85f)
+        matrix.postScale(dollyScale, dollyScale, focalX, focalY)
     }
 
     textureView.setTransform(matrix)
+}
+
+@Composable
+fun DollyZoomReticleOverlay(
+    cropState: com.example.camera.dollyzoom.DollyCropState,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(modifier = modifier) {
+        val w = maxWidth
+        val h = maxHeight
+        val density = androidx.compose.ui.platform.LocalDensity.current
+
+        val leftPx = with(density) { (cropState.subjectBoundsNorm.left * w.toPx()) }
+        val topPx = with(density) { (cropState.subjectBoundsNorm.top * h.toPx()) }
+        val widthPx = with(density) { (cropState.subjectBoundsNorm.width() * w.toPx()) }
+        val heightPx = with(density) { (cropState.subjectBoundsNorm.height() * h.toPx()) }
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cyanColor = Color(0xFF00E5FF)
+            val strokeW = 2.dp.toPx()
+            val bracketLen = minOf(widthPx, heightPx) * 0.25f
+
+            // Top-Left corner
+            drawLine(cyanColor, Offset(leftPx, topPx), Offset(leftPx + bracketLen, topPx), strokeW)
+            drawLine(cyanColor, Offset(leftPx, topPx), Offset(leftPx, topPx + bracketLen), strokeW)
+
+            // Top-Right corner
+            drawLine(cyanColor, Offset(leftPx + widthPx, topPx), Offset(leftPx + widthPx - bracketLen, topPx), strokeW)
+            drawLine(cyanColor, Offset(leftPx + widthPx, topPx), Offset(leftPx + widthPx, topPx + bracketLen), strokeW)
+
+            // Bottom-Left corner
+            drawLine(cyanColor, Offset(leftPx, topPx + heightPx), Offset(leftPx + bracketLen, topPx + heightPx), strokeW)
+            drawLine(cyanColor, Offset(leftPx, topPx + heightPx), Offset(leftPx, topPx + heightPx - bracketLen), strokeW)
+
+            // Bottom-Right corner
+            drawLine(cyanColor, Offset(leftPx + widthPx, topPx + heightPx), Offset(leftPx + widthPx - bracketLen, topPx + heightPx), strokeW)
+            drawLine(cyanColor, Offset(leftPx + widthPx, topPx + heightPx), Offset(leftPx + widthPx, topPx + heightPx - bracketLen), strokeW)
+
+            // Small center crosshair
+            val cx = leftPx + widthPx / 2f
+            val cy = topPx + heightPx / 2f
+            drawLine(cyanColor.copy(alpha = 0.7f), Offset(cx - 8f, cy), Offset(cx + 8f, cy), 1.5.dp.toPx())
+            drawLine(cyanColor.copy(alpha = 0.7f), Offset(cx, cy - 8f), Offset(cx, cy + 8f), 1.5.dp.toPx())
+        }
+    }
 }
 
 

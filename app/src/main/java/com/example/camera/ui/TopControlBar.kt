@@ -139,6 +139,9 @@ fun TopControlBar(
     onVideoAdjustmentsClick: () -> Unit = {},
     isHorizonLockEnabled: Boolean = false,
     onToggleHorizonLock: () -> Unit = {},
+    isDollyZoomSettingEnabled: Boolean = false,
+    isDollyZoomActive: Boolean = false,
+    onToggleDollyZoom: () -> Unit = {},
     onFlashClick: () -> Unit,
     onTimerClick: () -> Unit,
     onGridClick: () -> Unit,
@@ -737,6 +740,26 @@ fun TopControlBar(
             }
         }
 
+        val dollyZoomButton = @Composable {
+            IconButton(
+                onClick = onToggleDollyZoom,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isDollyZoomActive) Color(0xFF00E5FF) else null
+                    )
+                    .testTag("video_dolly_zoom_button")
+            ) {
+                Icon(
+                    imageVector = if (isDollyZoomActive) Icons.Filled.CenterFocusStrong else Icons.Outlined.CenterFocusStrong,
+                    contentDescription = if (isDollyZoomActive) "Dolly Zoom Enabled" else "Dolly Zoom Disabled",
+                    tint = if (isDollyZoomActive) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
         val isVideoFamily = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
 
         // Render Top Controls according to layoutConfig
@@ -749,7 +772,7 @@ fun TopControlBar(
             TopBarAlignment.COMPACT_RIGHT -> Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.End)
         }
 
-        val shouldScroll = (if (isVideoFamily) 6 else visibleItems.size) > 5
+        val shouldScroll = (if (isVideoFamily) (if (isDollyZoomSettingEnabled) 7 else 6) else visibleItems.size) > 5
         val topScrollState = rememberScrollState()
 
         Row(
@@ -771,6 +794,9 @@ fun TopControlBar(
             } else if (cameraMode == CameraMode.VIDEO) {
                 flashButton()
                 horizonLockButton()
+                if (isDollyZoomSettingEnabled) {
+                    dollyZoomButton()
+                }
                 videoAdjustmentsButton()
                 primaryBadge()
                 secondaryBadge()

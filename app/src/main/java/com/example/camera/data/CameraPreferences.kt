@@ -727,6 +727,10 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean("pref_show_horizon_level", true)
         set(value) = prefs.edit().putBoolean("pref_show_horizon_level", value).apply()
 
+    var isDollyZoomSettingEnabled: Boolean
+        get() = prefs.getBoolean("pref_dolly_zoom_setting_enabled", false)
+        set(value) = prefs.edit().putBoolean("pref_dolly_zoom_setting_enabled", value).apply()
+
     var antiBanding: String
         get() = prefs.getString("pref_anti_banding", "AUTO") ?: "AUTO"
         set(value) = prefs.edit().putString("pref_anti_banding", value).apply()

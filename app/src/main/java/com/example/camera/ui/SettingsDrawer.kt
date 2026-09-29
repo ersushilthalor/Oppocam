@@ -89,6 +89,8 @@ fun SettingsDrawer(
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     isVideoStabilizationEnabled: Boolean = true,
+    isDollyZoomSettingEnabled: Boolean = false,
+    onDollyZoomSettingToggle: (Boolean) -> Unit = {},
     isAudioEnabled: Boolean = true,
     isRawEnabled: Boolean = false,
     saveSelfieAsPreviewed: Boolean = true,
@@ -381,7 +383,9 @@ fun SettingsDrawer(
                             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
                             onStabilizationToggle = onStabilizationToggle,
                             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-                            onUltraStabilizationToggle = onUltraStabilizationToggle
+                            onUltraStabilizationToggle = onUltraStabilizationToggle,
+                            isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
+                            onDollyZoomSettingToggle = onDollyZoomSettingToggle
                         )
                         SettingsPage.CINEMA -> CinemaSettingsPage(
                             cinemaConfig = cinemaConfig,
@@ -827,7 +831,9 @@ private fun VideoSettingsPage(
     isVideoStabilizationEnabled: Boolean,
     onStabilizationToggle: (Boolean) -> Unit,
     isUltraStabilizationEnabled: Boolean,
-    onUltraStabilizationToggle: () -> Unit
+    onUltraStabilizationToggle: () -> Unit,
+    isDollyZoomSettingEnabled: Boolean = false,
+    onDollyZoomSettingToggle: (Boolean) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -900,6 +906,16 @@ private fun VideoSettingsPage(
                 isChecked = isUltraStabilizationEnabled,
                 onCheckedChange = { onUltraStabilizationToggle() },
                 tag = "toggle_ultra_stabilization"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Dolly Zoom (Vertigo Effect)",
+                description = "Show Dolly Zoom control in Video Mode to keep subject size invariant while moving.",
+                isChecked = isDollyZoomSettingEnabled,
+                onCheckedChange = onDollyZoomSettingToggle,
+                tag = "toggle_dolly_zoom_setting"
             )
         }
 

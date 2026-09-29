@@ -1377,6 +1377,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (enabled) "Horizontal Lock: ON" else "Horizontal Lock: OFF")
     }
 
+    private val _isDollyZoomSettingEnabled = MutableStateFlow(preferences.isDollyZoomSettingEnabled)
+    val isDollyZoomSettingEnabled: StateFlow<Boolean> = _isDollyZoomSettingEnabled.asStateFlow()
+
+    fun setDollyZoomSettingEnabled(enabled: Boolean) {
+        _isDollyZoomSettingEnabled.value = enabled
+        preferences.isDollyZoomSettingEnabled = enabled
+        if (!enabled) {
+            setDollyZoomActive(false)
+        }
+        showToast(if (enabled) "Dolly Zoom: Available in Video Mode" else "Dolly Zoom: Disabled")
+    }
+
+    val isDollyZoomActive: StateFlow<Boolean> = engine.isDollyZoomActive
+    val dollyCropState: StateFlow<com.example.camera.dollyzoom.DollyCropState> = engine.dollyZoomEngine.cropStateFlow
+
+    fun toggleDollyZoomActive() {
+        val next = !engine.isDollyZoomActive.value
+        setDollyZoomActive(next)
+    }
+
+    fun setDollyZoomActive(active: Boolean) {
+        engine.setDollyZoomActive(active)
+        showToast(if (active) "Dolly Zoom: ON (Locking subject)" else "Dolly Zoom: OFF")
+    }
+
+    fun onTapToLockDollySubject(normX: Float, normY: Float) {
+        engine.dollyZoomEngine.lockSubjectAt(normX, normY)
+        showToast("Dolly Zoom: Subject Locked")
+    }
+
     fun setPreferredGalleryPackage(packageName: String?) {
         _preferredGalleryPackage.value = packageName
         preferences.preferredGalleryPackage = packageName
