@@ -354,6 +354,17 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         // Create software/hardware encoder matching 10-bit capabilities
         val (encoder, supportedLevel) = findEncoder(mime, is10BitMode)
 
+        val colorStandard = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG || activeColorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
+            MediaFormat.COLOR_STANDARD_BT2020
+        } else {
+            MediaFormat.COLOR_STANDARD_BT709
+        }
+        val colorTransfer = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG) {
+            MediaFormat.COLOR_TRANSFER_HLG
+        } else {
+            MediaFormat.COLOR_TRANSFER_SDR_VIDEO
+        }
+
         val format = MediaFormat.createVideoFormat(mime, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
@@ -364,17 +375,6 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             try {
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             } catch (ignored: Exception) {}
-
-            val colorStandard = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG || activeColorSpace == com.example.camera.model.CinemaColorSpace.REC_2020) {
-                MediaFormat.COLOR_STANDARD_BT2020
-            } else {
-                MediaFormat.COLOR_STANDARD_BT709
-            }
-            val colorTransfer = if (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG) {
-                MediaFormat.COLOR_TRANSFER_HLG
-            } else {
-                MediaFormat.COLOR_TRANSFER_SDR_VIDEO
-            }
 
             if (mime == MediaFormat.MIMETYPE_VIDEO_VP9) {
                 // VP9 Profiles

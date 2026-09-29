@@ -41,6 +41,7 @@ import kotlin.math.roundToInt
  */
 enum class SettingsPage(val title: String, val subtitle: String, val icon: ImageVector) {
     PHOTO("Photo Settings", "Resolutions, HDR, RAW & 50MP", Icons.Outlined.CameraAlt),
+    DEPTH_PROCESSING("Depth Processing", "Depth Anything V2, MediaSWLF-I & Virtual Aperture", Icons.Outlined.Layers),
     VIDEO("Video Settings", "Resolution, Frame Rate, Codec & Bitrate", Icons.Outlined.Videocam),
     CINEMA("Cinema Settings", "Log profiles, LUTs, Bit depth & Assist tools", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
@@ -356,6 +357,10 @@ fun SettingsDrawer(
                             onJpegQualitySelected = onJpegQualitySelected,
                             selectedPhotoFilter = selectedPhotoFilter,
                             onPhotoFilterSelected = onPhotoFilterSelected
+                        )
+                        SettingsPage.DEPTH_PROCESSING -> DepthProcessingSettingsPage(
+                            portraitConfig = portraitConfig,
+                            onPortraitConfigChange = onPortraitConfigChange
                         )
                         SettingsPage.VIDEO -> VideoSettingsPage(
                             selectedVideoResolution = selectedVideoResolution,

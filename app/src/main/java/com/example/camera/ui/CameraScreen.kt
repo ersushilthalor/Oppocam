@@ -585,6 +585,7 @@ fun CameraScreen(
                 onToggleFaceEnhancement = { viewModel.togglePortraitFaceEnhancement() },
                 onToggleSkinTone = { viewModel.togglePortraitSkinTone() },
                 onToggleOpticalBlurGuided = { viewModel.toggleOpticalBlurGuided() },
+                onPortraitConfigChanged = { viewModel.setPortraitConfig(it) },
                 onClose = { viewModel.setPortraitSettingsOpen(false) },
                 modifier = Modifier.padding(horizontal = 12.dp)
             )

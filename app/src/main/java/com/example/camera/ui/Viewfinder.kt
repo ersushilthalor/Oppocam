@@ -56,6 +56,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import android.graphics.Bitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.camera.depth.DepthModelInstallState
+import com.example.camera.depth.DepthModelManager
+import com.example.camera.depth.PhotonVirtualApertureEngine
 import com.example.camera.model.CameraMode
 import com.example.camera.model.CinemaColorProfile
 import com.example.camera.model.CinemaConfig
@@ -114,6 +119,68 @@ fun Viewfinder(
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
+
+    val context = LocalContext.current
+    val depthModelManager = remember { DepthModelManager.getInstance(context) }
+    val virtualApertureEngine = remember { PhotonVirtualApertureEngine(context) }
+    val modelStatuses by depthModelManager.modelStatuses.collectAsStateWithLifecycle()
+    val hasVerifiedAiModel = remember(modelStatuses) {
+        modelStatuses.values.any { it.state is DepthModelInstallState.Installed }
+    }
+    val activeAiModel = remember(modelStatuses) {
+        depthModelManager.getActiveInstalledModelFile()?.first
+    }
+
+    var liveVirtualAperturePreviewBmp by remember { mutableStateOf<Bitmap?>(null) }
+    var liveDepthColormapBmp by remember { mutableStateOf<Bitmap?>(null) }
+    var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
+
+    val isLivePortraitDepthActive = cameraMode == CameraMode.PORTRAIT &&
+            hasVerifiedAiModel &&
+            portraitConfig != null &&
+            portraitConfig.virtualApertureEnabled &&
+            (portraitConfig.liveAperturePreviewEnabled || portraitConfig.showDepthPreview)
+
+    LaunchedEffect(
+        isLivePortraitDepthActive,
+        portraitConfig?.simulatedAperture,
+        portraitConfig?.blurStrength,
+        portraitConfig?.bokehStyle,
+        portraitConfig?.showDepthPreview,
+        portraitConfig?.focusPointX,
+        portraitConfig?.focusPointY,
+        activeAiModel
+    ) {
+        if (!isLivePortraitDepthActive || portraitConfig == null) {
+            liveVirtualAperturePreviewBmp = null
+            liveDepthColormapBmp = null
+            return@LaunchedEffect
+        }
+        while (true) {
+            val tv = textureViewInstance
+            if (tv != null && tv.isAvailable && tv.width > 32 && tv.height > 32) {
+                val sampleH = 256
+                val sampleW = ((tv.width.toFloat() / tv.height.toFloat()) * sampleH).toInt().coerceIn(144, 384)
+                val frame = try {
+                    tv.getBitmap(sampleW, sampleH)
+                } catch (_: Throwable) {
+                    null
+                }
+                if (frame != null) {
+                    val result = virtualApertureEngine.processRealtimePreviewFrame(frame, portraitConfig)
+                    frame.recycle()
+                    if (result != null) {
+                        liveVirtualAperturePreviewBmp = result.first
+                        liveDepthColormapBmp = result.second
+                    } else {
+                        liveVirtualAperturePreviewBmp = null
+                        liveDepthColormapBmp = null
+                    }
+                }
+            }
+            delay(140L)
+        }
+    }
 
     LaunchedEffect(currentZoom) {
         if (abs(currentZoom - currentScale) > 0.05f) {
@@ -219,6 +286,7 @@ fun Viewfinder(
                         var lastMotionSampleTime = 0L
                         var motionSampleBitmap: Bitmap? = null
                         TextureView(context).apply {
+                            textureViewInstance = this
                             addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
                                 val newW = right - left
                                 val newH = bottom - top
@@ -445,6 +513,26 @@ fun Viewfinder(
                             )
                         }
                 )
+
+                // Real-Time Photon Virtual Aperture / AI Depth Map Preview Overlay (Exclusively in Portrait Mode when verified AI model is active)
+                if (cameraMode == CameraMode.PORTRAIT && isLivePortraitDepthActive && portraitConfig != null) {
+                    val displayBmp = if (portraitConfig.showDepthPreview && liveDepthColormapBmp != null) {
+                        liveDepthColormapBmp
+                    } else if (portraitConfig.liveAperturePreviewEnabled) {
+                        liveVirtualAperturePreviewBmp
+                    } else null
+
+                    if (displayBmp != null && !displayBmp.isRecycled) {
+                        Image(
+                            bitmap = displayBmp.asImageBitmap(),
+                            contentDescription = "Real-time Virtual Aperture Preview",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("portrait_virtual_aperture_live_preview")
+                        )
+                    }
+                }
 
                 // Clean Cinematic LUT Active Badge (Omitted when LOG profile is selected)
                 val isLogProfile = cinemaConfig?.let {

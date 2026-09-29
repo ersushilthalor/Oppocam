@@ -1170,6 +1170,10 @@ class CameraPreferences(context: Context) {
             .putFloat(modeKey(mode, "portrait_blur"), config.blurStrength)
             .putString(modeKey(mode, "portrait_aperture"), config.simulatedAperture)
             .putBoolean(modeKey(mode, "portrait_optical_blur_guided"), config.opticalBlurGuided)
+            .putBoolean(modeKey(mode, "portrait_virtual_aperture"), config.virtualApertureEnabled)
+            .putBoolean(modeKey(mode, "portrait_live_aperture_preview"), config.liveAperturePreviewEnabled)
+            .putBoolean(modeKey(mode, "portrait_show_depth_preview"), config.showDepthPreview)
+            .putString(modeKey(mode, "portrait_bokeh_style"), config.bokehStyle.name)
             .apply()
     }
 
@@ -1177,7 +1181,20 @@ class CameraPreferences(context: Context) {
         val blur = prefs.getFloat(modeKey(mode, "portrait_blur"), portraitBlurStrength)
         val ap = prefs.getString(modeKey(mode, "portrait_aperture"), portraitAperture) ?: portraitAperture
         val opticalGuided = prefs.getBoolean(modeKey(mode, "portrait_optical_blur_guided"), portraitOpticalBlurGuided)
-        return PortraitConfig(blurStrength = blur, simulatedAperture = ap, opticalBlurGuided = opticalGuided)
+        val vaEnabled = prefs.getBoolean(modeKey(mode, "portrait_virtual_aperture"), true)
+        val livePreview = prefs.getBoolean(modeKey(mode, "portrait_live_aperture_preview"), true)
+        val depthPreview = prefs.getBoolean(modeKey(mode, "portrait_show_depth_preview"), false)
+        val bokehName = prefs.getString(modeKey(mode, "portrait_bokeh_style"), BokehStyle.NATURAL_ROUND.name)
+        val bokeh = try { BokehStyle.valueOf(bokehName ?: BokehStyle.NATURAL_ROUND.name) } catch (_: Exception) { BokehStyle.NATURAL_ROUND }
+        return PortraitConfig(
+            blurStrength = blur,
+            simulatedAperture = ap,
+            bokehStyle = bokeh,
+            opticalBlurGuided = opticalGuided,
+            virtualApertureEnabled = vaEnabled,
+            liveAperturePreviewEnabled = livePreview,
+            showDepthPreview = depthPreview
+        )
     }
 
     fun setModeNightConfig(mode: CameraMode, config: NightConfig) {

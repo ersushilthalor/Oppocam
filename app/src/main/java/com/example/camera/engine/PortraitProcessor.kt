@@ -13,6 +13,8 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import com.example.camera.depth.DepthModelManager
+import com.example.camera.depth.PhotonVirtualApertureEngine
 import com.example.camera.model.BokehStyle
 import com.example.camera.model.PortraitConfig
 import com.example.camera.model.PortraitStyle
@@ -66,6 +68,9 @@ class PortraitProcessor(private val context: Context) {
         Segmentation.getClient(options)
     }
 
+    private val virtualApertureEngine by lazy { PhotonVirtualApertureEngine(context) }
+    private val depthModelManager by lazy { DepthModelManager.getInstance(context) }
+
     /**
      * Executes the complete portrait rendering pipeline on a captured bitmap.
      * The input [orientedBitmap] is already oriented and mirrored identically to the viewfinder.
@@ -75,8 +80,10 @@ class PortraitProcessor(private val context: Context) {
         config: PortraitConfig,
         onProgress: (Float, String) -> Unit = { _, _ -> }
     ): Uri? = withContext(Dispatchers.Default) {
-        // Optical Blur Guided Portrait Pipeline branch (when enabled)
-        if (config.opticalBlurGuided) {
+        val activeAiModel = depthModelManager.getActiveInstalledModelFile()
+
+        // Optical Blur Guided Portrait Pipeline branch (when enabled and no AI model overrides it)
+        if (config.opticalBlurGuided && !config.virtualApertureEnabled && activeAiModel == null) {
             onProgress(0.05f, "Initializing Optical Blur Guided Portrait...")
             try {
                 val opticalPipeline = OpticalBlurGuidedPipeline(context)
@@ -105,10 +112,10 @@ class PortraitProcessor(private val context: Context) {
         var finalPortrait: Bitmap? = null
 
         try {
-            onProgress(0.10f, "Analyzing scene geometry...")
+            onProgress(0.08f, "Analyzing scene geometry...")
 
-            // Step 0: Ensure memory-safe processing resolution
-            val maxProcessingDimension = 1920
+            // Step 0: Ensure memory-safe processing resolution while preserving high detail
+            val maxProcessingDimension = 2048
             val maxOriginalDim = max(orientedBitmap.width, orientedBitmap.height)
             val processingBitmap = if (maxOriginalDim > maxProcessingDimension) {
                 val scale = maxProcessingDimension.toFloat() / maxOriginalDim
@@ -138,7 +145,7 @@ class PortraitProcessor(private val context: Context) {
             }
             val inputImage = InputImage.fromBitmap(inputForMl, 0)
 
-            onProgress(0.25f, "Detecting subject contours...")
+            onProgress(0.20f, "Detecting subject contours...")
 
             // Step 1: Run On-Device ML Kit Subject Segmentation safely
             val maskResult = try {
@@ -196,13 +203,12 @@ class PortraitProcessor(private val context: Context) {
                 }
             }
 
-            onProgress(0.45f, "Refining fine hair strands and clothing edges...")
+            onProgress(0.38f, "Refining fine hair strands and clothing edges...")
 
             // Step 2: Extract multi-channel guide (luminance and gradient edges)
             val guideChannels = extractMultiChannelGuide(processingBitmap, width, height)
 
             // Step 3: Dual-Scale Color-Guided Filter Alpha Matting
-            // Captures individual flyaway hair strands, ear shapes, and small gaps with pristine accuracy
             val mattedAlpha = applyDualScaleGuidedMatting(
                 guideLuma = guideChannels.luminance,
                 guideEdges = guideChannels.edgeMagnitude,
@@ -214,25 +220,7 @@ class PortraitProcessor(private val context: Context) {
             // Step 4: Morphological edge refinement & anti-halo trimap
             val refinedAlpha = refineEdgesAndEliminateHalos(mattedAlpha, width, height)
 
-            onProgress(0.65f, "Rendering cinematic ${config.bokehStyle.label} optical bokeh...")
-
-            // Step 5: Calculate optical blur radius based on simulated aperture and blur strength
-            val apertureMultiplier = when (config.simulatedAperture) {
-                "f/0.95" -> 2.6f
-                "f/1.2" -> 2.1f
-                "f/1.4" -> 1.7f
-                "f/1.8" -> 1.3f
-                "f/2.4" -> 0.85f
-                "f/2.8" -> 0.55f
-                else -> 1.3f
-            }
-
-            // Consistent and even optical blur radius across the entire background canvas
-            val targetBlurRadius = (max(width, height) * 0.032f * (config.blurStrength / 60f) * apertureMultiplier * confidenceFactor)
-                .coerceIn(3f, 85f)
-
-            // Step 6: Anti-Halo Color Decontamination
-            // Inpaint/extend background colors into the subject silhouette so foreground color does NOT bleed into background blur
+            // Step 5: Anti-Halo Color Decontamination
             decontaminatedBackground = decontaminateBackgroundBeforeBlur(
                 source = processingBitmap,
                 alphaMask = refinedAlpha,
@@ -240,24 +228,120 @@ class PortraitProcessor(private val context: Context) {
                 height = height
             )
 
-            // Step 7: Render Even, Authentic Cinematic Optical Bokeh
-            blurredBackground = renderCinematicOpticalBokeh(
-                source = decontaminatedBackground,
-                bokehStyle = config.bokehStyle,
-                radius = targetBlurRadius
-            )
+            // Step 6: Run AI Depth Estimation & PhotonCamera Virtual Aperture Pipeline if enabled or AI model installed
+            val aiDepthResult = if (activeAiModel != null) {
+                onProgress(0.52f, "Running ${activeAiModel.first.shortName} AI depth estimation...")
+                virtualApertureEngine.inferenceEngine.estimateDepth(
+                    sourceBitmap = processingBitmap,
+                    targetWidth = width,
+                    targetHeight = height
+                )
+            } else {
+                null
+            }
 
-            onProgress(0.85f, "Compositing razor-sharp subject...")
+            if (config.virtualApertureEnabled || aiDepthResult != null) {
+                val fusedDepth = if (aiDepthResult != null) {
+                    onProgress(0.66f, "Fusing ${aiDepthResult.modelType.shortName} depth map & hair matte...")
+                    virtualApertureEngine.fuseAiDepthWithSubjectMatte(
+                        aiInverseDepth = aiDepthResult.depthMap,
+                        alphaMatte = refinedAlpha,
+                        guideLuma = guideChannels.luminance,
+                        guideEdges = guideChannels.edgeMagnitude,
+                        width = width,
+                        height = height
+                    )
+                } else {
+                    // Optical defocus + vertical scene perspective gradient fused with subject hair alpha matte
+                    onProgress(0.60f, "Computing optical depth map for Virtual Aperture ${config.simulatedAperture}...")
+                    val syntheticSceneDepth = FloatArray(width * height) { idx ->
+                        val y = (idx / width).toFloat() / height.toFloat()
+                        val groundGrad = (y * 0.45f).coerceIn(0f, 0.45f)
+                        val a = refinedAlpha[idx]
+                        (a * 0.90f + (1f - a) * groundGrad).coerceIn(0f, 1f)
+                    }
+                    virtualApertureEngine.fuseAiDepthWithSubjectMatte(
+                        aiInverseDepth = syntheticSceneDepth,
+                        alphaMatte = refinedAlpha,
+                        guideLuma = guideChannels.luminance,
+                        guideEdges = guideChannels.edgeMagnitude,
+                        width = width,
+                        height = height
+                    )
+                }
 
-            // Step 8: Composite sharp subject over the uniform blurred background with selected style post-processing
-            finalPortrait = compositeSharpSubjectWithAlpha(
-                original = processingBitmap,
-                background = blurredBackground,
-                alphaMask = refinedAlpha,
-                skinToneCorrection = config.skinToneCorrection,
-                faceEnhancement = config.faceEnhancement,
-                style = config.selectedStyle
-            )
+                val focalDepth = virtualApertureEngine.determineFocalPlaneDepth(
+                    fusedDepth = fusedDepth,
+                    alphaMatte = refinedAlpha,
+                    width = width,
+                    height = height,
+                    focusPointX = config.focusPointX,
+                    focusPointY = config.focusPointY
+                )
+
+                val (cocMap, maxCoCRadius) = virtualApertureEngine.computeCircleOfConfusionMap(
+                    fusedDepth = fusedDepth,
+                    alphaMatte = refinedAlpha,
+                    width = width,
+                    height = height,
+                    focalDepth = focalDepth,
+                    config = config
+                )
+
+                onProgress(
+                    0.78f,
+                    "Rendering Virtual Aperture ${config.simulatedAperture} (${config.bokehStyle.label})..."
+                )
+
+                val renderedWorking = virtualApertureEngine.renderVirtualApertureBokeh(
+                    originalBitmap = processingBitmap,
+                    decontaminatedBg = decontaminatedBackground,
+                    fusedDepth = fusedDepth,
+                    alphaMatte = refinedAlpha,
+                    cocMap = cocMap,
+                    maxCoCRadius = maxCoCRadius * confidenceFactor,
+                    focalDepth = focalDepth,
+                    config = config
+                )
+
+                // Preserve full original sensor resolution if processingBitmap was downscaled
+                finalPortrait = if (processingBitmap != orientedBitmap) {
+                    onProgress(0.90f, "Restoring native sensor resolution...")
+                    val upscaledBokeh = Bitmap.createScaledBitmap(
+                        renderedWorking,
+                        orientedBitmap.width,
+                        orientedBitmap.height,
+                        true
+                    )
+                    renderedWorking.recycle()
+                    upscaledBokeh
+                } else {
+                    renderedWorking
+                }
+            } else {
+                onProgress(0.65f, "Rendering cinematic ${config.bokehStyle.label} optical bokeh...")
+
+                val apertureMultiplier = PhotonVirtualApertureEngine.computeApertureScale(config.simulatedAperture)
+                val targetBlurRadius = (max(width, height) * 0.032f * (config.blurStrength / 60f) * apertureMultiplier * confidenceFactor)
+                    .coerceIn(3f, 85f)
+
+                blurredBackground = renderCinematicOpticalBokeh(
+                    source = decontaminatedBackground,
+                    bokehStyle = config.bokehStyle,
+                    radius = targetBlurRadius
+                )
+
+                onProgress(0.85f, "Compositing razor-sharp subject...")
+
+                finalPortrait = compositeSharpSubjectWithAlpha(
+                    original = processingBitmap,
+                    background = blurredBackground,
+                    alphaMask = refinedAlpha,
+                    skinToneCorrection = config.skinToneCorrection,
+                    faceEnhancement = config.faceEnhancement,
+                    style = config.selectedStyle
+                )
+            }
 
             onProgress(0.95f, "Saving portrait...")
 

@@ -1396,6 +1396,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _focusRingPoint.value = point
         engine.triggerFocusAndMeter(normX, normY, isLock)
 
+        if (_cameraMode.value == CameraMode.PORTRAIT) {
+            _portraitConfig.update {
+                it.copy(focusPointX = normX, focusPointY = normY)
+            }
+        }
+
         if (!isLock) {
             focusDismissJob?.cancel()
             focusDismissJob = viewModelScope.launch {
@@ -1538,16 +1544,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setPortraitBlurStrength(strength: Float) {
         _portraitConfig.update { it.copy(blurStrength = strength) }
         preferences.portraitBlurStrength = strength
+        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
     }
 
     fun setPortraitAperture(aperture: String) {
         _portraitConfig.update { it.copy(simulatedAperture = aperture) }
         preferences.portraitAperture = aperture
+        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
         showToast("Aperture: $aperture")
     }
 
     fun setPortraitBokehStyle(style: BokehStyle) {
         _portraitConfig.update { it.copy(bokehStyle = style) }
+        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
         showToast("Bokeh: ${style.label}")
     }
 

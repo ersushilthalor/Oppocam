@@ -16,13 +16,17 @@ enum class CameraMode(val title: String) {
 
 data class PortraitConfig(
     val blurStrength: Float = 60f, // 0..100
-    val simulatedAperture: String = "f/1.4", // f/0.95, f/1.2, f/1.4, f/1.8, f/2.4, f/2.8
+    val simulatedAperture: String = "f/1.4", // f/0.95, f/1.2, f/1.4, f/1.8, f/2.0, f/2.4, f/2.8, f/4.0, f/5.6, f/8.0, f/11, f/16
     val bokehStyle: BokehStyle = BokehStyle.NATURAL_ROUND,
     val selectedStyle: PortraitStyle = PortraitStyle.NATURAL,
     val faceEnhancement: Boolean = false,
     val skinToneCorrection: Boolean = false,
     val showDepthPreview: Boolean = false,
-    val opticalBlurGuided: Boolean = true
+    val opticalBlurGuided: Boolean = true,
+    val virtualApertureEnabled: Boolean = true,
+    val liveAperturePreviewEnabled: Boolean = true,
+    val focusPointX: Float? = null,
+    val focusPointY: Float? = null
 )
 
 enum class PortraitStyle(
