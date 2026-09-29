@@ -156,6 +156,8 @@ fun CameraScreen(
     val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
     val isHorizonLockEnabled by viewModel.isHorizonLockEnabled.collectAsStateWithLifecycle()
     val horizonRollDegrees by viewModel.horizonRollDegrees.collectAsStateWithLifecycle()
+    val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
+    val horizonMotionOffset by viewModel.horizonMotionOffset.collectAsStateWithLifecycle()
 
     val flashMode by viewModel.flashMode.collectAsStateWithLifecycle()
     val timerMode by viewModel.timerMode.collectAsStateWithLifecycle()
@@ -345,8 +347,10 @@ fun CameraScreen(
                 onMotionPhotoPreviewFrame = { bmp ->
                     viewModel.onMotionPhotoPreviewFrame(bmp)
                 },
-                isHorizonLockEnabled = isHorizonLockEnabled,
+                isHorizonLockEnabled = isHorizonLockEnabled && isHorizontalLockSettingEnabled,
                 horizonRollDegrees = horizonRollDegrees,
+                horizonNormX = horizonMotionOffset.first,
+                horizonNormY = horizonMotionOffset.second,
                 isDollyZoomActive = isDollyZoomActive,
                 dollyCropState = dollyCropState,
                 onTapToLockDollySubject = { normX, normY ->
@@ -357,7 +361,7 @@ fun CameraScreen(
             )
 
         // 1b. Dedicated Horizon Lock On-Screen Indicator (Video Mode)
-        if (cameraMode == CameraMode.VIDEO && isHorizonLockEnabled) {
+        if (cameraMode == CameraMode.VIDEO && isHorizontalLockSettingEnabled && isHorizonLockEnabled) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -569,6 +573,7 @@ fun CameraScreen(
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
+            isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
             isHorizonLockEnabled = isHorizonLockEnabled,
             onToggleHorizonLock = { viewModel.toggleHorizonLock() },
             isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,

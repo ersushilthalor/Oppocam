@@ -731,6 +731,14 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean("pref_dolly_zoom_setting_enabled", false)
         set(value) = prefs.edit().putBoolean("pref_dolly_zoom_setting_enabled", value).apply()
 
+    var isHorizontalLockSettingEnabled: Boolean
+        get() = prefs.getBoolean("pref_horizontal_lock_setting_enabled", true)
+        set(value) = prefs.edit().putBoolean("pref_horizontal_lock_setting_enabled", value).apply()
+
+    var isHorizonLockActive: Boolean
+        get() = prefs.getBoolean("pref_horizon_lock_active", false)
+        set(value) = prefs.edit().putBoolean("pref_horizon_lock_active", value).apply()
+
     var antiBanding: String
         get() = prefs.getString("pref_anti_banding", "AUTO") ?: "AUTO"
         set(value) = prefs.edit().putString("pref_anti_banding", value).apply()

@@ -91,6 +91,7 @@ fun CameraSettingsHost(
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
     val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
+    val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
 
     SettingsDrawer(
         isOpen = true,
@@ -118,6 +119,8 @@ fun CameraSettingsHost(
         videoFps = videoFps,
         videoBitrate = videoBitrate,
         isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+        isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
+        onHorizontalLockSettingToggle = { viewModel.setHorizontalLockSettingEnabled(it) },
         isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
         onDollyZoomSettingToggle = { viewModel.setDollyZoomSettingEnabled(it) },
         isAudioEnabled = isAudioEnabled,

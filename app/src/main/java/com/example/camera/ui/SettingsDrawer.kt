@@ -89,6 +89,8 @@ fun SettingsDrawer(
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     isVideoStabilizationEnabled: Boolean = true,
+    isHorizontalLockSettingEnabled: Boolean = true,
+    onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isDollyZoomSettingEnabled: Boolean = false,
     onDollyZoomSettingToggle: (Boolean) -> Unit = {},
     isAudioEnabled: Boolean = true,
@@ -382,6 +384,8 @@ fun SettingsDrawer(
                             onAudioSourceSelected = onAudioSourceSelected,
                             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
                             onStabilizationToggle = onStabilizationToggle,
+                            isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
+                            onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
                             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
                             onUltraStabilizationToggle = onUltraStabilizationToggle,
                             isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
@@ -442,6 +446,8 @@ fun SettingsDrawer(
                             onStabilizationToggle = onStabilizationToggle,
                             isOisPreferred = hybridStabilizationConfig.isOisPreferred,
                             onOisToggle = onOisToggle,
+                            isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
+                            onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
                             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
                             onUltraStabilizationToggle = onUltraStabilizationToggle,
                             windNoiseReduction = windNoiseReduction,
@@ -830,6 +836,8 @@ private fun VideoSettingsPage(
     onAudioSourceSelected: (String) -> Unit,
     isVideoStabilizationEnabled: Boolean,
     onStabilizationToggle: (Boolean) -> Unit,
+    isHorizontalLockSettingEnabled: Boolean = true,
+    onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isUltraStabilizationEnabled: Boolean,
     onUltraStabilizationToggle: () -> Unit,
     isDollyZoomSettingEnabled: Boolean = false,
@@ -896,6 +904,16 @@ private fun VideoSettingsPage(
                 isChecked = isVideoStabilizationEnabled,
                 onCheckedChange = onStabilizationToggle,
                 tag = "toggle_video_stabilization"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Horizontal Lock",
+                description = "Show Horizontal Lock control in Video Mode to keep the horizon level during action shots.",
+                isChecked = isHorizontalLockSettingEnabled,
+                onCheckedChange = onHorizontalLockSettingToggle,
+                tag = "toggle_horizontal_lock_video_setting"
             )
         }
 
@@ -1259,6 +1277,8 @@ private fun StabilizationSettingsPage(
     onStabilizationToggle: (Boolean) -> Unit,
     isOisPreferred: Boolean,
     onOisToggle: (Boolean) -> Unit,
+    isHorizontalLockSettingEnabled: Boolean = true,
+    onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isUltraStabilizationEnabled: Boolean,
     onUltraStabilizationToggle: () -> Unit,
     windNoiseReduction: Boolean,
@@ -1301,6 +1321,16 @@ private fun StabilizationSettingsPage(
                 isChecked = isOisPreferred,
                 onCheckedChange = onOisToggle,
                 tag = "toggle_ois_preferred"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Horizontal Lock",
+                description = "Keep horizon level using Stable Action sensor tracking and counter-rotation crop stabilization.",
+                isChecked = isHorizontalLockSettingEnabled,
+                onCheckedChange = onHorizontalLockSettingToggle,
+                tag = "toggle_horizontal_lock_stab_card"
             )
         }
 

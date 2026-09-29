@@ -14,7 +14,6 @@ import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.Matrix
-import android.os.Build
 import android.util.Log
 import android.view.Surface
 import java.io.File
@@ -26,20 +25,27 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * Dedicated hardware-accelerated Video Processor for Stable Action Horizon Lock.
+ * Dedicated hardware-accelerated Video Processor for Stable Action Horizontal Lock.
  *
  * Implements:
- * 1. Frame-by-frame counter-rotation based on the recorded gyro roll trajectory,
- *    locking the horizon flat in the final recorded video.
- * 2. Stable Action safe crop scaling to ensure zero black borders or stretching
+ * 1. Mathematically exact isotropic 360° counter-rotation without stretching or distortion.
+ * 2. Stable Action safe crop scaling to ensure zero black borders or unwanted zoom
  *    at any rotation angle.
- * 3. 100% Lossless audio track passthrough without re-encoding.
+ * 3. Precise synchronization between sensor trajectory timestamps and video PTS.
+ * 4. Lateral translation shift compensation (gimbal effect) ported from Stable Action.
+ * 5. 100% Lossless audio track passthrough without re-encoding.
  */
 object StableActionVideoProcessor {
 
     private const val TAG = "StableActionProcessor"
     private const val DRAIN_TIMEOUT_US = 10_000L
     private const val EGL_RECORDABLE_ANDROID = 0x3142
+
+    data class InterpolatedMotion(
+        val rollRad: Float,
+        val normX: Float,
+        val normY: Float
+    )
 
     fun processHorizonLockVideo(
         inputFile: File,
@@ -57,7 +63,7 @@ object StableActionVideoProcessor {
             return inputFile
         }
 
-        Log.i(TAG, "Starting Stable Action Horizon Lock video processing: ${trajectory.size} trajectory points")
+        Log.i(TAG, "Starting Stable Action Horizontal Lock video processing: ${trajectory.size} trajectory points")
 
         try {
             outputFile.parentFile?.mkdirs()
@@ -69,33 +75,34 @@ object StableActionVideoProcessor {
             val success = transcodeVideoWithHorizonLock(
                 inputFile = inputFile,
                 outputFile = outputFile,
-                trajectory = trajectory,
-                aspectRatio = aspectRatio
+                trajectory = trajectory
             )
 
             if (success && outputFile.exists() && outputFile.length() > 0L) {
-                Log.i(TAG, "Horizon Lock video processed successfully: ${outputFile.length()} bytes")
+                Log.i(TAG, "Horizontal Lock video processed successfully: ${outputFile.length()} bytes")
                 return outputFile
             } else {
-                Log.w(TAG, "Horizon Lock video processing failed, falling back to original recording")
+                Log.w(TAG, "Horizontal Lock video processing failed, falling back to original recording")
             }
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to process horizon lock video, falling back to original recording", t)
+            Log.e(TAG, "Failed to process horizontal lock video, falling back to original recording", t)
         }
 
         return inputFile
     }
 
-    private fun interpolateRoll(
+    private fun interpolateMotion(
         trajectory: List<StableActionHorizonEngine.TrajectoryPoint>,
         timeUs: Long
-    ): Float {
-        if (trajectory.isEmpty()) return 0f
+    ): InterpolatedMotion {
+        if (trajectory.isEmpty()) return InterpolatedMotion(0f, 0f, 0f)
         if (trajectory.size == 1 || timeUs <= trajectory.first().timestampUs) {
-            return trajectory.first().smoothedRollRad
+            val f = trajectory.first()
+            return InterpolatedMotion(f.smoothedRollRad, f.normX, f.normY)
         }
         if (timeUs >= trajectory.last().timestampUs) {
-            return trajectory.last().smoothedRollRad
+            val l = trajectory.last()
+            return InterpolatedMotion(l.smoothedRollRad, l.normX, l.normY)
         }
 
         // Binary search for nearest points
@@ -107,7 +114,10 @@ object StableActionVideoProcessor {
             when {
                 midTime < timeUs -> low = mid + 1
                 midTime > timeUs -> high = mid - 1
-                else -> return trajectory[mid].smoothedRollRad
+                else -> {
+                    val p = trajectory[mid]
+                    return InterpolatedMotion(p.smoothedRollRad, p.normX, p.normY)
+                }
             }
         }
 
@@ -117,17 +127,19 @@ object StableActionVideoProcessor {
         val p1 = trajectory[idx1]
 
         val dt = (p1.timestampUs - p0.timestampUs).toFloat()
-        if (dt <= 0f) return p0.smoothedRollRad
+        if (dt <= 0f) return InterpolatedMotion(p0.smoothedRollRad, p0.normX, p0.normY)
 
         val fraction = ((timeUs - p0.timestampUs).toFloat() / dt).coerceIn(0f, 1f)
-        return p0.smoothedRollRad + fraction * (p1.smoothedRollRad - p0.smoothedRollRad)
+        val roll = p0.smoothedRollRad + fraction * (p1.smoothedRollRad - p0.smoothedRollRad)
+        val x = p0.normX + fraction * (p1.normX - p0.normX)
+        val y = p0.normY + fraction * (p1.normY - p0.normY)
+        return InterpolatedMotion(roll, x, y)
     }
 
     private fun transcodeVideoWithHorizonLock(
         inputFile: File,
         outputFile: File,
-        trajectory: List<StableActionHorizonEngine.TrajectoryPoint>,
-        aspectRatio: Float
+        trajectory: List<StableActionHorizonEngine.TrajectoryPoint>
     ): Boolean {
         var extractor: MediaExtractor? = null
         var decoder: MediaCodec? = null
@@ -294,9 +306,10 @@ object StableActionVideoProcessor {
             val mvpMatrix = FloatArray(16)
             val stMatrix = FloatArray(16)
 
-            // Safe crop scale calculation (Stable Action math)
-            val aspect = max(outWidth, outHeight).toFloat() / min(outWidth, outHeight).toFloat()
-            val safeCropScale = max(sqrt(1f + aspect * aspect) / 0.90f, 1.8518f)
+            // Safe crop scale factor so NO black borders appear at any rotation angle (0° to 360°)
+            val aspect = outWidth.toFloat() / outHeight.toFloat()
+            val maxRatio = max(aspect, 1f / aspect)
+            val safeCropScale = max(sqrt(1f + maxRatio * maxRatio) / 0.90f, 1.8518f)
 
             GLES20.glViewport(0, 0, outWidth, outHeight)
 
@@ -308,6 +321,8 @@ object StableActionVideoProcessor {
             var muxerVideoTrack = -1
             var muxerAudioTrack = -1
             var isMuxerStarted = false
+
+            var firstPtsUs: Long? = null
 
             while (!isEncoderEos) {
                 // Feed decoder
@@ -340,14 +355,38 @@ object StableActionVideoProcessor {
                                 surfaceTexture.updateTexImage()
                                 surfaceTexture.getTransformMatrix(stMatrix)
 
-                                // Interpolate exact roll angle from recorded trajectory
-                                val rollRad = interpolateRoll(trajectory, bufferInfo.presentationTimeUs)
-                                val angleDeg = -Math.toDegrees(rollRad.toDouble()).toFloat()
+                                if (firstPtsUs == null) {
+                                    firstPtsUs = bufferInfo.presentationTimeUs
+                                }
+                                val relPtsUs = (bufferInfo.presentationTimeUs - (firstPtsUs ?: 0L)).coerceAtLeast(0L)
 
-                                // Apply Stable Action counter-rotation & safe crop
+                                // Interpolate exact roll angle and lateral shift from trajectory
+                                val motion = interpolateMotion(trajectory, relPtsUs)
+                                val angleDeg = -Math.toDegrees(motion.rollRad.toDouble()).toFloat()
+
+                                // Apply isotropic counter-rotation & safe crop
                                 Matrix.setIdentityM(mvpMatrix, 0)
+
+                                // 1. Compensate for aspect ratio so rotation is isotropic in pixel space
+                                Matrix.scaleM(mvpMatrix, 0, 1f, aspect, 1f)
+                                // 2. Counter-rotate to level the horizon
                                 Matrix.rotateM(mvpMatrix, 0, angleDeg, 0f, 0f, 1f)
+                                // 3. Invert aspect ratio compensation
+                                Matrix.scaleM(mvpMatrix, 0, 1f, 1f / aspect, 1f)
+                                // 4. Apply uniform safe crop zoom
                                 Matrix.scaleM(mvpMatrix, 0, safeCropScale, safeCropScale, 1f)
+
+                                // 5. Apply lateral translation shift (gimbal compensation)
+                                val rad = Math.toRadians(angleDeg.toDouble())
+                                val cosA = kotlin.math.cos(rad)
+                                val sinA = kotlin.math.sin(rad)
+                                val rotNormX = motion.normX * cosA - motion.normY * sinA
+                                val rotNormY = motion.normX * sinA + motion.normY * cosA
+                                val marginX = (safeCropScale - 1f) * 0.5f
+                                val marginY = (safeCropScale - 1f) * 0.5f
+                                val shiftX = (rotNormX * marginX * 0.9f).toFloat()
+                                val shiftY = (rotNormY * marginY * 0.9f).toFloat()
+                                Matrix.translateM(mvpMatrix, 0, shiftX, shiftY, 0f)
 
                                 GLES20.glClearColor(0f, 0f, 0f, 1f)
                                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -443,7 +482,7 @@ object StableActionVideoProcessor {
 
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Error in Horizon Lock transcode", e)
+            Log.e(TAG, "Error in Horizontal Lock transcode", e)
             return false
         } finally {
             try { decoder?.stop(); decoder?.release() } catch (ignored: Exception) {}

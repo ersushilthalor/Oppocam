@@ -118,6 +118,8 @@ fun Viewfinder(
     onMotionPhotoPreviewFrame: ((Bitmap) -> Unit)? = null,
     isHorizonLockEnabled: Boolean = false,
     horizonRollDegrees: Float = 0f,
+    horizonNormX: Float = 0f,
+    horizonNormY: Float = 0f,
     viewfinderCornerRadiusDp: Int = 0,
     isDollyZoomActive: Boolean = false,
     dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
@@ -209,7 +211,7 @@ fun Viewfinder(
         }
     }
 
-    LaunchedEffect(textureViewInstance, isHorizonLockEnabled, horizonRollDegrees, isDollyZoomActive, dollyCropState, cameraMode) {
+    LaunchedEffect(textureViewInstance, isHorizonLockEnabled, horizonRollDegrees, horizonNormX, horizonNormY, isDollyZoomActive, dollyCropState, cameraMode) {
         textureViewInstance?.let { tv ->
             if (tv.width > 0 && tv.height > 0) {
                 val isFourThree = when (cameraMode) {
@@ -225,6 +227,8 @@ fun Viewfinder(
                     sensorOrientation = sensorOrientation,
                     isHorizonLockEnabled = isHorizonLockEnabled && cameraMode == CameraMode.VIDEO,
                     horizonRollDegrees = horizonRollDegrees,
+                    horizonNormX = horizonNormX,
+                    horizonNormY = horizonNormY,
                     isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
                     dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
                     dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
@@ -256,6 +260,8 @@ fun Viewfinder(
         val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
         val currentIsHorizonLock by rememberUpdatedState(isHorizonLockEnabled && cameraMode == CameraMode.VIDEO)
         val currentHorizonRoll by rememberUpdatedState(horizonRollDegrees)
+        val currentHorizonNormX by rememberUpdatedState(horizonNormX)
+        val currentHorizonNormY by rememberUpdatedState(horizonNormY)
         val currentIsDollyZoom by rememberUpdatedState(isDollyZoomActive && cameraMode == CameraMode.VIDEO)
         val currentDollyScale by rememberUpdatedState(dollyCropState?.scaleFactor ?: 1.0f)
         val currentDollyFocusX by rememberUpdatedState(dollyCropState?.focusNormX ?: 0.5f)
@@ -349,17 +355,17 @@ fun Viewfinder(
                                 val newW = right - left
                                 val newH = bottom - top
                                 if (newW > 0 && newH > 0) {
-                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
+                                    updateTextureViewTransform(this, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentHorizonNormX, currentHorizonNormY, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
                                 }
                             }
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentHorizonNormX, currentHorizonNormY, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
                                     onSurfaceTextureAvailable(st)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
+                                    updateTextureViewTransform(this@apply, currentPreviewBufferSize, currentTargetRatio, currentSensorOrientation, currentIsHorizonLock, currentHorizonRoll, currentHorizonNormX, currentHorizonNormY, currentIsDollyZoom, currentDollyScale, currentDollyFocusX, currentDollyFocusY)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
                                 }
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -431,7 +437,7 @@ fun Viewfinder(
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
-                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && cameraMode == CameraMode.VIDEO, horizonRollDegrees, isDollyZoomActive && cameraMode == CameraMode.VIDEO, dollyCropState?.scaleFactor ?: 1.0f, dollyCropState?.focusNormX ?: 0.5f, dollyCropState?.focusNormY ?: 0.5f)
+                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && cameraMode == CameraMode.VIDEO, horizonRollDegrees, horizonNormX, horizonNormY, isDollyZoomActive && cameraMode == CameraMode.VIDEO, dollyCropState?.scaleFactor ?: 1.0f, dollyCropState?.focusNormX ?: 0.5f, dollyCropState?.focusNormY ?: 0.5f)
                         }
 
                         // Outline provider for corner radius clipping on hardware accelerated TextureView
@@ -856,6 +862,8 @@ private fun updateTextureViewTransform(
     sensorOrientation: Int = 90,
     isHorizonLockEnabled: Boolean = false,
     horizonRollDegrees: Float = 0f,
+    horizonNormX: Float = 0f,
+    horizonNormY: Float = 0f,
     isDollyZoomActive: Boolean = false,
     dollyScale: Float = 1.0f,
     dollyFocusX: Float = 0.5f,
@@ -902,6 +910,18 @@ private fun updateTextureViewTransform(
         val aspect = max(viewW, viewH) / min(viewW, viewH)
         val safeScale = max(kotlin.math.sqrt(1f + aspect * aspect) / 0.90f, 1.8518f)
         matrix.postScale(safeScale, safeScale, centerX, centerY)
+
+        // Stable Action lateral translation shift (gimbal effect)
+        val rad = Math.toRadians(angleDeg.toDouble())
+        val cosA = kotlin.math.cos(rad)
+        val sinA = kotlin.math.sin(rad)
+        val rotNormX = horizonNormX * cosA - horizonNormY * sinA
+        val rotNormY = horizonNormX * sinA + horizonNormY * cosA
+        val marginX = (viewW * (safeScale - 1f) / 2f).coerceAtLeast(0f)
+        val marginY = (viewH * (safeScale - 1f) / 2f).coerceAtLeast(0f)
+        val shiftX = (rotNormX * marginX * 0.9).toFloat()
+        val shiftY = (rotNormY * marginY * 0.9).toFloat()
+        matrix.postTranslate(shiftX, shiftY)
     } else if (isDollyZoomActive && dollyScale > 1.005f) {
         // Dolly Zoom real-time geometric scaling: zooms in/out centered on the tracked subject
         // to maintain the subject's constant apparent size.

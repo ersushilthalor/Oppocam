@@ -137,6 +137,7 @@ fun TopControlBar(
     isVideoAdjustmentsOpen: Boolean = false,
     hasActiveVideoAdjustments: Boolean = false,
     onVideoAdjustmentsClick: () -> Unit = {},
+    isHorizontalLockSettingEnabled: Boolean = true,
     isHorizonLockEnabled: Boolean = false,
     onToggleHorizonLock: () -> Unit = {},
     isDollyZoomSettingEnabled: Boolean = false,
@@ -772,7 +773,8 @@ fun TopControlBar(
             TopBarAlignment.COMPACT_RIGHT -> Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.End)
         }
 
-        val shouldScroll = (if (isVideoFamily) (if (isDollyZoomSettingEnabled) 7 else 6) else visibleItems.size) > 5
+        val videoButtonCount = 5 + (if (isHorizontalLockSettingEnabled) 1 else 0) + (if (isDollyZoomSettingEnabled) 1 else 0)
+        val shouldScroll = (if (isVideoFamily) videoButtonCount else visibleItems.size) > 5
         val topScrollState = rememberScrollState()
 
         Row(
@@ -793,7 +795,9 @@ fun TopControlBar(
                 settingsButton()
             } else if (cameraMode == CameraMode.VIDEO) {
                 flashButton()
-                horizonLockButton()
+                if (isHorizontalLockSettingEnabled) {
+                    horizonLockButton()
+                }
                 if (isDollyZoomSettingEnabled) {
                     dollyZoomButton()
                 }

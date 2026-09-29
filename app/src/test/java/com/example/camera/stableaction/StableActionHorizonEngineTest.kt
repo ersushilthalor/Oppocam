@@ -105,4 +105,13 @@ class StableActionHorizonEngineTest {
         assertTrue("Trajectory points should be recorded", trajectory.isNotEmpty())
         assertEquals(0L, trajectory.first().timestampUs)
     }
+
+    @Test
+    fun testLinearAccelerationTranslationTracking() {
+        // Lateral jerk to the right (ax = 1.0 m/s^2)
+        engine.processLinearAcceleration(1.0f, 0.0f, 1.0 / 120.0, 1000L)
+        val snapshot = engine.snapshot()
+        // Shifting right moves offset in compensation direction
+        assertNotEquals(0f, snapshot.normX, 0.0001f)
+    }
 }

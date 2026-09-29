@@ -13,25 +13,28 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * Direct Android port of the Stable Action open-source Horizon Lock engine
- * (scienceLabwork/Stable-Action).
+ * Android implementation of the Stable Action Horizontal Lock engine
+ * directly ported from iOS Stable Action (scienceLabwork/Stable-Action).
  *
  * Implements:
  * 1. Continuous 360° roll tracking with boundary unwrapping across ±π (±180°),
  *    eliminating orientation flips and sudden jumps.
- * 2. Uses exclusively the necessary gyroscope/gravity Z-axis (roll) for horizontal leveling,
- *    without introducing unnecessary stabilization on other axes (Instruction 3).
+ * 2. High-precision gravity sensor reference and complementary gyroscope Z-axis roll
+ *    rate integration with correct Android sensor coordinates and sign conventions.
  * 3. Exact exponential moving average smoothing filter (rollSmoothingAlpha = 0.25)
- *    from Stable Action's CameraManager.swift to eliminate jitter while maintaining real-time responsiveness.
- * 4. Safe crop geometry calculation (cropFraction = 3/5 * 0.90) ensuring zero black borders
+ *    from Stable Action CameraManager.swift to eliminate jitter while maintaining real-time responsiveness.
+ * 4. User acceleration translation tracking (linear acceleration) with velocity decay (0.82),
+ *    position decay (0.992), and translation smoothing (0.10) for gimbal-like lateral stabilization.
+ * 5. Safe crop geometry calculation (cropFraction = 3/5 * 0.90 = 0.54) ensuring zero black borders
  *    at any 360-degree rotation angle without stretching or distortion.
- * 5. Thread-safe snapshot provider and synchronized recording trajectory buffer for final video post-processing.
+ * 6. High-precision synchronized recording trajectory buffer for final video post-processing.
  */
 class StableActionHorizonEngine(private val context: Context) : SensorEventListener {
 
@@ -40,10 +43,18 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
 
         // Exact smoothing factor from Stable Action CameraManager.swift
         const val ROLL_SMOOTHING_ALPHA = 0.25f
+        const val TRANSLATION_SMOOTHING_ALPHA = 0.10f
 
         // Geometry constants from Stable Action CameraManager.swift:
         // cropFraction = 3.0 / 5.0 * 0.90 = 0.54
         const val CROP_FRACTION = (3.0f / 5.0f) * 0.90f
+
+        // Physics constants from Stable Action HorizonRectangleView.swift
+        const val DEFAULT_DT = 1.0 / 120.0
+        const val VELOCITY_DECAY = 0.82
+        const val POSITION_DECAY = 0.992
+        const val SENSITIVITY = 0.035
+        const val ACCEL_DEAD_ZONE = 0.02
     }
 
     data class MotionSnapshot(
@@ -51,20 +62,24 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
         val unwrappedRoll: Float,
         val smoothedRoll: Float,
         val smoothedRollDegrees: Float,
+        val normX: Float,
+        val normY: Float,
         val timestampNanos: Long
     )
 
     data class TrajectoryPoint(
         val timestampUs: Long,
-        val smoothedRollRad: Float
+        val smoothedRollRad: Float,
+        val normX: Float = 0f,
+        val normY: Float = 0f
     )
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
 
-    // Hardware sensors: Gravity sensor (or accelerometer fallback) for absolute horizon reference,
-    // and Gyroscope for high-frequency roll rate (Z-axis only).
+    // Hardware sensors
     private val gravitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
         ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val linearAccelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val gyroSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED)
 
@@ -75,6 +90,12 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
     private var rollUnwrapped: Double = 0.0
     private var hasFirstSample = false
 
+    // Lateral translation accumulators (matching HorizonRectangleView.swift)
+    private var velX: Double = 0.0
+    private var velY: Double = 0.0
+    private var offsetX: Double = 0.0
+    private var offsetY: Double = 0.0
+
     // Exponential smoothing state (matching CameraManager.swift)
     @Volatile
     var smoothedRoll: Float = 0f
@@ -84,15 +105,27 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
     var smoothedRollDegrees: Float = 0f
         private set
 
+    @Volatile
+    var smoothedNormX: Float = 0f
+        private set
+
+    @Volatile
+    var smoothedNormY: Float = 0f
+        private set
+
     private val _rollDegreesFlow = MutableStateFlow(0f)
     val rollDegreesFlow: StateFlow<Float> = _rollDegreesFlow.asStateFlow()
 
-    // Gyroscope Z-axis integration
+    private val _motionOffsetFlow = MutableStateFlow(Pair(0f, 0f))
+    val motionOffsetFlow: StateFlow<Pair<Float, Float>> = _motionOffsetFlow.asStateFlow()
+
+    // Gyroscope tracking
     private var lastGyroTimestampNanos: Long = 0L
+    private var lastAccelTimestampNanos: Long = 0L
 
     // Trajectory recording for video capture
     private val isRecordingTrajectory = AtomicBoolean(false)
-    private var recordingStartUptimeUs = 0L
+    private var recordingStartNanos = 0L
     private val recordedTrajectory = ConcurrentLinkedDeque<TrajectoryPoint>()
 
     fun start() {
@@ -100,16 +133,13 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
             reset()
             try {
                 gravitySensor?.let {
-                    val registered = sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-                    if (registered == false) {
-                        sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-                    }
+                    sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+                }
+                linearAccelSensor?.let {
+                    sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
                 }
                 gyroSensor?.let {
-                    val registered = sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-                    if (registered == false) {
-                        sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-                    }
+                    sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
                 }
                 Log.i(TAG, "Stable Action Horizon Lock engine started")
             } catch (e: Exception) {
@@ -130,11 +160,19 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
     fun reset() {
         previousRawRoll = 0.0
         rollUnwrapped = 0.0
+        velX = 0.0
+        velY = 0.0
+        offsetX = 0.0
+        offsetY = 0.0
         smoothedRoll = 0f
         smoothedRollDegrees = 0f
+        smoothedNormX = 0f
+        smoothedNormY = 0f
         _rollDegreesFlow.value = 0f
+        _motionOffsetFlow.value = Pair(0f, 0f)
         hasFirstSample = false
         lastGyroTimestampNanos = 0L
+        lastAccelTimestampNanos = 0L
     }
 
     /**
@@ -142,15 +180,15 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
      */
     fun startRecordingTrajectory() {
         recordedTrajectory.clear()
-        recordingStartUptimeUs = SystemClock.uptimeMillis() * 1000L
+        recordingStartNanos = SystemClock.elapsedRealtimeNanos()
         isRecordingTrajectory.set(true)
-        // Record initial point
-        recordedTrajectory.add(TrajectoryPoint(0L, smoothedRoll))
+        // Record initial anchor point at 0 us
+        recordedTrajectory.add(TrajectoryPoint(0L, smoothedRoll, smoothedNormX, smoothedNormY))
         Log.i(TAG, "Started recording horizon lock trajectory for video")
     }
 
     /**
-     * Stops trajectory recording and returns an immutable list of timestamped roll values.
+     * Stops trajectory recording and returns an immutable list of timestamped roll and translation values.
      */
     fun stopRecordingTrajectory(): List<TrajectoryPoint> {
         isRecordingTrajectory.set(false)
@@ -160,14 +198,13 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
     }
 
     /**
-     * Computes the unwrapped roll angle and exponential smoothing given a raw gravity measurement.
-     * Exposed for unit testing without hardware sensors.
+     * Computes continuous unwrapped roll angle and exponential smoothing given a raw gravity measurement.
+     * In Android sensor coordinates:
+     * - When device is upright in portrait: gx ~= 0, gy ~= 9.8.
+     * - When device tilts clockwise (right): gx increases (>0), gy decreases.
+     * - atan2(gx, gy) computes device roll angle in (-π, π].
      */
     fun processGravitySample(gx: Float, gy: Float, timestampNanos: Long = System.nanoTime()) {
-        // In Android sensor coordinates:
-        // X points right, Y points up. When device is upright in portrait, gy ~= 9.8, gx ~= 0.
-        // Tilted clockwise (right): gx > 0, gy decreases.
-        // atan2(gx, gy) gives device roll angle in (-PI, PI].
         val rawRoll = atan2(gx.toDouble(), gy.toDouble())
 
         if (!hasFirstSample) {
@@ -180,7 +217,7 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
             return
         }
 
-        // Exact unwrap logic from Stable Action HorizonRectangleView.swift:
+        // Exact 360° unwrap logic from Stable Action HorizonRectangleView.swift
         var delta = rawRoll - previousRawRoll
         if (delta > PI) delta -= 2.0 * PI
         if (delta < -PI) delta += 2.0 * PI
@@ -189,58 +226,104 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
 
         val targetRoll = rollUnwrapped.toFloat()
 
-        // Exact exponential smoothing from Stable Action CameraManager.swift:
-        // smoothedRoll += rollSmoothingAlpha * (snap.roll - smoothedRoll)
+        // Exact exponential smoothing from Stable Action CameraManager.swift
         smoothedRoll += ROLL_SMOOTHING_ALPHA * (targetRoll - smoothedRoll)
         smoothedRollDegrees = Math.toDegrees(smoothedRoll.toDouble()).toFloat()
         _rollDegreesFlow.value = smoothedRollDegrees
 
-        // Record trajectory if video capture is in progress
-        if (isRecordingTrajectory.get()) {
-            val nowUs = SystemClock.uptimeMillis() * 1000L
-            val relTimeUs = (nowUs - recordingStartUptimeUs).coerceAtLeast(0L)
-            recordedTrajectory.add(TrajectoryPoint(relTimeUs, smoothedRoll))
-        }
+        recordCurrentTrajectorySample(timestampNanos)
     }
 
     /**
-     * Updates roll tracking using high-frequency gyroscope Z-axis angular velocity.
-     * Only the necessary Z-axis (roll) is used; pitch (X) and yaw (Y) are strictly ignored (Instruction 3).
+     * Updates lateral translation tracking using user linear acceleration (in m/s²).
+     * Implements Stable Action translation stabilization (velocity & position decay).
+     */
+    fun processLinearAcceleration(axIn: Float, ayIn: Float, dtSeconds: Double = DEFAULT_DT, timestampNanos: Long = System.nanoTime()) {
+        var ax = axIn.toDouble()
+        var ay = ayIn.toDouble()
+
+        // Dead-zone: eliminate micro-vibrations
+        if (abs(ax) < ACCEL_DEAD_ZONE) ax = 0.0
+        if (abs(ay) < ACCEL_DEAD_ZONE) ay = 0.0
+
+        // Integrate acceleration -> velocity, then decay
+        velX = (velX + ax * dtSeconds) * VELOCITY_DECAY
+        velY = (velY + ay * dtSeconds) * VELOCITY_DECAY
+
+        // Integrate velocity -> offset, then decay toward centre
+        // Negate: if device moves right we shift crop left to compensate
+        val newOffX = (offsetX - velX * SENSITIVITY) * POSITION_DECAY
+        val newOffY = (offsetY - velY * SENSITIVITY) * POSITION_DECAY
+
+        offsetX = newOffX.coerceIn(-1.0, 1.0)
+        offsetY = newOffY.coerceIn(-1.0, 1.0)
+
+        // Exponential smoothing
+        smoothedNormX += TRANSLATION_SMOOTHING_ALPHA * (offsetX.toFloat() - smoothedNormX)
+        smoothedNormY += TRANSLATION_SMOOTHING_ALPHA * (offsetY.toFloat() - smoothedNormY)
+        _motionOffsetFlow.value = Pair(smoothedNormX, smoothedNormY)
+
+        recordCurrentTrajectorySample(timestampNanos)
+    }
+
+    /**
+     * High-frequency gyroscope Z-axis roll assistance.
+     * In Android sensor coordinate system:
+     * - +Z axis points out of screen towards user.
+     * - Counter-clockwise rotation has wz > 0.
+     * - Clockwise rotation (which increases roll angle) has wz < 0.
+     * Hence, d(roll)/dt = -wz.
      */
     fun processGyroSample(wz: Float, timestampNanos: Long) {
         if (!hasFirstSample) return
         if (lastGyroTimestampNanos != 0L && timestampNanos > lastGyroTimestampNanos) {
-            val dt = ((timestampNanos - lastGyroTimestampNanos) * 1e-9f).coerceIn(0.0001f, 0.05f)
-            // wz is angular velocity about screen Z axis in rad/s
-            // In Android: counter-clockwise rotation is positive wz.
-            // Integrate high-frequency gyro change into unwrapped roll
-            rollUnwrapped += (wz * dt).toDouble()
+            val dt = ((timestampNanos - lastGyroTimestampNanos) * 1e-9).coerceIn(0.0005, 0.05)
+            // wz in rad/s, negate to match roll convention
+            val gyroDelta = (-wz.toDouble() * dt)
+            rollUnwrapped += gyroDelta * 0.15 // Fused complementary assist
             val targetRoll = rollUnwrapped.toFloat()
-            smoothedRoll += (ROLL_SMOOTHING_ALPHA * 0.5f) * (targetRoll - smoothedRoll)
+            smoothedRoll += (ROLL_SMOOTHING_ALPHA * 0.35f) * (targetRoll - smoothedRoll)
             smoothedRollDegrees = Math.toDegrees(smoothedRoll.toDouble()).toFloat()
             _rollDegreesFlow.value = smoothedRollDegrees
 
-            if (isRecordingTrajectory.get()) {
-                val nowUs = SystemClock.uptimeMillis() * 1000L
-                val relTimeUs = (nowUs - recordingStartUptimeUs).coerceAtLeast(0L)
-                recordedTrajectory.add(TrajectoryPoint(relTimeUs, smoothedRoll))
-            }
+            recordCurrentTrajectorySample(timestampNanos)
         }
         lastGyroTimestampNanos = timestampNanos
+    }
+
+    private fun recordCurrentTrajectorySample(timestampNanos: Long) {
+        if (isRecordingTrajectory.get()) {
+            val nowNs = SystemClock.elapsedRealtimeNanos()
+            val relTimeUs = ((nowNs - recordingStartNanos) / 1000L).coerceAtLeast(0L)
+            recordedTrajectory.add(TrajectoryPoint(relTimeUs, smoothedRoll, smoothedNormX, smoothedNormY))
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
         if (!isRunning.get() || event == null) return
         when (event.sensor.type) {
-            Sensor.TYPE_GRAVITY, Sensor.TYPE_ACCELEROMETER -> {
+            Sensor.TYPE_GRAVITY -> {
                 if (event.values.size >= 2) {
                     processGravitySample(event.values[0], event.values[1], event.timestamp)
                 }
             }
+            Sensor.TYPE_ACCELEROMETER -> {
+                if (gravitySensor?.type == Sensor.TYPE_ACCELEROMETER && event.values.size >= 2) {
+                    processGravitySample(event.values[0], event.values[1], event.timestamp)
+                }
+            }
+            Sensor.TYPE_LINEAR_ACCELERATION -> {
+                if (event.values.size >= 2) {
+                    val dt = if (lastAccelTimestampNanos != 0L && event.timestamp > lastAccelTimestampNanos) {
+                        ((event.timestamp - lastAccelTimestampNanos) * 1e-9).coerceIn(0.001, 0.05)
+                    } else DEFAULT_DT
+                    lastAccelTimestampNanos = event.timestamp
+                    processLinearAcceleration(event.values[0], event.values[1], dt, event.timestamp)
+                }
+            }
             Sensor.TYPE_GYROSCOPE, Sensor.TYPE_GYROSCOPE_UNCALIBRATED -> {
                 if (event.values.size >= 3) {
-                    // Instruction 3: Use ONLY the necessary gyroscope axis for horizontal leveling (Z-axis).
-                    // event.values[0] = pitch (ignored), event.values[1] = yaw (ignored), event.values[2] = roll (used)
+                    // Only Z-axis (roll) is used for horizon lock
                     val rollVelocity = event.values[2]
                     processGyroSample(rollVelocity, event.timestamp)
                 }
@@ -260,6 +343,8 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
             unwrappedRoll = rollUnwrapped.toFloat(),
             smoothedRoll = sRad,
             smoothedRollDegrees = Math.toDegrees(sRad.toDouble()).toFloat(),
+            normX = smoothedNormX,
+            normY = smoothedNormY,
             timestampNanos = System.nanoTime()
         )
     }
@@ -275,10 +360,6 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
         val w = min(width, height)
         val h = max(width, height)
         val aspect = h / w
-        // Radius of inscribed circle is w / 2.
-        // Half diagonal of crop rect is sqrt((w_crop/2)^2 + (h_crop/2)^2) = (w_crop/2) * sqrt(1 + aspect^2).
-        // For w_crop to fit inside inscribed circle at any rotation:
-        // scale >= sqrt(1 + aspect^2) / margin (with 0.90 margin matching Stable Action)
         val minScale = sqrt(1f + aspect * aspect) / 0.90f
         return max(minScale, 1.8518f)
     }

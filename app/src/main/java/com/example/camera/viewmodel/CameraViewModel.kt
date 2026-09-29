@@ -729,6 +729,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
 
+        if (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
+            engine.setHorizonLockEnabled(true)
+        }
+
         // Restore initial mode aspect ratio:
         // - Photo mode: fixed 3:4
         // - Portrait mode: fixed 3:4
@@ -1367,6 +1371,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val isHorizonLockEnabled: StateFlow<Boolean> = engine.isHorizonLockEnabled
     val horizonRollDegrees: StateFlow<Float> = engine.stableActionHorizonEngine.rollDegreesFlow
+    val horizonMotionOffset: StateFlow<Pair<Float, Float>> = engine.stableActionHorizonEngine.motionOffsetFlow
+
+    private val _isHorizontalLockSettingEnabled = MutableStateFlow(preferences.isHorizontalLockSettingEnabled)
+    val isHorizontalLockSettingEnabled: StateFlow<Boolean> = _isHorizontalLockSettingEnabled.asStateFlow()
+
+    fun setHorizontalLockSettingEnabled(enabled: Boolean) {
+        _isHorizontalLockSettingEnabled.value = enabled
+        preferences.isHorizontalLockSettingEnabled = enabled
+        if (!enabled) {
+            setHorizonLockEnabled(false)
+        }
+        showToast(if (enabled) "Horizontal Lock: Available in Video Mode" else "Horizontal Lock: Disabled")
+    }
+
+    fun toggleHorizontalLockSetting() {
+        setHorizontalLockSettingEnabled(!_isHorizontalLockSettingEnabled.value)
+    }
 
     fun toggleHorizonLock() {
         val newState = !engine.isHorizonLockEnabled.value
@@ -1374,6 +1395,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setHorizonLockEnabled(enabled: Boolean) {
+        preferences.isHorizonLockActive = enabled
         engine.setHorizonLockEnabled(enabled)
         showToast(if (enabled) "Horizontal Lock: ON" else "Horizontal Lock: OFF")
     }
