@@ -249,6 +249,7 @@ fun CameraScreen(
     }
 
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
+    val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
 
     val isAnyWindowOpen = isPhotoFilterBarOpen || isPortraitStyleBarOpen ||
             isCinemaSettingsOpen || isManualProOpen || isMoreModesOpen ||
@@ -337,6 +338,7 @@ fun CameraScreen(
                 onMotionPhotoPreviewFrame = { bmp ->
                     viewModel.onMotionPhotoPreviewFrame(bmp)
                 },
+                viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
                 modifier = Modifier.fillMaxSize()
             )
 

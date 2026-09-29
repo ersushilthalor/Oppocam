@@ -51,7 +51,12 @@ class CameraPreferences(context: Context) {
         private const val KEY_CUSTOM_ZOOM_PRESETS = "pref_custom_zoom_presets"
         private const val KEY_MOTION_PHOTO_ENABLED = "pref_motion_photo_enabled"
         private const val KEY_MOTION_PHOTO_DURATION = "pref_motion_photo_duration"
+        private const val KEY_VIEWFINDER_CORNER_RADIUS = "pref_viewfinder_corner_radius"
     }
+
+    var viewfinderCornerRadiusDp: Int
+        get() = prefs.getInt(KEY_VIEWFINDER_CORNER_RADIUS, 0).coerceIn(0, 48)
+        set(value) = prefs.edit().putInt(KEY_VIEWFINDER_CORNER_RADIUS, value.coerceIn(0, 48)).apply()
 
     var isMotionPhotoEnabled: Boolean
         get() = prefs.getBoolean(KEY_MOTION_PHOTO_ENABLED, false)

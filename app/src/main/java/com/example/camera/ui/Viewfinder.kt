@@ -110,6 +110,7 @@ fun Viewfinder(
     onFrameLuminanceStats: ((com.example.camera.engine.FrameLuminanceStats) -> Unit)? = null,
     isMotionPhotoEnabled: Boolean = false,
     onMotionPhotoPreviewFrame: ((Bitmap) -> Unit)? = null,
+    viewfinderCornerRadiusDp: Int = 0,
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -166,7 +167,13 @@ fun Viewfinder(
                         }
                     )
                     .size(width = targetWidth, height = targetHeight)
-                    .clipToBounds()
+                    .then(
+                        if (viewfinderCornerRadiusDp > 0) {
+                            Modifier.clip(RoundedCornerShape(viewfinderCornerRadiusDp.dp))
+                        } else {
+                            Modifier.clipToBounds()
+                        }
+                    )
                     .pointerInput(minZoom, maxZoom) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             var changed = false
@@ -299,6 +306,22 @@ fun Viewfinder(
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
                             updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation)
+                        }
+
+                        // Outline provider for corner radius clipping on hardware accelerated TextureView
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                            if (viewfinderCornerRadiusDp > 0) {
+                                textureView.outlineProvider = object : android.view.ViewOutlineProvider() {
+                                    override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                                        val radiusPx = viewfinderCornerRadiusDp * view.resources.displayMetrics.density
+                                        outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
+                                    }
+                                }
+                                textureView.clipToOutline = true
+                            } else {
+                                textureView.outlineProvider = null
+                                textureView.clipToOutline = false
+                            }
                         }
 
                         val effectiveLut = activeLut ?: cinemaConfig?.selectedLut

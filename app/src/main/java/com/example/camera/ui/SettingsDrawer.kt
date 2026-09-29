@@ -24,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -192,6 +193,8 @@ fun SettingsDrawer(
     onResetFloatingWindowAppearance: () -> Unit = {},
     preferredGalleryPackage: String? = null,
     onOpenGalleryChooser: () -> Unit = {},
+    viewfinderCornerRadiusDp: Int = 0,
+    onViewfinderCornerRadiusChange: (Int) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -318,6 +321,8 @@ fun SettingsDrawer(
                         selectedTemplate = uiCustomizationState.selectedTemplate,
                         onSelectTemplate = onSelectTemplate,
                         onSelectPage = { currentPage = it },
+                        viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
+                        onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange,
                         onResetAll = onResetAllSettings
                     )
                 } else {
@@ -417,7 +422,9 @@ fun SettingsDrawer(
                             gridType = gridType,
                             onGridTypeSelected = onGridTypeSelected,
                             horizonLeveler = horizonLeveler,
-                            onHorizonLevelerToggle = onHorizonLevelerToggle
+                            onHorizonLevelerToggle = onHorizonLevelerToggle,
+                            viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
+                            onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange
                         )
                         SettingsPage.STABILIZATION -> StabilizationSettingsPage(
                             mainCameraStabilizationMode = mainCameraStabilizationMode,
@@ -439,7 +446,9 @@ fun SettingsDrawer(
                             onFloatingWindowTransparencyChange = onFloatingWindowTransparencyChange,
                             onFloatingWindowBlurStrengthChange = onFloatingWindowBlurStrengthChange,
                             onFloatingWindowAppearanceChange = onFloatingWindowAppearanceChange,
-                            onResetFloatingWindowAppearance = onResetFloatingWindowAppearance
+                            onResetFloatingWindowAppearance = onResetFloatingWindowAppearance,
+                            viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
+                            onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange
                         )
                         SettingsPage.GENERAL -> GeneralSettingsPage(
                             volumeKeyAction = volumeKeyAction,
@@ -478,6 +487,8 @@ private fun SettingsOverviewPage(
     selectedTemplate: UiTemplateType,
     onSelectTemplate: (UiTemplateType) -> Unit,
     onSelectPage: (SettingsPage) -> Unit,
+    viewfinderCornerRadiusDp: Int,
+    onViewfinderCornerRadiusChange: (Int) -> Unit,
     onResetAll: () -> Unit
 ) {
     val quickTemplates = remember {
@@ -579,6 +590,13 @@ private fun SettingsOverviewPage(
                     }
                 }
             }
+        }
+
+        item {
+            ViewfinderCornerRadiusCard(
+                cornerRadiusDp = viewfinderCornerRadiusDp,
+                onCornerRadiusChange = onViewfinderCornerRadiusChange
+            )
         }
 
         items(SettingsPage.entries.toTypedArray()) { page ->
@@ -1129,7 +1147,9 @@ private fun CameraLensSettingsPage(
     gridType: GridType,
     onGridTypeSelected: (GridType) -> Unit,
     horizonLeveler: Boolean,
-    onHorizonLevelerToggle: (Boolean) -> Unit
+    onHorizonLevelerToggle: (Boolean) -> Unit,
+    viewfinderCornerRadiusDp: Int,
+    onViewfinderCornerRadiusChange: (Int) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1198,6 +1218,13 @@ private fun CameraLensSettingsPage(
                 options = listOf(30 to "30 FPS", 60 to "60 FPS", 120 to "120 FPS"),
                 selectedOption = viewfinderFps,
                 onOptionSelected = onViewfinderFpsSelected
+            )
+        }
+
+        item {
+            ViewfinderCornerRadiusCard(
+                cornerRadiusDp = viewfinderCornerRadiusDp,
+                onCornerRadiusChange = onViewfinderCornerRadiusChange
             )
         }
     }
@@ -1277,7 +1304,9 @@ private fun UiLayoutSettingsPage(
     onFloatingWindowTransparencyChange: (Float) -> Unit,
     onFloatingWindowBlurStrengthChange: (Float) -> Unit,
     onFloatingWindowAppearanceChange: (FloatingWindowAppearanceConfig) -> Unit,
-    onResetFloatingWindowAppearance: () -> Unit
+    onResetFloatingWindowAppearance: () -> Unit,
+    viewfinderCornerRadiusDp: Int,
+    onViewfinderCornerRadiusChange: (Int) -> Unit
 ) {
     val allTemplates = remember {
         listOf(
@@ -1389,6 +1418,14 @@ private fun UiLayoutSettingsPage(
                 description = "Fine-tune button positions, colors, typography, and controls density.",
                 actionText = "OPEN STUDIO",
                 onClick = onOpenCustomUiStudio
+            )
+        }
+
+        // 2b. Viewfinder Corner Radius
+        item {
+            ViewfinderCornerRadiusCard(
+                cornerRadiusDp = viewfinderCornerRadiusDp,
+                onCornerRadiusChange = onViewfinderCornerRadiusChange
             )
         }
 
@@ -2041,6 +2078,200 @@ private fun AboutSettingsPage(
 // -------------------------------------------------------------
 // REUSABLE MODERN SETTINGS CARDS
 // -------------------------------------------------------------
+
+@Composable
+fun ViewfinderCornerRadiusCard(
+    cornerRadiusDp: Int,
+    onCornerRadiusChange: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val presets = remember {
+        listOf(
+            0 to "0 dp (Sharp)",
+            8 to "8 dp (Subtle)",
+            16 to "16 dp (Standard)",
+            24 to "24 dp (Curved)",
+            36 to "36 dp (Modern)",
+            48 to "48 dp (Max)"
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF131622),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Viewfinder Corner Radius",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (cornerRadiusDp == 0) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color.White.copy(alpha = 0.1f)
+                            ) {
+                                Text(
+                                    text = "SHARP",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        } else {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0x26FFD54F)
+                            ) {
+                                Text(
+                                    text = "ROUNDED",
+                                    color = Color(0xFFFFD54F),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Customize the edge curvature and rounded corners of the live camera preview.",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0x26FFD54F)
+                ) {
+                    Text(
+                        text = "${cornerRadiusDp} dp",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Interactive Live Mini Preview Box showing exact corner radius
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(68.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF0A0C12))
+                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                // Miniature Viewfinder simulating aspect ratio & live corner radius
+                Box(
+                    modifier = Modifier
+                        .width(96.dp)
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(cornerRadiusDp.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF1E2638),
+                                    Color(0xFF141926)
+                                )
+                            )
+                        )
+                        .border(
+                            BorderStroke(1.5.dp, Color(0xFFFFD54F).copy(alpha = 0.85f)),
+                            RoundedCornerShape(cornerRadiusDp.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CropFree,
+                            contentDescription = null,
+                            tint = Color(0xFFFFD54F).copy(alpha = 0.85f),
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "${cornerRadiusDp} dp",
+                            color = Color.White,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Slider from 0 to 48 dp
+            Slider(
+                value = cornerRadiusDp.toFloat(),
+                onValueChange = { onCornerRadiusChange(it.roundToInt().coerceIn(0, 48)) },
+                valueRange = 0f..48f,
+                steps = 47,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color(0xFFFFD54F),
+                    activeTrackColor = Color(0xFFFFD54F),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.18f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("slider_viewfinder_corner_radius")
+            )
+
+            // Preset Quick Selection Chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                presets.forEach { (presetValue, label) ->
+                    val isSelected = cornerRadiusDp == presetValue
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onCornerRadiusChange(presetValue) },
+                        label = {
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFFFD54F),
+                            selectedLabelColor = Color.Black,
+                            containerColor = Color.White.copy(alpha = 0.08f),
+                            labelColor = Color.White
+                        ),
+                        modifier = Modifier.testTag("chip_corner_radius_$presetValue")
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun CategoryCard(

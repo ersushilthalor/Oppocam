@@ -89,6 +89,7 @@ fun CameraSettingsHost(
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
+    val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
 
     SettingsDrawer(
         isOpen = true,
@@ -219,6 +220,8 @@ fun CameraSettingsHost(
         onResetFloatingWindowAppearance = { viewModel.resetFloatingWindowAppearance() },
         preferredGalleryPackage = preferredGalleryPackage,
         onOpenGalleryChooser = onOpenGalleryChooser,
+        viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
+        onViewfinderCornerRadiusChange = { viewModel.setViewfinderCornerRadius(it) },
         onDismiss = onDismiss
     )
 }

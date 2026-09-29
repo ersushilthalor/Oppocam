@@ -182,6 +182,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setFloatingWindowAppearance(default)
     }
 
+    // Viewfinder Corner Radius (0..48 dp)
+    private val _viewfinderCornerRadiusDp = MutableStateFlow(preferences.viewfinderCornerRadiusDp)
+    val viewfinderCornerRadiusDp: StateFlow<Int> = _viewfinderCornerRadiusDp.asStateFlow()
+
+    fun setViewfinderCornerRadius(radiusDp: Int) {
+        val clamped = radiusDp.coerceIn(0, 48)
+        _viewfinderCornerRadiusDp.value = clamped
+        preferences.viewfinderCornerRadiusDp = clamped
+    }
+
     // Photo Megapixel Mode (12M vs 50M Ultra)
     private val _photoMegapixelMode = MutableStateFlow(preferences.getModePhotoMegapixelMode(preferences.cameraMode))
     val photoMegapixelMode: StateFlow<PhotoMegapixelMode> = _photoMegapixelMode.asStateFlow()

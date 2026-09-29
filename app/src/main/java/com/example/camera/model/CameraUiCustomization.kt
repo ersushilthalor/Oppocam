@@ -184,7 +184,8 @@ data class ModeLayoutConfig(
     val iconStrokeWidthDp: Float = 1.8f,
     // Uploaded photo UI matching
     val customUiPhotoUri: String? = null,
-    val customUiPhotoOverlayOpacity: Float = 0f
+    val customUiPhotoOverlayOpacity: Float = 0f,
+    val viewfinderCornerRadiusDp: Int = 0
 ) {
     fun getComposeAccentColor(): Color {
         return try {
@@ -261,6 +262,7 @@ data class ModeLayoutConfig(
         json.put("iconStrokeWidthDp", iconStrokeWidthDp.toDouble())
         if (customUiPhotoUri != null) json.put("customUiPhotoUri", customUiPhotoUri)
         json.put("customUiPhotoOverlayOpacity", customUiPhotoOverlayOpacity.toDouble())
+        json.put("viewfinderCornerRadiusDp", viewfinderCornerRadiusDp)
         return json
     }
 
@@ -359,7 +361,8 @@ data class ModeLayoutConfig(
                 iconContainerOpacity = json.optDouble("iconContainerOpacity", 0.35).toFloat(),
                 iconStrokeWidthDp = json.optDouble("iconStrokeWidthDp", 1.8).toFloat(),
                 customUiPhotoUri = if (json.has("customUiPhotoUri")) json.optString("customUiPhotoUri") else null,
-                customUiPhotoOverlayOpacity = json.optDouble("customUiPhotoOverlayOpacity", 0.0).toFloat()
+                customUiPhotoOverlayOpacity = json.optDouble("customUiPhotoOverlayOpacity", 0.0).toFloat(),
+                viewfinderCornerRadiusDp = json.optInt("viewfinderCornerRadiusDp", 0)
             )
         }
     }
