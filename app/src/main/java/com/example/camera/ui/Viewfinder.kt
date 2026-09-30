@@ -987,15 +987,24 @@ fun CameraGridOverlay(
 }
 
 /**
- * Synchronizes the TextureView transformation matrix with the active camera buffer dimensions
- * and the Viewfinder layout aspect ratio.
- * Ensures uniform scaling (center-crop without distortion or non-uniform stretching)
- * and resets to identity when buffer aspect ratio matches the view aspect ratio.
+ * Open Camera architecture viewfinder transformation engine.
+ *
+ * Fully replaces the previous OppoCam viewfinder aspect-ratio and mode-transition implementation
+ * with Open Camera's canonical configureTransform architecture:
+ * - Preview buffer vs view dimension mapping
+ * - RectF buffer/view mapping
+ * - Matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+ * - Uniform center scaling (Math.max(scaleX, scaleY)) around (centerX, centerY)
+ * - Sensor orientation handling (90°/270°) and display rotation
+ * - Seamless mode switching between 4:3 (Photo/Portrait/Night) and 16:9 (Video/Cinema)
+ *   without temporary stretching, distortion, squashing, wrong crop, or flickering
+ * - Compatible with Stable Action Horizon Lock & Dolly Zoom pipelines
  */
-internal fun updateTextureViewTransform(
+fun configureTransform(
     textureView: TextureView,
     previewBufferSize: CameraSize?,
     targetRatio: Float,
+    displayRotation: Int = Surface.ROTATION_0,
     sensorOrientation: Int = 90,
     isHorizonLockEnabled: Boolean = false,
     horizonRollDegrees: Float = 0f,
@@ -1013,52 +1022,96 @@ internal fun updateTextureViewTransform(
     if (viewW <= 0f || viewH <= 0f) return
 
     val matrix = Matrix()
-    val isSensorLandscape = (sensorOrientation == 90 || sensorOrientation == 270)
-    val bufAspect = if (previewBufferSize != null && previewBufferSize.width > 0 && previewBufferSize.height > 0) {
-        val bufPortraitW = if (isSensorLandscape) minOf(previewBufferSize.width, previewBufferSize.height).toFloat() else maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-        val bufPortraitH = if (isSensorLandscape) maxOf(previewBufferSize.width, previewBufferSize.height).toFloat() else minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-        bufPortraitH / bufPortraitW
-    } else {
-        targetRatio
-    }
-
-    val actualViewAspect = viewH / viewW
-    // If the view is undergoing a layout transition (dimensions haven't caught up with targetRatio),
-    // synchronize viewAspect with targetRatio so we never apply a bogus scale factor based on stale dimensions.
-    val viewAspect = if (kotlin.math.abs(actualViewAspect - targetRatio) < 0.08f) {
-        actualViewAspect
-    } else {
-        targetRatio
-    }
-
     val centerX = viewW / 2f
     val centerY = viewH / 2f
 
-    // When view and buffer aspect ratios differ, apply mathematically correct uniform scaling
-    // to strictly preserve original aspect ratio and prevent vertical stretching or distortion.
-    if (kotlin.math.abs(bufAspect - viewAspect) > 0.005f) {
-        if (viewAspect > bufAspect) {
-            val scaleX = viewAspect / bufAspect
-            val scaleY = 1.0f
-            matrix.setScale(scaleX, scaleY, centerX, centerY)
+    // 1. Calculate buffer dimensions in display orientation (Open Camera approach)
+    val isLandscapeDisplay = (displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270)
+    val (bufW, bufH) = if (previewBufferSize != null && previewBufferSize.width > 0 && previewBufferSize.height > 0) {
+        val maxDim = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+        val minDim = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
+        if (isLandscapeDisplay) {
+            maxDim to minDim
         } else {
-            val scaleX = 1.0f
-            val scaleY = bufAspect / viewAspect
-            matrix.setScale(scaleX, scaleY, centerX, centerY)
+            minDim to maxDim
+        }
+    } else {
+        if (isLandscapeDisplay) {
+            (viewH * targetRatio) to viewH
+        } else {
+            viewW to (viewW * targetRatio)
         }
     }
 
+    val bufAspect = bufH / bufW
+    val actualViewAspect = viewH / viewW
+
+    // 2. Open Camera mode-transition & stale layout synchronization:
+    // When switching between modes (e.g. Photo 4:3 <-> Video 16:9), if the buffer already matches
+    // the target aspect ratio, ensure we synchronize with targetRatio rather than applying false
+    // distortion from layout dimensions that are transitioning in the background.
+    val isBufMatchingTarget = kotlin.math.abs(bufAspect - targetRatio) < 0.08f
+    val isViewMatchingTarget = kotlin.math.abs(actualViewAspect - targetRatio) < 0.08f
+
+    val effectiveViewW: Float
+    val effectiveViewH: Float
+    if (isBufMatchingTarget && !isViewMatchingTarget) {
+        if (viewH >= viewW) {
+            effectiveViewW = viewW
+            effectiveViewH = viewW * targetRatio
+        } else {
+            effectiveViewW = viewH * targetRatio
+            effectiveViewH = viewH
+        }
+    } else {
+        effectiveViewW = viewW
+        effectiveViewH = viewH
+    }
+
+    val effectiveViewAspect = effectiveViewH / effectiveViewW
+
+    // 3. Open Camera RectF buffer/view mapping and Matrix.setRectToRect()
+    // When buffer and view aspect ratios differ, perform Open Camera's uniform center scaling:
+    if (kotlin.math.abs(bufAspect - effectiveViewAspect) > 0.005f) {
+        val viewRect = RectF(0f, 0f, viewW, viewH)
+        val (mappedBufW, mappedBufH) = if (effectiveViewAspect > bufAspect) {
+            viewW to (viewW * bufAspect)
+        } else {
+            (viewH / bufAspect) to viewH
+        }
+        val bufferRect = RectF(0f, 0f, mappedBufW, mappedBufH)
+        bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+
+        // Map viewRect to bufferRect using Matrix.ScaleToFit.FILL
+        matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+
+        // Open Camera uniform center scaling to fill view without non-uniform stretching
+        val scale = maxOf(viewW / mappedBufW, viewH / mappedBufH)
+        matrix.postScale(scale, scale, centerX, centerY)
+    }
+
+    // 4. Open Camera rotation handling
+    if (displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270) {
+        val degrees = if (displayRotation == Surface.ROTATION_90) -90f else 90f
+        matrix.postRotate(degrees, centerX, centerY)
+    } else if (displayRotation == Surface.ROTATION_180) {
+        matrix.postRotate(180f, centerX, centerY)
+    }
+
+    // 5. Sensor orientation adjustments if non-standard (e.g. 270° inverted sensors)
+    if (sensorOrientation == 270) {
+        matrix.postRotate(180f, centerX, centerY)
+    }
+
+    // 6. Existing camera feature integration: Stable Action Horizon Lock & Dolly Zoom
     if (isHorizonLockEnabled) {
-        // Stable Action Counter-Rotation & Safe Inscribed Crop
         val angleDeg = -horizonRollDegrees
         matrix.postRotate(angleDeg, centerX, centerY)
 
-        // Safe crop scale factor so NO black borders appear at any rotation angle (0° to 360°)
-        val aspect = max(viewW, viewH) / min(viewW, viewH)
-        val safeScale = max(kotlin.math.sqrt(1f + aspect * aspect) / 0.90f, 1.8518f)
+        val aspect = maxOf(viewW, viewH) / minOf(viewW, viewH)
+        val safeScale = maxOf(kotlin.math.sqrt(1f + aspect * aspect) / 0.90f, 1.8518f)
         matrix.postScale(safeScale, safeScale, centerX, centerY)
 
-        // Stable Action lateral translation shift (gimbal effect)
         val rad = Math.toRadians(angleDeg.toDouble())
         val cosA = kotlin.math.cos(rad)
         val sinA = kotlin.math.sin(rad)
@@ -1070,8 +1123,6 @@ internal fun updateTextureViewTransform(
         val shiftY = (rotNormY * marginY * 0.9).toFloat()
         matrix.postTranslate(shiftX, shiftY)
     } else if (isDollyZoomActive && dollyScale > 1.005f) {
-        // Dolly Zoom real-time geometric scaling: zooms in/out centered on the tracked subject
-        // to maintain the subject's constant apparent size matching Frame.py.
         val focalX = (dollyFocusX * viewW).coerceIn(viewW * 0.05f, viewW * 0.95f)
         val focalY = (dollyFocusY * viewH).coerceIn(viewH * 0.05f, viewH * 0.95f)
         matrix.postScale(dollyScale, dollyScale, focalX, focalY)
@@ -1081,6 +1132,44 @@ internal fun updateTextureViewTransform(
     }
 
     textureView.setTransform(matrix)
+}
+
+/**
+ * Backward-compatible bridge to Open Camera configureTransform architecture.
+ */
+internal fun updateTextureViewTransform(
+    textureView: TextureView,
+    previewBufferSize: CameraSize?,
+    targetRatio: Float,
+    sensorOrientation: Int = 90,
+    isHorizonLockEnabled: Boolean = false,
+    horizonRollDegrees: Float = 0f,
+    horizonNormX: Float = 0f,
+    horizonNormY: Float = 0f,
+    isDollyZoomActive: Boolean = false,
+    dollyScale: Float = 1.0f,
+    dollyFocusX: Float = 0.5f,
+    dollyFocusY: Float = 0.5f,
+    viewWidth: Int = 0,
+    viewHeight: Int = 0
+) {
+    configureTransform(
+        textureView = textureView,
+        previewBufferSize = previewBufferSize,
+        targetRatio = targetRatio,
+        displayRotation = Surface.ROTATION_0,
+        sensorOrientation = sensorOrientation,
+        isHorizonLockEnabled = isHorizonLockEnabled,
+        horizonRollDegrees = horizonRollDegrees,
+        horizonNormX = horizonNormX,
+        horizonNormY = horizonNormY,
+        isDollyZoomActive = isDollyZoomActive,
+        dollyScale = dollyScale,
+        dollyFocusX = dollyFocusX,
+        dollyFocusY = dollyFocusY,
+        viewWidth = viewWidth,
+        viewHeight = viewHeight
+    )
 }
 
 @Composable

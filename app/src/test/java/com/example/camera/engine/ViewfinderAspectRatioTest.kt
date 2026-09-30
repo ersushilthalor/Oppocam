@@ -6,6 +6,7 @@ import android.util.Size
 import android.view.TextureView
 import androidx.test.core.app.ApplicationProvider
 import com.example.camera.model.CameraMode
+import com.example.camera.ui.configureTransform
 import com.example.camera.ui.updateTextureViewTransform
 import org.junit.Assert.*
 import org.junit.Before
@@ -212,5 +213,48 @@ class ViewfinderAspectRatioTest {
         val matrixTransition = Matrix()
         tv.getTransform(matrixTransition)
         assertTrue("Transition must not apply false scaling on stale layout dimensions", matrixTransition.isIdentity)
+    }
+
+    @Test
+    fun testOpenCameraConfigureTransformDirect() {
+        val tv = TextureView(context)
+        tv.layout(0, 0, 1080, 1440)
+
+        // Open Camera style configureTransform steady-state 4:3
+        configureTransform(
+            textureView = tv,
+            previewBufferSize = Size(1440, 1080),
+            targetRatio = 4f / 3f,
+            viewWidth = 1080,
+            viewHeight = 1440
+        )
+        val matrix43 = Matrix()
+        tv.getTransform(matrix43)
+        assertTrue("Open Camera 4:3 transform must be Identity in steady state", matrix43.isIdentity)
+
+        // Open Camera style configureTransform steady-state 16:9
+        tv.layout(0, 0, 1080, 1920)
+        configureTransform(
+            textureView = tv,
+            previewBufferSize = Size(1920, 1080),
+            targetRatio = 16f / 9f,
+            viewWidth = 1080,
+            viewHeight = 1920
+        )
+        val matrix169 = Matrix()
+        tv.getTransform(matrix169)
+        assertTrue("Open Camera 16:9 transform must be Identity in steady state", matrix169.isIdentity)
+
+        // Open Camera style transition from 16:9 to 4:3 (stale 1080x1920 view, new 4:3 buffer 1440x1080)
+        configureTransform(
+            textureView = tv,
+            previewBufferSize = Size(1440, 1080),
+            targetRatio = 4f / 3f,
+            viewWidth = 1080,
+            viewHeight = 1920
+        )
+        val matrixRevTransition = Matrix()
+        tv.getTransform(matrixRevTransition)
+        assertTrue("Open Camera Video to Photo transition must prevent false scaling on stale dimensions", matrixRevTransition.isIdentity)
     }
 }
