@@ -148,6 +148,7 @@ object StableActionVideoProcessor {
         var surfaceTexture: android.graphics.SurfaceTexture? = null
         var decoderSurface: Surface? = null
         var encoderSurface: Surface? = null
+        var isMuxerStarted = false
 
         var eglDisplay = EGL14.EGL_NO_DISPLAY
         var eglContext = EGL14.EGL_NO_CONTEXT
@@ -156,6 +157,19 @@ object StableActionVideoProcessor {
         var textureId = 0
 
         try {
+            // Extract accurate video rotation metadata
+            val retriever = android.media.MediaMetadataRetriever()
+            var inputRotation = 0
+            try {
+                retriever.setDataSource(inputFile.absolutePath)
+                val rot = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                inputRotation = rot?.toIntOrNull() ?: 0
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not extract rotation via retriever", e)
+            } finally {
+                try { retriever.release() } catch (ignored: Exception) {}
+            }
+
             extractor = MediaExtractor().apply {
                 setDataSource(inputFile.absolutePath)
             }
@@ -192,8 +206,9 @@ object StableActionVideoProcessor {
             val outWidth = inWidth and 1.inv()
             val outHeight = inHeight and 1.inv()
 
-            // Setup MediaCodec Video Encoder
-            val encoderMime = MediaFormat.MIMETYPE_VIDEO_AVC
+            // Setup MediaCodec Video Encoder with robust fallback
+            val isHevc = inMime == MediaFormat.MIMETYPE_VIDEO_HEVC
+            var encoderMime = if (isHevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
             val outFormat = MediaFormat.createVideoFormat(encoderMime, outWidth, outHeight).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, maxOf(inBitrate, 20_000_000))
@@ -201,8 +216,22 @@ object StableActionVideoProcessor {
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             }
 
-            encoder = MediaCodec.createEncoderByType(encoderMime).apply {
-                configure(outFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoder = try {
+                MediaCodec.createEncoderByType(encoderMime).apply {
+                    configure(outFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Encoder $encoderMime failed to configure, falling back to AVC", e)
+                encoderMime = MediaFormat.MIMETYPE_VIDEO_AVC
+                val fallbackFormat = MediaFormat.createVideoFormat(encoderMime, outWidth, outHeight).apply {
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                    setInteger(MediaFormat.KEY_BIT_RATE, maxOf(inBitrate, 15_000_000))
+                    setInteger(MediaFormat.KEY_FRAME_RATE, maxOf(inFps, 24))
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                }
+                MediaCodec.createEncoderByType(encoderMime).apply {
+                    configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                }
             }
             encoderSurface = encoder.createInputSurface()
             encoder.start()
@@ -269,14 +298,20 @@ object StableActionVideoProcessor {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
 
+            val frameSyncObject = Object()
+            var isFrameAvailable = false
+
             surfaceTexture = android.graphics.SurfaceTexture(textureId).apply {
                 setDefaultBufferSize(inWidth, inHeight)
+                setOnFrameAvailableListener {
+                    synchronized(frameSyncObject) {
+                        isFrameAvailable = true
+                        frameSyncObject.notifyAll()
+                    }
+                }
             }
             decoderSurface = Surface(surfaceTexture)
 
-            val inputRotation = if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
-                videoFormat.getInteger(MediaFormat.KEY_ROTATION)
-            } else 0
             videoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
 
             decoder = MediaCodec.createDecoderByType(inMime).apply {
@@ -307,9 +342,12 @@ object StableActionVideoProcessor {
             val stMatrix = FloatArray(16)
 
             // Safe crop scale factor so NO black borders appear at any rotation angle (0° to 360°)
-            val aspect = outWidth.toFloat() / outHeight.toFloat()
-            val maxRatio = max(aspect, 1f / aspect)
-            val safeCropScale = max(sqrt(1f + maxRatio * maxRatio) / 0.90f, 1.8518f)
+            val maxD = max(outWidth, outHeight).toFloat()
+            val minD = min(outWidth, outHeight).toFloat()
+            val asp = maxD / minD
+            val safeCropScale = max(sqrt(1f + asp * asp) / 0.90f, 1.8518f)
+            val marginNorm = (safeCropScale - 1f) * 0.5f
+            val bufferAspect = outWidth.toFloat() / outHeight.toFloat()
 
             GLES20.glViewport(0, 0, outWidth, outHeight)
 
@@ -320,7 +358,7 @@ object StableActionVideoProcessor {
             var isEncoderEos = false
             var muxerVideoTrack = -1
             var muxerAudioTrack = -1
-            var isMuxerStarted = false
+            isMuxerStarted = false
 
             var firstPtsUs: Long? = null
 
@@ -348,9 +386,25 @@ object StableActionVideoProcessor {
                     val decIdx = decoder.dequeueOutputBuffer(bufferInfo, DRAIN_TIMEOUT_US)
                     if (decIdx >= 0) {
                         val doRender = (bufferInfo.size != 0)
+                        if (doRender) {
+                            synchronized(frameSyncObject) {
+                                isFrameAvailable = false
+                            }
+                        }
                         decoder.releaseOutputBuffer(decIdx, doRender)
 
                         if (doRender) {
+                            synchronized(frameSyncObject) {
+                                val deadlineMs = System.currentTimeMillis() + 200L
+                                while (!isFrameAvailable && System.currentTimeMillis() < deadlineMs) {
+                                    try {
+                                        frameSyncObject.wait(40L)
+                                    } catch (ignored: InterruptedException) {
+                                        break
+                                    }
+                                }
+                                isFrameAvailable = false
+                            }
                             try {
                                 surfaceTexture.updateTexImage()
                                 surfaceTexture.getTransformMatrix(stMatrix)
@@ -362,31 +416,57 @@ object StableActionVideoProcessor {
 
                                 // Interpolate exact roll angle and lateral shift from trajectory
                                 val motion = interpolateMotion(trajectory, relPtsUs)
-                                val angleDeg = -Math.toDegrees(motion.rollRad.toDouble()).toFloat()
+                                val rollDeg = Math.toDegrees(motion.rollRad.toDouble()).toFloat()
+                                val angleDeg = -rollDeg
 
-                                // Apply isotropic counter-rotation & safe crop
+                                // Apply isotropic counter-rotation & safe crop strictly matching Viewfinder.kt
                                 Matrix.setIdentityM(mvpMatrix, 0)
 
-                                // 1. Compensate for aspect ratio so rotation is isotropic in pixel space
-                                Matrix.scaleM(mvpMatrix, 0, 1f, aspect, 1f)
-                                // 2. Counter-rotate to level the horizon
-                                Matrix.rotateM(mvpMatrix, 0, angleDeg, 0f, 0f, 1f)
-                                // 3. Invert aspect ratio compensation
-                                Matrix.scaleM(mvpMatrix, 0, 1f, 1f / aspect, 1f)
-                                // 4. Apply uniform safe crop zoom
-                                Matrix.scaleM(mvpMatrix, 0, safeCropScale, safeCropScale, 1f)
-
-                                // 5. Apply lateral translation shift (gimbal compensation)
+                                // Lateral translation shift (gimbal effect) rotated by angleDeg matching Viewfinder.kt
                                 val rad = Math.toRadians(angleDeg.toDouble())
-                                val cosA = kotlin.math.cos(rad)
-                                val sinA = kotlin.math.sin(rad)
+                                val cosA = kotlin.math.cos(rad).toFloat()
+                                val sinA = kotlin.math.sin(rad).toFloat()
                                 val rotNormX = motion.normX * cosA - motion.normY * sinA
                                 val rotNormY = motion.normX * sinA + motion.normY * cosA
-                                val marginX = (safeCropScale - 1f) * 0.5f
-                                val marginY = (safeCropScale - 1f) * 0.5f
-                                val shiftX = (rotNormX * marginX * 0.9f).toFloat()
-                                val shiftY = (rotNormY * marginY * 0.9f).toFloat()
-                                Matrix.translateM(mvpMatrix, 0, shiftX, shiftY, 0f)
+
+                                // Map screen-space shift into buffer coordinates according to inputRotation
+                                val normShiftX: Float
+                                val normShiftY: Float
+                                when (inputRotation) {
+                                    90 -> {
+                                        normShiftX = -rotNormY
+                                        normShiftY = rotNormX
+                                    }
+                                    180 -> {
+                                        normShiftX = -rotNormX
+                                        normShiftY = -rotNormY
+                                    }
+                                    270 -> {
+                                        normShiftX = rotNormY
+                                        normShiftY = -rotNormX
+                                    }
+                                    else -> {
+                                        normShiftX = rotNormX
+                                        normShiftY = rotNormY
+                                    }
+                                }
+                                val transX = (normShiftX * marginNorm * 0.9f).coerceIn(-marginNorm, marginNorm)
+                                val transY = (normShiftY * marginNorm * 0.9f).coerceIn(-marginNorm, marginNorm)
+
+                                // 1. Post-stabilization translation
+                                Matrix.translateM(mvpMatrix, 0, transX, transY, 0f)
+
+                                // 2. Safe crop scale
+                                Matrix.scaleM(mvpMatrix, 0, safeCropScale, safeCropScale, 1f)
+
+                                // 3. Compensate for aspect ratio so rotation is isotropic in pixel space
+                                Matrix.scaleM(mvpMatrix, 0, 1f, bufferAspect, 1f)
+
+                                // 4. Counter-rotate to level the horizon
+                                Matrix.rotateM(mvpMatrix, 0, angleDeg, 0f, 0f, 1f)
+
+                                // 5. Invert aspect ratio compensation
+                                Matrix.scaleM(mvpMatrix, 0, 1f, 1f / bufferAspect, 1f)
 
                                 GLES20.glClearColor(0f, 0f, 0f, 1f)
                                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -447,36 +527,43 @@ object StableActionVideoProcessor {
 
                         if ((encBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                             isEncoderEos = true
-                            encoder.releaseOutputBuffer(encIdx, false)
-                            break
                         }
                         encoder.releaseOutputBuffer(encIdx, false)
                     }
-                    encIdx = encoder.dequeueOutputBuffer(encBufferInfo, DRAIN_TIMEOUT_US)
+                    if (isEncoderEos) break
+                    encIdx = encoder.dequeueOutputBuffer(encBufferInfo, 0)
                 }
             }
 
-            // Copy audio track losslessly without transcoding
+            // Copy audio track losslessly using a dedicated extractor to prevent track seeking interference
             if (audioTrackIndex >= 0 && isMuxerStarted && muxerAudioTrack >= 0) {
+                var audioExtractor: MediaExtractor? = null
                 try {
-                    extractor.unselectTrack(videoTrackIndex)
-                    extractor.selectTrack(audioTrackIndex)
-                    extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-
-                    val audioBuf = ByteBuffer.allocateDirect(1024 * 512)
+                    audioExtractor = MediaExtractor().apply {
+                        setDataSource(inputFile.absolutePath)
+                        selectTrack(audioTrackIndex)
+                    }
+                    val audioBuf = ByteBuffer.allocateDirect(1024 * 256)
                     val aInfo = MediaCodec.BufferInfo()
                     while (true) {
-                        val sampleSize = extractor.readSampleData(audioBuf, 0)
+                        val sampleSize = audioExtractor.readSampleData(audioBuf, 0)
                         if (sampleSize < 0) break
                         aInfo.offset = 0
                         aInfo.size = sampleSize
-                        aInfo.presentationTimeUs = extractor.sampleTime
-                        aInfo.flags = extractor.sampleFlags
-                        muxer.writeSampleData(muxerAudioTrack, audioBuf, aInfo)
-                        extractor.advance()
+                        aInfo.presentationTimeUs = audioExtractor.sampleTime
+                        aInfo.flags = audioExtractor.sampleFlags
+                        try {
+                            muxer.writeSampleData(muxerAudioTrack, audioBuf, aInfo)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Audio writeSampleData warning: ${e.message}")
+                            break
+                        }
+                        audioExtractor.advance()
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Audio copy exception: ${e.message}")
+                } finally {
+                    try { audioExtractor?.release() } catch (ignored: Exception) {}
                 }
             }
 
@@ -488,7 +575,7 @@ object StableActionVideoProcessor {
             try { decoder?.stop(); decoder?.release() } catch (ignored: Exception) {}
             try { encoder?.stop(); encoder?.release() } catch (ignored: Exception) {}
             try {
-                if (muxer != null) {
+                if (muxer != null && isMuxerStarted) {
                     try { muxer.stop() } catch (ignored: Exception) {}
                     try { muxer.release() } catch (ignored: Exception) {}
                 }

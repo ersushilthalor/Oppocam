@@ -381,6 +381,36 @@ class CinemaPipelineVerificationTest {
         assertEquals(20, array.size)
         // Verify non-zero contrast and saturation transform
         assertTrue("Contrast diagonal should be non-zero", array[0] > 1.0f)
+        // Verify zero pedestal offset so blacks are strictly uncrushed
+        assertEquals(0.0f, array[4], 0.001f)
+        assertEquals(0.0f, array[9], 0.001f)
+        assertEquals(0.0f, array[14], 0.001f)
+    }
+
+    @Test
+    fun testHlg10AribOetfContinuousAndMonotonic() {
+        // Test values across low toe, split point, and log shoulder
+        val testInputs = floatArrayOf(0.0f, 0.01f, 0.04f, 0.083333f, 0.18f, 0.5f, 1.0f)
+        var prevOutput = -1.0f
+        for (x in testInputs) {
+            val y = Hlg10AutoExposureEngine.evaluateAribOetf(x)
+            assertTrue("OETF output must be in [0, 1], got $y for x=$x", y in 0.0f..1.0f)
+            assertTrue("OETF must be strictly monotonic, got $y <= $prevOutput for x=$x", y >= prevOutput)
+            prevOutput = y
+        }
+        // At 0, output must be 0
+        assertEquals(0.0f, Hlg10AutoExposureEngine.evaluateAribOetf(0.0f), 0.0001f)
+        // At 1/12 (0.083333f), output should be 0.5
+        assertEquals(0.5f, Hlg10AutoExposureEngine.evaluateAribOetf(1.0f / 12.0f), 0.01f)
+    }
+
+    @Test
+    fun testHlg10AutoExposureEngineReset() {
+        val hlgEngine = Hlg10AutoExposureEngine()
+        hlgEngine.reset()
+        val params = hlgEngine.currentParams.value
+        assertEquals(0.0f, params.exposureComp, 0.001f)
+        assertEquals(0.5f, params.sceneLuxIndex, 0.001f)
     }
 
     @Test

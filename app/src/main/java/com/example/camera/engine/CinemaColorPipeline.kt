@@ -169,23 +169,19 @@ object CinemaColorPipeline {
 
             CinemaColorProfile.HLG10 -> {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR Technical Transform:
-                // - Rec.2020 wide color gamut primaries with HLG transfer function
-                // - Broadcast display system gamma 1.20 rendering: delivers rich, punchy, non-flat appearance
-                // - Firmly anchors true inky blacks at zero (no lifted/milky pedestal)
+                // - Faithful Rec.2020 wide color gamut primaries with calibrated HLG tone response
+                // - Zero pedestal offset (strictly 0.0f): preserves inky blacks without crushing shadow details
                 // - 0.38 middle-gray reference alignment (code 97 in 8-bit, 387 in 10-bit)
-                // - Preserves natural skin tones, vibrant foliage, and realistic sky highlights
-                val c = 1.18f // Contrast scaling per ARIB STD-B67 display gamma 1.20
-                val pivot = 97f // Reference 18% scene reflectance in HLG code values (0.38)
-                val pedestalOffset = -6f // Anchors deep inky blacks firmly at zero
-                val t = (1.0f - c) * pivot + pedestalOffset
+                // - Preserves full HLG dynamic range, natural skin tones, vibrant foliage, and realistic highlights
+                val c = 1.04f // Clean, natural contrast calibration conforming to ARIB STD-B67
                 val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
+                    c, 0f, 0f, 0f, 0f,
+                    0f, c, 0f, 0f, 0f,
+                    0f, 0f, c, 0f, 0f,
                     0f, 0f, 0f, 1f, 0f
                 ))
                 val hlg10Sat = ColorMatrix()
-                hlg10Sat.setSaturation(1.24f) // Faithful Rec.2020 wide-gamut chroma preservation
+                hlg10Sat.setSaturation(1.05f) // Natural, accurate Rec.2020 wide-gamut chroma balance
                 mat.postConcat(hlg10Sat)
                 mat
             }
@@ -405,7 +401,7 @@ object CinemaColorPipeline {
         val profile = config.colorProfile
         val isGraded = lut != CinematicLut.NONE || profile != CinemaColorProfile.NATIVE
 
-        if (!isGraded) return null
+        if (!isGraded || profile == CinemaColorProfile.HLG10) return null
 
         // Filmic Output S-curve:
         // Anchors deep inky blacks (-3f) while softly compressing highlights (0.975x)

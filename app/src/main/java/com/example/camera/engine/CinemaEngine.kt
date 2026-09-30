@@ -333,7 +333,7 @@ class CinemaEngine(private val context: Context) {
                 val baseGamma = when (config.colorProfile) {
                     CinemaColorProfile.NATIVE -> 2.2f
                     CinemaColorProfile.FLAT_LOG -> 1.55f
-                    CinemaColorProfile.HLG10 -> 1.85f
+                    CinemaColorProfile.HLG10 -> 2.2f
                     CinemaColorProfile.REC_2020 -> 2.1f
                     CinemaColorProfile.APPLE_LOG_2 -> 1.60f
                     CinemaColorProfile.SAMSUNG_APV_LOG -> 1.65f
@@ -350,10 +350,10 @@ class CinemaEngine(private val context: Context) {
 
             // 2. Hardware Color Space Matrix (Gamut Transfer + Saturation Scaling + Washed-Out Recovery + Baked LUT)
             if (supportsColorCorrection) {
-                if (config.colorProfile == CinemaColorProfile.REC_2020) {
-                    // For REC.2020 Log Profile:
+                if (config.colorProfile == CinemaColorProfile.REC_2020 || config.colorProfile == CinemaColorProfile.HLG10) {
+                    // For REC.2020 and HLG10 HDR Profiles:
                     // Maintain Camera2 ISP in High Quality Color Correction mode with factory-calibrated AWB gains.
-                    // This strictly prevents channel imbalance and false color / red / pink tint artifacts in bright highlights!
+                    // This strictly prevents channel imbalance and false color / green / pink tint artifacts in highlights!
                     builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
                 } else if (config.colorProfile == CinemaColorProfile.NATIVE) {
                     // Ultra-natural real-life colors: neutral white gains with zero yellow/warm bias
@@ -652,20 +652,7 @@ class CinemaEngine(private val context: Context) {
             }
             CinemaColorProfile.HLG10 -> {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR OETF Transfer Function:
-                // For 0 <= inVal <= 1/12: E' = sqrt(3 * inVal)
-                // For 1/12 < inVal <= 1:  E' = a * ln(12 * inVal - b) + c
-                // Constants per ARIB STD-B67: a = 0.17883277, b = 1 - 4a = 0.28466892, c = 0.5 - a * ln(4a) = 0.55991073
-                // Inky blacks anchored firmly at zero with smooth linear/parabolic toe (slope 2.45 at 0)
-                if (inVal <= 0.04f) {
-                    (2.45f * inVal + 1.25f * inVal * inVal).coerceIn(0f, 1f)
-                } else if (inVal <= Hlg10AutoExposureEngine.SPLIT_POINT) {
-                    kotlin.math.sqrt(3.0f * inVal).coerceIn(0f, 1f)
-                } else {
-                    val a = Hlg10AutoExposureEngine.ARIB_A
-                    val b = Hlg10AutoExposureEngine.ARIB_B
-                    val c = Hlg10AutoExposureEngine.ARIB_C
-                    (a * ln(12.0f * inVal - b) + c).coerceIn(0f, 1f)
-                }
+                Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
             }
             CinemaColorProfile.APPLE_LOG_2 -> {
                 // Official Apple Log 2 transfer function specification:
@@ -744,9 +731,8 @@ class CinemaEngine(private val context: Context) {
             )
         }
 
-        // Apple Log 2, Samsung APV Log, and HLG10 use wide-gamut Rec.2020 primaries natively
-        val effectiveBase = if (profile == CinemaColorProfile.HLG10 ||
-            ((profile == CinemaColorProfile.APPLE_LOG_2 || profile == CinemaColorProfile.SAMSUNG_APV_LOG) && colorSpace == CinemaColorSpace.REC_709)) {
+        // Apple Log 2 and Samsung APV Log map Rec.709 into Rec.2020 primaries
+        val effectiveBase = if ((profile == CinemaColorProfile.APPLE_LOG_2 || profile == CinemaColorProfile.SAMSUNG_APV_LOG) && colorSpace == CinemaColorSpace.REC_709) {
             floatArrayOf(
                 0.6274f, 0.3293f, 0.0433f,
                 0.0691f, 0.9195f, 0.0114f,
@@ -760,7 +746,7 @@ class CinemaEngine(private val context: Context) {
         val profileSatMultiplier = when (profile) {
             CinemaColorProfile.PROCESSED_JPEG -> 1.16f // Rich natural saturation for smartphone photo rendering
             CinemaColorProfile.NATIVE -> 1.0f
-            CinemaColorProfile.HLG10 -> 1.22f // Natural, rich Rec.2020 wide-gamut preservation per ARIB STD-B67
+            CinemaColorProfile.HLG10 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
             CinemaColorProfile.FLAT_LOG -> 0.88f // Flat desaturated base for pure Log
             CinemaColorProfile.REC_2020 -> 1.0f
             CinemaColorProfile.APPLE_LOG_2 -> 0.88f // Flat wide-gamut baseline for grading headroom

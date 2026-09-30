@@ -104,6 +104,16 @@ class StableActionHorizonEngineTest {
 
         assertTrue("Trajectory points should be recorded", trajectory.isNotEmpty())
         assertEquals(0L, trajectory.first().timestampUs)
+        assertTrue("Trajectory should contain at least 2 points (initial and terminal anchor)", trajectory.size >= 2)
+    }
+
+    @Test
+    fun testIsTrajectoryRecordingFlag() {
+        assertFalse(engine.isTrajectoryRecording())
+        engine.startRecordingTrajectory()
+        assertTrue(engine.isTrajectoryRecording())
+        engine.stopRecordingTrajectory()
+        assertFalse(engine.isTrajectoryRecording())
     }
 
     @Test

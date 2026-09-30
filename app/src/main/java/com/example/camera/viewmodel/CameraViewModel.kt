@@ -1001,6 +1001,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (mode == CameraMode.MORE) {
             _isMoreModesOpen.value = true
         }
+
+        if (mode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
+            engine.setHorizonLockEnabled(true)
+            switchToRealUltraWideIfAvailable()
+        }
     }
 
     fun selectLens(lens: LensInfo) {
@@ -1389,6 +1394,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setHorizontalLockSettingEnabled(!_isHorizontalLockSettingEnabled.value)
     }
 
+    fun switchToRealUltraWideIfAvailable(): Boolean {
+        val currentFacing = selectedLens.value?.facing ?: CameraCharacteristics.LENS_FACING_BACK
+        val realUltraWide = engine.availableLenses.value.firstOrNull {
+            it.facing == currentFacing && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
+                (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
+        } ?: engine.availableLenses.value.firstOrNull {
+            it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
+                (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
+        }
+        if (realUltraWide != null) {
+            if (selectedLens.value?.id != realUltraWide.id) {
+                Log.i("CameraViewModel", "Horizontal Lock active: auto-switching to real ultra-wide lens ${realUltraWide.displayName}")
+                selectLens(realUltraWide)
+            }
+            return true
+        } else {
+            Log.i("CameraViewModel", "No real ultra-wide lens available on device; continuing with current lens")
+            return false
+        }
+    }
+
     fun toggleHorizonLock() {
         val newState = !engine.isHorizonLockEnabled.value
         setHorizonLockEnabled(newState)
@@ -1397,6 +1423,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setHorizonLockEnabled(enabled: Boolean) {
         preferences.isHorizonLockActive = enabled
         engine.setHorizonLockEnabled(enabled)
+        if (enabled) {
+            switchToRealUltraWideIfAvailable()
+        }
         showToast(if (enabled) "Horizontal Lock: ON" else "Horizontal Lock: OFF")
     }
 

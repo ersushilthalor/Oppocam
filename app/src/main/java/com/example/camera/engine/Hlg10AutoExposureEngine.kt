@@ -200,6 +200,23 @@ class Hlg10AutoExposureEngine {
         lastIspExposureComp = _currentParams.value.exposureComp
     }
 
+    fun reset() {
+        smoothedEv100 = 11.0f
+        smoothedExposureComp = 0.0f
+        smoothedSceneLux = 0.5f
+        lastTargetExposureComp = 0.0f
+        lastTargetEv100 = 11.0f
+        staticFrameCounter = 0
+        lastIspUpdateTime = 0L
+        lastIspExposureComp = 0.0f
+        cachedTonemapCurve = null
+        lastCurveExposure = 0.0f
+        lastCurveContrast = 0.0f
+        lastCurveShadows = 0.0f
+        lastCurveHighlights = 0.0f
+        _currentParams.value = Hlg10AutoExposureParams()
+    }
+
     /**
      * Generates a stable C1-continuous HLG10 TonemapCurve based on ARIB STD-B67 broadcast standard.
      * Anchors deep inky blacks at zero while providing authentic, non-flat HDR tone response.
@@ -211,56 +228,70 @@ class Hlg10AutoExposureEngine {
         userContrast: Float = 0.0f
     ): TonemapCurve {
         val current = _currentParams.value
-        val effectiveExp = userExposure + current.exposureComp
+        val effectiveExp = (userExposure + current.exposureComp).coerceIn(-2.0f, 2.0f)
 
         if (cachedTonemapCurve != null &&
-            abs(effectiveExp - lastCurveExposure) < 0.02f &&
-            abs(userContrast - lastCurveContrast) < 0.02f &&
-            abs(userShadows - lastCurveShadows) < 0.02f &&
-            abs(userHighlights - lastCurveHighlights) < 0.02f
+            abs(effectiveExp - lastCurveExposure) < 0.01f &&
+            abs(userContrast - lastCurveContrast) < 0.01f &&
+            abs(userShadows - lastCurveShadows) < 0.01f &&
+            abs(userHighlights - lastCurveHighlights) < 0.01f
         ) {
             return cachedTonemapCurve!!
         }
 
         val numPoints = CURVE_POINTS
         val totalContrast = userContrast.coerceIn(-1.0f, 1.0f)
-        val expScale = 2.0f.pow(effectiveExp * 0.70f)
+        val expFactor = 2.0f.pow(effectiveExp * 0.50f)
 
+        var prevY = 0.0f
         for (i in 0 until numPoints) {
             val baseNormalizedX = i.toFloat() / (numPoints - 1).toFloat()
-            val x = (baseNormalizedX * expScale).coerceIn(0f, 1f)
 
-            // ARIB STD-B67 OETF with C1-continuous linear/parabolic toe near zero:
-            // Eliminates infinite gradient near 0 (preventing camera ISP AEC instability),
-            // while matching ARIB STD-B67 exactly across the entire dynamic range.
-            var y = if (x <= 0.04f) {
-                // Smooth linear-parabolic toe: slope at 0 is 2.45 (finite & stable), anchors true black at 0
-                (2.45f * x + 1.25f * x * x).coerceIn(0f, 1f)
-            } else if (x <= SPLIT_POINT) {
-                kotlin.math.sqrt(3.0f * x).coerceIn(0f, 1f)
+            // Smooth linear exposure with soft highlight shoulder roll-off to preserve peak range
+            val linearE = if (effectiveExp > 0f) {
+                val boosted = baseNormalizedX * expFactor
+                if (boosted <= 0.5f) {
+                    boosted
+                } else {
+                    val t = ((boosted - 0.5f) / (expFactor - 0.5f).coerceAtLeast(0.01f)).coerceIn(0f, 1f)
+                    0.5f + 0.5f * (t * (2.0f - t))
+                }
+            } else if (effectiveExp < 0f) {
+                baseNormalizedX * expFactor
             } else {
-                (ARIB_A * ln(12.0f * x - ARIB_B) + ARIB_C).coerceIn(0f, 1f)
-            }
+                baseNormalizedX
+            }.coerceIn(0f, 1f)
 
-            // User Contrast S-Curve centered at 0.18 middle-gray
+            // Pure, continuous ITU-R BT.2100 / ARIB STD-B67 OETF Transfer Function
+            var y = evaluateAribOetf(linearE)
+
+            // User Contrast S-Curve centered at reference 18% middle-gray level (ARIB OETF(0.18) ≈ 0.672f)
             if (totalContrast != 0.0f) {
-                val factor = 1.0f + (totalContrast * 0.35f)
-                y = 0.18f + (y - 0.18f) * factor
+                val pivot = 0.672f
+                val factor = 1.0f + (totalContrast * 0.25f)
+                y = pivot + (y - pivot) * factor
             }
 
-            // User Shadows toe adjustment
-            if (userShadows != 0.0f && x < 0.40f) {
-                val weight = (1.0f - x / 0.40f).pow(2.0f)
-                y += userShadows * 0.12f * weight
+            // User Shadows toe adjustment around 18% middle-gray
+            if (userShadows != 0.0f && baseNormalizedX < 0.18f) {
+                val weight = (1.0f - baseNormalizedX / 0.18f).pow(2.0f)
+                y += userShadows * 0.08f * weight
             }
 
-            // User Highlights shoulder adjustment
-            if (userHighlights != 0.0f && x > 0.55f) {
-                val weight = ((x - 0.55f) / 0.45f).pow(2.0f)
-                y += userHighlights * 0.12f * weight
+            // User Highlights shoulder adjustment above middle-gray
+            if (userHighlights != 0.0f && baseNormalizedX > 0.50f) {
+                val weight = ((baseNormalizedX - 0.50f) / 0.50f).pow(2.0f)
+                y += userHighlights * 0.08f * weight
             }
 
-            val clampedY = y.coerceIn(0.0f, 1.0f)
+            // Inky black strictly anchored at 0.0, peak white strictly at 1.0, and enforce monotonicity
+            val clampedY = when (i) {
+                0 -> 0.0f
+                numPoints - 1 -> 1.0f
+                else -> y.coerceIn(prevY, 1.0f)
+            }
+            prevY = clampedY
+
             val idx = i * 2
             curveRed[idx] = baseNormalizedX
             curveRed[idx + 1] = clampedY

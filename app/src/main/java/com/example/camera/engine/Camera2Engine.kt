@@ -283,7 +283,19 @@ class Camera2Engine(private val context: Context) {
         _isHorizonLockEnabled.value = enabled
         if (enabled && currentMode == CameraMode.VIDEO) {
             stableActionHorizonEngine.start()
-        } else {
+            val currentFacing = _selectedLens.value?.facing ?: CameraCharacteristics.LENS_FACING_BACK
+            val realUltraWide = _availableLenses.value.firstOrNull {
+                it.facing == currentFacing && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
+                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
+            } ?: _availableLenses.value.firstOrNull {
+                it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
+                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
+            }
+            if (realUltraWide != null && _selectedLens.value?.id != realUltraWide.id) {
+                Log.i(TAG, "Horizontal Lock enabled: switching to real ultra-wide lens ${realUltraWide.displayName}")
+                selectLens(realUltraWide)
+            }
+        } else if (!enabled) {
             stableActionHorizonEngine.stop()
         }
     }
@@ -1521,9 +1533,24 @@ class Camera2Engine(private val context: Context) {
             gyroStabilizationEngine.start()
         }
 
-        if (mode == CameraMode.VIDEO && _isHorizonLockEnabled.value) {
+        val horizonLockActiveInVideo = (mode == CameraMode.VIDEO) && (_isHorizonLockEnabled.value ||
+                (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive))
+        if (horizonLockActiveInVideo) {
+            _isHorizonLockEnabled.value = true
             stableActionHorizonEngine.start()
-        } else {
+            val currentFacing = _selectedLens.value?.facing ?: CameraCharacteristics.LENS_FACING_BACK
+            val realUltraWide = _availableLenses.value.firstOrNull {
+                it.facing == currentFacing && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
+                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
+            } ?: _availableLenses.value.firstOrNull {
+                it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
+                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
+            }
+            if (realUltraWide != null && _selectedLens.value?.id != realUltraWide.id) {
+                Log.i(TAG, "Mode switched to Video with Horizon Lock: selecting real ultra-wide lens ${realUltraWide.displayName}")
+                selectLens(realUltraWide)
+            }
+        } else if (mode != CameraMode.VIDEO) {
             stableActionHorizonEngine.stop()
         }
 
@@ -1624,8 +1651,12 @@ class Camera2Engine(private val context: Context) {
      * Update Cinema Mode configuration and immediately apply to hardware ISP
      */
     fun setCinemaConfig(newConfig: CinemaConfig) {
+        val oldProfile = _cinemaConfig.value.colorProfile
         cinemaEngine.config = newConfig
         _cinemaConfig.value = newConfig
+        if (newConfig.colorProfile == CinemaColorProfile.HLG10 && oldProfile != CinemaColorProfile.HLG10) {
+            cinemaEngine.hlg10AutoExposureEngine.reset()
+        }
         if (currentMode == CameraMode.CINEMA) {
             updatePreviewAspectRatio()
             updatePreviewSettings()
@@ -4805,6 +4836,14 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
+        val isHorizonActive = _isHorizonLockEnabled.value ||
+                (currentMode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
+        if (isHorizonActive) {
+            _isHorizonLockEnabled.value = true
+            stableActionHorizonEngine.start()
+            stableActionHorizonEngine.startRecordingTrajectory()
+        }
+
         try {
             val chars = getCharacteristics(lens.cameraId)
             val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -5381,8 +5420,14 @@ class Camera2Engine(private val context: Context) {
 
     private fun startVideoTimer() {
         _videoDurationSeconds.value = 0
-        if (_isHorizonLockEnabled.value) {
-            stableActionHorizonEngine.startRecordingTrajectory()
+        val isHorizonActive = _isHorizonLockEnabled.value ||
+                (currentMode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
+        if (isHorizonActive) {
+            _isHorizonLockEnabled.value = true
+            stableActionHorizonEngine.start()
+            if (!stableActionHorizonEngine.isTrajectoryRecording()) {
+                stableActionHorizonEngine.startRecordingTrajectory()
+            }
         }
         if (_isDollyZoomActive.value) {
             dollyZoomEngine.startRecordingTrajectory()
@@ -5423,8 +5468,19 @@ class Camera2Engine(private val context: Context) {
         recordingCinemaConfig = null
         recordingRec2020Params = null
 
-        val wasHorizonLockActive = _isHorizonLockEnabled.value
-        val horizonTrajectory = if (wasHorizonLockActive) stableActionHorizonEngine.stopRecordingTrajectory() else emptyList()
+        val wasHorizonLockActive = _isHorizonLockEnabled.value ||
+                (currentMode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
+        val horizonTrajectory = if (wasHorizonLockActive) {
+            val list = stableActionHorizonEngine.stopRecordingTrajectory()
+            if (list.isNotEmpty()) list else listOf(
+                com.example.camera.stableaction.StableActionHorizonEngine.TrajectoryPoint(
+                    0L,
+                    stableActionHorizonEngine.smoothedRoll,
+                    stableActionHorizonEngine.smoothedNormX,
+                    stableActionHorizonEngine.smoothedNormY
+                )
+            )
+        } else emptyList()
 
         val wasDollyZoomActive = _isDollyZoomActive.value
         val dollyTrajectory = if (wasDollyZoomActive) dollyZoomEngine.stopRecordingTrajectory() else emptyList()
@@ -5462,7 +5518,7 @@ class Camera2Engine(private val context: Context) {
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Cinema LUT to final video", e)
                             }
-                        } else if (wasHorizonLockActive && horizonTrajectory.isNotEmpty()) {
+                        } else if (wasHorizonLockActive) {
                             try {
                                 val procDest = File(recordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${recordedFile.extension}")
                                 val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
@@ -5562,7 +5618,7 @@ class Camera2Engine(private val context: Context) {
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Cinema LUT to final video", e)
                             }
-                        } else if (wasHorizonLockActive && horizonTrajectory.isNotEmpty()) {
+                        } else if (wasHorizonLockActive) {
                             try {
                                 val procDest = File(tempFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${tempFile.extension}")
                                 val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
