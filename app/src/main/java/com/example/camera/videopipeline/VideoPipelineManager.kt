@@ -62,9 +62,10 @@ object VideoPipelineManager {
     fun applyPipelineToCaptureRequest(
         builder: CaptureRequest.Builder,
         type: VideoPipelineType,
-        capabilities: HardwareCapabilities
+        capabilities: HardwareCapabilities,
+        baseEvIndex: Int = 0
     ) {
-        getPipeline(type).applyToCaptureRequest(builder, capabilities)
+        getPipeline(type).applyToCaptureRequest(builder, capabilities, baseEvIndex)
     }
 
     /**

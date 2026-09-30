@@ -453,9 +453,9 @@ class CinemaEngine(private val context: Context) {
             }
         }
 
-        // 4. Real Camera2 EV (Exposure Compensation) with live Exposure slider
+        // 4. Real Camera2 EV (Exposure Compensation) on top of continuous Auto Exposure
         val effectiveExp = when (config.colorProfile) {
-            CinemaColorProfile.REC_2020 -> rec2020AutoToneEngine.currentParams.value.exposure
+            CinemaColorProfile.REC_2020 -> config.exposure + rec2020AutoToneEngine.currentParams.value.exposure
             CinemaColorProfile.FLAT_LOG -> config.exposure + naturalLogEngine.currentParams.value.exposureComp
             CinemaColorProfile.HLG10 -> config.exposure + hlg10AutoExposureEngine.currentParams.value.exposureComp
             else -> config.exposure
@@ -484,13 +484,16 @@ class CinemaEngine(private val context: Context) {
             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, bestRange)
         }
 
-        // 8. Manual ISO & Shutter Speed vs Auto Exposure
+        // 8. Manual ISO & Shutter Speed vs Continuous Auto Exposure
         if (config.manualIso != null || config.manualShutterSpeedNs != null) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             config.manualIso?.let { builder.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
             config.manualShutterSpeedNs?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
         } else {
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            val currentAeMode = builder.get(CaptureRequest.CONTROL_AE_MODE)
+            if (currentAeMode == null || currentAeMode == CaptureRequest.CONTROL_AE_MODE_OFF) {
+                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            }
         }
     }
 

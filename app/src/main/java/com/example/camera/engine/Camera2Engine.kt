@@ -2610,11 +2610,13 @@ class Camera2Engine(private val context: Context) {
         lastHlgIspUpdateTime = now
         cinemaEngine.hlg10AutoExposureEngine.markIspUpdated()
         val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
-            cinemaEngine.applyToCaptureRequest(builder)
-            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-        } catch (ignored: Exception) {}
+        synchronized(previewRequestLock) {
+            val builder = previewRequestBuilder ?: return
+            try {
+                cinemaEngine.applyToCaptureRequest(builder)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (ignored: Exception) {}
+        }
     }
 
     private var lastNaturalLogIspUpdateTime = 0L
@@ -2625,11 +2627,13 @@ class Camera2Engine(private val context: Context) {
         lastNaturalLogIspUpdateTime = now
         cinemaEngine.naturalLogEngine.markIspUpdated()
         val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
-            cinemaEngine.applyToCaptureRequest(builder)
-            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-        } catch (ignored: Exception) {}
+        synchronized(previewRequestLock) {
+            val builder = previewRequestBuilder ?: return
+            try {
+                cinemaEngine.applyToCaptureRequest(builder)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (ignored: Exception) {}
+        }
     }
 
     private var lastRec2020IspUpdateTime = 0L
@@ -2640,11 +2644,13 @@ class Camera2Engine(private val context: Context) {
         lastRec2020IspUpdateTime = now
         cinemaEngine.rec2020AutoToneEngine.markIspUpdated()
         val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
-            cinemaEngine.applyToCaptureRequest(builder)
-            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-        } catch (ignored: Exception) {}
+        synchronized(previewRequestLock) {
+            val builder = previewRequestBuilder ?: return
+            try {
+                cinemaEngine.applyToCaptureRequest(builder)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (ignored: Exception) {}
+        }
     }
 
     private var lastNativeNaturalIspUpdateTime = 0L
@@ -2655,11 +2661,13 @@ class Camera2Engine(private val context: Context) {
         lastNativeNaturalIspUpdateTime = now
         cinemaEngine.nativeNaturalEngine.markIspUpdated()
         val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
-            cinemaEngine.applyToCaptureRequest(builder)
-            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-        } catch (ignored: Exception) {}
+        synchronized(previewRequestLock) {
+            val builder = previewRequestBuilder ?: return
+            try {
+                cinemaEngine.applyToCaptureRequest(builder)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (ignored: Exception) {}
+        }
     }
 
     private fun applyStabilizedCrop(crop: Rect) {
@@ -2692,6 +2700,16 @@ class Camera2Engine(private val context: Context) {
     private fun applyCommonSettings(builder: CaptureRequest.Builder) {
         val caps = _capabilities.value
 
+        // Exposure compensation (apply cinema EV if in Cinema mode, or standard exposure index)
+        val evToApply = if (currentMode == CameraMode.CINEMA) {
+            cinemaConfig.value.exposureCompensation
+        } else {
+            exposureCompensationIndex
+        }
+        val minEv = caps.minExposureCompensation
+        val maxEv = caps.maxExposureCompensation
+        val clampedEv = if (minEv <= maxEv) evToApply.coerceIn(minEv, maxEv) else 0
+
         // AE & Manual Exposure / ISO
         if (manualIso != null || manualExposureTimeNs != null) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
@@ -2721,15 +2739,6 @@ class Camera2Engine(private val context: Context) {
                     }
                 }
             }
-            // Exposure compensation (apply cinema EV if in Cinema mode, or standard exposure index)
-            val evToApply = if (currentMode == CameraMode.CINEMA) {
-                cinemaConfig.value.exposureCompensation
-            } else {
-                exposureCompensationIndex
-            }
-            val minEv = caps.minExposureCompensation
-            val maxEv = caps.maxExposureCompensation
-            val clampedEv = if (minEv <= maxEv) evToApply.coerceIn(minEv, maxEv) else 0
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, clampedEv)
             if (caps.supportsAeLock) {
                 builder.set(CaptureRequest.CONTROL_AE_LOCK, isAeLocked)
@@ -2881,14 +2890,16 @@ class Camera2Engine(private val context: Context) {
             com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToCaptureRequest(
                 builder = builder,
                 type = _selectedVideoPipeline.value,
-                capabilities = caps
+                capabilities = caps,
+                baseEvIndex = clampedEv
             )
         } else {
             if (currentMode == CameraMode.VIDEO) {
                 com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToCaptureRequest(
                     builder = builder,
                     type = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
-                    capabilities = caps
+                    capabilities = caps,
+                    baseEvIndex = clampedEv
                 )
             }
 

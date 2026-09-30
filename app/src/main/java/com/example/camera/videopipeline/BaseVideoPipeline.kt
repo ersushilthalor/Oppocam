@@ -52,17 +52,19 @@ abstract class BaseVideoPipeline(
             CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY
         )
 
-        // 2. Apply custom pipeline's sensor exposure headroom bias (for highlight retention)
-        if (params.sensorExposureBiasEv != 0f) {
-            val step = capabilities.exposureCompensationStep.takeIf { it > 0f } ?: 0.333f
-            val biasSteps = (params.sensorExposureBiasEv / step).roundToInt()
-            val targetEv = (baseEvIndex + biasSteps).coerceIn(
-                capabilities.minExposureCompensation,
-                capabilities.maxExposureCompensation
-            )
-            if (capabilities.minExposureCompensation <= capabilities.maxExposureCompensation) {
-                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetEv)
-            }
+        // 2. Apply custom pipeline's sensor exposure headroom bias combined with user EV compensation
+        val step = capabilities.exposureCompensationStep.takeIf { it > 0f } ?: 0.333f
+        val biasSteps = if (params.sensorExposureBiasEv != 0f) {
+            (params.sensorExposureBiasEv / step).roundToInt()
+        } else {
+            0
+        }
+        val targetEv = (baseEvIndex + biasSteps).coerceIn(
+            capabilities.minExposureCompensation,
+            capabilities.maxExposureCompensation
+        )
+        if (capabilities.minExposureCompensation <= capabilities.maxExposureCompensation) {
+            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, targetEv)
         }
 
         // 3. Bypass OEM Normal Video Tonemap Curve and install this pipeline's dedicated sensor curve
