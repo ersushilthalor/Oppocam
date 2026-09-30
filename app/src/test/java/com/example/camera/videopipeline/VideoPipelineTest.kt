@@ -149,6 +149,39 @@ class VideoPipelineTest {
     }
 
     @Test
+    fun testSharedLogToNaturalRec709Foundation() {
+        val customTypes = listOf(
+            VideoPipelineType.IPHONE,
+            VideoPipelineType.SAMSUNG,
+            VideoPipelineType.VIVO
+        )
+
+        for (type in customTypes) {
+            val pipeline = VideoPipelineManager.getPipeline(type)
+            val agsl = pipeline.getAgslShaderCode()
+            val glsl = pipeline.getGlFragmentShaderCode()
+
+            // Verify each custom pipeline internally starts with the same natural LOG -> Rec.709 conversion foundation
+            assertTrue("${type.name} AGSL must contain cameraToSceneLog", agsl.contains("cameraToSceneLog"))
+            assertTrue("${type.name} GLSL must contain cameraToSceneLog", glsl.contains("cameraToSceneLog"))
+            assertTrue("${type.name} AGSL must contain sceneLogToNaturalRec709", agsl.contains("sceneLogToNaturalRec709"))
+            assertTrue("${type.name} GLSL must contain sceneLogToNaturalRec709", glsl.contains("sceneLogToNaturalRec709"))
+        }
+    }
+
+    @Test
+    fun testSamsungGreenPopAndSkinSafeguard() {
+        val pipeline = VideoPipelineManager.getPipeline(VideoPipelineType.SAMSUNG)
+        val agsl = pipeline.getAgslShaderCode()
+        val glsl = pipeline.getGlFragmentShaderCode()
+
+        assertTrue("Samsung AGSL must contain green pop engine", agsl.contains("greenPopMask"))
+        assertTrue("Samsung GLSL must contain green pop engine", glsl.contains("greenPopMask"))
+        assertTrue("Samsung AGSL must contain skin safeguard", agsl.contains("isSkin"))
+        assertTrue("Samsung GLSL must contain skin safeguard", glsl.contains("isSkin"))
+    }
+
+    @Test
     fun testNormalVideoPipelinePassthrough() {
         val pipeline = VideoPipelineManager.getPipeline(VideoPipelineType.NORMAL)
         assertEquals("", pipeline.getAgslShaderCode())
