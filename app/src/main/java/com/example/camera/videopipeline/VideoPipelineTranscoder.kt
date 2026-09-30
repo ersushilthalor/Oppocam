@@ -221,6 +221,7 @@ object VideoPipelineTranscoder {
             programId = createGlProgram(pipeline.getGlFragmentShaderCode())
             val uMVPMatrixHandle = GLES20.glGetUniformLocation(programId, "uMVPMatrix")
             val uSTMatrixHandle = GLES20.glGetUniformLocation(programId, "uSTMatrix")
+            val uTexelSizeHandle = GLES20.glGetUniformLocation(programId, "uTexelSize")
             val aPositionHandle = GLES20.glGetAttribLocation(programId, "aPosition")
             val aTextureCoordHandle = GLES20.glGetAttribLocation(programId, "aTextureCoord")
 
@@ -323,6 +324,13 @@ object VideoPipelineTranscoder {
                                 GLES20.glUseProgram(programId)
                                 GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
                                 GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
+                                if (uTexelSizeHandle >= 0) {
+                                    GLES20.glUniform2f(
+                                        uTexelSizeHandle,
+                                        1.0f / outWidth.toFloat().coerceAtLeast(1f),
+                                        1.0f / outHeight.toFloat().coerceAtLeast(1f)
+                                    )
+                                }
 
                                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
                                 GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)

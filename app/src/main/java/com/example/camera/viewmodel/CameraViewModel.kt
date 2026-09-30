@@ -1139,7 +1139,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectVideoPipeline(pipeline: com.example.camera.videopipeline.VideoPipelineType) {
         engine.setVideoPipeline(pipeline)
-        showToast("Video Pipeline: ${pipeline.title}")
+        if (pipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+            _isVideoAdjustmentsOpen.value = false
+        }
+        showToast("Video Pipeline: ${pipeline.title} (${pipeline.subtitle})")
     }
 
     fun toggleManualPro() {

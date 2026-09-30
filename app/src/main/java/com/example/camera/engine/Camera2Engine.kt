@@ -233,12 +233,19 @@ class Camera2Engine(private val context: Context) {
     private var recordingCinemaConfig: CinemaConfig? = null
     private var recordingRec2020Params: Rec2020AutoToneParams? = null
 
+    private var customPipelineRecorder: com.example.camera.videopipeline.CustomVideoPipelineRecorder? = null
+    private var isCustomPipelineRecording: Boolean = false
+
     private val _selectedVideoPipeline = MutableStateFlow(preferences.videoPipeline)
     val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = _selectedVideoPipeline.asStateFlow()
 
     fun setVideoPipeline(pipeline: com.example.camera.videopipeline.VideoPipelineType) {
+        val previous = _selectedVideoPipeline.value
         _selectedVideoPipeline.value = pipeline
         preferences.videoPipeline = pipeline
+        if (previous != pipeline && currentMode == CameraMode.VIDEO) {
+            updatePreviewSettings()
+        }
     }
 
     private var recordingVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL
@@ -2863,42 +2870,64 @@ class Camera2Engine(private val context: Context) {
             )
         }
 
-        // Color profiles & Tonemap
-        when (colorProfile) {
-            ColorProfile.FLAT_LOG -> {
-                if (caps.supportsTonemapCurve) {
-                    val flatCurve = TonemapCurve(
-                        floatArrayOf(0f, 0.16f, 0.25f, 0.35f, 0.5f, 0.54f, 0.75f, 0.72f, 1f, 0.86f),
-                        floatArrayOf(0f, 0.16f, 0.25f, 0.35f, 0.5f, 0.54f, 0.75f, 0.72f, 1f, 0.86f),
-                        floatArrayOf(0f, 0.16f, 0.25f, 0.35f, 0.5f, 0.54f, 0.75f, 0.72f, 1f, 0.86f)
-                    )
-                    builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
-                    builder.set(CaptureRequest.TONEMAP_CURVE, flatCurve)
-                }
-                builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-            }
-            ColorProfile.MONOCHROME -> {
-                builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_MONO)
-            }
-            ColorProfile.VIBRANT -> {
-                builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-                builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-            }
-            ColorProfile.STANDARD, ColorProfile.NATURAL -> {
-                builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-            }
-        }
+        // Color profiles, Tonemap, Edge, and Noise Reduction:
+        // When a Custom Video Pipeline (iPhone, Samsung, Vivo) is selected in Video Mode,
+        // completely bypass the Normal Video pipeline's ColorProfile, Tonemap, Edge, and Noise Reduction
+        // and apply the Custom Video Pipeline's independent Stage 0 ISP configuration instead.
+        val isCustomVideoPipelineActive = (currentMode == CameraMode.VIDEO) &&
+                com.example.camera.videopipeline.VideoPipelineManager.isCustomPipeline(_selectedVideoPipeline.value)
 
-        // Pro Mode Edge & Noise Reduction tuning
-        if (proSharpness.value > 50f) {
-            builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-        } else if (proSharpness.value < 5f) {
-            builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
-        }
-        if (proNoiseReduction.value > 50f) {
-            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-        } else if (proNoiseReduction.value < 5f) {
-            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+        if (isCustomVideoPipelineActive) {
+            com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToCaptureRequest(
+                builder = builder,
+                type = _selectedVideoPipeline.value,
+                capabilities = caps
+            )
+        } else {
+            if (currentMode == CameraMode.VIDEO) {
+                com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToCaptureRequest(
+                    builder = builder,
+                    type = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
+                    capabilities = caps
+                )
+            }
+
+            when (colorProfile) {
+                ColorProfile.FLAT_LOG -> {
+                    if (caps.supportsTonemapCurve) {
+                        val flatCurve = TonemapCurve(
+                            floatArrayOf(0f, 0.16f, 0.25f, 0.35f, 0.5f, 0.54f, 0.75f, 0.72f, 1f, 0.86f),
+                            floatArrayOf(0f, 0.16f, 0.25f, 0.35f, 0.5f, 0.54f, 0.75f, 0.72f, 1f, 0.86f),
+                            floatArrayOf(0f, 0.16f, 0.25f, 0.35f, 0.5f, 0.54f, 0.75f, 0.72f, 1f, 0.86f)
+                        )
+                        builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                        builder.set(CaptureRequest.TONEMAP_CURVE, flatCurve)
+                    }
+                    builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                }
+                ColorProfile.MONOCHROME -> {
+                    builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_MONO)
+                }
+                ColorProfile.VIBRANT -> {
+                    builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                    builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+                }
+                ColorProfile.STANDARD, ColorProfile.NATURAL -> {
+                    builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+                }
+            }
+
+            // Pro Mode / Normal Mode Edge & Noise Reduction tuning
+            if (proSharpness.value > 50f) {
+                builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+            } else if (proSharpness.value < 5f) {
+                builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+            }
+            if (proNoiseReduction.value > 50f) {
+                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+            } else if (proNoiseReduction.value < 5f) {
+                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+            }
         }
 
         // Dedicated Cinema Log Color Profile
@@ -4783,12 +4812,18 @@ class Camera2Engine(private val context: Context) {
         isStoppingRecording.set(false)
         _isRecordingVideo.value = false
         isSoftwareCinemaRecording = false
+        isCustomPipelineRecording = false
         videoTimerJob?.cancel()
         activeRecordingSurface = null
 
         try {
             cinemaSoftwareRecorder.stopRecording()
         } catch (ignored: Throwable) {}
+
+        try {
+            customPipelineRecorder?.stopAndRelease()
+        } catch (ignored: Throwable) {}
+        customPipelineRecorder = null
 
         try {
             mediaRecorder?.reset()
@@ -4999,7 +5034,50 @@ class Camera2Engine(private val context: Context) {
                 }
             }
 
-            // Setup recording target surface
+            // Setup recording target surface:
+            // 1. Cinema Mode -> CinemaSoftwareRecordingEngine
+            // 2. Custom Video Pipeline (iPhone, Samsung, Vivo) -> CustomVideoPipelineRecorder (real-time 6-stage OpenGL ES shader pipeline)
+            // 3. Normal Video Pipeline -> Standard MediaRecorder
+            val isCustomPipelineMode = !isSoftwareCinema &&
+                    currentMode == CameraMode.VIDEO &&
+                    com.example.camera.videopipeline.VideoPipelineManager.isCustomPipeline(recordingVideoPipeline)
+
+            var customRecorderSurface: Surface? = null
+            if (isCustomPipelineMode) {
+                try {
+                    val customPipeline = com.example.camera.videopipeline.VideoPipelineManager.getPipeline(recordingVideoPipeline)
+                    val orientHint = getVideoOrientationHint()
+                    val maxD = maxOf(videoRes.width, videoRes.height)
+                    val minD = minOf(videoRes.width, videoRes.height)
+                    val recorder = com.example.camera.videopipeline.CustomVideoPipelineRecorder(
+                        outputFile = tempFile,
+                        width = maxD,
+                        height = minD,
+                        fps = targetFps,
+                        bitrate = bitrate,
+                        orientationHint = orientHint,
+                        pipeline = customPipeline
+                    )
+                    customRecorderSurface = recorder.prepare()
+                    customPipelineRecorder = recorder
+                    isCustomPipelineRecording = true
+                    preparedVideoGeometry = PreparedVideoGeometry(
+                        width = maxD,
+                        height = minD,
+                        fps = targetFps,
+                        orientationHint = orientHint,
+                        encoderRotation = 0
+                    )
+                    Log.i(TAG, "Initialized dedicated CustomVideoPipelineRecorder for ${customPipeline.displayName}")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "CustomVideoPipelineRecorder hardware init unavailable, falling back to post-transcode path: ${t.message}")
+                    try { customPipelineRecorder?.stopAndRelease() } catch (_: Throwable) {}
+                    customPipelineRecorder = null
+                    isCustomPipelineRecording = false
+                    customRecorderSurface = null
+                }
+            }
+
             val recorderSurface: Surface
             if (isSoftwareCinema) {
                 isSoftwareCinemaRecording = true
@@ -5024,6 +5102,8 @@ class Camera2Engine(private val context: Context) {
                     orientationHint = cinemaOrientationHint,
                     encoderRotation = encoderRotation
                 )
+            } else if (customRecorderSurface != null) {
+                recorderSurface = customRecorderSurface
             } else {
                 @Suppress("DEPRECATION")
                 val mr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -5292,7 +5372,9 @@ class Camera2Engine(private val context: Context) {
                                         applyCommonSettings(recordBuilder)
                                         session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
                                     }
-                                    if (!isSoftwareCinema) {
+                                    if (isCustomPipelineRecording) {
+                                        customPipelineRecorder?.start()
+                                    } else if (!isSoftwareCinema) {
                                         mediaRecorder?.start()
                                     }
                                     _isRecordingVideo.value = true
@@ -5341,7 +5423,9 @@ class Camera2Engine(private val context: Context) {
                                                         applyCommonSettings(safeBuilder)
                                                         fallbackSession.setRepeatingRequest(safeBuilder.build(), captureCallback, backgroundHandler)
                                                     }
-                                                    if (!isSoftwareCinema) {
+                                                    if (isCustomPipelineRecording) {
+                                                        customPipelineRecorder?.start()
+                                                    } else if (!isSoftwareCinema) {
                                                         mediaRecorder?.start()
                                                     }
                                                     _isRecordingVideo.value = true
@@ -5376,7 +5460,9 @@ class Camera2Engine(private val context: Context) {
                                                                     applyCommonSettings(previewTemplateBuilder)
                                                                     prevSession.setRepeatingRequest(previewTemplateBuilder.build(), captureCallback, backgroundHandler)
                                                                 }
-                                                                if (!isSoftwareCinema) {
+                                                                if (isCustomPipelineRecording) {
+                                                                    customPipelineRecorder?.start()
+                                                                } else if (!isSoftwareCinema) {
                                                                     mediaRecorder?.start()
                                                                 }
                                                                 _isRecordingVideo.value = true
@@ -5485,6 +5571,8 @@ class Camera2Engine(private val context: Context) {
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         val wasSoftwareCinema = isSoftwareCinemaRecording
         isSoftwareCinemaRecording = false
+        val wasCustomPipelineRecording = isCustomPipelineRecording
+        isCustomPipelineRecording = false
 
         val snapCinemaConfig = recordingCinemaConfig ?: cinemaConfig.value.copy()
         val snapRec2020Params = recordingRec2020Params ?: rec2020AutoToneParams.value
@@ -5522,7 +5610,111 @@ class Camera2Engine(private val context: Context) {
             }
 
             try {
-                if (wasSoftwareCinema) {
+                if (wasCustomPipelineRecording) {
+                    val activeCustomRecorder = customPipelineRecorder
+                    customPipelineRecorder = null
+                    val framesProcessed = activeCustomRecorder?.framesProcessedCount ?: 0
+                    val recordedFile = try {
+                        activeCustomRecorder?.stopAndRelease() ?: currentRecordingTempFile
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error stopping CustomVideoPipelineRecorder", e)
+                        currentRecordingTempFile
+                    }
+                    currentRecordingTempFile = null
+
+                    if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0L) {
+                        var fileToSave = recordedFile
+                        var gradedFile: File? = null
+                        var needsPipelinePostPass = (framesProcessed == 0)
+
+                        if (wasHorizonLockActive) {
+                            try {
+                                val procDest = File(recordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${recordedFile.extension}")
+                                val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    trajectory = horizonTrajectory,
+                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Stable Action Horizon Lock to custom pipeline video", e)
+                            }
+                        } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
+                            try {
+                                val procDest = File(recordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${recordedFile.extension}")
+                                val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    trajectory = dollyTrajectory,
+                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying Dolly Zoom to custom pipeline video", e)
+                            }
+                        }
+
+                        if (needsPipelinePostPass && snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                            try {
+                                val orientationHint = getVideoOrientationHint()
+                                val procDest = File(recordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${recordedFile.extension}")
+                                val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    type = snapVideoPipeline,
+                                    orientationDegrees = orientationHint
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    try { gradedFile?.delete() } catch (_: Exception) {}
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying ${snapVideoPipeline.title} fallback pass", e)
+                            }
+                        }
+
+                        try {
+                            val savedUri = saveVideoToGallery(
+                                tempFile = fileToSave,
+                                fileName = effectiveFileName,
+                                mimeType = effectiveMimeType,
+                                isCinema = false,
+                                isFrontFacing = isFrontFacing
+                            )
+                            if (savedUri != null) {
+                                _lastCapturedMedia.value = CapturedMedia(
+                                    uri = savedUri,
+                                    isVideo = true,
+                                    timestamp = System.currentTimeMillis(),
+                                    displayName = "${snapVideoPipeline.title} Video",
+                                    isFrontCamera = isFrontFacing
+                                )
+                                Log.i(TAG, "Custom pipeline (${snapVideoPipeline.title}) video saved: frames=$framesProcessed, size=${fileToSave.length()} bytes")
+                                notifyComplete(savedUri)
+                            } else {
+                                notifyComplete(null)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed saving custom pipeline video", e)
+                            notifyComplete(null)
+                        } finally {
+                            try { gradedFile?.delete() } catch (ignored: Exception) {}
+                            try { recordedFile.delete() } catch (ignored: Exception) {}
+                            updateStorageStats()
+                        }
+                    } else {
+                        Log.w(TAG, "Custom pipeline recordedFile was null or empty")
+                        notifyComplete(null)
+                    }
+                } else if (wasSoftwareCinema) {
                     val recordedFile = try {
                         cinemaSoftwareRecorder.stopRecording()
                     } catch (e: Exception) {

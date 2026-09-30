@@ -762,9 +762,11 @@ fun CameraScreen(
             }
         }
 
-        // 3d0. Dedicated Video Adjustments Panel (Normal Video Mode, matching reference design)
+        // 3d0. Dedicated Video Adjustments Panel (Normal Video Pipeline only; bypassed when Custom Video Pipeline is active)
         AnimatedVisibility(
-            visible = cameraMode == CameraMode.VIDEO && isVideoAdjustmentsOpen,
+            visible = cameraMode == CameraMode.VIDEO &&
+                    selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.NORMAL &&
+                    isVideoAdjustmentsOpen,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
             exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
             modifier = Modifier

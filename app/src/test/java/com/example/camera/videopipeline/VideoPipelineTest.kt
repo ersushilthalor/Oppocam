@@ -46,10 +46,41 @@ class VideoPipelineTest {
         assertTrue(samsung is SamsungVideoPipeline)
         assertTrue(vivo is VivoVideoPipeline)
 
+        assertFalse(normal.isCustomPipeline)
+        assertTrue(iphone.isCustomPipeline)
+        assertTrue(samsung.isCustomPipeline)
+        assertTrue(vivo.isCustomPipeline)
+
+        assertFalse(VideoPipelineManager.isCustomPipeline(VideoPipelineType.NORMAL))
+        assertTrue(VideoPipelineManager.isCustomPipeline(VideoPipelineType.IPHONE))
+        assertTrue(VideoPipelineManager.isCustomPipeline(VideoPipelineType.SAMSUNG))
+        assertTrue(VideoPipelineManager.isCustomPipeline(VideoPipelineType.VIVO))
+
         assertEquals("Normal", normal.displayName)
         assertEquals("iPhone", iphone.displayName)
         assertEquals("Samsung", samsung.displayName)
         assertEquals("Vivo", vivo.displayName)
+    }
+
+    @Test
+    fun testIndependentStageParamsAndTonemapCurves() {
+        val normalParams = VideoPipelineManager.getPipeline(VideoPipelineType.NORMAL).stageParams
+        val iphoneParams = VideoPipelineManager.getPipeline(VideoPipelineType.IPHONE).stageParams
+        val samsungParams = VideoPipelineManager.getPipeline(VideoPipelineType.SAMSUNG).stageParams
+        val vivoParams = VideoPipelineManager.getPipeline(VideoPipelineType.VIVO).stageParams
+
+        assertNotEquals(normalParams, iphoneParams)
+        assertNotEquals(iphoneParams, samsungParams)
+        assertNotEquals(samsungParams, vivoParams)
+
+        // Verify independent Stage 0 ISP tone curves are generated accurately
+        val iphoneCurve = iphoneParams.buildCustomIspTonemapCurve()
+        val samsungCurve = samsungParams.buildCustomIspTonemapCurve()
+        val vivoCurve = vivoParams.buildCustomIspTonemapCurve()
+
+        assertNotNull(iphoneCurve)
+        assertNotNull(samsungCurve)
+        assertNotNull(vivoCurve)
     }
 
     @Test
@@ -60,7 +91,10 @@ class VideoPipelineTest {
 
         assertTrue("AGSL shader must not be empty", agsl.isNotEmpty())
         assertTrue("GLSL shader must not be empty", glsl.isNotEmpty())
+        assertTrue("AGSL should contain 5-tap spatial convolution", agsl.contains("highFreqDetail"))
+        assertTrue("GLSL should contain 5-tap spatial convolution", glsl.contains("highFreqDetail"))
         assertTrue("AGSL should contain Smart HDR highlight retention", agsl.contains("hlCompression"))
+        assertTrue("GLSL should contain Smart HDR highlight retention", glsl.contains("hlCompression"))
         assertTrue("AGSL should contain Subject Separation bell curve", agsl.contains("subjectDist"))
         assertTrue("AGSL should contain Skin tone protection", agsl.contains("isSkin"))
 
@@ -80,6 +114,8 @@ class VideoPipelineTest {
 
         assertTrue(agsl.isNotEmpty())
         assertTrue(glsl.isNotEmpty())
+        assertTrue("AGSL should contain 5-tap spatial convolution", agsl.contains("edgeDetail"))
+        assertTrue("GLSL should contain 5-tap spatial convolution", glsl.contains("edgeDetail"))
         assertTrue("AGSL should contain lifted shadows toe curve", agsl.contains("shadowToe"))
         assertTrue("AGSL should contain bright midtone gain", agsl.contains("midtoneGain"))
         assertTrue("AGSL should contain rich highlight knee protection", agsl.contains("hlThreshold"))
@@ -100,6 +136,8 @@ class VideoPipelineTest {
 
         assertTrue(agsl.isNotEmpty())
         assertTrue(glsl.isNotEmpty())
+        assertTrue("AGSL should contain 5-tap spatial convolution", agsl.contains("microDetail"))
+        assertTrue("GLSL should contain 5-tap spatial convolution", glsl.contains("microDetail"))
         assertTrue("AGSL should contain controlled knee highlight compression", agsl.contains("knee"))
         assertTrue("AGSL should contain clean shadow detail lift", agsl.contains("shadowT"))
         assertTrue("AGSL should contain micro-contrast clarity", agsl.contains("clarityMask"))

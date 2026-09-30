@@ -790,6 +790,40 @@ fun Viewfinder(
                             letterSpacing = 0.5.sp
                         )
                     }
+                } else if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                    val pipelineAccent = when (selectedVideoPipeline) {
+                        com.example.camera.videopipeline.VideoPipelineType.IPHONE -> Color(0xFFFFD54F)
+                        com.example.camera.videopipeline.VideoPipelineType.SAMSUNG -> Color(0xFF40C4FF)
+                        com.example.camera.videopipeline.VideoPipelineType.VIVO -> Color(0xFF2979FF)
+                        com.example.camera.videopipeline.VideoPipelineType.NORMAL -> Color.White
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(10.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xDD0D0F18))
+                            .border(1.dp, pipelineAccent.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                            .testTag("active_video_pipeline_badge")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(pipelineAccent)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "${selectedVideoPipeline.title} • ${selectedVideoPipeline.subtitle}".uppercase(),
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.6.sp
+                            )
+                        }
+                    }
                 }
 
                 // Grid Overlay

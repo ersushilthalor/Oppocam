@@ -1,12 +1,15 @@
 package com.example.camera.videopipeline
 
 import android.graphics.ColorMatrix
+import android.hardware.camera2.CaptureRequest
 import android.view.View
+import com.example.camera.model.HardwareCapabilities
 import java.io.File
 
 /**
  * Base contract for an independent video processing pipeline.
- * Completely isolates its color science, tone curves, and rendering
+ * Completely isolates its sensor/ISP acquisition, multi-stage color science,
+ * tone curves, HDR compression, spatial detail/micro-contrast sharpening, and rendering
  * for both real-time viewfinder display and final recorded video files.
  */
 interface IVideoPipeline {
@@ -14,6 +17,22 @@ interface IVideoPipeline {
     val displayName: String get() = type.title
     val subtitle: String get() = type.subtitle
     val description: String get() = type.description
+    val isCustomPipeline: Boolean get() = type != VideoPipelineType.NORMAL
+
+    /**
+     * Multi-stage parameters defining this pipeline's independent processing path.
+     */
+    val stageParams: VideoPipelineStageParams
+
+    /**
+     * Configures the Camera2 CaptureRequest for this pipeline's dedicated ISP acquisition path,
+     * completely bypassing the normal video pipeline's tone mapping, sharpening, and color profile.
+     */
+    fun applyToCaptureRequest(
+        builder: CaptureRequest.Builder,
+        capabilities: HardwareCapabilities,
+        baseEvIndex: Int = 0
+    )
 
     /**
      * Applies this pipeline directly to the viewfinder TextureView.
@@ -32,7 +51,7 @@ interface IVideoPipeline {
     fun getAgslShaderCode(): String
 
     /**
-     * Returns the OpenGL ES fragment shader source code for video transcoding.
+     * Returns the OpenGL ES fragment shader source code for real-time custom video encoding and transcoding.
      */
     fun getGlFragmentShaderCode(): String
 
@@ -43,8 +62,8 @@ interface IVideoPipeline {
     fun computeColorMatrix(): ColorMatrix
 
     /**
-     * Hardware-accelerated post-processor that transforms the recorded video file
-     * using this pipeline's dedicated shader and parameters.
+     * Hardware-accelerated processor that transforms the recorded video file
+     * using this pipeline's dedicated multi-stage shader and parameters.
      */
     fun processVideo(inputFile: File, outputFile: File, orientationDegrees: Int): File
 }
