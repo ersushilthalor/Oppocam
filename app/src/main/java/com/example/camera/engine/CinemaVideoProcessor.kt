@@ -116,6 +116,7 @@ object CinemaVideoProcessor {
         var decoder: MediaCodec? = null
         var encoder: MediaCodec? = null
         var muxer: MediaMuxer? = null
+        var isMuxerStarted = false
         var surfaceTexture: android.graphics.SurfaceTexture? = null
         var decoderSurface: Surface? = null
         var encoderSurface: Surface? = null
@@ -366,7 +367,7 @@ object CinemaVideoProcessor {
             var isEncoderEos = false
             var muxerVideoTrack = -1
             var muxerAudioTrack = -1
-            var isMuxerStarted = false
+            isMuxerStarted = false
 
             while (!isEncoderEos) {
                 // 1. Feed input to decoder
@@ -489,6 +490,19 @@ object CinemaVideoProcessor {
                 }
             }
 
+            // Explicitly stop and finalize MediaMuxer before returning success
+            if (muxer != null && isMuxerStarted) {
+                try {
+                    muxer.stop()
+                } catch (e: Exception) {
+                    Log.e(TAG, "MediaMuxer stop failed during transcode finalization", e)
+                    return false
+                }
+                isMuxerStarted = false
+            }
+            try { muxer?.release() } catch (ignored: Exception) {}
+            muxer = null
+
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Video transcode failed", e)
@@ -504,8 +518,13 @@ object CinemaVideoProcessor {
             try { extractor?.release() } catch (ignored: Exception) {}
 
             if (muxer != null) {
-                try { muxer.stop() } catch (ignored: Exception) {}
+                try {
+                    if (isMuxerStarted) {
+                        muxer.stop()
+                    }
+                } catch (ignored: Exception) {}
                 try { muxer.release() } catch (ignored: Exception) {}
+                muxer = null
             }
 
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {

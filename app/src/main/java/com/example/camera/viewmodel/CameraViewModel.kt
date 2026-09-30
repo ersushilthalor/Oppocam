@@ -1803,9 +1803,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun triggerVideoCapture() {
         if (engine.isRecordingVideo.value) {
+            val isCinema = _cameraMode.value == CameraMode.CINEMA
             com.example.camera.sound.CameraSoundManager.playStopVideo()
-            engine.stopVideoRecording()
-            showToast("Video saved to DCIM/Camera")
+            engine.stopVideoRecording { savedUri ->
+                viewModelScope.launch(Dispatchers.Main) {
+                    if (savedUri != null) {
+                        val message = if (isCinema) "Cinema video saved to DCIM/Camera" else "Video saved to DCIM/Camera"
+                        showToast(message)
+                    } else {
+                        val errorMessage = if (isCinema) "Failed to save cinema video" else "Failed to save video"
+                        showToast(errorMessage)
+                    }
+                }
+            }
         } else {
             com.example.camera.sound.CameraSoundManager.playStartVideo()
             engine.startVideoRecording { error ->

@@ -102,6 +102,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         activeCodec = effectiveCodec
         activeColorProfile = colorProfile
         activeColorSpace = if (isHlg10) com.example.camera.model.CinemaColorSpace.REC_2020 else colorSpace
+        outputFile = destFile
 
         isRecording.set(true)
         isStopping.set(false)
@@ -281,6 +282,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             }
             mediaMuxer = null
             try {
+                cinemaMuxerPfd?.fileDescriptor?.sync()
+            } catch (ignored: Exception) {}
+            try {
                 cinemaMuxerPfd?.close()
             } catch (ignored: Exception) {}
             cinemaMuxerPfd = null
@@ -289,11 +293,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val file = outputFile
         outputFile = null
         activeCodec = null
-        if (file != null && file.exists()) {
+        if (file != null && file.exists() && file.length() > 0L) {
             Log.i(TAG, "Cinema recording finalized successfully: ${file.absolutePath} (${file.length()} bytes)")
             return file
         } else {
-            Log.w(TAG, "Cinema recording output file missing: ${file?.absolutePath}")
+            Log.w(TAG, "Cinema recording output file missing or empty: ${file?.absolutePath}")
             return null
         }
     }
