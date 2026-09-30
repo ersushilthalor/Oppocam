@@ -233,6 +233,16 @@ class Camera2Engine(private val context: Context) {
     private var recordingCinemaConfig: CinemaConfig? = null
     private var recordingRec2020Params: Rec2020AutoToneParams? = null
 
+    private val _selectedVideoPipeline = MutableStateFlow(preferences.videoPipeline)
+    val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = _selectedVideoPipeline.asStateFlow()
+
+    fun setVideoPipeline(pipeline: com.example.camera.videopipeline.VideoPipelineType) {
+        _selectedVideoPipeline.value = pipeline
+        preferences.videoPipeline = pipeline
+    }
+
+    private var recordingVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL
+
     private val _previewBufferSize = MutableStateFlow<Size?>(null)
     val previewBufferSize: StateFlow<Size?> = _previewBufferSize.asStateFlow()
 
@@ -4844,6 +4854,8 @@ class Camera2Engine(private val context: Context) {
             stableActionHorizonEngine.startRecordingTrajectory()
         }
 
+        recordingVideoPipeline = _selectedVideoPipeline.value
+
         try {
             val chars = getCharacteristics(lens.cameraId)
             val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -5468,6 +5480,9 @@ class Camera2Engine(private val context: Context) {
         recordingCinemaConfig = null
         recordingRec2020Params = null
 
+        val snapVideoPipeline = recordingVideoPipeline
+        recordingVideoPipeline = _selectedVideoPipeline.value
+
         val wasHorizonLockActive = _isHorizonLockEnabled.value ||
                 (currentMode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
         val horizonTrajectory = if (wasHorizonLockActive) {
@@ -5550,6 +5565,23 @@ class Camera2Engine(private val context: Context) {
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Dolly Zoom to final cinema video", e)
                             }
+                        } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                            try {
+                                val orientationHint = getVideoOrientationHint()
+                                val procDest = File(recordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${recordedFile.extension}")
+                                val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    type = snapVideoPipeline,
+                                    orientationDegrees = orientationHint
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying ${snapVideoPipeline.title} video pipeline to final video", e)
+                            }
                         }
 
                         try {
@@ -5561,11 +5593,18 @@ class Camera2Engine(private val context: Context) {
                                 isFrontFacing = isFrontFacing
                             )
                             if (savedUri != null) {
+                                val videoDisplayName = if (isCinema) {
+                                    "Cinema Video"
+                                } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                                    "${snapVideoPipeline.title} Video"
+                                } else {
+                                    "Video"
+                                }
                                 _lastCapturedMedia.value = CapturedMedia(
                                     uri = savedUri,
                                     isVideo = true,
                                     timestamp = System.currentTimeMillis(),
-                                    displayName = if (isCinema) "Cinema Video" else "Video",
+                                    displayName = videoDisplayName,
                                     isFrontCamera = isFrontFacing
                                 )
                                 Log.i(TAG, "Cinema software video successfully saved: size=${fileToSave.length()} bytes, uri=$savedUri")
@@ -5650,6 +5689,23 @@ class Camera2Engine(private val context: Context) {
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error applying Dolly Zoom to final video", e)
                             }
+                        } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                            try {
+                                val orientationHint = getVideoOrientationHint()
+                                val procDest = File(tempFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${tempFile.extension}")
+                                val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
+                                    inputFile = fileToSave,
+                                    outputFile = procDest,
+                                    type = snapVideoPipeline,
+                                    orientationDegrees = orientationHint
+                                )
+                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                                    fileToSave = processed
+                                    gradedFile = processed
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying ${snapVideoPipeline.title} video pipeline to final video", e)
+                            }
                         }
 
                         try {
@@ -5661,11 +5717,18 @@ class Camera2Engine(private val context: Context) {
                                 isFrontFacing = isFrontFacing
                             )
                             if (savedUri != null) {
+                                val videoDisplayName = if (isCinema) {
+                                    "Cinema Video"
+                                } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                                    "${snapVideoPipeline.title} Video"
+                                } else {
+                                    "Video"
+                                }
                                 _lastCapturedMedia.value = CapturedMedia(
                                     uri = savedUri,
                                     isVideo = true,
                                     timestamp = System.currentTimeMillis(),
-                                    displayName = if (isCinema) "Cinema Video" else "Video",
+                                    displayName = videoDisplayName,
                                     isFrontCamera = isFrontFacing
                                 )
                                 Log.i(TAG, "Hardware recorded video successfully saved: size=${fileToSave.length()} bytes, uri=$savedUri")

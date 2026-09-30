@@ -231,6 +231,7 @@ fun CameraScreen(
     val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
     val isDollyZoomActive by viewModel.isDollyZoomActive.collectAsStateWithLifecycle()
     val dollyCropState by viewModel.dollyCropState.collectAsStateWithLifecycle()
+    val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
@@ -308,6 +309,7 @@ fun CameraScreen(
                 cinemaConfig = cinemaConfig,
                 portraitConfig = portraitConfig,
                 videoAdjustments = videoAdjustments,
+                selectedVideoPipeline = selectedVideoPipeline,
                 rec2020AutoToneParams = rec2020AutoToneParams,
                 proSaturation = proSaturation,
                 proContrast = proContrast,
@@ -432,11 +434,52 @@ fun CameraScreen(
         }
 
         // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
-        if (cameraMode == CameraMode.VIDEO) {
+        if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
             VideoAdjustmentsViewfinderOverlay(
                 adjustments = videoAdjustments,
                 modifier = Modifier.fillMaxSize()
             )
+        }
+
+        // 1d. Dedicated Video Pipeline On-Screen Indicator (Video Mode)
+        if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+            val badgeColor = when (selectedVideoPipeline) {
+                com.example.camera.videopipeline.VideoPipelineType.IPHONE -> Color(0xFFFFB74D)
+                com.example.camera.videopipeline.VideoPipelineType.SAMSUNG -> Color(0xFF64B5F6)
+                com.example.camera.videopipeline.VideoPipelineType.VIVO -> Color(0xFF81C784)
+                else -> Color(0xFFFFD54F)
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = if (isHorizonLockEnabled || isDollyZoomActive) 96.dp else 58.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xCC0D0F18))
+                    .border(1.dp, badgeColor.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                    .clickable { viewModel.setVideoSettingsPanelOpen(true) }
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                    .testTag("video_pipeline_badge")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(badgeColor)
+                    )
+                    Text(
+                        text = "${selectedVideoPipeline.title.uppercase()} VIDEO • ${selectedVideoPipeline.subtitle.uppercase()}",
+                        color = badgeColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.6.sp
+                    )
+                }
+            }
         }
 
         // 1b. Cinema Viewfinder Assist Overlays (Waveform, Peaking, Zebras)
@@ -600,6 +643,7 @@ fun CameraScreen(
                 currentResolution = selectedVideoResolution,
                 currentFps = videoFps,
                 isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
+                selectedVideoPipeline = selectedVideoPipeline,
                 onResolutionSelected = { res ->
                     viewModel.selectVideoResolution(res)
                 },
@@ -608,6 +652,9 @@ fun CameraScreen(
                 },
                 onUltraStabilizationToggle = {
                     viewModel.toggleUltraStabilization()
+                },
+                onVideoPipelineSelected = { pipeline ->
+                    viewModel.selectVideoPipeline(pipeline)
                 },
                 onDismiss = { viewModel.setVideoSettingsPanelOpen(false) },
                 modifier = Modifier

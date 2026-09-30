@@ -1,6 +1,6 @@
 {
   "name": "Camera Pro",
-  "description": "Professional camera with manual controls, Night Multi-Frame Fusion, 50MP RAW, Portrait, AI Subject Tracking, and Cinema Log modes.",
+  "description": "Professional camera with manual controls, multi-pipeline video processing (iPhone, Samsung, Vivo), Night Multi-Frame Fusion, 50MP RAW, Portrait, AI Subject Tracking, and Cinema Log modes.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

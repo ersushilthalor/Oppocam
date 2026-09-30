@@ -95,6 +95,7 @@ fun Viewfinder(
     cinemaConfig: CinemaConfig? = null,
     portraitConfig: PortraitConfig? = null,
     videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
+    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
     rec2020AutoToneParams: com.example.camera.engine.Rec2020AutoToneParams? = null,
     proSaturation: Float = 0f,
     proContrast: Float = 1.0f,
@@ -552,6 +553,7 @@ fun Viewfinder(
 
                         if (cameraMode == CameraMode.PHOTO) {
                             // Completely isolate Photo Mode from video adjustments and video pipelines
+                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             if (activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
                                 val filterMat = activePhotoFilter.toAndroidColorMatrix()
@@ -583,6 +585,7 @@ fun Viewfinder(
                                 hasFilter = true
                             }
                         } else if (cameraMode == CameraMode.CINEMA) {
+                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             val effectiveConfig = if (activeLut != null && activeLut != cinemaConfig?.selectedLut) {
                                 cinemaConfig?.copy(selectedLut = activeLut)
@@ -599,6 +602,7 @@ fun Viewfinder(
                                 hasFilter = true
                             }
                         } else if (cameraMode == CameraMode.PORTRAIT && portraitConfig != null) {
+                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             val style = portraitConfig.selectedStyle
                             if (style.isZeissOptical) {
@@ -623,9 +627,19 @@ fun Viewfinder(
                                 hasFilter = true
                             }
                         } else if (cameraMode == CameraMode.VIDEO) {
-                            com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
-                            return@AndroidView
+                            if (selectedVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                                // Dedicated video pipeline completely bypasses default adjustments pipeline
+                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                                com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToView(textureView, selectedVideoPipeline)
+                                return@AndroidView
+                            } else {
+                                // Normal video pipeline: clear dedicated video pipeline and use default adjustments
+                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
+                                return@AndroidView
+                            }
                         } else {
+                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                         }
 

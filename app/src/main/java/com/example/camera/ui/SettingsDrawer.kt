@@ -89,6 +89,8 @@ fun SettingsDrawer(
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     isVideoStabilizationEnabled: Boolean = true,
+    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
+    onVideoPipelineSelected: (com.example.camera.videopipeline.VideoPipelineType) -> Unit = {},
     isHorizontalLockSettingEnabled: Boolean = true,
     onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isDollyZoomSettingEnabled: Boolean = false,
@@ -367,6 +369,8 @@ fun SettingsDrawer(
                             onPortraitConfigChange = onPortraitConfigChange
                         )
                         SettingsPage.VIDEO -> VideoSettingsPage(
+                            selectedVideoPipeline = selectedVideoPipeline,
+                            onVideoPipelineSelected = onVideoPipelineSelected,
                             selectedVideoResolution = selectedVideoResolution,
                             onVideoResolutionSelected = onVideoResolutionSelected,
                             capabilities = capabilities,
@@ -819,6 +823,8 @@ private fun PhotoSettingsPage(
 
 @Composable
 private fun VideoSettingsPage(
+    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
+    onVideoPipelineSelected: (com.example.camera.videopipeline.VideoPipelineType) -> Unit = {},
     selectedVideoResolution: CameraResolution?,
     onVideoResolutionSelected: (CameraResolution) -> Unit,
     capabilities: HardwareCapabilities,
@@ -848,6 +854,21 @@ private fun VideoSettingsPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        item {
+            SettingsSegmentedCard(
+                title = "Video Processing Pipeline",
+                description = "Dedicated independent computational processing pipeline: ${selectedVideoPipeline.subtitle}. ${selectedVideoPipeline.description}",
+                options = listOf(
+                    com.example.camera.videopipeline.VideoPipelineType.NORMAL to "Normal",
+                    com.example.camera.videopipeline.VideoPipelineType.IPHONE to "iPhone",
+                    com.example.camera.videopipeline.VideoPipelineType.SAMSUNG to "Samsung",
+                    com.example.camera.videopipeline.VideoPipelineType.VIVO to "Vivo"
+                ),
+                selectedOption = selectedVideoPipeline,
+                onOptionSelected = onVideoPipelineSelected
+            )
+        }
+
         item {
             val supportedResolutions = capabilities.supportedVideoResolutions
             if (supportedResolutions.isNotEmpty()) {
@@ -2572,6 +2593,7 @@ fun CameraSettingsScreen(
     val selectedLens by viewModel.selectedLens.collectAsStateWithLifecycle()
     val selectedPhotoResolution by viewModel.engine.selectedPhotoResolution.collectAsStateWithLifecycle()
     val selectedVideoResolution by viewModel.engine.selectedVideoResolution.collectAsStateWithLifecycle()
+    val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
     val photoMegapixelMode by viewModel.photoMegapixelMode.collectAsStateWithLifecycle()
     val isRefocusPhotoEnabled by viewModel.isRefocusPhotoEnabled.collectAsStateWithLifecycle()
     val refocusFrameCount by viewModel.refocusFrameCount.collectAsStateWithLifecycle()
@@ -2639,6 +2661,8 @@ fun CameraSettingsScreen(
         selectedLens = selectedLens,
         selectedPhotoResolution = selectedPhotoResolution,
         selectedVideoResolution = selectedVideoResolution,
+        selectedVideoPipeline = selectedVideoPipeline,
+        onVideoPipelineSelected = { viewModel.selectVideoPipeline(it) },
         photoMegapixelMode = photoMegapixelMode,
         isRefocusPhotoEnabled = isRefocusPhotoEnabled,
         refocusFrameCount = refocusFrameCount,

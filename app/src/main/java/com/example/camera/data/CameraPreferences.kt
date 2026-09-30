@@ -24,6 +24,7 @@ class CameraPreferences(context: Context) {
         private const val KEY_VIDEO_FPS = "pref_video_fps"
         private const val KEY_VIDEO_BITRATE = "pref_video_bitrate"
         private const val KEY_VIDEO_STABILIZATION = "pref_video_stabilization"
+        private const val KEY_VIDEO_PIPELINE = "pref_video_pipeline_mode"
         private const val KEY_AUDIO_ENABLED = "pref_audio_enabled"
         private const val KEY_COLOR_PROFILE = "pref_color_profile"
         private const val KEY_WHITE_BALANCE = "pref_white_balance"
@@ -268,6 +269,17 @@ class CameraPreferences(context: Context) {
     var isAudioEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUDIO_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_AUDIO_ENABLED, value).apply()
+
+    var videoPipeline: com.example.camera.videopipeline.VideoPipelineType
+        get() {
+            val name = prefs.getString(KEY_VIDEO_PIPELINE, com.example.camera.videopipeline.VideoPipelineType.NORMAL.name)
+            return try {
+                com.example.camera.videopipeline.VideoPipelineType.valueOf(name ?: com.example.camera.videopipeline.VideoPipelineType.NORMAL.name)
+            } catch (e: Exception) {
+                com.example.camera.videopipeline.VideoPipelineType.NORMAL
+            }
+        }
+        set(value) = prefs.edit().putString(KEY_VIDEO_PIPELINE, value.name).apply()
 
     var proSaturation: Float
         get() = prefs.getFloat("pref_pro_saturation", 0f)

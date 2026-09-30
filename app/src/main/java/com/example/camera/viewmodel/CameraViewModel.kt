@@ -63,6 +63,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     val isRecordingVideo: StateFlow<Boolean> = engine.isRecordingVideo
     val videoDurationSeconds: StateFlow<Int> = engine.videoDurationSeconds
+    val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = engine.selectedVideoPipeline
 
     // Portrait Mode Controls & Pipeline State
     private val _portraitConfig = MutableStateFlow(preferences.getModePortraitConfig(preferences.cameraMode))
@@ -1134,6 +1135,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.videoHeight = quality.height
         preferences.videoFps = quality.fps
         showToast("Video Quality: ${quality.fullLabel}")
+    }
+
+    fun selectVideoPipeline(pipeline: com.example.camera.videopipeline.VideoPipelineType) {
+        engine.setVideoPipeline(pipeline)
+        showToast("Video Pipeline: ${pipeline.title}")
     }
 
     fun toggleManualPro() {

@@ -41,9 +41,11 @@ fun FloatingVideoSettingsPanel(
     currentResolution: CameraResolution?,
     currentFps: Int,
     isUltraStabilizationEnabled: Boolean = false,
+    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
     onResolutionSelected: (CameraResolution) -> Unit,
     onFpsSelected: (Int) -> Unit,
     onUltraStabilizationToggle: () -> Unit = {},
+    onVideoPipelineSelected: (com.example.camera.videopipeline.VideoPipelineType) -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -120,6 +122,42 @@ fun FloatingVideoSettingsPanel(
                 }
 
                 val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
+
+                // Dedicated Video Processing Pipeline Selector
+                Spacer(modifier = Modifier.height(14.dp))
+                VideoPanelSectionHeader(
+                    title = "VIDEO PIPELINE",
+                    badge = selectedVideoPipeline.subtitle
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    com.example.camera.videopipeline.VideoPipelineType.entries.forEach { pipeline ->
+                        val isSelected = selectedVideoPipeline == pipeline
+                        VideoGlassChip(
+                            label = pipeline.title,
+                            isSelected = isSelected,
+                            accentColor = accentColor,
+                            onClick = { onVideoPipelineSelected(pipeline) },
+                            testTag = "pipeline_option_${pipeline.id}"
+                        )
+                    }
+                }
+
+                Text(
+                    text = selectedVideoPipeline.description,
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp)
+                )
 
                 if (appearance.showVideoResolution) {
                     Spacer(modifier = Modifier.height(14.dp))
