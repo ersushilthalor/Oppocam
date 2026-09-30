@@ -390,6 +390,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isCinemaSettingsOpen.value = !_isCinemaSettingsOpen.value
     }
 
+    // Floating EV Control Window visibility (Video Mode and Cinema Mode)
+    private val _isEvControlOpen = MutableStateFlow(false)
+    val isEvControlOpen: StateFlow<Boolean> = _isEvControlOpen.asStateFlow()
+
+    fun setEvControlOpen(isOpen: Boolean) {
+        _isEvControlOpen.value = isOpen
+        if (isOpen) {
+            _isVideoSettingsPanelOpen.value = false
+            _isVideoAdjustmentsOpen.value = false
+            _isCinemaSettingsOpen.value = false
+        }
+    }
+
+    fun toggleEvControlOpen() {
+        setEvControlOpen(!_isEvControlOpen.value)
+    }
+
     // Video Adjustments State (Normal Video Mode)
     private val _videoAdjustments = MutableStateFlow(preferences.getVideoAdjustments())
     val videoAdjustments: StateFlow<com.example.camera.model.VideoAdjustments> = _videoAdjustments.asStateFlow()
@@ -967,6 +984,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mEv = preferences.getModeEv(mode)
         _exposureCompensation.value = mEv
         engine.exposureCompensationIndex = mEv
+        if (mode == CameraMode.CINEMA) {
+            updateCinemaConfig(engine.cinemaConfig.value.copy(exposureCompensation = mEv))
+        }
+        _isEvControlOpen.value = false
 
         val mIso = preferences.getModeIso(mode)
         _manualIso.value = mIso
@@ -1162,10 +1183,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.exposureCompensation = value
         preferences.setModeEv(_cameraMode.value, value)
         engine.exposureCompensationIndex = value
+
+        // Exposure compensation operates on top of continuous Auto Exposure:
+        // Ensure AE is active, unlocked, and adapting continuously to lighting changes
+        engine.isAeLocked = false
+
+        // In Video and Cinema modes, clear any manual ISO or shutter speed lock
+        // so camera HAL continuously adapts ISO and shutter speed with the AE bias
+        if (_cameraMode.value == CameraMode.VIDEO || _cameraMode.value == CameraMode.CINEMA) {
+            _manualIso.value = null
+            _manualShutterSpeedNs.value = null
+            engine.manualIso = null
+            engine.manualExposureTimeNs = null
+        }
+
         if (_cameraMode.value == CameraMode.CINEMA) {
-            updateCinemaConfig(engine.cinemaConfig.value.copy(exposureCompensation = value))
+            updateCinemaConfig(engine.cinemaConfig.value.copy(
+                exposureCompensation = value,
+                manualIso = null,
+                manualShutterSpeedNs = null
+            ))
         }
         engine.updatePreviewSettings()
+    }
+
+    fun resetExposureCompensation() {
+        setExposureCompensation(0)
     }
 
     fun setManualIso(iso: Int?) {

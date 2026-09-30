@@ -8,15 +8,17 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Exposure
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -106,8 +108,8 @@ fun FloatingEvControlWindow(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0x8810131A),
-                        Color(0x700A0C10)
+                        Color(0x9910131A),
+                        Color(0x800A0C10)
                     )
                 )
             )
@@ -170,16 +172,64 @@ fun FloatingEvControlWindow(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // Quick Decrement button
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.12f))
+                            .clickable {
+                                val newIdx = (clampedIndex - 1).coerceIn(safeMinIndex, safeMaxIndex)
+                                if (newIdx != clampedIndex) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onEvIndexChange(newIdx)
+                                }
+                            }
+                            .testTag("floating_ev_minus_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Remove,
+                            contentDescription = "Decrease EV",
+                            tint = Color.White.copy(alpha = 0.9f),
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+
                     Text(
                         text = formattedEv,
                         color = valueHighlightColor,
-                        fontSize = 15.sp,
+                        fontSize = 14.5.sp,
                         fontWeight = FontWeight.ExtraBold,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.testTag("floating_ev_value_text")
                     )
+
+                    // Quick Increment button
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.12f))
+                            .clickable {
+                                val newIdx = (clampedIndex + 1).coerceIn(safeMinIndex, safeMaxIndex)
+                                if (newIdx != clampedIndex) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onEvIndexChange(newIdx)
+                                }
+                            }
+                            .testTag("floating_ev_plus_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = "Increase EV",
+                            tint = Color.White.copy(alpha = 0.9f),
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
 
                     if (isModified) {
                         Box(
@@ -247,50 +297,67 @@ fun FloatingEvControlWindow(
                         sliderWidthPx = size.width.toFloat().coerceAtLeast(1f)
                     }
                     .pointerInput(safeMinIndex, safeMaxIndex) {
-                        detectTapGestures { tapOffset ->
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val downX = down.position.x
+                            var lastX = downX
+                            var hasDragged = false
+                            val pointerId = down.id
                             val horizontalPaddingPx = 14.dp.toPx()
                             val usableWidth = (sliderWidthPx - horizontalPaddingPx * 2f).coerceAtLeast(1f)
-                            val fraction = ((tapOffset.x - horizontalPaddingPx) / usableWidth).coerceIn(0f, 1f)
-                            val targetFloat = safeMinIndex + fraction * (safeMaxIndex - safeMinIndex)
-                            val newIdx = targetFloat.roundToInt().coerceIn(safeMinIndex, safeMaxIndex)
-                            continuousDragIndex = newIdx.toFloat()
-                            if (newIdx != currentClampedRef) {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onEvIndexChangeRef(newIdx)
-                            }
-                        }
-                    }
-                    .pointerInput(safeMinIndex, safeMaxIndex) {
-                        detectHorizontalDragGestures(
-                            onDragStart = {
-                                isDragging = true
-                                continuousDragIndex = currentClampedRef.toFloat()
-                            },
-                            onDragEnd = {
-                                isDragging = false
-                                continuousDragIndex = currentClampedRef.toFloat()
-                            },
-                            onDragCancel = {
-                                isDragging = false
-                                continuousDragIndex = currentClampedRef.toFloat()
-                            },
-                            onHorizontalDrag = { change, dragAmount ->
-                                change.consume()
-                                val horizontalPaddingPx = 14.dp.toPx()
-                                val usableWidth = (sliderWidthPx - horizontalPaddingPx * 2f).coerceAtLeast(1f)
-                                val deltaIndex = (dragAmount / usableWidth) * (safeMaxIndex - safeMinIndex).toFloat()
-                                val updatedFloat = (continuousDragIndex + deltaIndex).coerceIn(
-                                    safeMinIndex.toFloat(),
-                                    safeMaxIndex.toFloat()
-                                )
-                                continuousDragIndex = updatedFloat
-                                val snappedIdx = updatedFloat.roundToInt().coerceIn(safeMinIndex, safeMaxIndex)
-                                if (snappedIdx != currentClampedRef) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onEvIndexChangeRef(snappedIdx)
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == pointerId }
+                                    ?: event.changes.firstOrNull()
+                                    ?: break
+
+                                if (!change.pressed) {
+                                    change.consume()
+                                    break
+                                }
+
+                                val currentX = change.position.x
+                                val totalDx = currentX - downX
+
+                                if (!hasDragged && abs(totalDx) >= 1.5f) {
+                                    hasDragged = true
+                                    isDragging = true
+                                    lastX = currentX
+                                    change.consume()
+                                } else if (hasDragged) {
+                                    val dragAmount = currentX - lastX
+                                    lastX = currentX
+                                    val deltaIndex = (dragAmount / usableWidth) * (safeMaxIndex - safeMinIndex).toFloat()
+                                    val updatedFloat = (continuousDragIndex + deltaIndex).coerceIn(
+                                        safeMinIndex.toFloat(),
+                                        safeMaxIndex.toFloat()
+                                    )
+                                    continuousDragIndex = updatedFloat
+                                    val snappedIdx = updatedFloat.roundToInt().coerceIn(safeMinIndex, safeMaxIndex)
+                                    if (snappedIdx != currentClampedRef) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onEvIndexChangeRef(snappedIdx)
+                                    }
+                                    change.consume()
                                 }
                             }
-                        )
+
+                            if (hasDragged) {
+                                isDragging = false
+                                continuousDragIndex = currentClampedRef.toFloat()
+                            } else {
+                                // Tap on dial track to jump directly to tapped EV position
+                                val fraction = ((downX - horizontalPaddingPx) / usableWidth).coerceIn(0f, 1f)
+                                val targetFloat = safeMinIndex + fraction * (safeMaxIndex - safeMinIndex)
+                                val newIdx = targetFloat.roundToInt().coerceIn(safeMinIndex, safeMaxIndex)
+                                continuousDragIndex = newIdx.toFloat()
+                                if (newIdx != currentClampedRef) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onEvIndexChangeRef(newIdx)
+                                }
+                            }
+                        }
                     }
                     .testTag("floating_ev_dial_slider"),
                 contentAlignment = Alignment.Center

@@ -170,6 +170,13 @@ fun CameraScreen(
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
+    val isEvControlOpen by viewModel.isEvControlOpen.collectAsStateWithLifecycle()
+
+    if (isEvControlOpen) {
+        BackHandler {
+            viewModel.setEvControlOpen(false)
+        }
+    }
 
     val exposureCompensation by viewModel.exposureCompensation.collectAsStateWithLifecycle()
     val manualIso by viewModel.manualIso.collectAsStateWithLifecycle()
@@ -265,7 +272,8 @@ fun CameraScreen(
             isCinemaSettingsOpen || isManualProOpen || isMoreModesOpen ||
             (cameraMode == CameraMode.PORTRAIT && isPortraitSettingsOpen) ||
             isVideoSettingsPanelOpen || isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
-            isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen
+            isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
+            isEvControlOpen
 
     LaunchedEffect(isAnyWindowOpen) {
         com.example.camera.ui.components.BackdropBlurManager.isWindowActive = isAnyWindowOpen
@@ -611,6 +619,10 @@ fun CameraScreen(
             onCinemaEvChange = { ev ->
                 viewModel.updateCinemaConfig(cinemaConfig.copy(exposureCompensation = ev))
             },
+            isEvOpen = isEvControlOpen,
+            onEvClick = { viewModel.toggleEvControlOpen() },
+            exposureCompensation = exposureCompensation,
+            evStepSize = capabilities.exposureCompensationStep,
             onVideoQualityClick = { viewModel.cycleVideoQuality() },
             onVideoSettingsClick = { viewModel.toggleVideoSettingsPanel() },
             onToggleMegapixelMode = { viewModel.togglePhotoMegapixelMode() },
@@ -635,6 +647,43 @@ fun CameraScreen(
             layoutConfig = activeLayoutConfig,
             modifier = Modifier.align(Alignment.TopCenter)
         )
+
+        // 2a. Transparent Floating EV Control Window (Video Mode & Cinema Mode)
+        AnimatedVisibility(
+            visible = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) && isEvControlOpen,
+            enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(180)) + slideInVertically(
+                animationSpec = androidx.compose.animation.core.spring(
+                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                ),
+                initialOffsetY = { -it / 2 }
+            ),
+            exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(150)) + slideOutVertically(
+                animationSpec = androidx.compose.animation.core.tween(150),
+                targetOffsetY = { -it / 2 }
+            ),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 62.dp)
+        ) {
+            com.example.camera.ui.components.FloatingEvControlWindow(
+                currentEvIndex = exposureCompensation,
+                minEvIndex = capabilities.minExposureCompensation,
+                maxEvIndex = capabilities.maxExposureCompensation,
+                evStepSize = capabilities.exposureCompensationStep,
+                accentColor = activeLayoutConfig.getComposeAccentColor(),
+                onEvIndexChange = { newEv ->
+                    viewModel.setExposureCompensation(newEv)
+                },
+                onReset = {
+                    viewModel.resetExposureCompensation()
+                },
+                onDismiss = {
+                    viewModel.setEvControlOpen(false)
+                }
+            )
+        }
 
         // 2b. Floating Frosted Video Settings Panel (Resolution & Frame Rate)
         if (cameraMode == CameraMode.VIDEO) {
@@ -984,6 +1033,10 @@ fun CameraScreen(
             onShutterAreaHeightMeasured = { shutterAreaHeightDp = it },
             selectedPhotoFilter = selectedPhotoFilter,
             onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
+            isEvOpen = isEvControlOpen,
+            onEvClick = { viewModel.toggleEvControlOpen() },
+            exposureCompensation = exposureCompensation,
+            evStepSize = capabilities.exposureCompensationStep,
             layoutConfig = activeLayoutConfig.copy(
                 showZoomCapsule = activeLayoutConfig.showZoomCapsule && (!isAnyWindowOpen || (isManualProOpen && !isManualProSliderOpen)),
                 zoomCapsuleVerticalOffsetDp = if (isManualProOpen) -76 else activeLayoutConfig.zoomCapsuleVerticalOffsetDp

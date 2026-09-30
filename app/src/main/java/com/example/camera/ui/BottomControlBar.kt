@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Exposure
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -85,6 +86,10 @@ fun BottomControlBar(
     onTimerClick: () -> Unit = {},
     selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL,
     onPhotoFilterClick: () -> Unit = {},
+    isEvOpen: Boolean = false,
+    onEvClick: () -> Unit = {},
+    exposureCompensation: Int = 0,
+    evStepSize: Float = 0.333f,
     onShutterAreaHeightMeasured: (Dp) -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
@@ -149,6 +154,51 @@ fun BottomControlBar(
                             tint = if (isFilterActive) Color(0xFF64FFDA) else Color.White,
                             modifier = Modifier.size(20.dp)
                         )
+                    }
+                }
+
+                // EV button positioned to the right side of the zoom capsule in Video and Cinema Mode
+                if (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) {
+                    val isEvModified = exposureCompensation != 0
+                    val evText = when {
+                        exposureCompensation == 0 -> "EV"
+                        exposureCompensation > 0 -> String.format(java.util.Locale.US, "+%.1f", exposureCompensation * evStepSize)
+                        else -> String.format(java.util.Locale.US, "%.1f", exposureCompensation * evStepSize)
+                    }
+                    IconButton(
+                        onClick = onEvClick,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(if (isEvOpen || isEvModified) accentColor.copy(alpha = 0.25f) else Color(0xD9141418))
+                            .border(
+                                width = 1.2.dp,
+                                color = if (isEvOpen || isEvModified) accentColor else Color.White.copy(alpha = 0.22f),
+                                shape = CircleShape
+                            )
+                            .testTag("bottom_ev_button")
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Exposure,
+                                contentDescription = "Exposure Compensation (EV)",
+                                tint = if (isEvOpen || isEvModified) accentColor else Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            if (isEvModified) {
+                                Text(
+                                    text = evText,
+                                    color = accentColor,
+                                    fontSize = 8.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -198,6 +198,10 @@ class Camera2Engine(private val context: Context) {
             }
         }
     var isAeLocked: Boolean = false
+        set(value) {
+            field = value
+            _isAeLockedFlow.value = value
+        }
     var isAfLocked: Boolean = false
     var isRawCaptureEnabled: Boolean = false
     var isVideoStabilizationEnabled: Boolean = true
@@ -1671,6 +1675,7 @@ class Camera2Engine(private val context: Context) {
         val oldProfile = _cinemaConfig.value.colorProfile
         cinemaEngine.config = newConfig
         _cinemaConfig.value = newConfig
+        exposureCompensationIndex = newConfig.exposureCompensation
         if (newConfig.colorProfile == CinemaColorProfile.HLG10 && oldProfile != CinemaColorProfile.HLG10) {
             cinemaEngine.hlg10AutoExposureEngine.reset()
         }
@@ -1678,6 +1683,24 @@ class Camera2Engine(private val context: Context) {
             updatePreviewAspectRatio()
             updatePreviewSettings()
         }
+    }
+
+    /**
+     * Set Camera2 AE exposure compensation and immediately update repeating preview/recording request
+     */
+    fun setExposureCompensation(index: Int) {
+        val caps = _capabilities.value
+        val clamped = if (caps.minExposureCompensation <= caps.maxExposureCompensation) {
+            index.coerceIn(caps.minExposureCompensation, caps.maxExposureCompensation)
+        } else {
+            index
+        }
+        exposureCompensationIndex = clamped
+        if (currentMode == CameraMode.CINEMA) {
+            _cinemaConfig.value = _cinemaConfig.value.copy(exposureCompensation = clamped)
+            cinemaEngine.config = _cinemaConfig.value
+        }
+        updatePreviewSettings()
     }
 
     @Volatile

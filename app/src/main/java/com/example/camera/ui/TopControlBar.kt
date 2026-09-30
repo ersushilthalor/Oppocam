@@ -131,6 +131,10 @@ fun TopControlBar(
     selectedPortraitStyle: PortraitStyle = PortraitStyle.NATURAL,
     onCinemaSettingsClick: () -> Unit = {},
     onCinemaEvChange: (Int) -> Unit = {},
+    isEvOpen: Boolean = false,
+    onEvClick: () -> Unit = {},
+    exposureCompensation: Int = 0,
+    evStepSize: Float = 0.333f,
     onVideoQualityClick: () -> Unit = {},
     onVideoSettingsClick: () -> Unit = {},
     onToggleMegapixelMode: () -> Unit = {},
@@ -761,6 +765,49 @@ fun TopControlBar(
             }
         }
 
+        val isEvActive = exposureCompensation != 0
+        val evButton = @Composable {
+            val evText = when {
+                exposureCompensation == 0 -> "EV"
+                exposureCompensation > 0 -> String.format(java.util.Locale.US, "+%.1f", exposureCompensation * evStepSize)
+                else -> String.format(java.util.Locale.US, "%.1f", exposureCompensation * evStepSize)
+            }
+            Box(
+                modifier = Modifier
+                    .height(34.dp)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isEvOpen || isEvActive) accentColor else null,
+                        isPill = true
+                    )
+                    .clickable { onEvClick() }
+                    .padding(horizontal = 9.dp)
+                    .testTag("top_bar_ev_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Exposure,
+                        contentDescription = "Exposure Compensation (EV)",
+                        tint = if (isEvOpen || isEvActive) accentColor else Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = evText,
+                        color = if (isEvOpen || isEvActive) accentColor else Color.White.copy(alpha = 0.95f),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+
         val isVideoFamily = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
 
         // Render Top Controls according to layoutConfig
@@ -773,7 +820,7 @@ fun TopControlBar(
             TopBarAlignment.COMPACT_RIGHT -> Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.End)
         }
 
-        val videoButtonCount = 5 + (if (isHorizontalLockSettingEnabled) 1 else 0) + (if (isDollyZoomSettingEnabled) 1 else 0)
+        val videoButtonCount = 6 + (if (isHorizontalLockSettingEnabled) 1 else 0) + (if (isDollyZoomSettingEnabled) 1 else 0)
         val shouldScroll = (if (isVideoFamily) videoButtonCount else visibleItems.size) > 5
         val topScrollState = rememberScrollState()
 
@@ -791,6 +838,7 @@ fun TopControlBar(
                 flashButton()
                 timerAudioButton()
                 gridAssistButton()
+                evButton()
                 cinemaSettingsQuickButton()
                 settingsButton()
             } else if (cameraMode == CameraMode.VIDEO) {
@@ -801,6 +849,7 @@ fun TopControlBar(
                 if (isDollyZoomSettingEnabled) {
                     dollyZoomButton()
                 }
+                evButton()
                 videoAdjustmentsButton()
                 primaryBadge()
                 secondaryBadge()
