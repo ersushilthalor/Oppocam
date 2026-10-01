@@ -92,6 +92,8 @@ fun CameraSettingsHost(
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
     val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
     val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
+    val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
+    val customVideoPipelineConfig by viewModel.customVideoPipelineConfig.collectAsStateWithLifecycle()
 
     SettingsDrawer(
         isOpen = true,
@@ -101,6 +103,11 @@ fun CameraSettingsHost(
         selectedLens = selectedLens,
         selectedPhotoResolution = selectedPhotoResolution,
         selectedVideoResolution = selectedVideoResolution,
+        selectedVideoPipeline = selectedVideoPipeline,
+        onVideoPipelineSelected = { viewModel.selectVideoPipeline(it) },
+        customVideoPipelineConfig = customVideoPipelineConfig,
+        onCustomVideoPipelineConfigChange = { viewModel.updateCustomVideoPipelineConfig(it) },
+        onResetCustomVideoPipelineConfig = { viewModel.resetCustomVideoPipelineConfig() },
         photoMegapixelMode = photoMegapixelMode,
         isRefocusPhotoEnabled = isRefocusPhotoEnabled,
         refocusFrameCount = refocusFrameCount,

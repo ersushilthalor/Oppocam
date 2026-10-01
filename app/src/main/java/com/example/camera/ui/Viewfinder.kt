@@ -126,6 +126,7 @@ fun Viewfinder(
     isDollyZoomActive: Boolean = false,
     dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
     onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
+    onOpenCustomPipelineSettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -627,9 +628,17 @@ fun Viewfinder(
                                 hasFilter = true
                             }
                         } else if (cameraMode == CameraMode.VIDEO) {
-                            com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
-                            return@AndroidView
+                            if (selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
+                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                                com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToView(textureView, selectedVideoPipeline)
+                                return@AndroidView
+                            } else {
+                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
+                                return@AndroidView
+                            }
                         } else {
+                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                         }
 
@@ -779,6 +788,38 @@ fun Viewfinder(
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp
                         )
+                    }
+                } else if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
+                    val pipelineAccent = Color(0xFFFFD54F)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(10.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xDD0D0F18))
+                            .border(1.dp, pipelineAccent.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                            .clickable(enabled = onOpenCustomPipelineSettings != null) {
+                                onOpenCustomPipelineSettings?.invoke()
+                            }
+                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                            .testTag("active_custom_pipeline_badge")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(pipelineAccent)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "CUSTOM PIPELINE • REC.2020 NATURAL LOG",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.6.sp
+                            )
+                        }
                     }
                 }
 

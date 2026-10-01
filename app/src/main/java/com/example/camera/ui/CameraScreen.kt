@@ -239,6 +239,8 @@ fun CameraScreen(
     val isDollyZoomActive by viewModel.isDollyZoomActive.collectAsStateWithLifecycle()
     val dollyCropState by viewModel.dollyCropState.collectAsStateWithLifecycle()
     val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
+    val isCustomVideoPipelineSettingsOpen by viewModel.isCustomVideoPipelineSettingsOpen.collectAsStateWithLifecycle()
+    val customVideoPipelineConfig by viewModel.customVideoPipelineConfig.collectAsStateWithLifecycle()
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
@@ -366,6 +368,9 @@ fun CameraScreen(
                 dollyCropState = dollyCropState,
                 onTapToLockDollySubject = { normX, normY ->
                     viewModel.onTapToLockDollySubject(normX, normY)
+                },
+                onOpenCustomPipelineSettings = {
+                    viewModel.setCustomVideoPipelineSettingsOpen(true)
                 },
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
                 modifier = Modifier.fillMaxSize()
@@ -669,6 +674,25 @@ fun CameraScreen(
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
                     .padding(top = 56.dp)
+            )
+        }
+
+        // 2c. Floating Custom Video Pipeline Settings Panel (Rec.2020 Log 38 ISP Controls)
+        AnimatedVisibility(
+            visible = cameraMode == CameraMode.VIDEO && isCustomVideoPipelineSettingsOpen,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 56.dp, start = 12.dp, end = 12.dp)
+        ) {
+            com.example.camera.ui.components.CustomVideoPipelineSettingsPanel(
+                config = customVideoPipelineConfig,
+                onConfigChange = { viewModel.updateCustomVideoPipelineConfig(it) },
+                onResetDefaults = { viewModel.resetCustomVideoPipelineConfig() },
+                onDismiss = { viewModel.setCustomVideoPipelineSettingsOpen(false) },
+                modifier = Modifier.fillMaxWidth()
             )
         }
 

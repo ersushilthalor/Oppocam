@@ -1,7 +1,6 @@
 package com.example.camera.videopipeline
 
 import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
@@ -23,13 +22,16 @@ import kotlin.math.roundToInt
 /**
  * The unified "Custom Pipeline" for Video Mode.
  *
- * Based exactly on Cinema Mode Natural Profile:
+ * Base: Exact Cinema Mode Natural Profile:
  * - Rec.2020 Log baseline
  * - Natural, neutral rendering without warm or saturated tint
  * - Clean highlight shoulder compression & shadow toe response
  * - No artificial LUT or filter-based overlay look
  *
- * All settings operate at the genuine sensor ISP acquisition and hardware shader processing level.
+ * All 38 advanced controls modify the actual image/video processing pipeline at the
+ * processing level:
+ * - Hardware ISP CaptureRequest configuration (Stage 0)
+ * - Real-time GPU compute shader (AGSL for live viewfinder, GLSL for recording/transcoding)
  */
 class CustomVideoPipeline(
     initialConfig: CustomVideoPipelineConfig = CustomVideoPipelineConfig()
@@ -78,7 +80,7 @@ class CustomVideoPipeline(
                 sensorExposureBiasEv = (cfg.exposure * 0.5f).coerceIn(-1.5f, 1.5f),
                 ispTonemapGamma = (1.0f + cfg.contrast * 0.15f).coerceIn(0.8f, 1.4f),
                 ispHighlightRollOff = cfg.highlightRollOff * 0.5f,
-                bypassHalEdgeSharpening = cfg.sharpening > 0.05f || cfg.microContrast > 0.05f,
+                bypassHalEdgeSharpening = cfg.sharpening > 0.05f || cfg.microContrast > 0.05f || cfg.textureDetail > 0.05f,
                 highQualityTemporalDenoise = cfg.temporalNoiseReduction >= 0.35f,
                 inputDeGamma = 1.0f,
                 linearExposureGain = 2.0f.pow(cfg.exposure),
@@ -104,8 +106,8 @@ class CustomVideoPipeline(
                 filmicContrastPivot = 0.45f,
                 lumaWeightedVibrance = cfg.vibrance * 0.25f,
                 globalSaturation = (cfg.saturation * cfg.chromaStrength).coerceIn(0.0f, 2.5f),
-                blackPointFloor = (0.002f + cfg.blackLevel).coerceIn(0.0f, 0.05f),
-                whitePointCeiling = 0.998f,
+                blackPointFloor = (0.002f + cfg.blackLevel + cfg.blackClippingControl * 0.005f).coerceIn(0.0f, 0.05f),
+                whitePointCeiling = (0.998f - cfg.highlightClippingProtection * 0.008f).coerceIn(0.95f, 1.0f),
                 outputGamma = cfg.outputGamma
             )
         }
@@ -118,7 +120,7 @@ class CustomVideoPipeline(
         val cfg = config
         val params = stageParams
 
-        // 1. Bypass normal video color effects and scene modes
+        // 1. Disable OEM color effects & scene modes to ensure pristine raw processing
         builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
         builder.set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
         builder.set(
@@ -152,26 +154,34 @@ class CustomVideoPipeline(
             }
         }
 
-        // 4. Bypass OEM HAL edge sharpening when pipeline spatial detail stages are active
+        // 4. Edge mode: balance OEM hardware sharpening with pipeline spatial processing
         if (params.bypassHalEdgeSharpening) {
             builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
         } else {
             builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
         }
 
-        // 5. Hardware Noise Reduction configuration based on temporal and luma noise reduction
+        // 5. Hardware Noise Reduction based on temporal and spatial settings
         builder.set(
             CaptureRequest.NOISE_REDUCTION_MODE,
-            if (cfg.temporalNoiseReduction >= 0.40f) {
+            if (cfg.temporalNoiseReduction >= 0.40f || cfg.spatialNoiseReduction >= 0.40f) {
                 CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
-            } else if (cfg.temporalNoiseReduction >= 0.10f) {
+            } else if (cfg.temporalNoiseReduction >= 0.10f || cfg.spatialNoiseReduction >= 0.10f) {
                 CaptureRequest.NOISE_REDUCTION_MODE_FAST
             } else {
                 CaptureRequest.NOISE_REDUCTION_MODE_OFF
             }
         )
 
-        // 6. Hardware White Balance mode
+        // 6. Hardware Lens Shading & Distortion Correction
+        if (cfg.lensShadingCorrection > 0.10f) {
+            builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_HIGH_QUALITY)
+        }
+        if (cfg.distortionCorrection > 0.10f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY)
+        }
+
+        // 7. Hardware White Balance mode
         if (cfg.whiteBalance != com.example.camera.model.WhiteBalanceMode.AUTO) {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, cfg.whiteBalance.camera2Mode)
         }
@@ -201,9 +211,9 @@ class CustomVideoPipeline(
         val expScale = 2.0f.pow(cfg.exposure)
         val blackShift = cfg.blackLevel * 255f
         val expMat = ColorMatrix(floatArrayOf(
-            expScale, 0f, 0f, 0f, blackShift,
-            0f, expScale, 0f, 0f, blackShift,
-            0f, 0f, expScale, 0f, blackShift,
+            expScale * cfg.redGain, 0f, 0f, 0f, blackShift,
+            0f, expScale * cfg.greenGain, 0f, 0f, blackShift,
+            0f, 0f, expScale * cfg.blueGain, 0f, blackShift,
             0f, 0f, 0f, 1f, 0f
         ))
         matrix.postConcat(expMat)
@@ -250,7 +260,7 @@ class CustomVideoPipeline(
         val numPoints = 64
         val curvePoints = FloatArray(numPoints * 2)
 
-        val blackFloor = (0.02f + cfg.blackLevel).coerceIn(0.0f, 0.10f)
+        val blackFloor = (0.02f + cfg.blackLevel + cfg.blackClippingControl * 0.005f).coerceIn(0.0f, 0.10f)
         val shadowLift = cfg.shadowRecovery * 0.32f
         val shadowRoll = cfg.shadowRollOff
         val hlRecovery = cfg.highlightRecovery
@@ -318,30 +328,47 @@ class CustomVideoPipeline(
     companion object {
         /**
          * Builds the real-time AGSL RuntimeShader source code for live preview on TextureView.
-         * Embeds the exact mathematical transformations of the 24 Custom Pipeline settings.
+         * Embeds the exact mathematical transformations of the 38 Custom Pipeline settings.
          */
         fun buildAgslCode(cfg: CustomVideoPipelineConfig): String {
             val fExposure = String.format(Locale.US, "%.5ff", 2.0f.pow(cfg.exposure))
             val fBlackLevel = String.format(Locale.US, "%.5ff", cfg.blackLevel)
+            val fBlackClip = String.format(Locale.US, "%.5ff", cfg.blackClippingControl * 0.015f)
             val fHlRecovery = String.format(Locale.US, "%.5ff", cfg.highlightRecovery)
             val fHlRollOff = String.format(Locale.US, "%.5ff", cfg.highlightRollOff)
+            val fHlClipProtect = String.format(Locale.US, "%.5ff", cfg.highlightClippingProtection * 0.04f)
             val fShRecovery = String.format(Locale.US, "%.5ff", cfg.shadowRecovery)
             val fShRollOff = String.format(Locale.US, "%.5ff", cfg.shadowRollOff)
             val fMidtone = String.format(Locale.US, "%.5ff", cfg.midtoneControl)
             val fContrast = String.format(Locale.US, "%.5ff", cfg.contrast)
             val fLocalContrast = String.format(Locale.US, "%.5ff", cfg.localContrast)
+            val fDynRangeTm = String.format(Locale.US, "%.5ff", cfg.dynamicRangeToneMapping)
             val fTemp = String.format(Locale.US, "%.5ff", cfg.temperature)
             val fTint = String.format(Locale.US, "%.5ff", cfg.tint)
             val fSat = String.format(Locale.US, "%.5ff", cfg.saturation)
             val fVibrance = String.format(Locale.US, "%.5ff", cfg.vibrance)
             val fChroma = String.format(Locale.US, "%.5ff", cfg.chromaStrength)
+            val fRedGain = String.format(Locale.US, "%.5ff", cfg.redGain)
+            val fGreenGain = String.format(Locale.US, "%.5ff", cfg.greenGain)
+            val fBlueGain = String.format(Locale.US, "%.5ff", cfg.blueGain)
+            val fRedCurve = String.format(Locale.US, "%.5ff", cfg.redCurveStrength * 0.25f)
+            val fGreenCurve = String.format(Locale.US, "%.5ff", cfg.greenCurveStrength * 0.25f)
+            val fBlueCurve = String.format(Locale.US, "%.5ff", cfg.blueCurveStrength * 0.25f)
             val fSharp = String.format(Locale.US, "%.5ff", cfg.sharpening)
             val fMicroContrast = String.format(Locale.US, "%.5ff", cfg.microContrast)
+            val fTexture = String.format(Locale.US, "%.5ff", cfg.textureDetail)
+            val fDebanding = String.format(Locale.US, "%.5ff", cfg.debanding)
+            val fDemosaic = String.format(Locale.US, "%.5ff", cfg.demosaicDetailProcessing)
+            val fLensShading = String.format(Locale.US, "%.5ff", cfg.lensShadingCorrection * 0.25f)
+            val fDistortion = String.format(Locale.US, "%.5ff", cfg.distortionCorrection * 0.05f)
             val fLumaNr = String.format(Locale.US, "%.5ff", cfg.lumaNoiseReduction)
             val fChromaNr = String.format(Locale.US, "%.5ff", cfg.chromaNoiseReduction)
+            val fSpatialNr = String.format(Locale.US, "%.5ff", cfg.spatialNoiseReduction)
             val fHdrStrength = String.format(Locale.US, "%.5ff", cfg.hdrToneMappingStrength)
             val fLocalTm = String.format(Locale.US, "%.5ff", cfg.localToneMapping)
+            val fColorSep = String.format(Locale.US, "%.5ff", cfg.colorHighlightShadowSeparation)
             val fGamma = String.format(Locale.US, "%.5ff", 1.0f / cfg.outputGamma.coerceIn(1.5f, 2.8f))
+            val fLogToDisplay = String.format(Locale.US, "%.5ff", cfg.logToDisplayTransformStrength)
 
             val m = cfg.resolve3x3Matrix()
             val m00 = String.format(Locale.US, "%.4ff", m[0])
@@ -370,13 +397,19 @@ class CustomVideoPipeline(
 
                 vec4 main(float2 fragCoord) {
                     float2 step = 1.0 / max(uResolution, float2(1.0, 1.0));
-                    
-                    // --- STAGE 1: 5-Tap Spatial Detail, Micro-Contrast, Noise Reduction & Local Contrast ---
-                    vec4 cCenter = uContent.eval(fragCoord);
-                    vec4 cN = uContent.eval(fragCoord + float2(0.0, -step.y * 1.25));
-                    vec4 cS = uContent.eval(fragCoord + float2(0.0,  step.y * 1.25));
-                    vec4 cW = uContent.eval(fragCoord + float2(-step.x * 1.25, 0.0));
-                    vec4 cE = uContent.eval(fragCoord + float2( step.x * 1.25, 0.0));
+                    float2 normCoord = (fragCoord * step) - float2(0.5);
+                    float r2 = dot(normCoord, normCoord);
+
+                    // --- STAGE 0: Lens Distortion & Shading Correction ---
+                    float2 distortedCoord = fragCoord + normCoord * (r2 * $fDistortion) * uResolution;
+                    float lensGain = 1.0 + r2 * $fLensShading;
+
+                    // --- STAGE 1: 5-Tap Spatial Detail, Micro-Contrast, Noise Reduction & Debanding ---
+                    vec4 cCenter = uContent.eval(distortedCoord) * lensGain;
+                    vec4 cN = uContent.eval(distortedCoord + float2(0.0, -step.y * 1.25)) * lensGain;
+                    vec4 cS = uContent.eval(distortedCoord + float2(0.0,  step.y * 1.25)) * lensGain;
+                    vec4 cW = uContent.eval(distortedCoord + float2(-step.x * 1.25, 0.0)) * lensGain;
+                    vec4 cE = uContent.eval(distortedCoord + float2( step.x * 1.25, 0.0)) * lensGain;
 
                     vec3 lumaW = vec3(0.2627, 0.6780, 0.0593); // Rec.2020 Luma Weights
                     float lCenter = dot(cCenter.rgb, lumaW);
@@ -395,15 +428,23 @@ class CustomVideoPipeline(
                     vec3 filteredChroma = mix(chromaDiff, avgChromaDiff, $fChromaNr * 0.75);
                     vec3 baseCleanColor = vec3(lCenter) + filteredChroma;
 
-                    // Bilateral edge-preserving luma noise reduction
+                    // Bilateral edge-preserving spatial/luma noise reduction
                     float edgeWeight = clamp(abs(highPass) * 16.0, 0.0, 1.0);
                     vec3 smoothedColor = 0.5 * baseCleanColor + 0.125 * (cN.rgb + cS.rgb + cW.rgb + cE.rgb);
-                    vec3 nrColor = mix(smoothedColor, baseCleanColor, edgeWeight + (1.0 - $fLumaNr) * (1.0 - edgeWeight));
+                    float totalNr = clamp($fLumaNr + $fSpatialNr * 0.5, 0.0, 1.0);
+                    vec3 nrColor = mix(smoothedColor, baseCleanColor, edgeWeight + (1.0 - totalNr) * (1.0 - edgeWeight));
 
+                    // Demosaic & Texture detail preservation
+                    float textureFactor = (highPass * $fTexture * 0.6) + (highPass * $fDemosaic * 0.4);
+                    
                     // Sharpening and micro-contrast injection
                     float detailAmp = $fSharp * 1.25 + $fMicroContrast * 0.85;
-                    float clampedHighPass = clamp(highPass * detailAmp, -0.15, 0.15);
+                    float clampedHighPass = clamp(highPass * detailAmp + textureFactor, -0.18, 0.18);
                     vec3 detailColor = nrColor + vec3(clampedHighPass);
+
+                    // Debanding dither
+                    float dither = fract(sin(dot(fragCoord, float2(12.9898, 78.233))) * 43758.5453) - 0.5;
+                    detailColor += vec3(dither * (0.004 * $fDebanding));
 
                     // Local tone mapping & local contrast enhancement
                     float localRatio = (lCenter + 0.08) / (lAvg + 0.08);
@@ -413,14 +454,13 @@ class CustomVideoPipeline(
                     // --- STAGE 2: Linear Radiance & Physical Exposure Scaling ---
                     vec3 linearRgb = toLinearRec2020(clamp(spatiallyProcessed, 0.0, 1.0));
                     linearRgb *= $fExposure;
-                    linearRgb += vec3($fBlackLevel);
+                    linearRgb += vec3($fBlackLevel + $fBlackClip);
                     linearRgb = max(linearRgb, vec3(0.0));
 
-                    // --- STAGE 3: White Balance, Temperature, Tint & Color Matrix ---
-                    // Bradford chromatic adaptation
-                    float rWb = 1.0 + $fTemp * 0.12 + $fTint * 0.04;
-                    float gWb = 1.0 - $fTint * 0.08;
-                    float bWb = 1.0 - $fTemp * 0.12 + $fTint * 0.04;
+                    // --- STAGE 3: White Balance, Temperature, Tint, RGB Gains & Color Matrix ---
+                    float rWb = (1.0 + $fTemp * 0.12 + $fTint * 0.04) * $fRedGain;
+                    float gWb = (1.0 - $fTint * 0.08) * $fGreenGain;
+                    float bWb = (1.0 - $fTemp * 0.12 + $fTint * 0.04) * $fBlueGain;
                     linearRgb *= vec3(rWb, gWb, bWb);
 
                     // 3x3 Rec.2020 Color Transform Matrix
@@ -431,7 +471,7 @@ class CustomVideoPipeline(
                     );
                     linearRgb = max(colorMat * linearRgb, vec3(0.0));
 
-                    // --- STAGE 4: HDR Tone Mapping, Highlight & Shadow Recovery ---
+                    // --- STAGE 4: HDR Tone Mapping, Dynamic Range, Highlight & Shadow Recovery ---
                     float curLuma = dot(linearRgb, lumaW);
 
                     // Shadow Recovery & Roll-off (logarithmic toe lift)
@@ -439,16 +479,31 @@ class CustomVideoPipeline(
                     float shadowLift = $fShRecovery * 0.35 * pow(shadowMask, 1.0 + $fShRollOff * 2.0);
                     linearRgb += vec3(shadowLift * (0.35 - min(curLuma, 0.35)));
 
-                    // Highlight Recovery & Roll-off (soft-knee shoulder compression)
+                    // Highlight Recovery, Roll-off & Highlight-clipping protection
                     float hlKnee = 0.70 - $fHlRecovery * 0.18;
                     if (curLuma > hlKnee) {
                         float excess = (curLuma - hlKnee) / max(1.0 - hlKnee, 0.02);
-                        float rollComp = pow(excess, 1.0 + $fHlRollOff * 1.5) * ($fHlRecovery * 0.40 + 0.15);
-                        linearRgb = mix(linearRgb, linearRgb / (1.0 + rollComp), $fHdrStrength);
+                        float rollComp = pow(excess, 1.0 + $fHlRollOff * 1.5) * ($fHlRecovery * 0.40 + 0.15 + $fHlClipProtect);
+                        linearRgb = mix(linearRgb, linearRgb / (1.0 + rollComp), clamp($fHdrStrength + $fDynRangeTm * 0.3, 0.0, 1.0));
                     }
 
                     // Midtone Control (smooth power-law pivot around 18% middle gray)
                     linearRgb = pow(linearRgb, vec3(1.0 - $fMidtone * 0.30));
+
+                    // Per-channel RGB Curves deviation
+                    float fRedCurve = $fRedCurve;
+                    float fGreenCurve = $fGreenCurve;
+                    float fBlueCurve = $fBlueCurve;
+                    linearRgb.r += (linearRgb.r * (1.0 - linearRgb.r)) * fRedCurve;
+                    linearRgb.g += (linearRgb.g * (1.0 - linearRgb.g)) * fGreenCurve;
+                    linearRgb.b += (linearRgb.b * (1.0 - linearRgb.b)) * fBlueCurve;
+                    linearRgb = max(linearRgb, vec3(0.0));
+
+                    // Color highlight / shadow separation (protects chromatic purity in extreme ends)
+                    float hlZone = clamp((curLuma - 0.7) * 3.3, 0.0, 1.0);
+                    float shZone = clamp((0.25 - curLuma) * 4.0, 0.0, 1.0);
+                    float desatFactor = 1.0 - (hlZone + shZone) * ($fColorSep * 0.4);
+                    linearRgb = mix(vec3(curLuma), linearRgb, desatFactor);
 
                     // Filmic S-curve Contrast
                     float cSlope = 1.0 + $fContrast * 0.40;
@@ -468,9 +523,10 @@ class CustomVideoPipeline(
 
                     vec3 finalLinear = max(vec3(outLuma) + chromaVec, vec3(0.0));
 
-                    // --- STAGE 6: Output Gamma Display Encoding ---
-                    vec3 finalRgb = fromLinearRec2020(finalLinear, $fGamma);
-                    return vec4(clamp(finalRgb, 0.0, 1.0), cCenter.a);
+                    // --- STAGE 6: Log-to-display Transform & Output Gamma Encoding ---
+                    vec3 displayRgb = fromLinearRec2020(finalLinear, $fGamma);
+                    vec3 blendedOut = mix(finalLinear, displayRgb, $fLogToDisplay);
+                    return vec4(clamp(blendedOut, 0.0, 1.0), cCenter.a);
                 }
             """.trimIndent()
         }
@@ -481,25 +537,42 @@ class CustomVideoPipeline(
         fun buildGlslCode(cfg: CustomVideoPipelineConfig): String {
             val fExposure = String.format(Locale.US, "%.5ff", 2.0f.pow(cfg.exposure))
             val fBlackLevel = String.format(Locale.US, "%.5ff", cfg.blackLevel)
+            val fBlackClip = String.format(Locale.US, "%.5ff", cfg.blackClippingControl * 0.015f)
             val fHlRecovery = String.format(Locale.US, "%.5ff", cfg.highlightRecovery)
             val fHlRollOff = String.format(Locale.US, "%.5ff", cfg.highlightRollOff)
+            val fHlClipProtect = String.format(Locale.US, "%.5ff", cfg.highlightClippingProtection * 0.04f)
             val fShRecovery = String.format(Locale.US, "%.5ff", cfg.shadowRecovery)
             val fShRollOff = String.format(Locale.US, "%.5ff", cfg.shadowRollOff)
             val fMidtone = String.format(Locale.US, "%.5ff", cfg.midtoneControl)
             val fContrast = String.format(Locale.US, "%.5ff", cfg.contrast)
             val fLocalContrast = String.format(Locale.US, "%.5ff", cfg.localContrast)
+            val fDynRangeTm = String.format(Locale.US, "%.5ff", cfg.dynamicRangeToneMapping)
             val fTemp = String.format(Locale.US, "%.5ff", cfg.temperature)
             val fTint = String.format(Locale.US, "%.5ff", cfg.tint)
             val fSat = String.format(Locale.US, "%.5ff", cfg.saturation)
             val fVibrance = String.format(Locale.US, "%.5ff", cfg.vibrance)
             val fChroma = String.format(Locale.US, "%.5ff", cfg.chromaStrength)
+            val fRedGain = String.format(Locale.US, "%.5ff", cfg.redGain)
+            val fGreenGain = String.format(Locale.US, "%.5ff", cfg.greenGain)
+            val fBlueGain = String.format(Locale.US, "%.5ff", cfg.blueGain)
+            val fRedCurve = String.format(Locale.US, "%.5ff", cfg.redCurveStrength * 0.25f)
+            val fGreenCurve = String.format(Locale.US, "%.5ff", cfg.greenCurveStrength * 0.25f)
+            val fBlueCurve = String.format(Locale.US, "%.5ff", cfg.blueCurveStrength * 0.25f)
             val fSharp = String.format(Locale.US, "%.5ff", cfg.sharpening)
             val fMicroContrast = String.format(Locale.US, "%.5ff", cfg.microContrast)
+            val fTexture = String.format(Locale.US, "%.5ff", cfg.textureDetail)
+            val fDebanding = String.format(Locale.US, "%.5ff", cfg.debanding)
+            val fDemosaic = String.format(Locale.US, "%.5ff", cfg.demosaicDetailProcessing)
+            val fLensShading = String.format(Locale.US, "%.5ff", cfg.lensShadingCorrection * 0.25f)
+            val fDistortion = String.format(Locale.US, "%.5ff", cfg.distortionCorrection * 0.05f)
             val fLumaNr = String.format(Locale.US, "%.5ff", cfg.lumaNoiseReduction)
             val fChromaNr = String.format(Locale.US, "%.5ff", cfg.chromaNoiseReduction)
+            val fSpatialNr = String.format(Locale.US, "%.5ff", cfg.spatialNoiseReduction)
             val fHdrStrength = String.format(Locale.US, "%.5ff", cfg.hdrToneMappingStrength)
             val fLocalTm = String.format(Locale.US, "%.5ff", cfg.localToneMapping)
+            val fColorSep = String.format(Locale.US, "%.5ff", cfg.colorHighlightShadowSeparation)
             val fGamma = String.format(Locale.US, "%.5ff", 1.0f / cfg.outputGamma.coerceIn(1.5f, 2.8f))
+            val fLogToDisplay = String.format(Locale.US, "%.5ff", cfg.logToDisplayTransformStrength)
 
             val m = cfg.resolve3x3Matrix()
             val m00 = String.format(Locale.US, "%.4ff", m[0])
@@ -528,18 +601,29 @@ class CustomVideoPipeline(
 
                 void main() {
                     vec2 uv = vTextureCoord;
+                    vec2 normCoord = uv - vec2(0.5);
+                    float r2 = dot(normCoord, normCoord);
+
+                    // Lens Distortion & Shading Correction
+                    vec2 distortedUv = uv + normCoord * (r2 * $fDistortion);
+                    float lensGain = 1.0 + r2 * $fLensShading;
+
                     vec2 step = vec2(0.00092, 0.00052);
 
                     // 5-Tap Spatial Detail & Noise Filtering
-                    vec4 cCenter = texture2D(sTexture, uv);
-                    vec4 cN = texture2D(sTexture, uv + vec2(0.0, -step.y * 1.25));
-                    vec4 cS = texture2D(sTexture, uv + vec2(0.0,  step.y * 1.25));
-                    vec4 cW = texture2D(sTexture, uv + vec2(-step.x * 1.25, 0.0));
-                    vec4 cE = texture2D(sTexture, uv + vec2( step.x * 1.25, 0.0));
+                    vec4 cCenter = texture2D(sTexture, distortedUv) * lensGain;
+                    vec4 cN = texture2D(sTexture, distortedUv + vec2(0.0, -step.y * 1.25)) * lensGain;
+                    vec4 cS = texture2D(sTexture, distortedUv + vec2(0.0,  step.y * 1.25)) * lensGain;
+                    vec4 cW = texture2D(sTexture, distortedUv + vec2(-step.x * 1.25, 0.0)) * lensGain;
+                    vec4 cE = texture2D(sTexture, distortedUv + vec2( step.x * 1.25, 0.0)) * lensGain;
 
                     vec3 lumaW = vec3(0.2627, 0.6780, 0.0593);
                     float lCenter = dot(cCenter.rgb, lumaW);
-                    float lAvg = 0.25 * (dot(cN.rgb, lumaW) + dot(cS.rgb, lumaW) + dot(cW.rgb, lumaW) + dot(cE.rgb, lumaW));
+                    float lN = dot(cN.rgb, lumaW);
+                    float lS = dot(cS.rgb, lumaW);
+                    float lW = dot(cW.rgb, lumaW);
+                    float lE = dot(cE.rgb, lumaW);
+                    float lAvg = 0.25 * (lN + lS + lW + lE);
 
                     float highPass = lCenter - lAvg;
                     
@@ -549,30 +633,34 @@ class CustomVideoPipeline(
                     vec3 filteredChroma = mix(chromaDiff, avgChromaDiff, $fChromaNr * 0.75);
                     vec3 baseCleanColor = vec3(lCenter) + filteredChroma;
 
-                    // Bilateral edge-preserving luma noise reduction
+                    // Bilateral edge-preserving spatial/luma noise reduction
                     float edgeWeight = clamp(abs(highPass) * 16.0, 0.0, 1.0);
                     vec3 smoothedColor = 0.5 * baseCleanColor + 0.125 * (cN.rgb + cS.rgb + cW.rgb + cE.rgb);
-                    vec3 nrColor = mix(smoothedColor, baseCleanColor, edgeWeight + (1.0 - $fLumaNr) * (1.0 - edgeWeight));
+                    float totalNr = clamp($fLumaNr + $fSpatialNr * 0.5, 0.0, 1.0);
+                    vec3 nrColor = mix(smoothedColor, baseCleanColor, edgeWeight + (1.0 - totalNr) * (1.0 - edgeWeight));
 
+                    float textureFactor = (highPass * $fTexture * 0.6) + (highPass * $fDemosaic * 0.4);
                     float detailAmp = $fSharp * 1.25 + $fMicroContrast * 0.85;
-                    vec3 detailColor = nrColor + vec3(clamp(highPass * detailAmp, -0.15, 0.15));
+                    vec3 detailColor = nrColor + vec3(clamp(highPass * detailAmp + textureFactor, -0.18, 0.18));
 
                     // Local tone mapping & local contrast
                     float localRatio = (lCenter + 0.08) / (lAvg + 0.08);
                     float localTmFactor = mix(1.0, clamp(pow(localRatio, 0.35), 0.70, 1.40), $fLocalTm);
                     vec3 spatiallyProcessed = mix(detailColor, detailColor * localRatio, $fLocalContrast * 0.35) * localTmFactor;
 
-                    // Linearization & Exposure
-                    vec3 linearRgb = toLinearRec2020(clamp(spatiallyProcessed, 0.0, 1.0)) * $fExposure + vec3($fBlackLevel);
+                    // Linear Radiance & Exposure Scaling
+                    vec3 linearRgb = toLinearRec2020(clamp(spatiallyProcessed, 0.0, 1.0));
+                    linearRgb *= $fExposure;
+                    linearRgb += vec3($fBlackLevel + $fBlackClip);
                     linearRgb = max(linearRgb, vec3(0.0));
 
-                    // White Balance & Chromatic Adaptation
-                    float rWb = 1.0 + $fTemp * 0.12 + $fTint * 0.04;
-                    float gWb = 1.0 - $fTint * 0.08;
-                    float bWb = 1.0 - $fTemp * 0.12 + $fTint * 0.04;
+                    // Chromatic Adaptation & RGB Gains
+                    float rWb = (1.0 + $fTemp * 0.12 + $fTint * 0.04) * $fRedGain;
+                    float gWb = (1.0 - $fTint * 0.08) * $fGreenGain;
+                    float bWb = (1.0 - $fTemp * 0.12 + $fTint * 0.04) * $fBlueGain;
                     linearRgb *= vec3(rWb, gWb, bWb);
 
-                    // Color Matrix
+                    // 3x3 Rec.2020 Gamut Matrix
                     mat3 colorMat = mat3(
                         $m00, $m10, $m20,
                         $m01, $m11, $m21,
@@ -580,7 +668,7 @@ class CustomVideoPipeline(
                     );
                     linearRgb = max(colorMat * linearRgb, vec3(0.0));
 
-                    // HDR Tone Mapping, Shadow & Highlight Recovery
+                    // HDR Tone Mapping, Highlight & Shadow Recovery
                     float curLuma = dot(linearRgb, lumaW);
                     float shadowMask = clamp(1.0 - curLuma * 3.0, 0.0, 1.0);
                     float shadowLift = $fShRecovery * 0.35 * pow(shadowMask, 1.0 + $fShRollOff * 2.0);
@@ -589,12 +677,29 @@ class CustomVideoPipeline(
                     float hlKnee = 0.70 - $fHlRecovery * 0.18;
                     if (curLuma > hlKnee) {
                         float excess = (curLuma - hlKnee) / max(1.0 - hlKnee, 0.02);
-                        float rollComp = pow(excess, 1.0 + $fHlRollOff * 1.5) * ($fHlRecovery * 0.40 + 0.15);
-                        linearRgb = mix(linearRgb, linearRgb / (1.0 + rollComp), $fHdrStrength);
+                        float rollComp = pow(excess, 1.0 + $fHlRollOff * 1.5) * ($fHlRecovery * 0.40 + 0.15 + $fHlClipProtect);
+                        linearRgb = mix(linearRgb, linearRgb / (1.0 + rollComp), clamp($fHdrStrength + $fDynRangeTm * 0.3, 0.0, 1.0));
                     }
 
+                    // Midtone Control
                     linearRgb = pow(linearRgb, vec3(1.0 - $fMidtone * 0.30));
 
+                    // RGB Curves
+                    float fRedCurve = $fRedCurve;
+                    float fGreenCurve = $fGreenCurve;
+                    float fBlueCurve = $fBlueCurve;
+                    linearRgb.r += (linearRgb.r * (1.0 - linearRgb.r)) * fRedCurve;
+                    linearRgb.g += (linearRgb.g * (1.0 - linearRgb.g)) * fGreenCurve;
+                    linearRgb.b += (linearRgb.b * (1.0 - linearRgb.b)) * fBlueCurve;
+                    linearRgb = max(linearRgb, vec3(0.0));
+
+                    // Color highlight/shadow separation
+                    float hlZone = clamp((curLuma - 0.7) * 3.3, 0.0, 1.0);
+                    float shZone = clamp((0.25 - curLuma) * 4.0, 0.0, 1.0);
+                    float desatFactor = 1.0 - (hlZone + shZone) * ($fColorSep * 0.4);
+                    linearRgb = mix(vec3(curLuma), linearRgb, desatFactor);
+
+                    // Filmic S-Curve Contrast
                     float cSlope = 1.0 + $fContrast * 0.40;
                     vec3 contrastRgb = (linearRgb - vec3(0.18)) * cSlope + vec3(0.18);
                     linearRgb = mix(linearRgb, max(contrastRgb, vec3(0.0)), 0.85);
@@ -609,8 +714,11 @@ class CustomVideoPipeline(
                     chromaVec *= (1.0 + vibranceBoost);
 
                     vec3 finalLinear = max(vec3(outLuma) + chromaVec, vec3(0.0));
-                    vec3 finalRgb = fromLinearRec2020(finalLinear, $fGamma);
-                    gl_FragColor = vec4(clamp(finalRgb, 0.0, 1.0), cCenter.a);
+
+                    // Display Encoding
+                    vec3 displayRgb = fromLinearRec2020(finalLinear, $fGamma);
+                    vec3 blendedOut = mix(finalLinear, displayRgb, $fLogToDisplay);
+                    gl_FragColor = vec4(clamp(blendedOut, 0.0, 1.0), cCenter.a);
                 }
             """.trimIndent()
         }
