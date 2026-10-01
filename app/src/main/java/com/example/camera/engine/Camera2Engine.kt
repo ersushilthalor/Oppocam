@@ -3379,20 +3379,34 @@ class Camera2Engine(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 if (zoomRange != null) {
-                    val targetZoomRatio = if (isLogicalMulti && !isRunningOnPhysicalStream) {
-                        effectiveUiZoom.coerceIn(zoomRange.lower, zoomRange.upper)
+                    val desiredZoom = if (isLogicalMulti && !isRunningOnPhysicalStream) {
+                        effectiveUiZoom
                     } else {
-                        digitalCrop.coerceIn(zoomRange.lower, zoomRange.upper)
+                        digitalCrop
                     }
+                    val targetZoomRatio = desiredZoom.coerceIn(zoomRange.lower, zoomRange.upper)
                     builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetZoomRatio)
-                    builder.set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
+
+                    // Native camera zoom is used up to supported maximum (e.g. 10x).
+                    // From 10x to 20x, extend zoom continuously via digital crop/upscaling on top of native maximum
+                    if (desiredZoom > zoomRange.upper) {
+                        val extraScale = (desiredZoom / zoomRange.upper).coerceAtLeast(1.0f)
+                        val cropW = (sensorRect.width() / extraScale).toInt().coerceIn(1, sensorRect.width())
+                        val cropH = (sensorRect.height() / extraScale).toInt().coerceIn(1, sensorRect.height())
+                        val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
+                        val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
+                        val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
+                        builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
+                    } else {
+                        builder.set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
+                    }
                     return
                 }
             }
 
             // Fallback for devices without CONTROL_ZOOM_RATIO or legacy hardware: precise SCALER_CROP_REGION
             val maxDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
-            val safeMaxZoom = if (maxDigitalZoom >= 1.0f) maxDigitalZoom else lens.maxZoomRatio.coerceAtLeast(1.0f)
+            val safeMaxZoom = maxOf(maxDigitalZoom, lens.maxZoomRatio, 20.0f)
 
             val factor = digitalCrop.coerceIn(1.0f, safeMaxZoom)
             val cropW = (sensorRect.width() / factor).toInt().coerceIn(1, sensorRect.width())
@@ -3477,11 +3491,14 @@ class Camera2Engine(private val context: Context) {
             ?: backLenses.firstOrNull()
 
         val minAllowedZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
-        val maxCapabilityZoom = _availableLenses.value
-            .filter { it.facing == currentLens.facing }
-            .map { it.maxZoomRatio }
-            .maxOrNull()
-            ?.coerceAtLeast(minAllowedZoom) ?: currentLens.maxZoomRatio.coerceAtLeast(minAllowedZoom)
+        val maxCapabilityZoom = maxOf(
+            _availableLenses.value
+                .filter { it.facing == currentLens.facing }
+                .map { it.maxZoomRatio }
+                .maxOrNull() ?: 10.0f,
+            currentLens.maxZoomRatio,
+            20.0f
+        )
         val clampedZoom = zoom.coerceIn(minAllowedZoom, maxCapabilityZoom)
 
         currentZoom = clampedZoom

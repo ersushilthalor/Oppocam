@@ -110,7 +110,7 @@ fun Viewfinder(
     onZoomChange: (Float) -> Unit,
     currentZoom: Float = 1.0f,
     minZoom: Float = 0.5f,
-    maxZoom: Float = 10.0f,
+    maxZoom: Float = 20.0f,
     onZoomPresetTap: (Float) -> Unit = {},
     onExposureCompensationChange: (Int) -> Unit = {},
     onToggleLock: () -> Unit = {},

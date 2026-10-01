@@ -47,6 +47,25 @@ class HalfCircleZoomSliderTest {
     }
 
     @Test
+    fun `test extended zoom range up to 20x logarithmic mapping`() {
+        val minZoom = 0.5f
+        val maxZoom = 20.0f
+
+        val pMin = zoomToProgress(minZoom, minZoom, maxZoom)
+        assertEquals(0.0f, pMin, 0.001f)
+
+        val pMax = zoomToProgress(maxZoom, minZoom, maxZoom)
+        assertEquals(1.0f, pMax, 0.001f)
+
+        val testZooms = listOf(0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 15.0f, 20.0f)
+        for (z in testZooms) {
+            val progress = zoomToProgress(z, minZoom, maxZoom)
+            val reconstructed = progressToZoom(progress, minZoom, maxZoom)
+            assertEquals(z, (reconstructed * 10f).roundToInt() / 10f, 0.1f)
+        }
+    }
+
+    @Test
     fun `test swipe gestures directionality`() {
         var currentZoom = 1.0f
         val minZoom = 0.5f

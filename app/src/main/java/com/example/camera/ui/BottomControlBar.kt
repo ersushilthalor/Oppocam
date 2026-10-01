@@ -1067,7 +1067,7 @@ fun MasterZoomCapsule(
             .filter { selectedLens == null || it.facing == selectedLens.facing }
             .maxOfOrNull { it.maxZoomRatio } ?: 10.0f
     }
-    val maxZoom = maxOf(capabilities.maxZoom, maxLensZoom, 10.0f)
+    val maxZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
 
     var liveZoom by remember { mutableFloatStateOf(currentZoom.coerceIn(minZoom, maxZoom)) }
     LaunchedEffect(currentZoom, minZoom, maxZoom) {
@@ -1236,7 +1236,7 @@ fun MasterZoomCapsule(
                                         isSliderOpen = true
                                     } else if (preset == 0.5f && !hasRealUltraWide) {
                                         onShowToast("Ultra-Wide lens is not available on this device")
-                                    } else if (preset > capabilities.maxZoom) {
+                                    } else if (preset > maxZoom) {
                                         onShowToast("${preset.toInt()}x zoom is not supported on this device")
                                     } else {
                                         onZoomPresetTap(preset)

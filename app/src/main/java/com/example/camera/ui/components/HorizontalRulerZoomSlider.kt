@@ -70,7 +70,7 @@ internal fun normalizedToZoomLog(t: Float, minZ: Float, maxZ: Float): Float {
 fun HorizontalRulerZoomSlider(
     currentZoom: Float,
     minZoom: Float = 0.5f,
-    maxZoom: Float = 10.0f,
+    maxZoom: Float = 20.0f,
     onZoomChange: (Float) -> Unit,
     onClose: () -> Unit,
     isExternalDragging: Boolean = false,

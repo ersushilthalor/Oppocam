@@ -300,7 +300,7 @@ fun CameraScreen(
                     .filter { activeFacing == null || it.facing == activeFacing }
                     .maxOfOrNull { it.maxZoomRatio } ?: 10.0f
             }
-            val maxViewfinderZoom = maxOf(capabilities.maxZoom, maxLensZoom, 10.0f)
+            val maxViewfinderZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
 
             // 1. Viewfinder layer preserving exact aspect ratio without distortion
             Viewfinder(

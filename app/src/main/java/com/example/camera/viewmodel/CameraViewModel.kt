@@ -1488,7 +1488,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ?: engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
         val minZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
         val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 10.0f
-        val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 10.0f)
+        val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
         val clamped = zoom.coerceIn(minZoom, maxZoom)
 
         // Cancel running transition if user initiates a new manual zoom action or slider gesture
