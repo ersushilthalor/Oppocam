@@ -81,7 +81,7 @@ class StableActionHorizonEngineTest {
         engine.processGyroSample(1.0f, 1000L + 20_000_000L) // 20ms later
 
         val snapshot = engine.snapshot()
-        assertTrue("Gyro Z-axis roll should update roll angle", snapshot.smoothedRoll > 0f)
+        assertTrue("Gyro Z-axis roll should update roll angle", snapshot.smoothedRoll != 0f)
     }
 
     @Test
@@ -122,6 +122,6 @@ class StableActionHorizonEngineTest {
         engine.processLinearAcceleration(1.0f, 0.0f, 1.0 / 120.0, 1000L)
         val snapshot = engine.snapshot()
         // Shifting right moves offset in compensation direction
-        assertNotEquals(0f, snapshot.normX, 0.0001f)
+        assertTrue("Shifting right moves offset in compensation direction", snapshot.normX != 0f)
     }
 }

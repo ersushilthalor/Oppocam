@@ -139,8 +139,7 @@ fun HorizontalRulerZoomSlider(
         } else if (!isDragging) {
             val now = SystemClock.uptimeMillis()
             val isWithinCooldown = (now - lastUserDragEndTimeMs) < 220L
-            val delta = abs(currentZoom - activeZoom)
-            if (!isWithinCooldown || delta < 0.02f) {
+            if (!isWithinCooldown) {
                 val clamped = currentZoom.coerceIn(safeMinZoom, safeMaxZoom)
                 activeZoom = clamped
                 accumulatedNorm = zoomToNormalizedLog(clamped, safeMinZoom, safeMaxZoom)
@@ -256,19 +255,10 @@ fun HorizontalRulerZoomSlider(
                                     lastUserDragEndTimeMs = SystemClock.uptimeMillis()
                                     restartAutoHideTimer()
                                 } else {
-                                    // Clean single tap on ruler: jump proportionally to tapped offset from center
-                                    val minZ = safeMinZoomState.value
-                                    val maxZ = safeMaxZoomState.value
-                                    val centerX = size.width / 2f
-                                    val deltaX = downX - centerX
-                                    val currentNorm = zoomToNormalizedLog(activeZoom, minZ, maxZ)
-                                    val newNorm = (currentNorm + deltaX / totalRulerWidthPx).coerceIn(0f, 1f)
-                                    val newZoom = normalizedToZoomLog(newNorm, minZ, maxZ)
-                                    activeZoom = newZoom
-                                    accumulatedNorm = newNorm
+                                    // Touching or tapping on ruler without dragging: keep zoom level unchanged without resetting
+                                    isDragging = false
                                     lastUserDragEndTimeMs = SystemClock.uptimeMillis()
                                     restartAutoHideTimer()
-                                    onZoomChangeState.value(newZoom)
                                 }
                             }
                         }

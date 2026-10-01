@@ -64,7 +64,7 @@ class DollyZoomEngineTest {
         engine.setZoom(0.25f) // Reference repo ZOOM = 0.25
 
         // Simulate subject far away (small face box: 15% of screen width)
-        engine.lockSubjectAt(0.5f, 0.5f)
+        engine.setSubjectBox(DollyBoundingBox(0.425f, 0.425f, 0.15f, 0.15f))
         val farState = engine.cropStateFlow.value
         assertTrue("Far subject triggers zoom-in scale", farState.scaleFactor > 1.0f)
 

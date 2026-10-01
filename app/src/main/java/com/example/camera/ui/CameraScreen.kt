@@ -298,7 +298,7 @@ fun CameraScreen(
             val maxLensZoom = remember(displayedLenses, activeFacing) {
                 displayedLenses
                     .filter { activeFacing == null || it.facing == activeFacing }
-                    .maxOfOrNull { it.maxZoomRatio } ?: 10.0f
+                    .maxOfOrNull { it.maxZoomRatio } ?: 20.0f
             }
             val maxViewfinderZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
 

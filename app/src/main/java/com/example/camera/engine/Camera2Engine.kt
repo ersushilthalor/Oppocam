@@ -883,7 +883,8 @@ class Camera2Engine(private val context: Context) {
             val aeCompStep = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0.333f
             val minFocus = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
             val flashAvailable = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
-            val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 8f
+            val reportedDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 8f
+            val maxZoom = maxOf(reportedDigitalZoom, 20.0f)
 
             // OIS / EIS
             val oisModes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
@@ -3387,7 +3388,7 @@ class Camera2Engine(private val context: Context) {
             // 1.0x must ALWAYS use the physical Main/Wide camera.
             // Never use the Ultra-Wide camera with digital cropping at 1.0x.
             // When returning from 0.5x to 1.0x, reliably switch back to the physical Main/Wide lens every time.
-            if (effectiveUiZoom >= 0.98f && (lens.lensType == LensType.ULTRAWIDE || activeSessionPhysicalCameraId != null)) {
+            if (effectiveUiZoom >= 1.0f && (lens.lensType == LensType.ULTRAWIDE || activeSessionPhysicalCameraId != null)) {
                 val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
                 val mainLens = backLenses.firstOrNull { it.isPrimaryMain }
                     ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
@@ -3529,13 +3530,14 @@ class Camera2Engine(private val context: Context) {
             ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
             ?: backLenses.firstOrNull()
 
-        val minAllowedZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
+        val minAllowedZoom = if (ultraWideLens != null) 0.5f else 1.0f
         val maxCapabilityZoom = maxOf(
             _availableLenses.value
                 .filter { it.facing == currentLens.facing }
                 .map { it.maxZoomRatio }
-                .maxOrNull() ?: 10.0f,
+                .maxOrNull() ?: 20.0f,
             currentLens.maxZoomRatio,
+            capabilities.value.maxZoom,
             20.0f
         )
         val clampedZoom = zoom.coerceIn(minAllowedZoom, maxCapabilityZoom)
@@ -3584,7 +3586,7 @@ class Camera2Engine(private val context: Context) {
 
         val targetLens: LensInfo = when (targetType) {
             LensType.ULTRAWIDE -> {
-                if (clampedZoom >= 0.95f) {
+                if (clampedZoom >= 1.0f) {
                     mainWideLens ?: currentLens
                 } else {
                     ultraWideLens ?: mainWideLens ?: currentLens
@@ -3611,10 +3613,7 @@ class Camera2Engine(private val context: Context) {
         }
 
         val activeLens = activeSessionLens ?: currentLens
-        val isIntermediateTransition = !isPresetTap && (clampedZoom in 0.55f..0.97f) && (activeLens.lensType == LensType.WIDE)
-        val shouldDeferIndependentSwitch = isIntermediateTransition && (targetLens.cameraId != activeLens.cameraId)
-
-        val effectiveTargetLens = if (shouldDeferIndependentSwitch) activeLens else targetLens
+        val effectiveTargetLens = targetLens
         val needsLensSwitch = (effectiveTargetLens.id != activeLens.id) ||
                 (effectiveTargetLens.cameraId != activeLens.cameraId) ||
                 (cameraDevice != null && effectiveTargetLens.cameraId != cameraDevice?.id) ||

@@ -147,7 +147,7 @@ object CameraDiscovery {
                     isHiddenAux = false,
                     isZoomPreset = false,
                     baseZoomRatio = 1.0f,
-                    minZoomRatio = primaryBackMinZoom,
+                    minZoomRatio = 1.0f,
                     maxZoomRatio = primaryBackMaxZoom,
                     isLogicalMultiCamera = isPrimaryBackLogical,
                     isPrimaryMain = true,
@@ -215,24 +215,27 @@ object CameraDiscovery {
                 val key = "BACK_${pType.name}"
                 if (!registeredLensesTypes.contains(key)) {
                     registeredLensesTypes.add(key)
+                    val effectiveBaseRatio = if (pType == LensType.ULTRAWIDE) 0.5f else opticalRatio
+                    val effectiveMinRatio = if (pType == LensType.ULTRAWIDE) 0.5f else primaryBackMinZoom
+                    val labelPrefix = if (pType == LensType.ULTRAWIDE) "0.5x" else "${opticalRatio}x"
                     lenses.add(
                         LensInfo(
                             cameraId = primaryBackId, // Openable device is logical multi-camera
                             facing = CameraCharacteristics.LENS_FACING_BACK,
                             lensType = pType,
-                            displayName = "${opticalRatio}x ${pType.shortLabel} (${pFocal}mm f/${pAperture})",
+                            displayName = "$labelPrefix ${pType.shortLabel} (${pFocal}mm f/${pAperture})",
                             focalLengthMm = pFocal,
                             maxAperture = pAperture,
                             isPhysical = true,
                             isHiddenAux = false,
                             isZoomPreset = false,
-                            baseZoomRatio = opticalRatio,
-                            minZoomRatio = primaryBackMinZoom,
+                            baseZoomRatio = effectiveBaseRatio,
+                            minZoomRatio = effectiveMinRatio,
                             maxZoomRatio = primaryBackMaxZoom,
                             isLogicalMultiCamera = true,
                             isIndependentCamera = false,
                             supportsPhysicalStream = true,
-                            intrinsicZoomRatio = opticalRatio,
+                            intrinsicZoomRatio = effectiveBaseRatio,
                             physicalCameraId = physId,
                             fovDegrees = pFov,
                             equivalent35mmFocalMm = pEq35,
@@ -245,25 +248,25 @@ object CameraDiscovery {
             // 3. Fallback for logical ultra-wide zoom (< 0.95x) if physical IDs were not advertised
             if (hasLogicalUltraWide && !detectedPhysicalUltraWide && !registeredLensesTypes.contains("BACK_ULTRAWIDE")) {
                 registeredLensesTypes.add("BACK_ULTRAWIDE")
-                val uwRatio = primaryBackMinZoom.coerceIn(0.35f, 0.85f)
+                val uwRatio = 0.5f
                 lenses.add(
                     LensInfo(
                         cameraId = primaryBackId,
                         facing = CameraCharacteristics.LENS_FACING_BACK,
                         lensType = LensType.ULTRAWIDE,
-                        displayName = "${uwRatio}x Ultra Wide",
+                        displayName = "0.5x Ultra Wide",
                         focalLengthMm = primaryMainFocal * uwRatio,
                         maxAperture = primaryMainAperture,
                         isPhysical = true,
                         isHiddenAux = false,
                         isZoomPreset = false,
-                        baseZoomRatio = uwRatio,
-                        minZoomRatio = primaryBackMinZoom,
+                        baseZoomRatio = 0.5f,
+                        minZoomRatio = 0.5f,
                         maxZoomRatio = primaryBackMaxZoom,
                         isLogicalMultiCamera = isPrimaryBackLogical,
                         isIndependentCamera = false,
                         supportsPhysicalStream = false,
-                        intrinsicZoomRatio = uwRatio,
+                        intrinsicZoomRatio = 0.5f,
                         fovDegrees = 110f,
                         equivalent35mmFocalMm = primaryMainEq35 * uwRatio,
                         idTypeDescription = "Logical Multi-Cam Optical Ultra-Wide"
@@ -318,10 +321,11 @@ object CameraDiscovery {
                     mainSensorWidthMm = primaryMainSensorWidth,
                     lensType = lensType
                 )
+                val effectiveRatio = if (lensType == LensType.ULTRAWIDE) 0.5f else opticalRatio
 
                 val displayName = when (lensType) {
                     LensType.FRONT -> "Front Selfie (f/${maxAperture})"
-                    LensType.ULTRAWIDE -> "${opticalRatio}x Ultra Wide (${focalMm}mm f/${maxAperture})"
+                    LensType.ULTRAWIDE -> "0.5x Ultra Wide (${focalMm}mm f/${maxAperture})"
                     LensType.WIDE -> "1x Wide (${focalMm}mm f/${maxAperture})"
                     LensType.TELEPHOTO -> "${opticalRatio}x Telephoto (${focalMm}mm f/${maxAperture})"
                     LensType.TELEPHOTO_3X -> "${opticalRatio}x Telephoto (${focalMm}mm f/${maxAperture})"
@@ -339,12 +343,13 @@ object CameraDiscovery {
                         isPhysical = true,
                         isHiddenAux = !isOfficial,
                         isZoomPreset = false,
-                        baseZoomRatio = opticalRatio,
+                        baseZoomRatio = effectiveRatio,
+                        minZoomRatio = if (lensType == LensType.ULTRAWIDE) 0.5f else 1.0f,
                         fovDegrees = fovDegrees,
                         equivalent35mmFocalMm = eq35mm,
                         isIndependentCamera = true,
                         supportsPhysicalStream = false,
-                        intrinsicZoomRatio = opticalRatio,
+                        intrinsicZoomRatio = effectiveRatio,
                         maxZoomRatio = primaryBackMaxZoom,
                         idTypeDescription = if (!isOfficial) "Aux Camera ID $id" else "Camera ID $id"
                     )

@@ -300,7 +300,7 @@ object CinemaColorPipeline {
     private fun computeCreativeLutTransform(config: CinemaConfig): ColorMatrix? {
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
-        if (lut == CinematicLut.NONE || intensity <= 0.001f) return null
+        if (lut == CinematicLut.NONE || intensity <= 0.001f || (config.colorProfile == CinemaColorProfile.HLG10 && lut == CinematicLut.REC_709)) return null
 
         // Obtain the base creative transform matrix
         val rawLutMat = if (lut == CinematicLut.CUSTOM && !config.customLutPath.isNullOrBlank()) {

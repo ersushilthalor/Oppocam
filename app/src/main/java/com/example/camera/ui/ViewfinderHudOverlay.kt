@@ -109,6 +109,7 @@ fun ViewfinderHudOverlay(
                     onExposureChange = onExposureChange,
                     currentZoom = currentZoom,
                     onZoomChange = onZoomChange,
+                    maxZoom = maxOf(capabilities.maxZoom, 20.0f),
                     enableExposure = false,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -555,6 +556,7 @@ fun ImmersiveEdgeControls(
     onExposureChange: (Int) -> Unit,
     currentZoom: Float,
     onZoomChange: (Float) -> Unit,
+    maxZoom: Float = 20.0f,
     enableExposure: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -587,7 +589,7 @@ fun ImmersiveEdgeControls(
                     detectVerticalDragGestures { change, dragAmount ->
                         change.consume()
                         val delta = -dragAmount / 80f
-                        val newZoom = (currentZoom + delta).coerceIn(0.5f, 10.0f)
+                        val newZoom = (currentZoom + delta).coerceIn(0.5f, maxZoom)
                         onZoomChange(newZoom)
                     }
                 }

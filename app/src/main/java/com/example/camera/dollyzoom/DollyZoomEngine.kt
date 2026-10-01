@@ -103,6 +103,11 @@ class DollyZoomEngine {
         Log.i(TAG, "Dolly Zoom subject anchored at ($safeX, $safeY)")
     }
 
+    fun setSubjectBox(newBox: DollyBoundingBox) {
+        box = newBox
+        updateCalculations(1080f, 1920f)
+    }
+
     /**
      * Feeds camera capture faces from hardware capture result.
      * Mirrors face detection and largestBox(boxes) + box.lerpShape from reference repo main.py.

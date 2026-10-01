@@ -1110,7 +1110,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val currentLens = engine.selectedLens.value
         val currentZ = _currentZoom.value
         val targetZ = when (lens.lensType) {
-            LensType.ULTRAWIDE -> lens.baseZoomRatio.coerceIn(0.35f, 0.85f)
+            LensType.ULTRAWIDE -> 0.5f
             LensType.WIDE -> 1.0f
             LensType.TELEPHOTO -> 2.0f
             LensType.TELEPHOTO_3X -> 3.0f
@@ -1444,6 +1444,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val startTime = System.currentTimeMillis()
             val frameIntervalMs = 16L // ~60 FPS smooth continuous updates
 
+            // If transitioning from 1x down to 0.5x, switch to Ultra-Wide at 1.0x where 2x digital crop matches 1x Main FOV
+            if (startZ >= 0.95f && targetZ < 0.95f) {
+                val currentFacing = engine.selectedLens.value?.facing
+                val uw = engine.availableLenses.value.firstOrNull { (currentFacing == null || it.facing == currentFacing) && it.lensType == LensType.ULTRAWIDE }
+                if (uw != null && !engine.isRunningOnLens(uw)) {
+                    engine.selectLens(uw, preserveZoom = true, targetZoom = startZ)
+                }
+            }
+
             while (isActive) {
                 val now = System.currentTimeMillis()
                 val elapsed = now - startTime
@@ -1498,8 +1507,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
         val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
             ?: engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-        val minZoom = ultraWideLens?.baseZoomRatio?.coerceAtLeast(0.35f) ?: 1.0f
-        val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 10.0f
+        val minZoom = if (ultraWideLens != null) 0.5f else 1.0f
+        val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 20.0f
         val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
         val clamped = zoom.coerceIn(minZoom, maxZoom)
 
