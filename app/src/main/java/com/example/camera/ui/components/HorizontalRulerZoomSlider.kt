@@ -57,6 +57,9 @@ internal fun normalizedToZoomLog(t: Float, minZ: Float, maxZ: Float): Float {
     return rawZoom.coerceIn(safeMin, safeMax)
 }
 
+const val RULER_TOTAL_TICKS = 120
+val RULER_TICK_SPACING_DP = 6.5.dp
+
 /**
  * Flagship Horizontal Ruler Zoom Slider matching the reference camera UI:
  * - Floating live zoom text in prominent gold/yellow (e.g. "5.0 x") centered above the capsule.
@@ -105,8 +108,8 @@ fun HorizontalRulerZoomSlider(
     val safeMaxZoomState = rememberUpdatedState(safeMaxZoom)
 
     val density = LocalDensity.current
-    val totalTicks = 90
-    val tickSpacingDp = 7.dp
+    val totalTicks = RULER_TOTAL_TICKS
+    val tickSpacingDp = RULER_TICK_SPACING_DP
     val tickSpacingPx = with(density) { tickSpacingDp.toPx() }
     val totalRulerWidthPx = totalTicks * tickSpacingPx
 
@@ -278,8 +281,13 @@ fun HorizontalRulerZoomSlider(
                         val currentNorm = zoomToNormalizedLog(activeZoom, safeMinZoom, safeMaxZoom)
                         val currentScrollPx = currentNorm * totalRulerWidthPx
 
-                        // Draw moving ticks
-                        for (i in 0..totalTicks) {
+                        // Draw moving ticks with generous padding on both ends so ruler continues smoothly
+                        // and never appears blank or abruptly truncated at 10x..20x or 0.5x
+                        val extraVisibleTicks = ceil((size.width / 2f) / tickSpacingPx).toInt() + 15
+                        val startTick = -extraVisibleTicks
+                        val endTick = totalTicks + extraVisibleTicks
+
+                        for (i in startTick..endTick) {
                             val tickX = centerX - currentScrollPx + (i * tickSpacingPx)
 
                             // Only draw visible ticks inside canvas
@@ -288,7 +296,7 @@ fun HorizontalRulerZoomSlider(
                                 val alpha = (1f - distFromCenter.pow(1.8f)).coerceIn(0f, 1f)
 
                                 if (alpha > 0.02f) {
-                                    val isMajor = (i % 5 == 0)
+                                    val isMajor = (abs(i) % 5 == 0)
                                     val tickHeight = if (isMajor) 18.dp.toPx() else 11.dp.toPx()
                                     val strokeW = if (isMajor) 1.5.dp.toPx() else 1.0.dp.toPx()
                                     val tickColor = if (isMajor) {

@@ -1083,7 +1083,7 @@ fun MasterZoomCapsule(
     val isSliderOpenState = rememberUpdatedState(isSliderOpen)
 
     val density = LocalDensity.current
-    val totalRulerWidthPx = with(density) { (90 * 7).dp.toPx() }
+    val totalRulerWidthPx = with(density) { (com.example.camera.ui.components.RULER_TOTAL_TICKS * com.example.camera.ui.components.RULER_TICK_SPACING_DP.value).dp.toPx() }
     val capsuleSwipeSlopPx = with(density) { 3.5.dp.toPx() }
 
     // Persistent outer container so opening the slider during a horizontal swipe

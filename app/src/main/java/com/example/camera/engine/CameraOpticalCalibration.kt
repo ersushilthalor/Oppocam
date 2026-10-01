@@ -159,13 +159,14 @@ object CameraOpticalCalibration {
         // Continuous dragging with hysteresis thresholds:
         return when (currentLensType) {
             LensType.ULTRAWIDE -> {
-                // Transition cleanly at 1.0x where Ultra-Wide FOV matches uncropped 1x Main
-                if (targetZoom >= 1.0f) LensType.WIDE else LensType.ULTRAWIDE
+                // 1.0x must ALWAYS use the physical Main/Wide camera.
+                // Transition cleanly to WIDE as soon as 0.95x so 1.0x NEVER uses Ultra-Wide with digital crop
+                if (targetZoom >= 0.95f) LensType.WIDE else LensType.ULTRAWIDE
             }
             LensType.WIDE -> {
                 when {
-                    // Transition to Ultra-Wide below 1.0x since physical Main sensor cannot zoom wider than 1x
-                    targetZoom < 1.0f && hasUltraWide -> LensType.ULTRAWIDE
+                    // Transition to Ultra-Wide below 0.98x since physical Main sensor cannot zoom wider than 1x
+                    targetZoom < 0.98f && hasUltraWide -> LensType.ULTRAWIDE
                     // Main stays active up to 2.15x before switching to 2x Tele
                     targetZoom >= 2.15f && hasTelephoto2x -> LensType.TELEPHOTO
                     // Main stays active up to 3.15x before switching to 3x Tele

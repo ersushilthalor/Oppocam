@@ -399,7 +399,7 @@ data class LensInfo(
     val idTypeDescription: String = "Logical",
     val isLogicalMultiCamera: Boolean = false,
     val minZoomRatio: Float = 0.5f,
-    val maxZoomRatio: Float = 10.0f,
+    val maxZoomRatio: Float = 20.0f,
     val isPrimaryMain: Boolean = false,
     val isIndependentCamera: Boolean = false,
     val supportsPhysicalStream: Boolean = false,
@@ -443,7 +443,7 @@ data class HardwareCapabilities(
     val supportsAwbLock: Boolean = true,
     val hardwareLevel: Int = 0,
     val minZoom: Float = 1.0f,
-    val maxZoom: Float = 8f
+    val maxZoom: Float = 20.0f
 )
 
 data class StorageStats(

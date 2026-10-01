@@ -1121,7 +1121,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.25f
 
         if (isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
-            // Smooth ~0.5-second transition interpolating through the zoom levels to target lens
+            // Smooth exactly 0.25-second (250 ms) transition interpolating through the zoom levels to target lens
             startSmoothLensTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens)
             return
         }
@@ -1431,14 +1431,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var zoomTransitionJob: Job? = null
 
     /**
-     * Smoothly transitions zoom between 1x <-> 0.5x and other lens switches in ~0.5 seconds (500 ms).
+     * Smoothly transitions zoom between 1x <-> 0.5x and other lens switches in exactly 0.25 seconds (250 ms).
      * Smoothly interpolates through intermediate zoom levels without visible jumps or stutter,
      * maintaining high responsiveness.
      */
     fun startSmoothLensTransition(fromZoom: Float, targetZoom: Float, targetLens: LensInfo? = null) {
         zoomTransitionJob?.cancel()
         zoomTransitionJob = viewModelScope.launch(Dispatchers.Main.immediate) {
-            val durationMs = 500L // Intended ~0.5 seconds
+            val durationMs = 250L // Exactly 0.25 seconds
             val startZ = fromZoom
             val targetZ = targetZoom
             val startTime = System.currentTimeMillis()
@@ -1460,15 +1460,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 delay(sleepTime)
             }
 
-            // Exactly ~0.5s reached: cleanly finalize at target zoom & lens
+            // Exactly 0.25s reached: cleanly finalize at target zoom & lens
             _currentZoom.value = targetZ
             preferences.setModeZoom(_cameraMode.value, targetZ)
             engine.setZoom(targetZ, isPresetTap = true)
-            if (targetLens != null) {
-                engine.selectLens(targetLens, preserveZoom = true, targetZoom = targetZ)
-                preferences.lastFacing = targetLens.facing
-                preferences.saveLastLens(targetLens)
-                preferences.setModeLens(_cameraMode.value, targetLens)
+
+            // Ensure 1.0x always reliably uses the physical Main/Wide camera, never Ultra-Wide with crop
+            val effectiveTargetLens = targetLens ?: if (targetZ in 0.95f..1.1f) {
+                val currentFacing = engine.selectedLens.value?.facing
+                engine.availableLenses.value.firstOrNull { (currentFacing == null || it.facing == currentFacing) && (it.isPrimaryMain || it.lensType == LensType.WIDE) }
+            } else if (targetZ < 0.95f) {
+                val currentFacing = engine.selectedLens.value?.facing
+                engine.availableLenses.value.firstOrNull { (currentFacing == null || it.facing == currentFacing) && it.lensType == LensType.ULTRAWIDE }
+            } else null
+
+            if (effectiveTargetLens != null) {
+                if (!engine.isRunningOnLens(effectiveTargetLens)) {
+                    engine.selectLens(effectiveTargetLens, preserveZoom = true, targetZoom = targetZ)
+                }
+                preferences.lastFacing = effectiveTargetLens.facing
+                preferences.saveLastLens(effectiveTargetLens)
+                preferences.setModeLens(_cameraMode.value, effectiveTargetLens)
             }
             zoomTransitionJob = null
         }
@@ -1502,7 +1514,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val currentZ = _currentZoom.value
-        // Preset tap with meaningful zoom change: interpolate smoothly through zoom levels over ~0.5s
+        // Preset tap with meaningful zoom change: interpolate smoothly through zoom levels over exactly 0.25s (250 ms)
         if ((clamped - currentZ).absoluteValue >= 0.25f) {
             startSmoothLensTransition(fromZoom = currentZ, targetZoom = clamped)
             return

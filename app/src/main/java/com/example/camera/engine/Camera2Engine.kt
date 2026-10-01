@@ -378,6 +378,15 @@ class Camera2Engine(private val context: Context) {
     private val _selectedLens = MutableStateFlow<LensInfo?>(null)
     val selectedLens: StateFlow<LensInfo?> = _selectedLens.asStateFlow()
 
+    fun isRunningOnLens(targetLens: LensInfo): Boolean {
+        val active = activeSessionLens ?: _selectedLens.value
+        val cam = cameraDevice
+        return active?.id == targetLens.id &&
+                active?.lensType == targetLens.lensType &&
+                (cam == null || cam.id == targetLens.cameraId) &&
+                activeSessionPhysicalCameraId == targetLens.physicalCameraId
+    }
+
     private val _capabilities = MutableStateFlow(HardwareCapabilities())
     val capabilities: StateFlow<HardwareCapabilities> = _capabilities.asStateFlow()
 
@@ -1100,11 +1109,18 @@ class Camera2Engine(private val context: Context) {
         isSwitchingLens.set(false)
 
         val currentActive = activeSessionLens ?: _selectedLens.value
-        if (nextLens != null && currentActive != null &&
-            (nextLens.id != currentActive.id ||
-             nextLens.cameraId != currentActive.cameraId ||
-             nextLens.physicalCameraId != currentActive.physicalCameraId)
-        ) {
+        val isHardwareMismatch = nextLens != null && (
+            nextLens.id != currentActive?.id ||
+            nextLens.cameraId != currentActive?.cameraId ||
+            (cameraDevice != null && nextLens.cameraId != cameraDevice?.id) ||
+            nextLens.physicalCameraId != currentActive?.physicalCameraId ||
+            nextLens.physicalCameraId != activeSessionPhysicalCameraId ||
+            nextLens.lensType != currentActive?.lensType ||
+            (nextLens.lensType == LensType.WIDE && activeSessionPhysicalCameraId != null) ||
+            (nextLens.lensType == LensType.WIDE && currentActive?.lensType == LensType.ULTRAWIDE)
+        )
+
+        if (nextLens != null && isHardwareMismatch) {
             selectLens(nextLens, preserveZoom = true, targetZoom = currentZoom)
         } else {
             scheduleZoomPreviewUpdate(immediate = nextPresetTap || nextZoom != null)
@@ -1154,7 +1170,8 @@ class Camera2Engine(private val context: Context) {
             pendingZoomRunnable = null
 
             val previousLens = _selectedLens.value
-            val strategy = CameraDiscovery.resolveSwitchStrategy(previousLens, lens)
+            val currentRunningLens = activeSessionLens ?: previousLens
+            val strategy = CameraDiscovery.resolveSwitchStrategy(currentRunningLens, lens)
             preferences.saveLastLens(lens)
 
             currentZoom = effectiveTargetZoom
@@ -1162,10 +1179,11 @@ class Camera2Engine(private val context: Context) {
             preferences.currentZoom = effectiveTargetZoom
             _selectedLens.value = lens
 
-            Log.i(TAG, "[LENS_SWITCH] Switching from ${previousLens?.lensType} (ID=${previousLens?.cameraId}, phys=${previousLens?.physicalCameraId}) to ${lens.lensType} (ID=${lens.cameraId}, phys=${lens.physicalCameraId}) via strategy: $strategy (effectiveZoom=$effectiveTargetZoom)")
+            Log.i(TAG, "[LENS_SWITCH] Switching from ${currentRunningLens?.lensType} (ID=${currentRunningLens?.cameraId}, phys=${currentRunningLens?.physicalCameraId}) to ${lens.lensType} (ID=${lens.cameraId}, phys=${lens.physicalCameraId}) via strategy: $strategy (effectiveZoom=$effectiveTargetZoom)")
 
-            val isSwitchBetweenMainAndUW = (previousLens?.lensType == LensType.WIDE && lens.lensType == LensType.ULTRAWIDE) ||
-                    (previousLens?.lensType == LensType.ULTRAWIDE && lens.lensType == LensType.WIDE)
+            val isSwitchBetweenMainAndUW = (currentRunningLens?.lensType == LensType.WIDE && lens.lensType == LensType.ULTRAWIDE) ||
+                    (currentRunningLens?.lensType == LensType.ULTRAWIDE && lens.lensType == LensType.WIDE) ||
+                    (lens.lensType == LensType.WIDE && cameraDevice != null && lens.cameraId != cameraDevice?.id)
 
             if (_isKeepUltraWideReady.value && isSwitchBetweenMainAndUW) {
                 val isSameCameraDevice = (cameraDevice != null && lens.cameraId == cameraDevice?.id)
@@ -1176,7 +1194,7 @@ class Camera2Engine(private val context: Context) {
                     activeSessionLens = lens
                     _selectedLens.value = lens
                     if (previewSurfaceTexture != null) {
-                        if (lens.physicalCameraId != null && lens.physicalCameraId != activeSessionPhysicalCameraId) {
+                        if (lens.physicalCameraId != activeSessionPhysicalCameraId) {
                             reconfigureSessionForPhysicalLens(lens, switchGen)
                             return
                         } else {
@@ -1216,7 +1234,13 @@ class Camera2Engine(private val context: Context) {
                 return
             }
 
-            when (strategy) {
+            val effectiveStrategy = if (cameraDevice != null && lens.cameraId != cameraDevice?.id) {
+                LensSwitchStrategy.INDEPENDENT_DEVICE
+            } else {
+                strategy
+            }
+
+            when (effectiveStrategy) {
                 LensSwitchStrategy.LOGICAL_ZOOM -> {
                     activeSessionLens = lens
                     if (activeSessionPhysicalCameraId != null && cameraDevice != null && previewSurfaceTexture != null) {
@@ -3360,6 +3384,21 @@ class Camera2Engine(private val context: Context) {
 
             val effectiveUiZoom = currentZoom
 
+            // 1.0x must ALWAYS use the physical Main/Wide camera.
+            // Never use the Ultra-Wide camera with digital cropping at 1.0x.
+            // When returning from 0.5x to 1.0x, reliably switch back to the physical Main/Wide lens every time.
+            if (effectiveUiZoom >= 0.98f && (lens.lensType == LensType.ULTRAWIDE || activeSessionPhysicalCameraId != null)) {
+                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+                val mainLens = backLenses.firstOrNull { it.isPrimaryMain }
+                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
+                if (mainLens != null && !isSwitchingLens.get()) {
+                    backgroundHandler?.post {
+                        selectLens(mainLens, preserveZoom = true, targetZoom = effectiveUiZoom)
+                    }
+                }
+            }
+
             // Digital Crop calculation calibrated from actual sensor FOV
             val digitalCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
                 uiZoom = effectiveUiZoom,
@@ -3544,14 +3583,20 @@ class Camera2Engine(private val context: Context) {
         )
 
         val targetLens: LensInfo = when (targetType) {
-            LensType.ULTRAWIDE -> ultraWideLens ?: mainWideLens ?: currentLens
+            LensType.ULTRAWIDE -> {
+                if (clampedZoom >= 0.95f) {
+                    mainWideLens ?: currentLens
+                } else {
+                    ultraWideLens ?: mainWideLens ?: currentLens
+                }
+            }
             LensType.TELEPHOTO -> backLenses.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical } ?: mainWideLens ?: currentLens
             LensType.TELEPHOTO_3X -> backLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical } ?: mainWideLens ?: currentLens
             else -> mainWideLens ?: currentLens
         }
 
         val pZoom = if (isPresetTap) {
-            if (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE) 1.0f else clampedZoom
+            if (clampedZoom in 0.95f..1.05f && (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE)) 1.0f else clampedZoom
         } else {
             clampedZoom
         }
@@ -3566,13 +3611,18 @@ class Camera2Engine(private val context: Context) {
         }
 
         val activeLens = activeSessionLens ?: currentLens
-        val isIntermediateTransition = !isPresetTap && (clampedZoom in 0.55f..0.98f) && (activeLens.lensType == LensType.WIDE)
+        val isIntermediateTransition = !isPresetTap && (clampedZoom in 0.55f..0.97f) && (activeLens.lensType == LensType.WIDE)
         val shouldDeferIndependentSwitch = isIntermediateTransition && (targetLens.cameraId != activeLens.cameraId)
 
         val effectiveTargetLens = if (shouldDeferIndependentSwitch) activeLens else targetLens
         val needsLensSwitch = (effectiveTargetLens.id != activeLens.id) ||
                 (effectiveTargetLens.cameraId != activeLens.cameraId) ||
-                (effectiveTargetLens.physicalCameraId != activeLens.physicalCameraId)
+                (cameraDevice != null && effectiveTargetLens.cameraId != cameraDevice?.id) ||
+                (effectiveTargetLens.physicalCameraId != activeLens.physicalCameraId) ||
+                (effectiveTargetLens.physicalCameraId != activeSessionPhysicalCameraId) ||
+                (effectiveTargetLens.lensType != activeLens.lensType) ||
+                (effectiveTargetLens.lensType == LensType.WIDE && activeSessionPhysicalCameraId != null) ||
+                (effectiveTargetLens.lensType == LensType.WIDE && activeLens.lensType == LensType.ULTRAWIDE)
 
         if (needsLensSwitch) {
             selectLens(effectiveTargetLens, preserveZoom = true, targetZoom = pZoom)

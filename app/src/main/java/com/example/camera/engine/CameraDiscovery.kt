@@ -109,7 +109,7 @@ object CameraDiscovery {
                 primaryBackChars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             } else null
             val primaryBackMinZoom = primaryBackZoomRange?.lower ?: 1.0f
-            val primaryBackMaxZoom = primaryBackZoomRange?.upper ?: 10.0f
+            val primaryBackMaxZoom = maxOf(primaryBackZoomRange?.upper ?: 10.0f, 20.0f)
             val hasLogicalUltraWide = primaryBackMinZoom < 0.95f
 
             // Baseline Main Sensor dimensions
@@ -345,6 +345,7 @@ object CameraDiscovery {
                         isIndependentCamera = true,
                         supportsPhysicalStream = false,
                         intrinsicZoomRatio = opticalRatio,
+                        maxZoomRatio = primaryBackMaxZoom,
                         idTypeDescription = if (!isOfficial) "Aux Camera ID $id" else "Camera ID $id"
                     )
                 )
