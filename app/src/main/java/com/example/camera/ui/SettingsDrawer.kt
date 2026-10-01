@@ -194,6 +194,7 @@ fun SettingsDrawer(
     onOpenPipelineStudio: () -> Unit = {},
     onOpenBeforeAfter: () -> Unit = {},
     instantSwitchState: MotorolaInstantSwitchState = MotorolaInstantSwitchState(),
+    onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit = {},
     onKeepFrontCameraReadyToggle: (Boolean) -> Unit = {},
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit = {},
@@ -446,6 +447,7 @@ fun SettingsDrawer(
                             onLensSelected = onLensSelected,
                             onForceDeepScan = onForceDeepScan,
                             instantSwitchState = instantSwitchState,
+                            onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
                             onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
                             onKeepFrontCameraReadyToggle = onKeepFrontCameraReadyToggle,
                             onShowFrontCameraPreviewToggle = onShowFrontCameraPreviewToggle,
@@ -1286,6 +1288,7 @@ private fun CameraLensSettingsPage(
     onLensSelected: (LensInfo) -> Unit,
     onForceDeepScan: () -> Unit,
     instantSwitchState: MotorolaInstantSwitchState,
+    onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
     onKeepFrontCameraReadyToggle: (Boolean) -> Unit,
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit,
@@ -1311,6 +1314,16 @@ private fun CameraLensSettingsPage(
                 description = "Detected ${availableLenses.size} optical camera sensors on this device.",
                 actionText = "RE-SCAN",
                 onClick = onForceDeepScan
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Keep Ultra Wide Ready",
+                description = "Keep Main and Ultra-Wide cameras active and ready in background simultaneously for instant, zero-lag lens switching during photo and video recording.",
+                isChecked = instantSwitchState.isKeepUltraWideReady,
+                onCheckedChange = onKeepUltraWideReadyToggle,
+                tag = "toggle_keep_ultrawide_ready"
             )
         }
 
@@ -2869,6 +2882,7 @@ fun CameraSettingsScreen(
             viewModel.setBeforeAfterOpen(true)
         },
         instantSwitchState = instantSwitchState,
+        onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
         onKeepFrontCameraReadyToggle = { viewModel.setKeepFrontCameraReady(it) },
         onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },

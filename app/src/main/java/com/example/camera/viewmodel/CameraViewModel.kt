@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -553,8 +554,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // --- Camera Switching State ---
-    private val _instantSwitchState = MutableStateFlow(MotorolaInstantSwitchState())
+    private val _instantSwitchState = MutableStateFlow(
+        MotorolaInstantSwitchState(
+            isKeepUltraWideReady = preferences.isKeepUltraWideReady,
+            isShowUltraWidePreview = preferences.isShowUltraWidePreview,
+            isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
+            isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
+            ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF
+        )
+    )
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
+
+    fun setKeepUltraWideReady(enabled: Boolean) {
+        preferences.isKeepUltraWideReady = enabled
+        _instantSwitchState.value = _instantSwitchState.value.copy(
+            isKeepUltraWideReady = enabled,
+            ultraWideStatus = if (enabled) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF
+        )
+        engine.setKeepUltraWideReady(enabled)
+        showToast(if (enabled) "Keep Ultra Wide Ready: ON" else "Keep Ultra Wide Ready: OFF")
+    }
 
     fun setShowUltraWidePreview(enabled: Boolean) {
         _instantSwitchState.value = _instantSwitchState.value.copy(isShowUltraWidePreview = enabled)
@@ -794,6 +813,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
         com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(_customVideoPipelineConfig.value)
+        engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
+
+        viewModelScope.launch {
+            engine.ultraWideStreamStatus.collect { status ->
+                _instantSwitchState.update { it.copy(ultraWideStatus = status) }
+            }
+        }
 
         if (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
             engine.setHorizonLockEnabled(true)
@@ -1079,6 +1105,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectLens(lens: LensInfo) {
+        val currentLens = engine.selectedLens.value
+        val isSwitchingToUltraWideFromOneX = (lens.lensType == LensType.ULTRAWIDE) &&
+                (currentLens == null || currentLens.lensType == LensType.WIDE) &&
+                (_currentZoom.value >= 0.85f)
+
+        if (isSwitchingToUltraWideFromOneX) {
+            setZoom(0.5f, isPresetTap = true)
+            return
+        }
+
         engine.selectLens(lens)
         preferences.lastFacing = lens.facing
         preferences.saveLastLens(lens)
@@ -1381,6 +1417,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (next) "Focus Locked" else "Focus Unlocked")
     }
 
+    private var zoomTransitionJob: Job? = null
+
+    /**
+     * Smoothly transitions zoom from 1.0x to 0.5x in exactly 0.5 seconds (500 ms).
+     * Smoothly transitions through: 1.0x -> 0.9x -> 0.8x -> 0.7x -> 0.6x -> 0.5x
+     * with smooth, continuous interpolation and no visible jumps or stutter.
+     */
+    fun startSmoothOneXToHalfXTransition(fromZoom: Float = 1.0f, targetZoom: Float = 0.5f) {
+        zoomTransitionJob?.cancel()
+        zoomTransitionJob = viewModelScope.launch(Dispatchers.Main.immediate) {
+            val durationMs = 500L // Exactly 0.5 seconds
+            val startZ = if (fromZoom < 0.95f) 1.0f else fromZoom
+            val targetZ = targetZoom.coerceIn(0.35f, 0.55f)
+            val startTime = System.currentTimeMillis()
+            val frameIntervalMs = 16L // ~60 FPS smooth continuous updates
+
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                val elapsed = now - startTime
+                if (elapsed >= durationMs) {
+                    break
+                }
+                val progress = (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                // Continuous smooth linear interpolation passing through 1.0x -> 0.9x -> 0.8x -> 0.7x -> 0.6x -> 0.5x
+                val currentZ = startZ + (targetZ - startZ) * progress
+                _currentZoom.value = currentZ
+                preferences.setModeZoom(_cameraMode.value, currentZ)
+                engine.setZoom(currentZ, isPresetTap = false)
+
+                val sleepTime = (frameIntervalMs - (System.currentTimeMillis() - now)).coerceAtLeast(2L)
+                delay(sleepTime)
+            }
+
+            // Exactly 0.5s reached: cleanly finalize at target 0.5x
+            _currentZoom.value = targetZ
+            preferences.setModeZoom(_cameraMode.value, targetZ)
+            engine.setZoom(targetZ, isPresetTap = true)
+            zoomTransitionJob = null
+        }
+    }
+
     fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
         val currentFacing = engine.selectedLens.value?.facing
         val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
@@ -1390,6 +1467,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 10.0f
         val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 10.0f)
         val clamped = zoom.coerceIn(minZoom, maxZoom)
+
+        // Cancel running transition if user initiates a new manual zoom action or slider gesture
+        zoomTransitionJob?.cancel()
+        zoomTransitionJob = null
+
+        // 1x -> 0.5x transition:
+        // When user taps 0.5x, do NOT switch directly from 1x to 0.5x. Instead, smoothly transition through:
+        // 1.0x -> 0.9x -> 0.8x -> 0.7x -> 0.6x -> 0.5x
+        // Complete the entire transition in exactly 0.5 seconds with smooth, continuous interpolation.
+        val currentZ = _currentZoom.value
+        val isTappingHalfXFromOneX = isPresetTap && (clamped in 0.45f..0.55f) && (currentZ >= 0.85f)
+        if (isTappingHalfXFromOneX) {
+            startSmoothOneXToHalfXTransition(fromZoom = currentZ, targetZoom = clamped)
+            return
+        }
+
         _currentZoom.value = clamped
         preferences.setModeZoom(_cameraMode.value, clamped)
         engine.setZoom(clamped, isPresetTap)

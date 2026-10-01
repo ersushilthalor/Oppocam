@@ -223,6 +223,7 @@ fun CameraSettingsHost(
         onOpenPipelineStudio = onOpenPipelineStudio,
         onOpenBeforeAfter = onOpenBeforeAfter,
         instantSwitchState = instantSwitchState,
+        onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
         onKeepFrontCameraReadyToggle = { viewModel.setKeepFrontCameraReady(it) },
         onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },

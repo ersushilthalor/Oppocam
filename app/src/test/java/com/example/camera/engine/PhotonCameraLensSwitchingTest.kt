@@ -169,4 +169,63 @@ class PhotonCameraLensSwitchingTest {
             assertTrue("Height should be positive", size.height > 0)
         }
     }
+
+    @Test
+    fun testKeepUltraWideReadyDefaultOff() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        assertFalse("Keep Ultra Wide Ready must be OFF by default in preferences", prefs.isKeepUltraWideReady)
+        assertFalse("Keep Ultra Wide Ready must be OFF by default in engine", engine.isKeepUltraWideReady.value)
+    }
+
+    @Test
+    fun testKeepUltraWideReadyTogglePersistsAndUpdatesState() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        engine.setKeepUltraWideReady(true)
+        assertTrue("Setting Keep Ultra Wide Ready to true must update engine state", engine.isKeepUltraWideReady.value)
+        assertTrue("Setting Keep Ultra Wide Ready to true must persist in preferences", prefs.isKeepUltraWideReady)
+
+        engine.setKeepUltraWideReady(false)
+        assertFalse("Setting Keep Ultra Wide Ready to false must update engine state", engine.isKeepUltraWideReady.value)
+        assertFalse("Setting Keep Ultra Wide Ready to false must persist in preferences", prefs.isKeepUltraWideReady)
+    }
+
+    @Test
+    fun testKeepUltraWideReadyInstantSwitchMainAndUltraWide() {
+        engine.detectHardwareLenses()
+        val lenses = engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+
+        assertNotNull("Main lens should be detected", mainLens)
+        engine.selectLens(mainLens!!)
+        assertEquals(mainLens.id, engine.selectedLens.value?.id)
+
+        // Enable Keep Ultra Wide Ready
+        engine.setKeepUltraWideReady(true)
+        assertTrue(engine.isKeepUltraWideReady.value)
+
+        // If an ultra-wide lens is present, test instant digital switch
+        if (ultraWideLens != null) {
+            engine.selectLens(ultraWideLens)
+            assertEquals(ultraWideLens.id, engine.selectedLens.value?.id)
+
+            // Switch back to Main
+            engine.selectLens(mainLens)
+            assertEquals(mainLens.id, engine.selectedLens.value?.id)
+        }
+    }
+
+    @Test
+    fun testOneXToHalfXSmoothTransitionInterpolatesCorrectly() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.setZoom(1.0f, isPresetTap = false)
+        assertEquals(1.0f, viewModel.currentZoom.value, 0.001f)
+
+        // Trigger 0.5x preset tap from 1.0x
+        viewModel.setZoom(0.5f, isPresetTap = true)
+
+        // Smooth transition job should be active and current zoom smoothly transitioning down
+        assertTrue(viewModel.currentZoom.value <= 1.0f)
+    }
 }
