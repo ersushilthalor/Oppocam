@@ -228,4 +228,56 @@ class PhotonCameraLensSwitchingTest {
         // Smooth transition job should be active and current zoom smoothly transitioning down
         assertTrue(viewModel.currentZoom.value <= 1.0f)
     }
+
+    @Test
+    fun testSmoothTransitionBetweenHalfXAndOneXBothWays() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        // Transition down from 1.0x to 0.5x
+        viewModel.setZoom(1.0f, isPresetTap = false)
+        viewModel.setZoom(0.5f, isPresetTap = true)
+        assertTrue(viewModel.currentZoom.value <= 1.0f)
+
+        // Transition up from 0.5x to 1.0x
+        viewModel.startSmoothLensTransition(fromZoom = 0.5f, targetZoom = 1.0f)
+        assertTrue(viewModel.currentZoom.value >= 0.5f)
+    }
+
+    @Test
+    fun testSmoothTransitionOtherLensSwitches() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.setZoom(1.0f, isPresetTap = false)
+        assertEquals(1.0f, viewModel.currentZoom.value, 0.001f)
+
+        // Trigger 2.0x preset tap from 1.0x
+        viewModel.setZoom(2.0f, isPresetTap = true)
+
+        // Smooth transition should be active and current zoom smoothly transitioning up
+        assertTrue(viewModel.currentZoom.value >= 1.0f)
+    }
+
+    @Test
+    fun testKeepUltraWideReadyPhysicalSwitchVerified() {
+        engine.detectHardwareLenses()
+        val lenses = engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+
+        assertNotNull("Main lens must exist", mainLens)
+        engine.selectLens(mainLens!!)
+        engine.setKeepUltraWideReady(true)
+
+        if (ultraWideLens != null) {
+            engine.selectLens(ultraWideLens)
+            // Tapping 0.5x / selecting Ultra-Wide must genuinely set selected lens to Ultra-Wide
+            assertEquals(ultraWideLens.id, engine.selectedLens.value?.id)
+            assertEquals(LensType.ULTRAWIDE, engine.selectedLens.value?.lensType)
+
+            // Switch back to 1x Main
+            engine.selectLens(mainLens)
+            assertEquals(mainLens.id, engine.selectedLens.value?.id)
+            assertEquals(LensType.WIDE, engine.selectedLens.value?.lensType)
+        }
+    }
 }

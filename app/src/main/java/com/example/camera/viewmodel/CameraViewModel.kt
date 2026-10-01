@@ -22,6 +22,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.absoluteValue
 
 enum class ProControlTab(val label: String) {
     EXPOSURE("EV"),
@@ -1106,12 +1108,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectLens(lens: LensInfo) {
         val currentLens = engine.selectedLens.value
-        val isSwitchingToUltraWideFromOneX = (lens.lensType == LensType.ULTRAWIDE) &&
-                (currentLens == null || currentLens.lensType == LensType.WIDE) &&
-                (_currentZoom.value >= 0.85f)
+        val currentZ = _currentZoom.value
+        val targetZ = when (lens.lensType) {
+            LensType.ULTRAWIDE -> lens.baseZoomRatio.coerceIn(0.35f, 0.85f)
+            LensType.WIDE -> 1.0f
+            LensType.TELEPHOTO -> 2.0f
+            LensType.TELEPHOTO_3X -> 3.0f
+            else -> lens.baseZoomRatio
+        }
 
-        if (isSwitchingToUltraWideFromOneX) {
-            setZoom(0.5f, isPresetTap = true)
+        val isDifferentLens = currentLens == null || currentLens.id != lens.id || currentLens.lensType != lens.lensType
+        val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.25f
+
+        if (isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
+            // Smooth ~0.5-second transition interpolating through the zoom levels to target lens
+            startSmoothLensTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens)
             return
         }
 
@@ -1420,16 +1431,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var zoomTransitionJob: Job? = null
 
     /**
-     * Smoothly transitions zoom from 1.0x to 0.5x in exactly 0.5 seconds (500 ms).
-     * Smoothly transitions through: 1.0x -> 0.9x -> 0.8x -> 0.7x -> 0.6x -> 0.5x
-     * with smooth, continuous interpolation and no visible jumps or stutter.
+     * Smoothly transitions zoom between 1x <-> 0.5x and other lens switches in ~0.5 seconds (500 ms).
+     * Smoothly interpolates through intermediate zoom levels without visible jumps or stutter,
+     * maintaining high responsiveness.
      */
-    fun startSmoothOneXToHalfXTransition(fromZoom: Float = 1.0f, targetZoom: Float = 0.5f) {
+    fun startSmoothLensTransition(fromZoom: Float, targetZoom: Float, targetLens: LensInfo? = null) {
         zoomTransitionJob?.cancel()
         zoomTransitionJob = viewModelScope.launch(Dispatchers.Main.immediate) {
-            val durationMs = 500L // Exactly 0.5 seconds
-            val startZ = if (fromZoom < 0.95f) 1.0f else fromZoom
-            val targetZ = targetZoom.coerceIn(0.35f, 0.55f)
+            val durationMs = 500L // Intended ~0.5 seconds
+            val startZ = fromZoom
+            val targetZ = targetZoom
             val startTime = System.currentTimeMillis()
             val frameIntervalMs = 16L // ~60 FPS smooth continuous updates
 
@@ -1440,7 +1451,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     break
                 }
                 val progress = (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                // Continuous smooth linear interpolation passing through 1.0x -> 0.9x -> 0.8x -> 0.7x -> 0.6x -> 0.5x
                 val currentZ = startZ + (targetZ - startZ) * progress
                 _currentZoom.value = currentZ
                 preferences.setModeZoom(_cameraMode.value, currentZ)
@@ -1450,12 +1460,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 delay(sleepTime)
             }
 
-            // Exactly 0.5s reached: cleanly finalize at target 0.5x
+            // Exactly ~0.5s reached: cleanly finalize at target zoom & lens
             _currentZoom.value = targetZ
             preferences.setModeZoom(_cameraMode.value, targetZ)
             engine.setZoom(targetZ, isPresetTap = true)
+            if (targetLens != null) {
+                engine.selectLens(targetLens, preserveZoom = true, targetZoom = targetZ)
+                preferences.lastFacing = targetLens.facing
+                preferences.saveLastLens(targetLens)
+                preferences.setModeLens(_cameraMode.value, targetLens)
+            }
             zoomTransitionJob = null
         }
+    }
+
+    /**
+     * Backward-compatible helper for 1x -> 0.5x transition.
+     */
+    fun startSmoothOneXToHalfXTransition(fromZoom: Float = 1.0f, targetZoom: Float = 0.5f) {
+        startSmoothLensTransition(fromZoom, targetZoom)
     }
 
     fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
@@ -1469,23 +1492,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clamped = zoom.coerceIn(minZoom, maxZoom)
 
         // Cancel running transition if user initiates a new manual zoom action or slider gesture
-        zoomTransitionJob?.cancel()
-        zoomTransitionJob = null
+        if (!isPresetTap) {
+            zoomTransitionJob?.cancel()
+            zoomTransitionJob = null
+            _currentZoom.value = clamped
+            preferences.setModeZoom(_cameraMode.value, clamped)
+            engine.setZoom(clamped, isPresetTap = false)
+            return
+        }
 
-        // 1x -> 0.5x transition:
-        // When user taps 0.5x, do NOT switch directly from 1x to 0.5x. Instead, smoothly transition through:
-        // 1.0x -> 0.9x -> 0.8x -> 0.7x -> 0.6x -> 0.5x
-        // Complete the entire transition in exactly 0.5 seconds with smooth, continuous interpolation.
         val currentZ = _currentZoom.value
-        val isTappingHalfXFromOneX = isPresetTap && (clamped in 0.45f..0.55f) && (currentZ >= 0.85f)
-        if (isTappingHalfXFromOneX) {
-            startSmoothOneXToHalfXTransition(fromZoom = currentZ, targetZoom = clamped)
+        // Preset tap with meaningful zoom change: interpolate smoothly through zoom levels over ~0.5s
+        if ((clamped - currentZ).absoluteValue >= 0.25f) {
+            startSmoothLensTransition(fromZoom = currentZ, targetZoom = clamped)
             return
         }
 
         _currentZoom.value = clamped
         preferences.setModeZoom(_cameraMode.value, clamped)
-        engine.setZoom(clamped, isPresetTap)
+        engine.setZoom(clamped, isPresetTap = true)
     }
 
     fun setVideoStabilization(enabled: Boolean) {
