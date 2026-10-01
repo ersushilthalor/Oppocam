@@ -27,158 +27,38 @@ class VideoPipelineTest {
     @Test
     fun testPipelineTypesAndLookup() {
         assertEquals(VideoPipelineType.NORMAL, VideoPipelineType.fromId("normal"))
-        assertEquals(VideoPipelineType.IPHONE, VideoPipelineType.fromId("iphone"))
-        assertEquals(VideoPipelineType.SAMSUNG, VideoPipelineType.fromId("samsung"))
-        assertEquals(VideoPipelineType.VIVO, VideoPipelineType.fromId("vivo"))
+        assertEquals(VideoPipelineType.CUSTOM, VideoPipelineType.fromId("custom"))
         assertEquals(VideoPipelineType.NORMAL, VideoPipelineType.fromId("unknown_id"))
-        assertEquals(4, VideoPipelineType.entries.size)
+        assertEquals(2, VideoPipelineType.entries.size)
     }
 
     @Test
     fun testPipelineManagerResolution() {
         val normal = VideoPipelineManager.getPipeline(VideoPipelineType.NORMAL)
-        val iphone = VideoPipelineManager.getPipeline(VideoPipelineType.IPHONE)
-        val samsung = VideoPipelineManager.getPipeline(VideoPipelineType.SAMSUNG)
-        val vivo = VideoPipelineManager.getPipeline(VideoPipelineType.VIVO)
+        val custom = VideoPipelineManager.getPipeline(VideoPipelineType.CUSTOM)
 
         assertTrue(normal is NormalVideoPipeline)
-        assertTrue(iphone is IPhoneVideoPipeline)
-        assertTrue(samsung is SamsungVideoPipeline)
-        assertTrue(vivo is VivoVideoPipeline)
+        assertTrue(custom is CustomVideoPipeline)
 
         assertFalse(normal.isCustomPipeline)
-        assertTrue(iphone.isCustomPipeline)
-        assertTrue(samsung.isCustomPipeline)
-        assertTrue(vivo.isCustomPipeline)
+        assertTrue(custom.isCustomPipeline)
 
         assertFalse(VideoPipelineManager.isCustomPipeline(VideoPipelineType.NORMAL))
-        assertTrue(VideoPipelineManager.isCustomPipeline(VideoPipelineType.IPHONE))
-        assertTrue(VideoPipelineManager.isCustomPipeline(VideoPipelineType.SAMSUNG))
-        assertTrue(VideoPipelineManager.isCustomPipeline(VideoPipelineType.VIVO))
+        assertTrue(VideoPipelineManager.isCustomPipeline(VideoPipelineType.CUSTOM))
 
         assertEquals("Normal", normal.displayName)
-        assertEquals("iPhone", iphone.displayName)
-        assertEquals("Samsung", samsung.displayName)
-        assertEquals("Vivo", vivo.displayName)
+        assertEquals("Custom Pipeline", custom.displayName)
     }
 
     @Test
     fun testIndependentStageParamsAndTonemapCurves() {
         val normalParams = VideoPipelineManager.getPipeline(VideoPipelineType.NORMAL).stageParams
-        val iphoneParams = VideoPipelineManager.getPipeline(VideoPipelineType.IPHONE).stageParams
-        val samsungParams = VideoPipelineManager.getPipeline(VideoPipelineType.SAMSUNG).stageParams
-        val vivoParams = VideoPipelineManager.getPipeline(VideoPipelineType.VIVO).stageParams
+        val customParams = VideoPipelineManager.getPipeline(VideoPipelineType.CUSTOM).stageParams
 
-        assertNotEquals(normalParams, iphoneParams)
-        assertNotEquals(iphoneParams, samsungParams)
-        assertNotEquals(samsungParams, vivoParams)
+        assertNotEquals(normalParams, customParams)
 
-        // Verify independent Stage 0 ISP tone curves are generated accurately
-        val iphoneCurve = iphoneParams.buildCustomIspTonemapCurve()
-        val samsungCurve = samsungParams.buildCustomIspTonemapCurve()
-        val vivoCurve = vivoParams.buildCustomIspTonemapCurve()
-
-        assertNotNull(iphoneCurve)
-        assertNotNull(samsungCurve)
-        assertNotNull(vivoCurve)
-    }
-
-    @Test
-    fun testIPhoneVideoPipelineCharacteristics() {
-        val pipeline = VideoPipelineManager.getPipeline(VideoPipelineType.IPHONE)
-        val agsl = pipeline.getAgslShaderCode()
-        val glsl = pipeline.getGlFragmentShaderCode()
-
-        assertTrue("AGSL shader must not be empty", agsl.isNotEmpty())
-        assertTrue("GLSL shader must not be empty", glsl.isNotEmpty())
-        assertTrue("AGSL should contain 5-tap spatial convolution", agsl.contains("highFreqDetail"))
-        assertTrue("GLSL should contain 5-tap spatial convolution", glsl.contains("highFreqDetail"))
-        assertTrue("AGSL should contain Smart HDR highlight retention", agsl.contains("hlCompression"))
-        assertTrue("GLSL should contain Smart HDR highlight retention", glsl.contains("hlCompression"))
-        assertTrue("AGSL should contain Subject Separation bell curve", agsl.contains("subjectDist"))
-        assertTrue("AGSL should contain Skin tone protection", agsl.contains("isSkin"))
-
-        val matrix = pipeline.computeColorMatrix()
-        assertNotNull(matrix)
-        val arr = matrix.array
-        assertEquals(20, arr.size)
-        // Red channel offset should have slight warm daylight boost
-        assertTrue("Red offset should be positive for Apple warm daylight", arr[4] > 0f)
-    }
-
-    @Test
-    fun testSamsungVideoPipelineCharacteristics() {
-        val pipeline = VideoPipelineManager.getPipeline(VideoPipelineType.SAMSUNG)
-        val agsl = pipeline.getAgslShaderCode()
-        val glsl = pipeline.getGlFragmentShaderCode()
-
-        assertTrue(agsl.isNotEmpty())
-        assertTrue(glsl.isNotEmpty())
-        assertTrue("AGSL should contain 5-tap spatial convolution", agsl.contains("edgeDetail"))
-        assertTrue("GLSL should contain 5-tap spatial convolution", glsl.contains("edgeDetail"))
-        assertTrue("AGSL should contain lifted shadows toe curve", agsl.contains("shadowToe"))
-        assertTrue("AGSL should contain bright midtone gain", agsl.contains("midtoneGain"))
-        assertTrue("AGSL should contain rich highlight knee protection", agsl.contains("hlThreshold"))
-
-        val matrix = pipeline.computeColorMatrix()
-        assertNotNull(matrix)
-        val arr = matrix.array
-        assertEquals(20, arr.size)
-        // High saturation boost
-        assertTrue("Samsung should have high red gain", arr[0] > 1.05f)
-    }
-
-    @Test
-    fun testVivoVideoPipelineCharacteristics() {
-        val pipeline = VideoPipelineManager.getPipeline(VideoPipelineType.VIVO)
-        val agsl = pipeline.getAgslShaderCode()
-        val glsl = pipeline.getGlFragmentShaderCode()
-
-        assertTrue(agsl.isNotEmpty())
-        assertTrue(glsl.isNotEmpty())
-        assertTrue("AGSL should contain 5-tap spatial convolution", agsl.contains("microDetail"))
-        assertTrue("GLSL should contain 5-tap spatial convolution", glsl.contains("microDetail"))
-        assertTrue("AGSL should contain controlled knee highlight compression", agsl.contains("knee"))
-        assertTrue("AGSL should contain clean shadow detail lift", agsl.contains("shadowT"))
-        assertTrue("AGSL should contain micro-contrast clarity", agsl.contains("clarityMask"))
-
-        val matrix = pipeline.computeColorMatrix()
-        assertNotNull(matrix)
-        val arr = matrix.array
-        assertEquals(20, arr.size)
-    }
-
-    @Test
-    fun testSharedLogToNaturalRec709Foundation() {
-        val customTypes = listOf(
-            VideoPipelineType.IPHONE,
-            VideoPipelineType.SAMSUNG,
-            VideoPipelineType.VIVO
-        )
-
-        for (type in customTypes) {
-            val pipeline = VideoPipelineManager.getPipeline(type)
-            val agsl = pipeline.getAgslShaderCode()
-            val glsl = pipeline.getGlFragmentShaderCode()
-
-            // Verify each custom pipeline internally starts with the same natural LOG -> Rec.709 conversion foundation
-            assertTrue("${type.name} AGSL must contain cameraToSceneLog", agsl.contains("cameraToSceneLog"))
-            assertTrue("${type.name} GLSL must contain cameraToSceneLog", glsl.contains("cameraToSceneLog"))
-            assertTrue("${type.name} AGSL must contain sceneLogToNaturalRec709", agsl.contains("sceneLogToNaturalRec709"))
-            assertTrue("${type.name} GLSL must contain sceneLogToNaturalRec709", glsl.contains("sceneLogToNaturalRec709"))
-        }
-    }
-
-    @Test
-    fun testSamsungGreenPopAndSkinSafeguard() {
-        val pipeline = VideoPipelineManager.getPipeline(VideoPipelineType.SAMSUNG)
-        val agsl = pipeline.getAgslShaderCode()
-        val glsl = pipeline.getGlFragmentShaderCode()
-
-        assertTrue("Samsung AGSL must contain green pop engine", agsl.contains("greenPopMask"))
-        assertTrue("Samsung GLSL must contain green pop engine", glsl.contains("greenPopMask"))
-        assertTrue("Samsung AGSL must contain skin safeguard", agsl.contains("isSkin"))
-        assertTrue("Samsung GLSL must contain skin safeguard", glsl.contains("isSkin"))
+        val customCurve = customParams.buildCustomIspTonemapCurve()
+        assertNotNull(customCurve)
     }
 
     @Test
@@ -190,14 +70,8 @@ class VideoPipelineTest {
 
     @Test
     fun testPreferencesPersistence() {
-        preferences.videoPipeline = VideoPipelineType.IPHONE
-        assertEquals(VideoPipelineType.IPHONE, preferences.videoPipeline)
-
-        preferences.videoPipeline = VideoPipelineType.SAMSUNG
-        assertEquals(VideoPipelineType.SAMSUNG, preferences.videoPipeline)
-
-        preferences.videoPipeline = VideoPipelineType.VIVO
-        assertEquals(VideoPipelineType.VIVO, preferences.videoPipeline)
+        preferences.videoPipeline = VideoPipelineType.CUSTOM
+        assertEquals(VideoPipelineType.CUSTOM, preferences.videoPipeline)
 
         preferences.videoPipeline = VideoPipelineType.NORMAL
         assertEquals(VideoPipelineType.NORMAL, preferences.videoPipeline)
@@ -207,14 +81,8 @@ class VideoPipelineTest {
     fun testViewApplicationAndClearing() {
         val textureView = TextureView(context)
 
-        // Applying iPhone pipeline
-        VideoPipelineManager.applyPipelineToView(textureView, VideoPipelineType.IPHONE)
-
-        // Switching to Samsung pipeline
-        VideoPipelineManager.applyPipelineToView(textureView, VideoPipelineType.SAMSUNG)
-
-        // Switching to Vivo pipeline
-        VideoPipelineManager.applyPipelineToView(textureView, VideoPipelineType.VIVO)
+        // Applying custom pipeline
+        VideoPipelineManager.applyPipelineToView(textureView, VideoPipelineType.CUSTOM)
 
         // Clearing
         VideoPipelineManager.clearPipelineFromView(textureView)

@@ -43,12 +43,12 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 // Vibrant yellow accent matching the reference screenshots
-val AccentYellow = Color(0xFFFFD54F)
-val WindowDarkBg = Color(0xF212141A)
-val CardDarkBg = Color(0xFF1B1D26)
-val UnselectedPillBg = Color(0xFF1E212B)
-val SelectedPillBg = Color(0xFF383C4A)
-val UnselectedTextColor = Color(0xFF7E8494)
+private val AccentYellow = Color(0xFFFFD54F)
+private val WindowDarkBg = Color(0xF212141A)
+private val CardDarkBg = Color(0xFF1B1D26)
+private val UnselectedPillBg = Color(0xFF1E212B)
+private val SelectedPillBg = Color(0xFF383C4A)
+private val UnselectedTextColor = Color(0xFF7E8494)
 
 /**
  * Floating Video Adjustments settings window closely matching the reference screenshots.

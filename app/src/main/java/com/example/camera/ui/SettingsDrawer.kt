@@ -855,19 +855,6 @@ private fun VideoSettingsPage(
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
         item {
-            SettingsSegmentedCard(
-                title = "Video Processing Pipeline",
-                description = "Dedicated independent computational processing pipeline: ${selectedVideoPipeline.subtitle}. ${selectedVideoPipeline.description}",
-                options = listOf(
-                    com.example.camera.videopipeline.VideoPipelineType.NORMAL to "Normal",
-                    com.example.camera.videopipeline.VideoPipelineType.CUSTOM to "Custom Pipeline"
-                ),
-                selectedOption = selectedVideoPipeline,
-                onOptionSelected = onVideoPipelineSelected
-            )
-        }
-
-        item {
             val supportedResolutions = capabilities.supportedVideoResolutions
             if (supportedResolutions.isNotEmpty()) {
                 val current = selectedVideoResolution ?: supportedResolutions.first()

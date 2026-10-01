@@ -442,47 +442,11 @@ fun CameraScreen(
         }
 
         // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
-        if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+        if (cameraMode == CameraMode.VIDEO) {
             VideoAdjustmentsViewfinderOverlay(
                 adjustments = videoAdjustments,
                 modifier = Modifier.fillMaxSize()
             )
-        }
-
-        // 1d. Dedicated Video Pipeline On-Screen Indicator (Video Mode)
-        if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-            val badgeColor = Color(0xFFFFD54F)
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = if (isHorizonLockEnabled || isDollyZoomActive) 96.dp else 58.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xCC0D0F18))
-                    .border(1.dp, badgeColor.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
-                    .clickable { viewModel.setVideoSettingsPanelOpen(true) }
-                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                    .testTag("video_pipeline_badge")
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(badgeColor)
-                    )
-                    Text(
-                        text = "${selectedVideoPipeline.title.uppercase()} VIDEO • ${selectedVideoPipeline.subtitle.uppercase()}",
-                        color = badgeColor,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.6.sp
-                    )
-                }
-            }
         }
 
         // 1b. Cinema Viewfinder Assist Overlays (Waveform, Peaking, Zebras)
@@ -806,10 +770,9 @@ fun CameraScreen(
             }
         }
 
-        // 3d0. Dedicated Video Adjustments Panel (Normal Video Pipeline only; bypassed when Custom Video Pipeline is active)
+        // 3d0. Dedicated Video Adjustments Panel
         AnimatedVisibility(
             visible = cameraMode == CameraMode.VIDEO &&
-                    selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.NORMAL &&
                     isVideoAdjustmentsOpen,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
             exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),

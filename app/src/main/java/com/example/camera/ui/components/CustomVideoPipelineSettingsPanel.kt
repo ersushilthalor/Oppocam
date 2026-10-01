@@ -31,7 +31,7 @@ import kotlin.math.roundToInt
 
 private val AccentGold = Color(0xFFFFD54F)
 private val PanelDarkBg = Color(0xF210121A)
-private val CardDarkBg = Color(0xFF181B24)
+private val PipelineCardDarkBg = Color(0xFF181B24)
 private val PillUnselectedBg = Color(0xFF1E222D)
 private val PillSelectedBg = Color(0xFF333847)
 
@@ -471,7 +471,7 @@ private fun PipelineSliderItem(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(CardDarkBg)
+            .background(PipelineCardDarkBg)
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Row(
@@ -521,7 +521,7 @@ private fun PipelineSegmentedSelector(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(CardDarkBg)
+            .background(PipelineCardDarkBg)
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Text(
