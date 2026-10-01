@@ -7,18 +7,23 @@ import java.io.File
 import java.util.WeakHashMap
 
 /**
- * Central Coordinator for Independent Video Processing Pipelines.
- * Manages pipeline instances, sensor/ISP CaptureRequest isolation, live preview shader switching,
- * real-time custom pipeline OpenGL recording, and recorded video processing.
+ * Central Coordinator for Video Processing Pipelines in Video Mode.
+ *
+ * Manages:
+ * - [NormalVideoPipeline]: Default standard video pipeline.
+ * - [CustomVideoPipeline]: The dedicated "Custom Pipeline" based on Cinema Mode Natural Profile.
  */
 object VideoPipelineManager {
 
     private val normalPipeline = NormalVideoPipeline()
-    private val iPhonePipeline = IPhoneVideoPipeline()
-    private val samsungPipeline = SamsungVideoPipeline()
-    private val vivoPipeline = VivoVideoPipeline()
+    private val customPipeline = CustomVideoPipeline()
 
     private val activeViewPipelines = WeakHashMap<View, VideoPipelineType>()
+
+    /**
+     * Access the singleton [CustomVideoPipeline] instance to tune or inspect settings.
+     */
+    fun getCustomPipeline(): CustomVideoPipeline = customPipeline
 
     @Synchronized
     fun getActiveViewPipeline(view: View): VideoPipelineType? {
@@ -40,9 +45,7 @@ object VideoPipelineManager {
     fun getPipeline(type: VideoPipelineType): IVideoPipeline {
         return when (type) {
             VideoPipelineType.NORMAL -> normalPipeline
-            VideoPipelineType.IPHONE -> iPhonePipeline
-            VideoPipelineType.SAMSUNG -> samsungPipeline
-            VideoPipelineType.VIVO -> vivoPipeline
+            VideoPipelineType.CUSTOM -> customPipeline
         }
     }
 
@@ -56,8 +59,8 @@ object VideoPipelineManager {
 
     /**
      * Applies the selected pipeline's Stage 0 hardware ISP configuration to the Camera2 [builder].
-     * When a custom pipeline is active, this overrides default normal video tone mapping, edge
-     * enhancement, noise reduction, and exposure bias with the custom pipeline's own curve.
+     * When Custom Pipeline is active, overrides default normal video tone mapping, edge
+     * enhancement, noise reduction, and exposure bias with the Rec.2020 Natural Log curve.
      */
     fun applyPipelineToCaptureRequest(
         builder: CaptureRequest.Builder,
@@ -70,7 +73,7 @@ object VideoPipelineManager {
 
     /**
      * Applies the designated video pipeline to the viewfinder [view].
-     * If [type] is [VideoPipelineType.NORMAL], any active dedicated pipeline effect is cleared.
+     * If [type] is [VideoPipelineType.NORMAL], any active custom pipeline effect is cleared.
      */
     fun applyPipelineToView(view: View, type: VideoPipelineType) {
         if (type == VideoPipelineType.NORMAL) {
@@ -84,10 +87,9 @@ object VideoPipelineManager {
      * Clears all pipeline shader effects from the viewfinder [view].
      */
     fun clearPipelineFromView(view: View) {
-        iPhonePipeline.clearFromView(view)
-        samsungPipeline.clearFromView(view)
-        vivoPipeline.clearFromView(view)
+        customPipeline.clearFromView(view)
         normalPipeline.clearFromView(view)
+        markActiveViewPipeline(view, null)
     }
 
     /**
@@ -108,4 +110,3 @@ object VideoPipelineManager {
         )
     }
 }
-

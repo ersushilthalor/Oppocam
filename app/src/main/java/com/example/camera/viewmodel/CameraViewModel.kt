@@ -451,6 +451,53 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // Custom Video Pipeline State (Dedicated "Custom Pipeline" in Video Mode)
+    private val _customVideoPipelineConfig = MutableStateFlow(preferences.getCustomVideoPipelineConfig())
+    val customVideoPipelineConfig: StateFlow<com.example.camera.videopipeline.CustomVideoPipelineConfig> = _customVideoPipelineConfig.asStateFlow()
+
+    private val _isCustomVideoPipelineSettingsOpen = MutableStateFlow(false)
+    val isCustomVideoPipelineSettingsOpen: StateFlow<Boolean> = _isCustomVideoPipelineSettingsOpen.asStateFlow()
+
+    fun setCustomVideoPipelineSettingsOpen(isOpen: Boolean) {
+        _isCustomVideoPipelineSettingsOpen.value = isOpen
+        if (isOpen) {
+            _isVideoSettingsPanelOpen.value = false
+            _isVideoAdjustmentsOpen.value = false
+            _isSettingsOpen.value = false
+            _isManualProOpen.value = false
+        }
+    }
+
+    fun toggleCustomVideoPipelineSettingsOpen() {
+        setCustomVideoPipelineSettingsOpen(!_isCustomVideoPipelineSettingsOpen.value)
+    }
+
+    private var saveCustomVideoPipelineJob: kotlinx.coroutines.Job? = null
+
+    fun updateCustomVideoPipelineConfig(config: com.example.camera.videopipeline.CustomVideoPipelineConfig) {
+        _customVideoPipelineConfig.value = config
+        com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(config)
+        engine.updatePreviewSettings()
+
+        saveCustomVideoPipelineJob?.cancel()
+        saveCustomVideoPipelineJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            kotlinx.coroutines.delay(300)
+            preferences.saveCustomVideoPipelineConfig(config)
+        }
+    }
+
+    fun resetCustomVideoPipelineConfig() {
+        saveCustomVideoPipelineJob?.cancel()
+        val defaultCfg = com.example.camera.videopipeline.CustomVideoPipelineConfig()
+        _customVideoPipelineConfig.value = defaultCfg
+        com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(defaultCfg)
+        engine.updatePreviewSettings()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            preferences.saveCustomVideoPipelineConfig(defaultCfg)
+        }
+        showToast("Custom Pipeline reset to Cinema Natural baseline")
+    }
+
     fun updateCinemaConfig(config: CinemaConfig) {
         engine.setCinemaConfig(config)
         preferences.saveCinemaConfig(config)
@@ -746,6 +793,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setCinemaConfig(preferences.getCinemaConfig())
         engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
+        com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(_customVideoPipelineConfig.value)
 
         if (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
             engine.setHorizonLockEnabled(true)

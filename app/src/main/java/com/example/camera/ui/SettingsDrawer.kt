@@ -860,9 +860,7 @@ private fun VideoSettingsPage(
                 description = "Dedicated independent computational processing pipeline: ${selectedVideoPipeline.subtitle}. ${selectedVideoPipeline.description}",
                 options = listOf(
                     com.example.camera.videopipeline.VideoPipelineType.NORMAL to "Normal",
-                    com.example.camera.videopipeline.VideoPipelineType.IPHONE to "iPhone",
-                    com.example.camera.videopipeline.VideoPipelineType.SAMSUNG to "Samsung",
-                    com.example.camera.videopipeline.VideoPipelineType.VIVO to "Vivo"
+                    com.example.camera.videopipeline.VideoPipelineType.CUSTOM to "Custom Pipeline"
                 ),
                 selectedOption = selectedVideoPipeline,
                 onOptionSelected = onVideoPipelineSelected

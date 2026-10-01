@@ -490,10 +490,8 @@ class CinemaEngine(private val context: Context) {
             config.manualIso?.let { builder.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
             config.manualShutterSpeedNs?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
         } else {
-            val currentAeMode = builder.get(CaptureRequest.CONTROL_AE_MODE)
-            if (currentAeMode == null || currentAeMode == CaptureRequest.CONTROL_AE_MODE_OFF) {
-                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-            }
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            builder.set(CaptureRequest.CONTROL_AE_LOCK, false)
         }
     }
 

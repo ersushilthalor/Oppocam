@@ -1696,8 +1696,17 @@ class Camera2Engine(private val context: Context) {
             index
         }
         exposureCompensationIndex = clamped
+        isAeLocked = false
+        if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) {
+            manualIso = null
+            manualExposureTimeNs = null
+        }
         if (currentMode == CameraMode.CINEMA) {
-            _cinemaConfig.value = _cinemaConfig.value.copy(exposureCompensation = clamped)
+            _cinemaConfig.value = _cinemaConfig.value.copy(
+                exposureCompensation = clamped,
+                manualIso = null,
+                manualShutterSpeedNs = null
+            )
             cinemaEngine.config = _cinemaConfig.value
         }
         updatePreviewSettings()
@@ -2733,14 +2742,16 @@ class Camera2Engine(private val context: Context) {
         val maxEv = caps.maxExposureCompensation
         val clampedEv = if (minEv <= maxEv) evToApply.coerceIn(minEv, maxEv) else 0
 
+        val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
+
         // AE & Manual Exposure / ISO
-        if (manualIso != null || manualExposureTimeNs != null) {
+        if (!isVideoOrCinema && (manualIso != null || manualExposureTimeNs != null)) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             manualIso?.let { builder.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
             manualExposureTimeNs?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
         } else {
             // Auto Exposure mode + Flash configuration (safely verifying hardware flash support)
-            if (!caps.supportsFlash || flashMode == FlashMode.OFF) {
+            if (!caps.supportsFlash || flashMode == FlashMode.OFF || isVideoOrCinema) {
                 builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
             } else {
@@ -2764,7 +2775,8 @@ class Camera2Engine(private val context: Context) {
             }
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, clampedEv)
             if (caps.supportsAeLock) {
-                builder.set(CaptureRequest.CONTROL_AE_LOCK, isAeLocked)
+                val effectiveAeLock = if (isVideoOrCinema) false else isAeLocked
+                builder.set(CaptureRequest.CONTROL_AE_LOCK, effectiveAeLock)
             }
         }
 

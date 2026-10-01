@@ -451,12 +451,7 @@ fun CameraScreen(
 
         // 1d. Dedicated Video Pipeline On-Screen Indicator (Video Mode)
         if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-            val badgeColor = when (selectedVideoPipeline) {
-                com.example.camera.videopipeline.VideoPipelineType.IPHONE -> Color(0xFFFFB74D)
-                com.example.camera.videopipeline.VideoPipelineType.SAMSUNG -> Color(0xFF64B5F6)
-                com.example.camera.videopipeline.VideoPipelineType.VIVO -> Color(0xFF81C784)
-                else -> Color(0xFFFFD54F)
-            }
+            val badgeColor = Color(0xFFFFD54F)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)

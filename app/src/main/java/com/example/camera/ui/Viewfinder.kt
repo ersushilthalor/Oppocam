@@ -792,9 +792,7 @@ fun Viewfinder(
                     }
                 } else if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
                     val pipelineAccent = when (selectedVideoPipeline) {
-                        com.example.camera.videopipeline.VideoPipelineType.IPHONE -> Color(0xFFFFD54F)
-                        com.example.camera.videopipeline.VideoPipelineType.SAMSUNG -> Color(0xFF40C4FF)
-                        com.example.camera.videopipeline.VideoPipelineType.VIVO -> Color(0xFF2979FF)
+                        com.example.camera.videopipeline.VideoPipelineType.CUSTOM -> Color(0xFFFFD54F)
                         com.example.camera.videopipeline.VideoPipelineType.NORMAL -> Color.White
                     }
                     Box(
@@ -1098,12 +1096,7 @@ fun configureTransform(
         matrix.postRotate(180f, centerX, centerY)
     }
 
-    // 5. Sensor orientation adjustments if non-standard (e.g. 270° inverted sensors)
-    if (sensorOrientation == 270) {
-        matrix.postRotate(180f, centerX, centerY)
-    }
-
-    // 6. Existing camera feature integration: Stable Action Horizon Lock & Dolly Zoom
+    // 5. Existing camera feature integration: Stable Action Horizon Lock & Dolly Zoom
     if (isHorizonLockEnabled) {
         val angleDeg = -horizonRollDegrees
         matrix.postRotate(angleDeg, centerX, centerY)
@@ -1153,11 +1146,22 @@ internal fun updateTextureViewTransform(
     viewWidth: Int = 0,
     viewHeight: Int = 0
 ) {
+    val displayRotation = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            textureView.display?.rotation ?: Surface.ROTATION_0
+        } else {
+            val wm = textureView.context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            wm?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+        }
+    } catch (e: Exception) {
+        Surface.ROTATION_0
+    }
+
     configureTransform(
         textureView = textureView,
         previewBufferSize = previewBufferSize,
         targetRatio = targetRatio,
-        displayRotation = Surface.ROTATION_0,
+        displayRotation = displayRotation,
         sensorOrientation = sensorOrientation,
         isHorizonLockEnabled = isHorizonLockEnabled,
         horizonRollDegrees = horizonRollDegrees,

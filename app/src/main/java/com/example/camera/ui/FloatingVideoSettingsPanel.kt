@@ -14,6 +14,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Camera
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -46,6 +47,7 @@ fun FloatingVideoSettingsPanel(
     onFpsSelected: (Int) -> Unit,
     onUltraStabilizationToggle: () -> Unit = {},
     onVideoPipelineSelected: (com.example.camera.videopipeline.VideoPipelineType) -> Unit = {},
+    onOpenCustomPipelineSettings: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -158,6 +160,51 @@ fun FloatingVideoSettingsPanel(
                     lineHeight = 15.sp,
                     modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp)
                 )
+
+                if (selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(accentColor.copy(alpha = 0.15f))
+                            .border(1.dp, accentColor.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                            .clickable {
+                                onDismiss()
+                                onOpenCustomPipelineSettings()
+                            }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .testTag("tune_custom_pipeline_btn")
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Tune,
+                                    contentDescription = "Tune Custom Pipeline",
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Tune Custom Pipeline (25 ISP Controls)",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = "OPEN",
+                                color = accentColor,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+                }
 
                 if (appearance.showVideoResolution) {
                     Spacer(modifier = Modifier.height(14.dp))

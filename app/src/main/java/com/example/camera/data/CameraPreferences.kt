@@ -1454,4 +1454,71 @@ class CameraPreferences(context: Context) {
             .putFloat("pref_va_tex_micro_contrast", va.textureMicroContrast)
             .apply()
     }
+
+    fun getCustomVideoPipelineConfig(): com.example.camera.videopipeline.CustomVideoPipelineConfig {
+        return com.example.camera.videopipeline.CustomVideoPipelineConfig(
+            exposure = prefs.getFloat("pref_cvp_exposure", 0.0f),
+            highlightRecovery = prefs.getFloat("pref_cvp_hl_recovery", 0.40f),
+            shadowRecovery = prefs.getFloat("pref_cvp_sh_recovery", 0.35f),
+            blackLevel = prefs.getFloat("pref_cvp_black_level", 0.0f),
+            midtoneControl = prefs.getFloat("pref_cvp_midtone", 0.0f),
+            contrast = prefs.getFloat("pref_cvp_contrast", 0.0f),
+            localContrast = prefs.getFloat("pref_cvp_local_contrast", 0.15f),
+            highlightRollOff = prefs.getFloat("pref_cvp_hl_rolloff", 0.45f),
+            shadowRollOff = prefs.getFloat("pref_cvp_sh_rolloff", 0.30f),
+            whiteBalance = try {
+                com.example.camera.model.WhiteBalanceMode.valueOf(
+                    prefs.getString("pref_cvp_wb", com.example.camera.model.WhiteBalanceMode.AUTO.name)
+                        ?: com.example.camera.model.WhiteBalanceMode.AUTO.name
+                )
+            } catch (e: Exception) {
+                com.example.camera.model.WhiteBalanceMode.AUTO
+            },
+            temperature = prefs.getFloat("pref_cvp_temperature", 0.0f),
+            tint = prefs.getFloat("pref_cvp_tint", 0.0f),
+            saturation = prefs.getFloat("pref_cvp_saturation", 1.0f),
+            vibrance = prefs.getFloat("pref_cvp_vibrance", 0.0f),
+            colorMatrixPreset = prefs.getInt("pref_cvp_colormatrix_preset", 0),
+            lumaCurvePreset = prefs.getInt("pref_cvp_lumacurve_preset", 0),
+            chromaStrength = prefs.getFloat("pref_cvp_chroma_strength", 1.0f),
+            lumaNoiseReduction = prefs.getFloat("pref_cvp_luma_nr", 0.25f),
+            chromaNoiseReduction = prefs.getFloat("pref_cvp_chroma_nr", 0.30f),
+            temporalNoiseReduction = prefs.getFloat("pref_cvp_temporal_nr", 0.50f),
+            sharpening = prefs.getFloat("pref_cvp_sharpening", 0.20f),
+            microContrast = prefs.getFloat("pref_cvp_micro_contrast", 0.12f),
+            hdrToneMappingStrength = prefs.getFloat("pref_cvp_hdr_strength", 0.35f),
+            localToneMapping = prefs.getFloat("pref_cvp_local_tm", 0.20f),
+            outputGamma = prefs.getFloat("pref_cvp_output_gamma", 2.2f)
+        )
+    }
+
+    fun saveCustomVideoPipelineConfig(config: com.example.camera.videopipeline.CustomVideoPipelineConfig) {
+        prefs.edit()
+            .putFloat("pref_cvp_exposure", config.exposure)
+            .putFloat("pref_cvp_hl_recovery", config.highlightRecovery)
+            .putFloat("pref_cvp_sh_recovery", config.shadowRecovery)
+            .putFloat("pref_cvp_black_level", config.blackLevel)
+            .putFloat("pref_cvp_midtone", config.midtoneControl)
+            .putFloat("pref_cvp_contrast", config.contrast)
+            .putFloat("pref_cvp_local_contrast", config.localContrast)
+            .putFloat("pref_cvp_hl_rolloff", config.highlightRollOff)
+            .putFloat("pref_cvp_sh_rolloff", config.shadowRollOff)
+            .putString("pref_cvp_wb", config.whiteBalance.name)
+            .putFloat("pref_cvp_temperature", config.temperature)
+            .putFloat("pref_cvp_tint", config.tint)
+            .putFloat("pref_cvp_saturation", config.saturation)
+            .putFloat("pref_cvp_vibrance", config.vibrance)
+            .putInt("pref_cvp_colormatrix_preset", config.colorMatrixPreset)
+            .putInt("pref_cvp_lumacurve_preset", config.lumaCurvePreset)
+            .putFloat("pref_cvp_chroma_strength", config.chromaStrength)
+            .putFloat("pref_cvp_luma_nr", config.lumaNoiseReduction)
+            .putFloat("pref_cvp_chroma_nr", config.chromaNoiseReduction)
+            .putFloat("pref_cvp_temporal_nr", config.temporalNoiseReduction)
+            .putFloat("pref_cvp_sharpening", config.sharpening)
+            .putFloat("pref_cvp_micro_contrast", config.microContrast)
+            .putFloat("pref_cvp_hdr_strength", config.hdrToneMappingStrength)
+            .putFloat("pref_cvp_local_tm", config.localToneMapping)
+            .putFloat("pref_cvp_output_gamma", config.outputGamma)
+            .apply()
+    }
 }
