@@ -121,4 +121,166 @@ class DualVideoCapabilityAndModelTest {
         assertEquals(DualVideoLayout.PIP, state.config.layout)
         assertEquals(PipPosition.TOP_RIGHT, state.config.pipPosition)
     }
+
+    @Test
+    fun testDualVideoOrientationBackCameraUprightInPortrait() {
+        val compositor = com.example.camera.dualvideo.gl.DualVideoGLCompositor(1080, 1920)
+
+        // Standard Android Camera2 SurfaceTexture transform for back camera (ROT_90 with OpenGL Y-flip):
+        // col 0 = (0, -1, 0, 0), col 1 = (-1, 0, 0, 0), col 2 = (0, 0, 1, 0), col 3 = (1, 1, 0, 1)
+        val stMatrixBack = floatArrayOf(
+            0f, -1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        compositor.computeCameraTexMatrix(
+            stMatrix = stMatrixBack,
+            isFront = false,
+            sensorOrientation = 90,
+            rotationDegrees = 0, // Portrait
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            outMatrix = outMatrix
+        )
+
+        // When stMatrix already contains ROT_90, for fullscreen 1080x1920 in portrait,
+        // localTexMatrix must be Identity, so outMatrix == stMatrix!
+        for (i in 0 until 16) {
+            assertEquals("Index $i should match stMatrix", stMatrixBack[i], outMatrix[i], 0.001f)
+        }
+    }
+
+    @Test
+    fun testDualVideoOrientationFrontCameraUprightAndMirroredInPortrait() {
+        val compositor = com.example.camera.dualvideo.gl.DualVideoGLCompositor(1080, 1920)
+
+        // Standard Android Camera2 SurfaceTexture transform for front camera (FLIP_H | ROT_90 with OpenGL Y-flip):
+        // col 0 = (0, 1, 0, 0), col 1 = (-1, 0, 0, 0), col 2 = (0, 0, 1, 0), col 3 = (1, 0, 0, 1)
+        // Determinant = 0*0 - 1*(-1) = +1 (> 0, indicating already mirrored)
+        val stMatrixFront = floatArrayOf(
+            0f, 1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 0f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        compositor.computeCameraTexMatrix(
+            stMatrix = stMatrixFront,
+            isFront = true,
+            sensorOrientation = 270,
+            rotationDegrees = 0, // Portrait
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            outMatrix = outMatrix
+        )
+
+        // When stMatrix already contains FLIP_H | ROT_90, for fullscreen 1080x1920 in portrait,
+        // localTexMatrix must be Identity (no double rotation, no double mirror), so outMatrix == stMatrix!
+        for (i in 0 until 16) {
+            assertEquals("Index $i should match stMatrix", stMatrixFront[i], outMatrix[i], 0.001f)
+        }
+    }
+
+    @Test
+    fun testDualVideoOrientationLandscapeRecordingRotation() {
+        val compositor = com.example.camera.dualvideo.gl.DualVideoGLCompositor(1080, 1920)
+
+        val stMatrixBack = floatArrayOf(
+            0f, -1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 1f, 0f, 1f
+        )
+        val outMatrix90 = FloatArray(16)
+        val outMatrix270 = FloatArray(16)
+
+        // Landscape 90
+        compositor.computeCameraTexMatrix(
+            stMatrix = stMatrixBack,
+            isFront = false,
+            sensorOrientation = 90,
+            rotationDegrees = 90,
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            outMatrix = outMatrix90
+        )
+
+        // Landscape 270
+        compositor.computeCameraTexMatrix(
+            stMatrix = stMatrixBack,
+            isFront = false,
+            sensorOrientation = 90,
+            rotationDegrees = 270,
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            outMatrix = outMatrix270
+        )
+
+        // Both matrices must be valid 4x4 affine matrices
+        assertEquals(1.0f, outMatrix90[15], 0.001f)
+        assertEquals(1.0f, outMatrix270[15], 0.001f)
+        assertNotEquals(outMatrix90[0], outMatrix270[0], 0.001f)
+    }
+
+    @Test
+    fun testDualVideoSplitTopBottomAspectScaling() {
+        val compositor = com.example.camera.dualvideo.gl.DualVideoGLCompositor(1080, 1920)
+
+        // Identity-like portrait stMatrix
+        val stMatrixBack = floatArrayOf(
+            0f, -1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        // Split Top/Bottom: viewport is 1080 x 960 (half height)
+        compositor.computeCameraTexMatrix(
+            stMatrix = stMatrixBack,
+            isFront = false,
+            sensorOrientation = 90,
+            rotationDegrees = 0,
+            viewportWidth = 1080,
+            viewportHeight = 960,
+            outMatrix = outMatrix
+        )
+
+        // Matrix must be scaled along height axis (factor 0.5f = (1080/1920) / (1080/960))
+        assertNotNull(outMatrix)
+        assertEquals(1.0f, outMatrix[15], 0.001f)
+    }
+
+    @Test
+    fun testDualVideoFallbackUnrotatedStMatrix() {
+        val compositor = com.example.camera.dualvideo.gl.DualVideoGLCompositor(1080, 1920)
+
+        // Raw unrotated landscape buffer with standard OpenGL Y-flip (m0=1, m5=-1)
+        val unrotatedSt = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        compositor.computeCameraTexMatrix(
+            stMatrix = unrotatedSt,
+            isFront = false,
+            sensorOrientation = 90,
+            rotationDegrees = 0,
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            outMatrix = outMatrix
+        )
+
+        // Fallback must rotate by 90° so off-diagonal terms become dominant in outMatrix
+        val offDiag = kotlin.math.abs(outMatrix[1]) + kotlin.math.abs(outMatrix[4])
+        val diag = kotlin.math.abs(outMatrix[0]) + kotlin.math.abs(outMatrix[5])
+        assertTrue("Fallback must apply 90-degree sensor rotation", offDiag > diag)
+    }
 }

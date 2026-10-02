@@ -76,15 +76,24 @@ fun DualVideoScreen(
         val containerWidth = maxWidth
         val containerHeight = maxHeight
 
-        // Exactly matches normal Video mode 9:16 portrait framing (16:9 vertical frame)
+        // Viewfinder aspect ratio box matching normal Video mode
+        val isLandscapeContainer = containerWidth > containerHeight
         val targetRatio = 16f / 9f
-        val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
-            containerWidth to (containerWidth * targetRatio)
+        val (targetWidth, targetHeight) = if (isLandscapeContainer) {
+            if (containerHeight * targetRatio <= containerWidth) {
+                (containerHeight * targetRatio) to containerHeight
+            } else {
+                containerWidth to (containerWidth / targetRatio)
+            }
         } else {
-            (containerHeight / targetRatio) to containerHeight
+            if (containerWidth * targetRatio <= containerHeight) {
+                containerWidth to (containerWidth * targetRatio)
+            } else {
+                (containerHeight / targetRatio) to containerHeight
+            }
         }
 
-        // 1. Live Dual Camera OpenGL Viewfinder - centered in 9:16 aspect ratio box
+        // 1. Live Dual Camera OpenGL Viewfinder - centered in aspect ratio box
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -97,21 +106,57 @@ fun DualVideoScreen(
                 AndroidView(
                     factory = { ctx ->
                         TextureView(ctx).apply {
+                            var activeSurface: Surface? = null
+
+                            fun getDisplayRotDeg(): Int {
+                                val rot = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                                    try {
+                                        this.display?.rotation ?: Surface.ROTATION_0
+                                    } catch (e: Exception) {
+                                        Surface.ROTATION_0
+                                    }
+                                } else {
+                                    val wm = ctx.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager
+                                    @Suppress("DEPRECATION")
+                                    wm?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+                                }
+                                return when (rot) {
+                                    Surface.ROTATION_0 -> 0
+                                    Surface.ROTATION_90 -> 90
+                                    Surface.ROTATION_180 -> 180
+                                    Surface.ROTATION_270 -> 270
+                                    else -> 0
+                                }
+                            }
+
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                                     val effW = if (this@apply.width > 0) this@apply.width else w
                                     val effH = if (this@apply.height > 0) this@apply.height else h
-                                    dualEngine.setPreviewSurface(Surface(st), effW, effH)
+                                    activeSurface?.release()
+                                    val newSurf = Surface(st)
+                                    activeSurface = newSurf
+                                    dualEngine.setPreviewSurface(newSurf, effW, effH, getDisplayRotDeg())
                                 }
 
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
                                     val effW = if (this@apply.width > 0) this@apply.width else w
                                     val effH = if (this@apply.height > 0) this@apply.height else h
-                                    dualEngine.setPreviewSurface(Surface(st), effW, effH)
+                                    val surf = activeSurface
+                                    if (surf != null && surf.isValid) {
+                                        dualEngine.updatePreviewSize(effW, effH, getDisplayRotDeg())
+                                    } else {
+                                        activeSurface?.release()
+                                        val newSurf = Surface(st)
+                                        activeSurface = newSurf
+                                        dualEngine.setPreviewSurface(newSurf, effW, effH, getDisplayRotDeg())
+                                    }
                                 }
 
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                                    dualEngine.setPreviewSurface(null, 0, 0)
+                                    dualEngine.setPreviewSurface(null, 0, 0, 0)
+                                    activeSurface?.release()
+                                    activeSurface = null
                                     return true
                                 }
 

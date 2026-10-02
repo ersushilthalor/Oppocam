@@ -49,8 +49,8 @@ class DualVideoRecorder(
         val info: MediaCodec.BufferInfo
     )
 
-    private val actualWidth = minOf(videoWidth, videoHeight)
-    private val actualHeight = maxOf(videoWidth, videoHeight)
+    private val actualWidth = (videoWidth and 1.inv()).coerceAtLeast(320)
+    private val actualHeight = (videoHeight and 1.inv()).coerceAtLeast(240)
 
     private var videoEncoder: MediaCodec? = null
     private var inputSurface: Surface? = null
@@ -98,7 +98,8 @@ class DualVideoRecorder(
         outputFile = tempFile
 
         mediaMuxer = MediaMuxer(tempFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4).apply {
-            setOrientationHint(orientationHint)
+            val normalizedRot = ((orientationHint % 360) + 360) % 360
+            setOrientationHint(normalizedRot)
         }
 
         // 3. Configure Audio Encoder if enabled
@@ -416,6 +417,8 @@ class DualVideoRecorder(
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.WIDTH, actualWidth)
+            put(MediaStore.Video.Media.HEIGHT, actualHeight)
             put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
             put(MediaStore.Video.Media.DATE_TAKEN, System.currentTimeMillis())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

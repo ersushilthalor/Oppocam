@@ -50,7 +50,66 @@ class DualCameraEngine(
     private var recordingTimerJob: Job? = null
     private val isSwitching = AtomicBoolean(false)
 
+    private var lastPreviewSurface: Surface? = null
+    private var lastPreviewWidth: Int = 0
+    private var lastPreviewHeight: Int = 0
+    private var lastPreviewDisplayRotation: Int = 0
+
+    private var physicalOrientationEventListener: android.view.OrientationEventListener? = null
+    @Volatile
+    private var physicalOrientationDegrees: Int = 0
+
+    private fun initOrientationListener() {
+        if (physicalOrientationEventListener == null) {
+            physicalOrientationEventListener = object : android.view.OrientationEventListener(
+                context,
+                android.hardware.SensorManager.SENSOR_DELAY_NORMAL
+            ) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN) return
+                    physicalOrientationDegrees = when (orientation) {
+                        in 45..134 -> 270
+                        in 135..224 -> 180
+                        in 225..314 -> 90
+                        else -> 0
+                    }
+                }
+            }
+        }
+        if (physicalOrientationEventListener?.canDetectOrientation() == true) {
+            physicalOrientationEventListener?.enable()
+        }
+    }
+
+    private fun getDeviceRotationDegrees(): Int {
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager
+        val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                context.display?.rotation ?: Surface.ROTATION_0
+            } catch (e: Exception) {
+                windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+        }
+        return when (rotation) {
+            Surface.ROTATION_0 -> 0
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+    }
+
+    private fun getEffectiveDeviceRotation(): Int {
+        val windowRot = getDeviceRotationDegrees()
+        if (windowRot != 0) return windowRot
+        return physicalOrientationDegrees
+    }
+
     fun initialize() {
+        initOrientationListener()
         val thread = HandlerThread("DualCameraEngineThread").apply { start() }
         cameraThread = thread
         cameraHandler = Handler(thread.looper)
@@ -122,8 +181,19 @@ class DualCameraEngine(
         )
     }
 
-    fun setPreviewSurface(surface: Surface?, width: Int, height: Int) {
-        compositor?.setPreviewSurface(surface, width, height)
+    fun setPreviewSurface(surface: Surface?, width: Int, height: Int, displayRotationDegrees: Int = getDeviceRotationDegrees()) {
+        lastPreviewSurface = surface
+        lastPreviewWidth = width
+        lastPreviewHeight = height
+        lastPreviewDisplayRotation = displayRotationDegrees
+        compositor?.setPreviewSurface(surface, width, height, displayRotationDegrees)
+    }
+
+    fun updatePreviewSize(width: Int, height: Int, displayRotationDegrees: Int = getDeviceRotationDegrees()) {
+        lastPreviewWidth = width
+        lastPreviewHeight = height
+        lastPreviewDisplayRotation = displayRotationDegrees
+        compositor?.updatePreviewSize(width, height, displayRotationDegrees)
     }
 
     @SuppressLint("MissingPermission")
@@ -282,6 +352,10 @@ class DualCameraEngine(
             updateCompositorCameraInfo()
             glComp.setLayout(newConfig.layout, newConfig.pipPosition)
             glComp.start {
+                val prevSurf = lastPreviewSurface
+                if (prevSurf != null && prevSurf.isValid && lastPreviewWidth > 0 && lastPreviewHeight > 0) {
+                    glComp.setPreviewSurface(prevSurf, lastPreviewWidth, lastPreviewHeight, lastPreviewDisplayRotation)
+                }
                 cameraHandler?.post {
                     openBothCameras()
                 }
@@ -423,16 +497,34 @@ class DualCameraEngine(
         val config = _uiState.value.config
 
         try {
+            val recRotation = getEffectiveDeviceRotation()
+            val isLandscapeRecording = (recRotation == 90 || recRotation == 270)
+            val recWidth = if (isLandscapeRecording) {
+                maxOf(config.resolution.portraitWidth, config.resolution.portraitHeight)
+            } else {
+                minOf(config.resolution.portraitWidth, config.resolution.portraitHeight)
+            }
+            val recHeight = if (isLandscapeRecording) {
+                minOf(config.resolution.portraitWidth, config.resolution.portraitHeight)
+            } else {
+                maxOf(config.resolution.portraitWidth, config.resolution.portraitHeight)
+            }
+
             val rec = DualVideoRecorder(
                 context = context,
-                videoWidth = config.resolution.portraitWidth,
-                videoHeight = config.resolution.portraitHeight,
+                videoWidth = recWidth,
+                videoHeight = recHeight,
                 frameRate = config.fps,
                 isAudioEnabled = config.isAudioEnabled,
                 orientationHint = 0
             )
             val encoderSurface = rec.prepare()
-            compositor?.setRecordingSurface(encoderSurface)
+            compositor?.setRecordingSurface(
+                surface = encoderSurface,
+                width = recWidth,
+                height = recHeight,
+                rotationDegrees = recRotation
+            )
             rec.start()
             recorder = rec
 
@@ -452,7 +544,7 @@ class DualCameraEngine(
                 }
             }
 
-            Log.i(TAG, "Dual video recording started at ${config.resolution.width}x${config.resolution.height} @ ${config.fps}fps")
+            Log.i(TAG, "Dual video recording started at ${recWidth}x${recHeight} (rot=$recRotation) @ ${config.fps}fps")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to start dual video recording", t)
             _uiState.value = _uiState.value.copy(errorMessage = "Recording error: ${t.message}")
@@ -507,6 +599,10 @@ class DualCameraEngine(
     }
 
     fun release() {
+        try {
+            physicalOrientationEventListener?.disable()
+        } catch (ignored: Throwable) {}
+        physicalOrientationEventListener = null
         recordingTimerJob?.cancel()
         if (_uiState.value.isRecording) {
             stopRecording()

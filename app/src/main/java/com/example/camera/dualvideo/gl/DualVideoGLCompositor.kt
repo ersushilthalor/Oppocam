@@ -72,6 +72,11 @@ class DualVideoGLCompositor(
 
     private var previewWidth = 0
     private var previewHeight = 0
+    private var previewDisplayRotation = 0
+
+    private var recordWidth = outputWidth
+    private var recordHeight = outputHeight
+    private var recordingRotation = 0
 
     private var programId = 0
     private var uMVPMatrixHandle = 0
@@ -266,7 +271,7 @@ class DualVideoGLCompositor(
         surfaceSecondary = Surface(surfaceTextureSecondary)
     }
 
-    fun setPreviewSurface(surface: Surface?, width: Int, height: Int) {
+    fun setPreviewSurface(surface: Surface?, width: Int, height: Int, displayRotationDegrees: Int = 0) {
         glHandler?.post {
             if (previewEglSurface != EGL14.EGL_NO_SURFACE) {
                 EGL14.eglDestroySurface(eglDisplay, previewEglSurface)
@@ -274,6 +279,7 @@ class DualVideoGLCompositor(
             }
             previewWidth = width
             previewHeight = height
+            previewDisplayRotation = ((displayRotationDegrees % 360) + 360) % 360
             if (surface != null && surface.isValid) {
                 val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
                 previewEglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, surfaceAttribs, 0)
@@ -282,12 +288,29 @@ class DualVideoGLCompositor(
         }
     }
 
-    fun setRecordingSurface(surface: Surface?) {
+    fun updatePreviewSize(width: Int, height: Int, displayRotationDegrees: Int = 0) {
+        glHandler?.post {
+            previewWidth = width
+            previewHeight = height
+            previewDisplayRotation = ((displayRotationDegrees % 360) + 360) % 360
+            requestRender()
+        }
+    }
+
+    fun setRecordingSurface(
+        surface: Surface?,
+        width: Int = outputWidth,
+        height: Int = outputHeight,
+        rotationDegrees: Int = 0
+    ) {
         glHandler?.post {
             if (recordEglSurface != EGL14.EGL_NO_SURFACE) {
                 EGL14.eglDestroySurface(eglDisplay, recordEglSurface)
                 recordEglSurface = EGL14.EGL_NO_SURFACE
             }
+            recordWidth = if (width > 0) width else outputWidth
+            recordHeight = if (height > 0) height else outputHeight
+            recordingRotation = ((rotationDegrees % 360) + 360) % 360
             if (surface != null && surface.isValid) {
                 val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
                 recordEglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, surfaceAttribs, 0)
@@ -346,10 +369,10 @@ class DualVideoGLCompositor(
             surfaceTextureSecondary?.getTransformMatrix(secondaryTransformMatrix)
         } catch (ignored: Exception) {}
 
-        // 1. Render to on-screen Preview Viewfinder (exact 9:16 aspect ratio box)
+        // 1. Render to on-screen Preview Viewfinder (consistent with normal Video mode)
         if (previewEglSurface != EGL14.EGL_NO_SURFACE && previewWidth > 0 && previewHeight > 0) {
             EGL14.eglMakeCurrent(eglDisplay, previewEglSurface, previewEglSurface, eglContext)
-            drawCompositeLayout(previewWidth, previewHeight)
+            drawCompositeLayout(previewWidth, previewHeight, previewDisplayRotation)
             EGL14.eglSwapBuffers(eglDisplay, previewEglSurface)
         }
 
@@ -370,14 +393,14 @@ class DualVideoGLCompositor(
                 recordedFrameCount++
 
                 EGL14.eglMakeCurrent(eglDisplay, recordEglSurface, recordEglSurface, eglContext)
-                drawCompositeLayout(outputWidth, outputHeight)
+                drawCompositeLayout(recordWidth, recordHeight, recordingRotation)
                 EGLExt.eglPresentationTimeANDROID(eglDisplay, recordEglSurface, ptsNs)
                 EGL14.eglSwapBuffers(eglDisplay, recordEglSurface)
             }
         }
     }
 
-    private fun drawCompositeLayout(width: Int, height: Int) {
+    private fun drawCompositeLayout(width: Int, height: Int, rotationDegrees: Int) {
         GLES20.glViewport(0, 0, width, height)
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -388,18 +411,19 @@ class DualVideoGLCompositor(
 
         when (currentLayout) {
             DualVideoLayout.PIP -> {
-                // Background: Fullscreen Primary Camera (9:16 canvas)
+                // Background: Fullscreen Primary Camera
                 GLES20.glViewport(0, 0, width, height)
                 drawCamera(
                     textureId = textureIdPrimary,
                     stMatrix = primaryTransformMatrix,
                     isFront = isPrimaryFront,
                     sensorOrientation = primarySensorOrientation,
+                    rotationDegrees = rotationDegrees,
                     viewportWidth = width,
                     viewportHeight = height
                 )
 
-                // Foreground: Floating Picture-in-Picture Secondary Camera (9:16 portrait aspect)
+                // Foreground: Floating Picture-in-Picture Secondary Camera
                 val pipW = (width * 0.34f).toInt()
                 val pipH = (height * 0.34f).toInt()
                 val marginX = (width * 0.04f).toInt()
@@ -421,6 +445,7 @@ class DualVideoGLCompositor(
                     stMatrix = secondaryTransformMatrix,
                     isFront = isSecondaryFront,
                     sensorOrientation = secondarySensorOrientation,
+                    rotationDegrees = rotationDegrees,
                     viewportWidth = pipW,
                     viewportHeight = pipH
                 )
@@ -440,6 +465,7 @@ class DualVideoGLCompositor(
                     stMatrix = primaryTransformMatrix,
                     isFront = isPrimaryFront,
                     sensorOrientation = primarySensorOrientation,
+                    rotationDegrees = rotationDegrees,
                     viewportWidth = width,
                     viewportHeight = height - halfH
                 )
@@ -452,6 +478,7 @@ class DualVideoGLCompositor(
                     stMatrix = secondaryTransformMatrix,
                     isFront = isSecondaryFront,
                     sensorOrientation = secondarySensorOrientation,
+                    rotationDegrees = rotationDegrees,
                     viewportWidth = width,
                     viewportHeight = halfH
                 )
@@ -470,6 +497,7 @@ class DualVideoGLCompositor(
                     stMatrix = primaryTransformMatrix,
                     isFront = isPrimaryFront,
                     sensorOrientation = primarySensorOrientation,
+                    rotationDegrees = rotationDegrees,
                     viewportWidth = halfW,
                     viewportHeight = height
                 )
@@ -482,6 +510,7 @@ class DualVideoGLCompositor(
                     stMatrix = secondaryTransformMatrix,
                     isFront = isSecondaryFront,
                     sensorOrientation = secondarySensorOrientation,
+                    rotationDegrees = rotationDegrees,
                     viewportWidth = width - halfW,
                     viewportHeight = height
                 )
@@ -495,21 +524,84 @@ class DualVideoGLCompositor(
 
     /**
      * Renders a camera frame upright and uniform center-cropped (no non-uniform stretching or squishing).
+     *
+     * Respects the SurfaceTexture transform matrix (`stMatrix`) populated by Camera2 HAL
+     * (`Camera3OutputStream` / `CameraUtils::getRotationTransform`), which on Android already
+     * applies `SENSOR_ORIENTATION` (90° for back camera, 270° + FLIP_H for front camera) relative
+     * to natural portrait orientation (`ROTATION_0`). Avoids double-rotating by 90° while still
+     * compensating for display/recording rotation (`0°`, `90°`, `180°`, `270°`) and providing
+     * a fallback if `stMatrix` is unrotated.
      */
     private fun drawCamera(
         textureId: Int,
         stMatrix: FloatArray,
         isFront: Boolean,
         sensorOrientation: Int,
+        rotationDegrees: Int,
         viewportWidth: Int,
         viewportHeight: Int
     ) {
         if (viewportWidth <= 0 || viewportHeight <= 0) return
 
-        val targetAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
-        // Native camera sensor aspect ratio when upright in portrait (e.g. 1080 / 1920 = 9 / 16)
-        val camAspect = minOf(outputWidth, outputHeight).toFloat() / maxOf(outputWidth, outputHeight).toFloat()
+        computeCameraTexMatrix(
+            stMatrix = stMatrix,
+            isFront = isFront,
+            sensorOrientation = sensorOrientation,
+            rotationDegrees = rotationDegrees,
+            viewportWidth = viewportWidth,
+            viewportHeight = viewportHeight,
+            camBufferWidth = maxOf(outputWidth, outputHeight),
+            camBufferHeight = minOf(outputWidth, outputHeight),
+            outMatrix = finalTexMatrix
+        )
 
+        drawQuad(textureId, finalTexMatrix, 1.0f)
+    }
+
+    internal fun computeCameraTexMatrix(
+        stMatrix: FloatArray,
+        isFront: Boolean,
+        sensorOrientation: Int,
+        rotationDegrees: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        camBufferWidth: Int = maxOf(outputWidth, outputHeight),
+        camBufferHeight: Int = minOf(outputWidth, outputHeight),
+        outMatrix: FloatArray
+    ) {
+        val m0 = stMatrix[0]
+        val m1 = stMatrix[1]
+        val m4 = stMatrix[4]
+        val m5 = stMatrix[5]
+
+        val offDiag = kotlin.math.abs(m1) + kotlin.math.abs(m4)
+        val diag = kotlin.math.abs(m0) + kotlin.math.abs(m5)
+        // When Camera2 streams to a SurfaceTexture, Camera3OutputStream sets the ANativeWindow
+        // buffer transform (ROT_90 / ROT_270), making off-diagonal terms (m1, m4) dominant.
+        val isStRotated90 = offDiag > diag
+
+        // Standard un-mirrored SurfaceTexture has mtxFlipV (1 reflection -> det < 0).
+        // When Camera3OutputStream also sets NATIVE_WINDOW_TRANSFORM_FLIP_H (front camera),
+        // there are 2 reflections (mtxFlipV * FLIP_H) -> det > 0.
+        val isIdentitySt = kotlin.math.abs(m0 - 1f) < 1e-4f &&
+            kotlin.math.abs(m5 - 1f) < 1e-4f &&
+            offDiag < 1e-4f &&
+            kotlin.math.abs(stMatrix[13]) < 1e-4f
+        val det = m0 * m5 - m1 * m4
+        val isStMirrored = !isIdentitySt && (offDiag + diag > 0.1f) && (det > 0f)
+
+        val normRot = ((rotationDegrees % 360) + 360) % 360
+        val isLandscapeTarget = (normRot == 90 || normRot == 270)
+        val isSensorSwappedInPortrait = (sensorOrientation == 90 || sensorOrientation == 270)
+        val isSwapped = isSensorSwappedInPortrait xor isLandscapeTarget
+
+        val camLong = maxOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val camShort = minOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val uprightCamW = if (isSwapped) camShort else camLong
+        val uprightCamH = if (isSwapped) camLong else camShort
+        val camAspect = uprightCamW / uprightCamH
+
+        val targetAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
         val scaleX: Float
         val scaleY: Float
         if (targetAspect > camAspect) {
@@ -517,21 +609,43 @@ class DualVideoGLCompositor(
             scaleX = 1.0f
             scaleY = camAspect / targetAspect
         } else {
-            // Viewport is taller than upright camera frame -> fit height, crop width uniformly
+            // Viewport is taller/narrower than upright camera frame -> fit height, crop width uniformly
             scaleX = targetAspect / camAspect
             scaleY = 1.0f
         }
 
+        // Map from target viewport orientation (0, 90, 180, 270) into natural portrait (0)
+        val rotToPortrait = when (normRot) {
+            90 -> -90f
+            180 -> 180f
+            270 -> 90f
+            else -> 0f
+        }
+
         val matrix2d = AndroidMatrix().apply {
             postTranslate(-0.5f, -0.5f)
+            // 1. Uniform center-crop scaling in the viewport's upright coordinate axes
             postScale(scaleX, scaleY)
-            if (isFront) {
-                postScale(-1.0f, 1.0f) // Horizontal mirror for natural selfie preview & video
-                val rot = if (sensorOrientation == 270) 90f else -90f
-                postRotate(rot)
-            } else {
-                val rot = if (sensorOrientation == 90) -90f else 90f
-                postRotate(rot)
+            // 2. Rotate from display/recording orientation into natural portrait space
+            if (rotToPortrait != 0f) {
+                postRotate(rotToPortrait)
+            }
+            // 3. Apply horizontal selfie mirror only if stMatrix hasn't already applied FLIP_H
+            if (isFront != isStMirrored) {
+                postScale(-1.0f, 1.0f)
+            }
+            // 4. Apply sensor orientation rotation only if stMatrix hasn't already rotated the buffer
+            if (!isStRotated90) {
+                if (sensorOrientation == 90 || sensorOrientation == 270) {
+                    val fallbackRot = if (isFront) {
+                        if (sensorOrientation == 270) 90f else -90f
+                    } else {
+                        if (sensorOrientation == 90) -90f else 90f
+                    }
+                    postRotate(fallbackRot)
+                } else if (sensorOrientation == 180) {
+                    postRotate(180f)
+                }
             }
             postTranslate(0.5f, 0.5f)
         }
@@ -543,9 +657,7 @@ class DualVideoGLCompositor(
         localTexMatrix[8] = 0f;              localTexMatrix[9] = 0f;              localTexMatrix[10] = 1f; localTexMatrix[11] = 0f
         localTexMatrix[12] = matrixValues[2]; localTexMatrix[13] = matrixValues[5]; localTexMatrix[14] = 0f; localTexMatrix[15] = 1f
 
-        Matrix.multiplyMM(finalTexMatrix, 0, stMatrix, 0, localTexMatrix, 0)
-
-        drawQuad(textureId, finalTexMatrix, 1.0f)
+        Matrix.multiplyMM(outMatrix, 0, stMatrix, 0, localTexMatrix, 0)
     }
 
     private fun drawQuad(textureId: Int, stMatrix: FloatArray, alpha: Float) {
