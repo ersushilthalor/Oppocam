@@ -135,6 +135,19 @@ class Camera2Engine(private val context: Context) {
     private val _isKeepUltraWideReady = MutableStateFlow(preferences.isKeepUltraWideReady)
     val isKeepUltraWideReady: StateFlow<Boolean> = _isKeepUltraWideReady.asStateFlow()
 
+    private val _isAutoSwitchToUltraWide = MutableStateFlow(preferences.isAutoSwitchToUltraWide)
+    val isAutoSwitchToUltraWide: StateFlow<Boolean> = _isAutoSwitchToUltraWide.asStateFlow()
+
+    private val _isAutoMacroActive = MutableStateFlow(false)
+    val isAutoMacroActive: StateFlow<Boolean> = _isAutoMacroActive.asStateFlow()
+
+    var onLensSwitchCompletedListener: ((LensInfo, Float) -> Unit)? = null
+
+    private var ultraWideReconnectRunnable: Runnable? = null
+    private var lastAutoSwitchTimestampMs: Long = 0L
+    private var closeSubjectUnfocusedFrames: Int = 0
+    private var subjectFarFrames: Int = 0
+
     private val _ultraWideStreamStatus = MutableStateFlow(
         if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF
     )
@@ -147,6 +160,35 @@ class Camera2Engine(private val context: Context) {
     private var ultraWideStandbyRequestBuilder: CaptureRequest.Builder? = null
     private val isPreparingUltraWideStandby = java.util.concurrent.atomic.AtomicBoolean(false)
     private var activeLogicalMultiCamUltraWideConfigured = false
+
+    fun setAutoSwitchToUltraWide(enabled: Boolean) {
+        _isAutoSwitchToUltraWide.value = enabled
+        preferences.isAutoSwitchToUltraWide = enabled
+        if (!enabled && _isAutoMacroActive.value) {
+            _isAutoMacroActive.value = false
+            val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+            val mainLens = backLenses.firstOrNull { it.isPrimaryMain }
+                ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
+            if (mainLens != null) {
+                selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+            }
+        }
+    }
+
+    private fun scheduleUltraWideReconnect(delayMs: Long = 1500L) {
+        ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+        val runnable = Runnable {
+            if (_isKeepUltraWideReady.value && _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_BACK) {
+                if (ultraWideStandbyCameraDevice == null && !isPreparingUltraWideStandby.get()) {
+                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Reopening/reconnecting background ultra-wide camera...")
+                    ensureUltraWideSimultaneousReady()
+                }
+            }
+        }
+        ultraWideReconnectRunnable = runnable
+        backgroundHandler?.postDelayed(runnable, delayMs)
+    }
 
     fun setKeepUltraWideReady(enabled: Boolean) {
         _isKeepUltraWideReady.value = enabled
@@ -305,6 +347,10 @@ class Camera2Engine(private val context: Context) {
                                     isPreparingUltraWideStandby.set(false)
                                     _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
                                     try { session.close() } catch (ignored: Throwable) {}
+                                    ultraWideStandbyCaptureSession = null
+                                    if (_isKeepUltraWideReady.value) {
+                                        scheduleUltraWideReconnect()
+                                    }
                                 }
                             },
                             backgroundHandler
@@ -312,6 +358,9 @@ class Camera2Engine(private val context: Context) {
                     } catch (e: Exception) {
                         isPreparingUltraWideStandby.set(false)
                         Log.e(TAG, "Failed to create standby session", e)
+                        if (_isKeepUltraWideReady.value) {
+                            scheduleUltraWideReconnect()
+                        }
                     }
                 }
 
@@ -323,6 +372,9 @@ class Camera2Engine(private val context: Context) {
                     }
                     isPreparingUltraWideStandby.set(false)
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                    if (_isKeepUltraWideReady.value) {
+                        scheduleUltraWideReconnect()
+                    }
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
@@ -333,17 +385,25 @@ class Camera2Engine(private val context: Context) {
                     }
                     isPreparingUltraWideStandby.set(false)
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
-                    Log.w(TAG, "Standby camera open error: $error (turbo handover fallback)")
+                    Log.w(TAG, "Standby camera open error: $error (scheduling reconnect)")
+                    if (_isKeepUltraWideReady.value) {
+                        scheduleUltraWideReconnect()
+                    }
                 }
             }, backgroundHandler)
         } catch (t: Throwable) {
             isPreparingUltraWideStandby.set(false)
             _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
             Log.w(TAG, "Could not open standby camera concurrently", t)
+            if (_isKeepUltraWideReady.value) {
+                scheduleUltraWideReconnect()
+            }
         }
     }
 
     fun releaseUltraWideStandby() {
+        ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+        ultraWideReconnectRunnable = null
         try {
             ultraWideStandbyCaptureSession?.stopRepeating()
         } catch (ignored: Throwable) {}
@@ -1126,6 +1186,10 @@ class Camera2Engine(private val context: Context) {
         } else {
             scheduleZoomPreviewUpdate(immediate = nextPresetTap || nextZoom != null)
         }
+
+        if (currentActive != null) {
+            onLensSwitchCompletedListener?.invoke(currentActive, currentZoom)
+        }
     }
 
     /**
@@ -1293,42 +1357,19 @@ class Camera2Engine(private val context: Context) {
                 val standbySession = ultraWideStandbyCaptureSession
                 val oldCam = cameraDevice
                 val oldSession = captureSession
-                val oldSurface = previewSurface
-                val oldTexture = previewSurfaceTexture
-                val oldBuilder = previewRequestBuilder
 
-                if (standbySession != null) {
-                    // KEEP SESSIONS ALIVE: Reuse pre-warmed CameraDevice and CaptureSession!
-                    // Do NOT stop repeating, abort captures, or close either session.
-                    ultraWideStandbyCameraDevice = oldCam
-                    ultraWideStandbyCaptureSession = oldSession
-                    ultraWideStandbySurface = oldSurface
-                    ultraWideStandbySurfaceTexture = oldTexture
-                    ultraWideStandbyRequestBuilder = oldBuilder
+                // Stop the standby background stream on targetCam so it can output to the viewfinder previewSurface
+                try {
+                    standbySession?.stopRepeating()
+                    standbySession?.close()
+                } catch (ignored: Throwable) {}
+                ultraWideStandbyCaptureSession = null
 
-                    cameraDevice = targetCam
-                    captureSession = standbySession
-                    previewSurface = ultraWideStandbySurface
-                    previewSurfaceTexture = ultraWideStandbySurfaceTexture
-                    previewRequestBuilder = ultraWideStandbyRequestBuilder
-
-                    activeSessionLens = targetLens
-                    _selectedLens.value = targetLens
-                    activeSessionPhysicalCameraId = targetLens.physicalCameraId
-                    _isCameraReady.value = true
-
-                    // Apply current zoom/exposure/AF settings to the newly active session
-                    scheduleZoomPreviewUpdate(immediate = true)
-                    completeLensSwitch(targetLens)
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Instant session handoff to ${targetLens.lensType} (ID=${targetCam.id}) completed without closing sessions")
-                    return@synchronized
-                }
-
-                // Fallback only if standby session wasn't already running:
-                ultraWideStandbyCameraDevice = oldCam
+                // Bind active camera to targetCam (the real ultra-wide camera)
                 cameraDevice = targetCam
                 activeSessionLens = targetLens
                 _selectedLens.value = targetLens
+                activeSessionPhysicalCameraId = targetLens.physicalCameraId
 
                 val targetRatio = getTargetAspectRatioForMode(currentMode)
                 val optimalPreviewSize = getOptimalPreviewSize(targetLens.cameraId, targetRatio)
@@ -1343,9 +1384,57 @@ class Camera2Engine(private val context: Context) {
                     previewSurface = Surface(texture)
                 }
 
+                // If Keep Ultra Wide Ready is enabled, keep oldCam open and ready in standby
+                if (_isKeepUltraWideReady.value && oldCam != null && oldCam != targetCam) {
+                    ultraWideStandbyCameraDevice = oldCam
+                    try {
+                        val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
+                        if (ultraWideStandbySurfaceTexture == null) {
+                            val st = SurfaceTexture(0).apply {
+                                detachFromGLContext()
+                                setDefaultBufferSize(optimalSize.width, optimalSize.height)
+                            }
+                            ultraWideStandbySurfaceTexture = st
+                            ultraWideStandbySurface = Surface(st)
+                        }
+                        val standbySurf = ultraWideStandbySurface
+                        if (standbySurf != null && standbySurf.isValid) {
+                            val builder = oldCam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                addTarget(standbySurf)
+                                applyCommonSettings(this)
+                            }
+                            ultraWideStandbyRequestBuilder = builder
+                            oldCam.createCaptureSession(
+                                listOf(standbySurf),
+                                object : CameraCaptureSession.StateCallback() {
+                                    override fun onConfigured(session: CameraCaptureSession) {
+                                        ultraWideStandbyCaptureSession = session
+                                        _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                                        try {
+                                            session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+                                        } catch (ignored: Exception) {}
+                                    }
+                                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                                        try { session.close() } catch (ignored: Throwable) {}
+                                        ultraWideStandbyCaptureSession = null
+                                        scheduleUltraWideReconnect()
+                                    }
+                                },
+                                backgroundHandler
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed creating standby session on old camera", e)
+                        scheduleUltraWideReconnect()
+                    }
+                } else if (oldCam != null && oldCam != targetCam) {
+                    try { oldSession?.close() } catch (ignored: Throwable) {}
+                    try { oldCam.close() } catch (ignored: Throwable) {}
+                }
+
                 setupImageReaders(targetLens.cameraId)
                 createCameraCaptureSession()
-                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Standby camera ID ${targetCam.id} session created on fallback path")
+                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Pre-warmed Camera ID ${targetCam.id} session created on viewfinder surface for ${targetLens.lensType}")
             }
         }
     }
@@ -2932,6 +3021,10 @@ class Camera2Engine(private val context: Context) {
             lastCaptureResult = result
             CameraPerformanceMonitor.onPreviewFrame()
 
+            if (_isAutoSwitchToUltraWide.value && !_isRecordingVideo.value && !isSwitchingLens.get()) {
+                checkAutoLensSwitch(result)
+            }
+
             if (_isDollyZoomActive.value && currentMode == CameraMode.VIDEO) {
                 val faces = result.get(CaptureResult.STATISTICS_FACES) ?: emptyArray()
                 val lens = _selectedLens.value
@@ -2998,6 +3091,107 @@ class Camera2Engine(private val context: Context) {
                 onNativeNaturalAutoToneFrame()
             }
         }
+    }
+
+    private fun checkAutoLensSwitch(result: TotalCaptureResult) {
+        if (!_isAutoSwitchToUltraWide.value || _isRecordingVideo.value || isSwitchingLens.get()) return
+
+        val currentLens = activeSessionLens ?: _selectedLens.value ?: return
+        if (currentLens.facing != CameraCharacteristics.LENS_FACING_BACK) return
+
+        val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+        val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+            ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+            ?: return
+        val mainLens = backLenses.firstOrNull { it.isPrimaryMain }
+            ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+            ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
+            ?: return
+
+        val afState = result.get(CaptureResult.CONTROL_AF_STATE) ?: CaptureResult.CONTROL_AF_STATE_INACTIVE
+        val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0.0f
+        val chars = getCharacteristics(currentLens.cameraId)
+        val minFocusDistance = chars?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 10.0f
+
+        processAfCondition(
+            afState = afState,
+            focusDistance = focusDistance,
+            minFocusDistance = minFocusDistance,
+            currentLens = currentLens,
+            mainLens = mainLens,
+            ultraWideLens = ultraWideLens
+        )
+    }
+
+    fun processAfCondition(
+        afState: Int,
+        focusDistance: Float,
+        minFocusDistance: Float,
+        currentLens: LensInfo,
+        mainLens: LensInfo,
+        ultraWideLens: LensInfo,
+        nowMs: Long = android.os.SystemClock.uptimeMillis()
+    ) {
+        val isCurrentMain = currentLens.id == mainLens.id || currentLens.lensType == LensType.WIDE
+
+        if (isCurrentMain) {
+            // Monitor main-lens autofocus for close-up subject that repeatedly cannot achieve focus
+            val effectiveMinFocus = if (minFocusDistance > 0f) minFocusDistance else 10.0f
+            val isSubjectVeryClose = focusDistance >= effectiveMinFocus * 0.70f || focusDistance >= 6.0f
+            val isAfStruggling = afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED ||
+                    afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED ||
+                    (focusDistance >= effectiveMinFocus * 0.85f && (afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN || afState == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN))
+
+            if (isSubjectVeryClose && isAfStruggling && currentZoom in 0.9f..1.6f) {
+                closeSubjectUnfocusedFrames++
+                subjectFarFrames = 0
+            } else {
+                closeSubjectUnfocusedFrames = maxOf(0, closeSubjectUnfocusedFrames - 1)
+            }
+
+            // Hysteresis: sustained for >= 10 frames (~330ms) and cooldown of at least 2000ms
+            if (closeSubjectUnfocusedFrames >= 10 && (nowMs - lastAutoSwitchTimestampMs >= 2000L)) {
+                Log.i(TAG, "[AUTO_LENS_SWITCH] Main lens repeatedly cannot achieve focus on close subject ($focusDistance diopters, AF state=$afState). Auto-switching to real ultra-wide lens.")
+                lastAutoSwitchTimestampMs = nowMs
+                closeSubjectUnfocusedFrames = 0
+                _isAutoMacroActive.value = true
+                selectLens(ultraWideLens, preserveZoom = false, targetZoom = 0.5f)
+            }
+        } else if (currentLens.id == ultraWideLens.id || currentLens.lensType == LensType.ULTRAWIDE) {
+            // On ultra-wide lens: monitor if subject moves away and main-lens AF becomes reliable
+            if (_isAutoMacroActive.value) {
+                val isSubjectFarAway = focusDistance < 4.0f ||
+                        (afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED && focusDistance < 5.0f) ||
+                        (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED && focusDistance < 5.0f)
+
+                if (isSubjectFarAway) {
+                    subjectFarFrames++
+                    closeSubjectUnfocusedFrames = 0
+                } else {
+                    subjectFarFrames = maxOf(0, subjectFarFrames - 1)
+                }
+
+                // Hysteresis: sustained for >= 14 frames (~460ms) and cooldown of at least 2000ms
+                if (subjectFarFrames >= 14 && (nowMs - lastAutoSwitchTimestampMs >= 2000L)) {
+                    Log.i(TAG, "[AUTO_LENS_SWITCH] Subject moved away ($focusDistance diopters). Auto-switching back to main lens.")
+                    lastAutoSwitchTimestampMs = nowMs
+                    subjectFarFrames = 0
+                    _isAutoMacroActive.value = false
+                    selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+                }
+            }
+        }
+    }
+
+    /**
+     * Testing hook to simulate AF conditions for unit testing auto lens switch logic.
+     */
+    fun simulateAfConditionForTesting(afState: Int, focusDistance: Float, minFocusDistance: Float = 10.0f) {
+        val currentLens = activeSessionLens ?: _selectedLens.value ?: return
+        val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+        val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE } ?: return
+        val mainLens = backLenses.firstOrNull { it.isPrimaryMain } ?: backLenses.firstOrNull { it.lensType == LensType.WIDE } ?: return
+        processAfCondition(afState, focusDistance, minFocusDistance, currentLens, mainLens, ultraWideLens)
     }
 
     @Volatile

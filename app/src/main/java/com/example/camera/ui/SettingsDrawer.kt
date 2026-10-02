@@ -195,6 +195,7 @@ fun SettingsDrawer(
     onOpenBeforeAfter: () -> Unit = {},
     instantSwitchState: MotorolaInstantSwitchState = MotorolaInstantSwitchState(),
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
+    onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit = {},
     onKeepFrontCameraReadyToggle: (Boolean) -> Unit = {},
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit = {},
@@ -448,6 +449,7 @@ fun SettingsDrawer(
                             onForceDeepScan = onForceDeepScan,
                             instantSwitchState = instantSwitchState,
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
+                            onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
                             onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
                             onKeepFrontCameraReadyToggle = onKeepFrontCameraReadyToggle,
                             onShowFrontCameraPreviewToggle = onShowFrontCameraPreviewToggle,
@@ -1289,6 +1291,7 @@ private fun CameraLensSettingsPage(
     onForceDeepScan: () -> Unit,
     instantSwitchState: MotorolaInstantSwitchState,
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
+    onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
     onKeepFrontCameraReadyToggle: (Boolean) -> Unit,
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit,
@@ -1324,6 +1327,16 @@ private fun CameraLensSettingsPage(
                 isChecked = instantSwitchState.isKeepUltraWideReady,
                 onCheckedChange = onKeepUltraWideReadyToggle,
                 tag = "toggle_keep_ultrawide_ready"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Auto Switch to Ultra Wide",
+                description = "Automatically switch to the ultra-wide lens when close-up subjects cannot achieve focus on the main lens, and switch back when moving away.",
+                isChecked = instantSwitchState.isAutoSwitchToUltraWide,
+                onCheckedChange = onAutoSwitchToUltraWideToggle,
+                tag = "toggle_auto_switch_to_ultra_wide"
             )
         }
 
@@ -2883,6 +2896,7 @@ fun CameraSettingsScreen(
         },
         instantSwitchState = instantSwitchState,
         onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
+        onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
         onKeepFrontCameraReadyToggle = { viewModel.setKeepFrontCameraReady(it) },
         onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },

@@ -342,4 +342,94 @@ class PhotonCameraLensSwitchingTest {
             assertEquals(LensType.ULTRAWIDE, resolvedAt0999x)
         }
     }
+
+    @Test
+    fun testAutoSwitchToUltraWideSettingDefaultOff() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        assertFalse("Auto switch to Ultra Wide must be OFF by default in preferences", prefs.isAutoSwitchToUltraWide)
+        assertFalse("Auto switch to Ultra Wide must be OFF by default in engine", engine.isAutoSwitchToUltraWide.value)
+    }
+
+    @Test
+    fun testAutoSwitchToUltraWideTogglePersistsAndUpdatesState() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        engine.setAutoSwitchToUltraWide(true)
+        assertTrue("Setting Auto Switch to true must update engine state", engine.isAutoSwitchToUltraWide.value)
+        assertTrue("Setting Auto Switch to true must persist in preferences", prefs.isAutoSwitchToUltraWide)
+
+        engine.setAutoSwitchToUltraWide(false)
+        assertFalse("Setting Auto Switch to false must update engine state", engine.isAutoSwitchToUltraWide.value)
+        assertFalse("Setting Auto Switch to false must persist in preferences", prefs.isAutoSwitchToUltraWide)
+    }
+
+    @Test
+    fun testAutoLensSwitchOnCloseSubjectAndAwayWithHysteresis() {
+        engine.detectHardwareLenses()
+        val lenses = engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+
+        if (mainLens != null && ultraWideLens != null) {
+            engine.selectLens(mainLens)
+            assertEquals(mainLens.id, engine.selectedLens.value?.id)
+
+            // Enable Auto Switch to Ultra Wide
+            engine.setAutoSwitchToUltraWide(true)
+            assertTrue(engine.isAutoSwitchToUltraWide.value)
+
+            // Simulate close subject (9.0 diopters) with struggling focus for 12 frames
+            for (i in 1..12) {
+                engine.simulateAfConditionForTesting(
+                    afState = android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED,
+                    focusDistance = 9.0f,
+                    minFocusDistance = 10.0f
+                )
+            }
+
+            // Must have auto-switched to the REAL ultra-wide lens
+            assertTrue("Auto macro state should be active", engine.isAutoMacroActive.value)
+            assertEquals("Should have switched to ultra wide lens", ultraWideLens.id, engine.selectedLens.value?.id)
+
+            // Advance time past cooldown
+            val nowMs = android.os.SystemClock.uptimeMillis() + 2500L
+            // Simulate subject moving away (< 4.0 diopters) for 15 frames
+            for (i in 1..16) {
+                engine.processAfCondition(
+                    afState = android.hardware.camera2.CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
+                    focusDistance = 2.0f,
+                    minFocusDistance = 10.0f,
+                    currentLens = ultraWideLens,
+                    mainLens = mainLens,
+                    ultraWideLens = ultraWideLens,
+                    nowMs = nowMs
+                )
+            }
+
+            // Must have auto-switched back to the REAL main lens
+            assertFalse("Auto macro state should be cleared", engine.isAutoMacroActive.value)
+            assertEquals("Should have switched back to main lens", mainLens.id, engine.selectedLens.value?.id)
+        }
+    }
+
+    @Test
+    fun testTappingHalfXSwitchesToRealUltraWideLens() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (ultraWideLens != null && mainLens != null) {
+            viewModel.engine.selectLens(mainLens)
+            assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
+
+            // Tap 0.5x preset
+            viewModel.setZoom(0.5f, isPresetTap = true)
+
+            // Selected lens must be the real Ultra-Wide camera, not cropped Main
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+            assertEquals(LensType.ULTRAWIDE, viewModel.engine.selectedLens.value?.lensType)
+        }
+    }
 }

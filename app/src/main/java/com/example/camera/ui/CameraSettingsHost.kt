@@ -224,6 +224,7 @@ fun CameraSettingsHost(
         onOpenBeforeAfter = onOpenBeforeAfter,
         instantSwitchState = instantSwitchState,
         onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
+        onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
         onKeepFrontCameraReadyToggle = { viewModel.setKeepFrontCameraReady(it) },
         onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },

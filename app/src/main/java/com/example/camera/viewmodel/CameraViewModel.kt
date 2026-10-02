@@ -559,6 +559,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _instantSwitchState = MutableStateFlow(
         MotorolaInstantSwitchState(
             isKeepUltraWideReady = preferences.isKeepUltraWideReady,
+            isAutoSwitchToUltraWide = preferences.isAutoSwitchToUltraWide,
             isShowUltraWidePreview = preferences.isShowUltraWidePreview,
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
@@ -575,6 +576,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
         engine.setKeepUltraWideReady(enabled)
         showToast(if (enabled) "Keep Ultra Wide Ready: ON" else "Keep Ultra Wide Ready: OFF")
+    }
+
+    fun setAutoSwitchToUltraWide(enabled: Boolean) {
+        preferences.isAutoSwitchToUltraWide = enabled
+        _instantSwitchState.update { it.copy(isAutoSwitchToUltraWide = enabled) }
+        engine.setAutoSwitchToUltraWide(enabled)
+        showToast(if (enabled) "Auto Switch to Ultra Wide: ON" else "Auto Switch to Ultra Wide: OFF")
     }
 
     fun setShowUltraWidePreview(enabled: Boolean) {
@@ -816,10 +824,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.currentVideoAdjustments = _videoAdjustments.value
         com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(_customVideoPipelineConfig.value)
         engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
+        engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
 
         viewModelScope.launch {
             engine.ultraWideStreamStatus.collect { status ->
                 _instantSwitchState.update { it.copy(ultraWideStatus = status) }
+            }
+        }
+
+        viewModelScope.launch {
+            engine.isAutoMacroActive.collect { isMacro ->
+                _instantSwitchState.update { it.copy(isAutoMacroActive = isMacro) }
+            }
+        }
+
+        engine.onLensSwitchCompletedListener = { switchedLens, targetZoom ->
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                val curZ = _currentZoom.value
+                if (abs(curZ - targetZoom) >= 0.05f) {
+                    startSmoothLensTransition(fromZoom = curZ, targetZoom = targetZoom, targetLens = switchedLens)
+                } else {
+                    _currentZoom.value = targetZoom
+                    preferences.setModeZoom(_cameraMode.value, targetZoom)
+                }
             }
         }
 
@@ -1496,8 +1523,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
         val currentFacing = engine.selectedLens.value?.facing
         val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
-        val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+            ?: lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
             ?: engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainWideLens = lensesForFacing.firstOrNull { it.isPrimaryMain }
+            ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+            ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
+            ?: engine.availableLenses.value.firstOrNull { it.isPrimaryMain || it.lensType == LensType.WIDE }
+
         val minZoom = if (ultraWideLens != null) 0.5f else 1.0f
         val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 20.0f
         val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
@@ -1516,7 +1549,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val currentZ = _currentZoom.value
         // Preset tap with meaningful zoom change: interpolate smoothly through zoom levels over exactly 0.25s (250 ms)
         if ((clamped - currentZ).absoluteValue >= 0.25f) {
-            startSmoothLensTransition(fromZoom = currentZ, targetZoom = clamped)
+            val targetLens = if (clamped < 0.95f) {
+                ultraWideLens
+            } else if (clamped in 0.95f..1.5f) {
+                mainWideLens
+            } else null
+
+            val needsPhysicalSwitch = targetLens != null && !engine.isRunningOnLens(targetLens)
+            if (needsPhysicalSwitch) {
+                // Tapping 0.5x must switch to the actual ultra-wide camera, not digitally crop the main lens.
+                // Update the zoom UI only after the real lens switch succeeds via onLensSwitchCompletedListener.
+                engine.selectLens(targetLens, preserveZoom = true, targetZoom = clamped)
+                return
+            }
+
+            startSmoothLensTransition(fromZoom = currentZ, targetZoom = clamped, targetLens = targetLens)
             return
         }
 
