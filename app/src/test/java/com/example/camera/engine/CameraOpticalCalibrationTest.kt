@@ -26,9 +26,7 @@ class CameraOpticalCalibrationTest {
 
     @Test
     fun testUltraWideCalibratedOpticalRatioAccountsForSensorSizes() {
-        // Main: 7.0mm width, 5.5mm focal length (tan(theta/2) = 7.0 / 11.0 = 0.6364)
-        // Ultra-Wide: 4.0mm width, 1.8mm focal length (tan(theta/2) = 4.0 / 3.6 = 1.1111)
-        // Optical Ratio = 0.6364 / 1.1111 = ~0.57x
+        // Ultra-wide native FOV is preserved at 0.5x
         val uwRatio = CameraOpticalCalibration.calculateCalibratedOpticalRatio(
             lensFocalLengthMm = 1.8f,
             lensSensorWidthMm = 4.0f,
@@ -37,8 +35,7 @@ class CameraOpticalCalibrationTest {
             lensType = LensType.ULTRAWIDE
         )
 
-        assertTrue("Ultra-wide ratio must be strictly wider than 1.0x Main", uwRatio < 1.0f)
-        assertTrue("Ultra-wide ratio should be ~0.57x", uwRatio in 0.55f..0.60f)
+        assertEquals("Ultra-wide native FOV must be preserved at 0.5x", 0.5f, uwRatio, 0.001f)
     }
 
     @Test
@@ -54,6 +51,14 @@ class CameraOpticalCalibrationTest {
     }
 
     @Test
+    fun testUltraWideCropLimitCalculation() {
+        // Ultra-Wide is ~16mm equivalent, Main 1x lens is ~23mm equivalent.
+        // Required crop factor is 23 / 16 ≈ 1.4375x (≈ 1.44x)
+        val limit = CameraOpticalCalibration.calculateUltraWideCropLimit(16.0f, 23.0f)
+        assertEquals(1.44f, limit, 0.01f)
+    }
+
+    @Test
     fun testUltraWideDigitalCropMappingAvoidsDoubleCropping() {
         val baseUwRatio = 0.5f
 
@@ -61,17 +66,17 @@ class CameraOpticalCalibrationTest {
         val cropAt05 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.5f, baseUwRatio, LensType.ULTRAWIDE)
         assertEquals(1.0f, cropAt05, 0.001f)
 
-        // At 0.7x UI zoom -> 1.4x digital crop
+        // At 0.7x UI zoom -> intermediate crop smoothly interpolated between 1.0x and 1.44x
         val cropAt07 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.7f, baseUwRatio, LensType.ULTRAWIDE)
-        assertEquals(1.4f, cropAt07, 0.001f)
+        assertTrue("Crop at 0.7x must be > 1.0x and < 1.44x", cropAt07 in 1.15f..1.22f)
 
-        // At 0.9x UI zoom -> 1.8x digital crop (< 2.0x crop, so strictly wider than 1.0x Main)
-        val cropAt09 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.9f, baseUwRatio, LensType.ULTRAWIDE)
-        assertEquals(1.8f, cropAt09, 0.001f)
-
-        // At 1.0x UI zoom -> 2.0x digital crop (matches 1.0x Main FOV)
+        // At 1.0x UI zoom -> approximately 1.44x digital crop (matches 1.0x Main FOV)
         val cropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, baseUwRatio, LensType.ULTRAWIDE)
-        assertEquals(2.0f, cropAt10, 0.001f)
+        assertEquals(1.44f, cropAt10, 0.01f)
+
+        // Do NOT crop the Ultra-Wide up to 2x: at 2.0x UI zoom, Ultra-Wide digital crop remains capped at ~1.44x
+        val cropAt20 = CameraOpticalCalibration.calculateRequiredDigitalCrop(2.0f, baseUwRatio, LensType.ULTRAWIDE)
+        assertEquals(1.44f, cropAt20, 0.01f)
 
         // Main camera at 1.0x -> 1.0x digital crop
         val mainCropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.WIDE)

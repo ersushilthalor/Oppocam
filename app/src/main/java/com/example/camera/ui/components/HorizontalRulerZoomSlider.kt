@@ -40,16 +40,18 @@ import kotlin.math.*
  */
 internal fun zoomToNormalizedLog(zoom: Float, minZ: Float, maxZ: Float): Float {
     val safeMin = minZ.coerceAtLeast(0.3f)
-    val safeMax = maxZ.coerceAtLeast(safeMin + 1.0f)
+    val safeMax = maxZ.coerceAtLeast(safeMin + 0.05f)
     val logMin = ln(safeMin.toDouble())
     val logMax = ln(safeMax.toDouble())
+    if (logMax <= logMin) return 0f
     val logZ = ln(zoom.coerceIn(safeMin, safeMax).toDouble())
     return ((logZ - logMin) / (logMax - logMin)).toFloat().coerceIn(0f, 1f)
 }
 
 internal fun normalizedToZoomLog(t: Float, minZ: Float, maxZ: Float): Float {
     val safeMin = minZ.coerceAtLeast(0.3f)
-    val safeMax = maxZ.coerceAtLeast(safeMin + 1.0f)
+    val safeMax = maxZ.coerceAtLeast(safeMin + 0.05f)
+    if (safeMax <= safeMin) return safeMin
     val logMin = ln(safeMin.toDouble())
     val logMax = ln(safeMax.toDouble())
     val logZ = logMin + t.coerceIn(0f, 1f) * (logMax - logMin)
@@ -101,7 +103,7 @@ fun HorizontalRulerZoomSlider(
     }
 
     val safeMinZoom = minZoom.coerceAtLeast(0.3f)
-    val safeMaxZoom = maxZoom.coerceAtLeast(safeMinZoom + 1.0f)
+    val safeMaxZoom = maxZoom.coerceAtLeast(safeMinZoom + 0.05f)
 
     val onZoomChangeState = rememberUpdatedState(onZoomChange)
     val safeMinZoomState = rememberUpdatedState(safeMinZoom)

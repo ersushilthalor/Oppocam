@@ -3401,10 +3401,17 @@ class Camera2Engine(private val context: Context) {
             }
 
             // Digital Crop calculation calibrated from actual sensor FOV
+            val uwEqFocal = if (lens.lensType == LensType.ULTRAWIDE && lens.equivalent35mmFocalMm > 0f) {
+                lens.equivalent35mmFocalMm
+            } else {
+                CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+            }
             val digitalCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
                 uiZoom = effectiveUiZoom,
                 lensBaseRatio = lens.baseZoomRatio,
-                lensType = lens.lensType
+                lensType = lens.lensType,
+                uwEquivalentFocalMm = uwEqFocal,
+                mainEquivalentFocalMm = CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
             )
 
             val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
@@ -3424,7 +3431,12 @@ class Camera2Engine(private val context: Context) {
                     } else {
                         digitalCrop
                     }
-                    val targetZoomRatio = desiredZoom.coerceIn(zoomRange.lower, zoomRange.upper)
+                    val maxAllowedZoom = if (lens.lensType == LensType.ULTRAWIDE) {
+                        CameraOpticalCalibration.calculateUltraWideCropLimit(uwEqFocal, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+                    } else {
+                        zoomRange.upper
+                    }
+                    val targetZoomRatio = desiredZoom.coerceIn(zoomRange.lower, minOf(zoomRange.upper, maxAllowedZoom))
                     builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetZoomRatio)
 
                     // Native camera zoom is used up to supported maximum (e.g. 10x).
@@ -3446,7 +3458,11 @@ class Camera2Engine(private val context: Context) {
 
             // Fallback for devices without CONTROL_ZOOM_RATIO or legacy hardware: precise SCALER_CROP_REGION
             val maxDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
-            val safeMaxZoom = maxOf(maxDigitalZoom, lens.maxZoomRatio, 20.0f)
+            val safeMaxZoom = if (lens.lensType == LensType.ULTRAWIDE) {
+                CameraOpticalCalibration.calculateUltraWideCropLimit(uwEqFocal, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+            } else {
+                maxOf(maxDigitalZoom, lens.maxZoomRatio, 20.0f)
+            }
 
             val factor = digitalCrop.coerceIn(1.0f, safeMaxZoom)
             val cropW = (sensorRect.width() / factor).toInt().coerceIn(1, sensorRect.width())

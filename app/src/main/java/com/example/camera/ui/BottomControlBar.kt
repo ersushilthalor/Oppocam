@@ -1057,17 +1057,24 @@ fun MasterZoomCapsule(
     var isSliderOpen by remember { mutableStateOf(false) }
     var isCapsuleDragging by remember { mutableStateOf(false) }
 
-    val minZoom = if (hasRealUltraWide) 0.5f else 1.0f
+    val isMainWide = selectedLens == null || selectedLens.isPrimaryMain || selectedLens.lensType == LensType.WIDE
+    val isUltraWide = selectedLens?.lensType == LensType.ULTRAWIDE
+
+    // Zoom slider bounds:
+    // - When Main camera is active at 1x, the zoom slider must start at exactly 1.0x (minZoom = 1.0f).
+    // - When Ultra-Wide is active, the slider correctly shows and starts at 0.5x (minZoom = 0.5f).
+    val minZoom = if (isUltraWide || currentZoom < 0.98f) 0.5f else 1.0f
     val maxLensZoom = remember(displayedLenses, selectedLens?.facing) {
         displayedLenses
             .filter { selectedLens == null || it.facing == selectedLens.facing }
             .maxOfOrNull { it.maxZoomRatio } ?: 20.0f
     }
-    val maxZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
+    val maxZoom = if (isUltraWide) 1.0f else maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
 
-    val isMainWide = selectedLens == null || selectedLens.isPrimaryMain || selectedLens.lensType == LensType.WIDE
-    val initialSafeZoom = if (isMainWide && (currentZoom in 0.65f..1.05f)) {
+    val initialSafeZoom = if (isMainWide && (currentZoom in 0.95f..1.05f)) {
         1.0f
+    } else if (isUltraWide && (currentZoom in 0.45f..0.55f)) {
+        0.5f
     } else {
         currentZoom.coerceIn(minZoom, maxZoom)
     }
@@ -1075,8 +1082,10 @@ fun MasterZoomCapsule(
     var liveZoom by remember { mutableFloatStateOf(initialSafeZoom) }
     LaunchedEffect(currentZoom, minZoom, maxZoom, selectedLens?.id) {
         if (!isCapsuleDragging) {
-            val safeZ = if (isMainWide && (currentZoom in 0.65f..1.05f)) {
+            val safeZ = if (isMainWide && (currentZoom in 0.95f..1.05f)) {
                 1.0f
+            } else if (isUltraWide && (currentZoom in 0.45f..0.55f)) {
+                0.5f
             } else {
                 currentZoom.coerceIn(minZoom, maxZoom)
             }
@@ -1243,6 +1252,8 @@ fun MasterZoomCapsule(
                                     if (isActive) {
                                         if (preset == 1.0f && isMainWide) {
                                             liveZoom = 1.0f
+                                        } else if (preset == 0.5f && isUltraWide) {
+                                            liveZoom = 0.5f
                                         }
                                         isSliderOpen = true
                                     } else if (preset == 0.5f && !hasRealUltraWide) {

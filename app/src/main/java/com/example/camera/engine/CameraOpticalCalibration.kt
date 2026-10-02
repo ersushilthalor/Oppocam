@@ -45,6 +45,34 @@ object CameraOpticalCalibration {
      * - Ultra-wide's minimum zoom is strictly wider than 1.0x main (< 1.0f).
      * - At 0.9x, Ultra-wide must NEVER look more zoomed-in than 1.0x main.
      */
+    const val DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM = 16.0f
+    const val DEFAULT_MAIN_EQUIVALENT_FOCAL_MM = 23.0f
+
+    /**
+     * Calculates the crop limit required for Ultra-Wide (~16mm equivalent) to reach 1x Main-lens FOV (~23mm equivalent):
+     * cropLimit = mainEquivalentFocalMm / uwEquivalentFocalMm ≈ 23 / 16 ≈ 1.4375x (≈ 1.44x).
+     *
+     * Based on actual focal-length/FOV relationship, not an arbitrary zoom multiplier.
+     */
+    fun calculateUltraWideCropLimit(
+        uwEquivalentFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
+        mainEquivalentFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+    ): Float {
+        val uwEq = if (uwEquivalentFocalMm in 10f..20f) uwEquivalentFocalMm else DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+        val mainEq = if (mainEquivalentFocalMm in 21f..32f) mainEquivalentFocalMm else DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+        return ((mainEq / uwEq) * 100f).roundToInt() / 100f
+    }
+
+    /**
+     * Calculates the calibrated optical equivalence zoom ratio of a physical lens relative to the primary 1.0x Main camera.
+     *
+     * Uses actual sensor-size-aware horizontal Field Of View (hFOV):
+     * Zoom Ratio = tan(hFOV_main / 2) / tan(hFOV_lens / 2) = (F_lens * W_main) / (F_main * W_lens)
+     *
+     * Invariants:
+     * - 1.0x always represents the main camera's calibrated FOV.
+     * - Ultra-wide native FOV is preserved at 0.5x.
+     */
     fun calculateCalibratedOpticalRatio(
         lensFocalLengthMm: Float,
         lensSensorWidthMm: Float,
@@ -68,7 +96,7 @@ object CameraOpticalCalibration {
             lensFocalLengthMm / mainFocalLengthMm
         } else {
             when (lensType) {
-                LensType.ULTRAWIDE -> logicalMinZoomRatio ?: 0.5f
+                LensType.ULTRAWIDE -> 0.5f
                 LensType.TELEPHOTO -> 2.0f
                 LensType.TELEPHOTO_3X -> 3.0f
                 else -> 1.0f
@@ -76,16 +104,7 @@ object CameraOpticalCalibration {
         }
 
         return when (lensType) {
-            LensType.ULTRAWIDE -> {
-                val rawRatio = if (logicalMinZoomRatio != null && logicalMinZoomRatio in 0.3f..0.95f) {
-                    min(fovBasedRatio, logicalMinZoomRatio)
-                } else {
-                    fovBasedRatio
-                }
-                // Ultra-wide must be strictly wider than 1.0x main (< 1.0f)
-                val rounded = (rawRatio * 100f).roundToInt() / 100f
-                rounded.coerceIn(0.35f, 0.85f)
-            }
+            LensType.ULTRAWIDE -> 0.5f
             LensType.TELEPHOTO -> {
                 val rounded = (fovBasedRatio * 10f).roundToInt() / 10f
                 rounded.coerceAtLeast(1.8f)
@@ -102,12 +121,13 @@ object CameraOpticalCalibration {
      * Calculates the required digital crop factor for a given UI zoom level on the active lens.
      *
      * UI zoom → physical lens → required digital crop:
-     * - On Ultra-wide (base ratio < 1.0x):
-     *     cropFactor = UI zoom / baseOpticalRatio
-     *     At 0.5x (if base=0.5x) -> cropFactor = 1.0x (full uncropped sensor)
-     *     At 0.7x -> cropFactor = 1.4x (small crop)
-     *     At 0.9x -> cropFactor = 1.8x (< 2.0x, so strictly wider than 1.0x Main)
-     *     At 1.0x -> cropFactor = 2.0x (matches 1.0x Main FOV exactly)
+     * - On Ultra-wide (native FOV = 0.5x, approx 16mm eq; Main = 23mm eq):
+     *     Required crop factor to reach 1x main FOV is 23/16 ≈ 1.44x.
+     *     Allows digital cropping ONLY up to approximately 1.44x.
+     *     Does NOT crop Ultra-Wide up to 2x.
+     *     At 0.5x UI zoom -> 1.0x digital crop (full uncropped sensor).
+     *     At 1.0x UI zoom -> ~1.44x digital crop (matches 1x Main FOV).
+     *     Above 1.0x -> strictly capped at ~1.44x crop limit.
      * - On Main Wide (base ratio = 1.0x):
      *     cropFactor = UI zoom / 1.0x = UI zoom
      * - On Telephoto (base ratio >= 2.0x):
@@ -116,12 +136,21 @@ object CameraOpticalCalibration {
     fun calculateRequiredDigitalCrop(
         uiZoom: Float,
         lensBaseRatio: Float,
-        lensType: LensType
+        lensType: LensType,
+        uwEquivalentFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
+        mainEquivalentFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
     ): Float {
         val base = if (lensType == LensType.ULTRAWIDE) 0.5f else (if (lensBaseRatio > 0.1f) lensBaseRatio else 1.0f)
         return when (lensType) {
             LensType.ULTRAWIDE -> {
-                (uiZoom / base).coerceAtLeast(1.0f)
+                val maxCrop = calculateUltraWideCropLimit(uwEquivalentFocalMm, mainEquivalentFocalMm)
+                if (uiZoom <= 0.5f) {
+                    1.0f
+                } else {
+                    val t = ((uiZoom - 0.5f) / (1.0f - 0.5f)).coerceIn(0f, 1f)
+                    val crop = 1.0f + t * (maxCrop - 1.0f)
+                    crop.coerceIn(1.0f, maxCrop)
+                }
             }
             LensType.WIDE -> {
                 uiZoom.coerceAtLeast(1.0f)
