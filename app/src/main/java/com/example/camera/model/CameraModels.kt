@@ -10,6 +10,7 @@ enum class CameraMode(val title: String) {
     VIDEO("Video"),
     CINEMA("Cinema"),
     NIGHT("Night"),
+    DUAL_VIDEO("Dual Video"),
     MORE("More"),
     AI_SUBJECT_TRACKING("AI Tracking")
 }

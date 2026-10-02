@@ -36,6 +36,7 @@ fun MoreModesDrawer(
     onSelectCinemaLog: () -> Unit,
     onSelectNight: () -> Unit,
     onSelectAiSubjectTracking: () -> Unit = {},
+    onSelectDualVideo: () -> Unit = {},
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -142,6 +143,22 @@ fun MoreModesDrawer(
                         tag = "mode_card_ai_subject_tracking",
                         modifier = Modifier.weight(1f),
                         onClick = onSelectAiSubjectTracking
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MoreModeCard(
+                        icon = Icons.Outlined.FlipCameraAndroid,
+                        title = "Dual Video",
+                        subtitle = "Simultaneous Front + Rear Video",
+                        tag = "mode_card_dual_video",
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onSelectDualVideo
                     )
                 }
 

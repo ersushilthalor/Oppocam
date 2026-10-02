@@ -966,9 +966,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // 4. Switch engine mode early to synchronize preview buffer and session
         engine.setMode(mode)
 
-        if (mode == CameraMode.AI_SUBJECT_TRACKING) {
+        if (mode == CameraMode.AI_SUBJECT_TRACKING || mode == CameraMode.DUAL_VIDEO) {
             engine.closeCamera()
-        } else if (previousMode == CameraMode.AI_SUBJECT_TRACKING) {
+        } else if (previousMode == CameraMode.AI_SUBJECT_TRACKING || previousMode == CameraMode.DUAL_VIDEO) {
             safeInitializeCamera()
         }
 
@@ -1943,7 +1943,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         when (_cameraMode.value) {
             CameraMode.PHOTO, CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> triggerPhotoCapture()
             CameraMode.PORTRAIT -> triggerPortraitCapture()
-            CameraMode.VIDEO, CameraMode.CINEMA -> triggerVideoCapture()
+            CameraMode.VIDEO, CameraMode.CINEMA, CameraMode.DUAL_VIDEO -> triggerVideoCapture()
             CameraMode.NIGHT -> triggerNightCapture()
         }
     }
