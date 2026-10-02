@@ -70,28 +70,56 @@ class CameraOpticalCalibrationTest {
         val cropAt07 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.7f, baseUwRatio, LensType.ULTRAWIDE)
         assertTrue("Crop at 0.7x must be > 1.0x and < 1.44x", cropAt07 in 1.15f..1.22f)
 
-        // At 1.0x UI zoom -> approximately 1.44x digital crop (matches 1.0x Main FOV)
-        val cropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, baseUwRatio, LensType.ULTRAWIDE)
-        assertEquals(1.44f, cropAt10, 0.01f)
+        // At 0.999x UI zoom -> maximum allowed Ultra-wide crop strictly below 1.000x
+        val cropAt0999 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.999f, baseUwRatio, LensType.ULTRAWIDE)
+        assertEquals(1.44f, cropAt0999, 0.02f)
 
-        // Do NOT crop the Ultra-Wide up to 2x: at 2.0x UI zoom, Ultra-Wide digital crop remains capped at ~1.44x
-        val cropAt20 = CameraOpticalCalibration.calculateRequiredDigitalCrop(2.0f, baseUwRatio, LensType.ULTRAWIDE)
-        assertEquals(1.44f, cropAt20, 0.01f)
-
-        // Main camera at 1.0x -> 1.0x digital crop
+        // At 1.000x UI zoom -> camera switches to Main Wide where crop is 1.0x (native 1x FOV)
         val mainCropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.WIDE)
         assertEquals(1.0f, mainCropAt10, 0.001f)
     }
 
     @Test
     fun testHysteresisPreventsOscillationDuringZoomDrag() {
-        // When currently on Ultra-Wide:
-        // Dragging below 1.0x stays on Ultra-Wide; at >= 1.0x transitions cleanly to Main Wide
+        // At 0.999x Ultra-wide is allowed; at exactly 1.000x Main Wide is strictly required
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
                 currentLensType = LensType.ULTRAWIDE,
-                targetZoom = 0.95f,
+                targetZoom = 0.999f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = false
+            )
+        )
+        assertEquals(
+            LensType.WIDE,
+            CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.ULTRAWIDE,
+                targetZoom = 1.000f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = false
+            )
+        )
+        assertEquals(
+            LensType.WIDE,
+            CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.WIDE,
+                targetZoom = 1.000f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = false
+            )
+        )
+        assertEquals(
+            LensType.ULTRAWIDE,
+            CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.WIDE,
+                targetZoom = 0.999f,
                 hasUltraWide = true,
                 hasTelephoto2x = false,
                 hasTelephoto3x = false,

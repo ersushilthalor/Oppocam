@@ -147,7 +147,9 @@ object CameraOpticalCalibration {
                 if (uiZoom <= 0.5f) {
                     1.0f
                 } else {
-                    val t = ((uiZoom - 0.5f) / (1.0f - 0.5f)).coerceIn(0f, 1f)
+                    // Maximum zoom on Ultra-wide is 0.999x; at 1.000x the camera strictly uses native Main Wide
+                    val clampedUi = uiZoom.coerceIn(0.5f, 0.999f)
+                    val t = ((clampedUi - 0.5f) / (1.0f - 0.5f)).coerceIn(0f, 1f)
                     val crop = 1.0f + t * (maxCrop - 1.0f)
                     crop.coerceIn(1.0f, maxCrop)
                 }
@@ -176,50 +178,20 @@ object CameraOpticalCalibration {
         hasTelephoto3x: Boolean,
         isPresetTap: Boolean
     ): LensType {
-        if (isPresetTap) {
+        // Ultra-wide is strictly prohibited at >= 1.000x.
+        // At exactly 1.000x and above, the camera MUST use native Main/Wide FOV (or Telephoto).
+        // The maximum Ultra-wide zoom is 0.999x.
+        if (targetZoom >= 1.000f) {
             return when {
-                targetZoom < 0.95f && hasUltraWide -> LensType.ULTRAWIDE
-                targetZoom >= 2.8f && hasTelephoto3x -> LensType.TELEPHOTO_3X
-                targetZoom >= 1.8f && hasTelephoto2x -> LensType.TELEPHOTO
+                targetZoom >= 2.8f && hasTelephoto3x && (isPresetTap || currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) -> LensType.TELEPHOTO_3X
+                targetZoom >= 1.8f && hasTelephoto2x && (isPresetTap || currentLensType == LensType.TELEPHOTO || targetZoom >= 2.15f) -> LensType.TELEPHOTO
+                currentLensType == LensType.TELEPHOTO && targetZoom >= 1.85f -> LensType.TELEPHOTO
+                currentLensType == LensType.TELEPHOTO_3X && targetZoom >= 2.85f -> LensType.TELEPHOTO_3X
                 else -> LensType.WIDE
             }
         }
 
-        // Continuous dragging with hysteresis thresholds:
-        return when (currentLensType) {
-            LensType.ULTRAWIDE -> {
-                // When zooming in from Ultra-Wide, use smooth digital crop all the way up to 1.0x.
-                // At >= 1.0x, seamlessly switch to physical Main Wide camera.
-                if (targetZoom >= 1.0f) LensType.WIDE else LensType.ULTRAWIDE
-            }
-            LensType.WIDE -> {
-                when {
-                    // Transition to Ultra-Wide below 0.985f when zooming out
-                    targetZoom < 0.985f && hasUltraWide -> LensType.ULTRAWIDE
-                    // Main stays active up to 2.15x before switching to 2x Tele
-                    targetZoom >= 2.15f && hasTelephoto2x -> LensType.TELEPHOTO
-                    // Main stays active up to 3.15x before switching to 3x Tele
-                    targetZoom >= 3.15f && hasTelephoto3x && !hasTelephoto2x -> LensType.TELEPHOTO_3X
-                    else -> LensType.WIDE
-                }
-            }
-            LensType.TELEPHOTO -> {
-                when {
-                    // Tele stays active down to 1.85x before falling back to Main
-                    targetZoom < 1.85f -> LensType.WIDE
-                    targetZoom >= 3.15f && hasTelephoto3x -> LensType.TELEPHOTO_3X
-                    else -> LensType.TELEPHOTO
-                }
-            }
-            LensType.TELEPHOTO_3X -> {
-                // 3x Tele stays active down to 2.85x
-                if (targetZoom < 2.85f) {
-                    if (hasTelephoto2x && targetZoom >= 1.85f) LensType.TELEPHOTO else LensType.WIDE
-                } else {
-                    LensType.TELEPHOTO_3X
-                }
-            }
-            else -> currentLensType
-        }
+        // Strictly below 1.000x (up to 0.999x):
+        return if (hasUltraWide) LensType.ULTRAWIDE else LensType.WIDE
     }
 }

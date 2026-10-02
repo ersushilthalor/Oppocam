@@ -1060,36 +1060,22 @@ fun MasterZoomCapsule(
     val isMainWide = selectedLens == null || selectedLens.isPrimaryMain || selectedLens.lensType == LensType.WIDE
     val isUltraWide = selectedLens?.lensType == LensType.ULTRAWIDE
 
-    // Zoom slider bounds:
-    // - When Main camera is active at 1x, the zoom slider must start at exactly 1.0x (minZoom = 1.0f).
-    // - When Ultra-Wide is active, the slider correctly shows and starts at 0.5x (minZoom = 0.5f).
-    val minZoom = if (isUltraWide || currentZoom < 0.98f) 0.5f else 1.0f
+    // Fixed zoom slider bounds:
+    // Do NOT dynamically change the slider range based on which physical lens is currently active.
+    // If a real Ultra-wide lens exists on the device, the slider must always allow the full range starting from 0.5x.
+    // Keep minZoom and maxZoom invariant across active lens state so 0.5x <-> 10x is smooth, continuous and bidirectional.
+    val minZoom = if (hasRealUltraWide) 0.5f else 1.0f
     val maxLensZoom = remember(displayedLenses, selectedLens?.facing) {
         displayedLenses
             .filter { selectedLens == null || it.facing == selectedLens.facing }
             .maxOfOrNull { it.maxZoomRatio } ?: 20.0f
     }
-    val maxZoom = if (isUltraWide) 1.0f else maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
+    val maxZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
 
-    val initialSafeZoom = if (isMainWide && (currentZoom in 0.95f..1.05f)) {
-        1.0f
-    } else if (isUltraWide && (currentZoom in 0.45f..0.55f)) {
-        0.5f
-    } else {
-        currentZoom.coerceIn(minZoom, maxZoom)
-    }
-
-    var liveZoom by remember { mutableFloatStateOf(initialSafeZoom) }
-    LaunchedEffect(currentZoom, minZoom, maxZoom, selectedLens?.id) {
+    var liveZoom by remember { mutableFloatStateOf(currentZoom.coerceIn(minZoom, maxZoom)) }
+    LaunchedEffect(currentZoom, minZoom, maxZoom) {
         if (!isCapsuleDragging) {
-            val safeZ = if (isMainWide && (currentZoom in 0.95f..1.05f)) {
-                1.0f
-            } else if (isUltraWide && (currentZoom in 0.45f..0.55f)) {
-                0.5f
-            } else {
-                currentZoom.coerceIn(minZoom, maxZoom)
-            }
-            liveZoom = safeZ
+            liveZoom = currentZoom.coerceIn(minZoom, maxZoom)
         }
     }
 
@@ -1250,11 +1236,7 @@ fun MasterZoomCapsule(
                                 )
                                 .clickable {
                                     if (isActive) {
-                                        if (preset == 1.0f && isMainWide) {
-                                            liveZoom = 1.0f
-                                        } else if (preset == 0.5f && isUltraWide) {
-                                            liveZoom = 0.5f
-                                        }
+                                        liveZoom = preset
                                         isSliderOpen = true
                                     } else if (preset == 0.5f && !hasRealUltraWide) {
                                         onShowToast("Ultra-Wide lens is not available on this device")

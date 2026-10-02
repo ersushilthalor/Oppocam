@@ -1274,7 +1274,7 @@ class Camera2Engine(private val context: Context) {
 
     /**
      * Seamlessly hands over the active preview stream to the pre-warmed CameraDevice instance
-     * without calling openCamera() or tearing down camera hardware.
+     * without calling openCamera(), tearing down camera hardware, or destroying active capture sessions.
      */
     private fun switchUsingPrewarmedStandby(targetLens: LensInfo, switchGen: Int) {
         val targetCam = ultraWideStandbyCameraDevice ?: run {
@@ -1290,29 +1290,41 @@ class Camera2Engine(private val context: Context) {
             synchronized(cameraLifecycleLock) {
                 if (switchGen != lensSwitchGeneration.get()) return@synchronized
 
-                // Stop repeating and close standby session on the pre-warmed camera
-                try {
-                    ultraWideStandbyCaptureSession?.stopRepeating()
-                    ultraWideStandbyCaptureSession?.abortCaptures()
-                } catch (ignored: Throwable) {}
-                try {
-                    ultraWideStandbyCaptureSession?.close()
-                } catch (ignored: Throwable) {}
-                ultraWideStandbyCaptureSession = null
-
-                // Stop repeating and close active session on the old camera
+                val standbySession = ultraWideStandbyCaptureSession
                 val oldCam = cameraDevice
-                try {
-                    captureSession?.stopRepeating()
-                    captureSession?.abortCaptures()
-                } catch (ignored: Throwable) {}
-                try {
-                    captureSession?.close()
-                } catch (ignored: Throwable) {}
-                captureSession = null
+                val oldSession = captureSession
+                val oldSurface = previewSurface
+                val oldTexture = previewSurfaceTexture
+                val oldBuilder = previewRequestBuilder
 
-                // Hand over pre-warmed camera instance as active cameraDevice,
-                // and preserve oldCam as the new standby instance for fast return switch
+                if (standbySession != null) {
+                    // KEEP SESSIONS ALIVE: Reuse pre-warmed CameraDevice and CaptureSession!
+                    // Do NOT stop repeating, abort captures, or close either session.
+                    ultraWideStandbyCameraDevice = oldCam
+                    ultraWideStandbyCaptureSession = oldSession
+                    ultraWideStandbySurface = oldSurface
+                    ultraWideStandbySurfaceTexture = oldTexture
+                    ultraWideStandbyRequestBuilder = oldBuilder
+
+                    cameraDevice = targetCam
+                    captureSession = standbySession
+                    previewSurface = ultraWideStandbySurface
+                    previewSurfaceTexture = ultraWideStandbySurfaceTexture
+                    previewRequestBuilder = ultraWideStandbyRequestBuilder
+
+                    activeSessionLens = targetLens
+                    _selectedLens.value = targetLens
+                    activeSessionPhysicalCameraId = targetLens.physicalCameraId
+                    _isCameraReady.value = true
+
+                    // Apply current zoom/exposure/AF settings to the newly active session
+                    scheduleZoomPreviewUpdate(immediate = true)
+                    completeLensSwitch(targetLens)
+                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Instant session handoff to ${targetLens.lensType} (ID=${targetCam.id}) completed without closing sessions")
+                    return@synchronized
+                }
+
+                // Fallback only if standby session wasn't already running:
                 ultraWideStandbyCameraDevice = oldCam
                 cameraDevice = targetCam
                 activeSessionLens = targetLens
@@ -1333,7 +1345,7 @@ class Camera2Engine(private val context: Context) {
 
                 setupImageReaders(targetLens.cameraId)
                 createCameraCaptureSession()
-                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Pre-warmed switch to ${targetLens.lensType} (ID=${targetCam.id}) successfully attached to preview surface")
+                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Standby camera ID ${targetCam.id} session created on fallback path")
             }
         }
     }

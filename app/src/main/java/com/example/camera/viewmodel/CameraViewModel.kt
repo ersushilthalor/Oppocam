@@ -1444,15 +1444,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val startTime = System.currentTimeMillis()
             val frameIntervalMs = 16L // ~60 FPS smooth continuous updates
 
-            // If transitioning from 1x down to 0.5x, switch to Ultra-Wide at 1.0x where 2x digital crop matches 1x Main FOV
-            if (startZ >= 0.95f && targetZ < 0.95f) {
-                val currentFacing = engine.selectedLens.value?.facing
-                val uw = engine.availableLenses.value.firstOrNull { (currentFacing == null || it.facing == currentFacing) && it.lensType == LensType.ULTRAWIDE }
-                if (uw != null && !engine.isRunningOnLens(uw)) {
-                    engine.selectLens(uw, preserveZoom = true, targetZoom = startZ)
-                }
-            }
-
             while (isActive) {
                 val now = System.currentTimeMillis()
                 val elapsed = now - startTime
@@ -1475,13 +1466,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             engine.setZoom(targetZ, isPresetTap = true)
 
             // Ensure 1.0x always reliably uses the physical Main/Wide camera, never Ultra-Wide with crop
-            val effectiveTargetLens = targetLens ?: if (targetZ in 0.95f..1.1f) {
+            val effectiveTargetLens = targetLens ?: if (targetZ >= 1.000f) {
                 val currentFacing = engine.selectedLens.value?.facing
                 engine.availableLenses.value.firstOrNull { (currentFacing == null || it.facing == currentFacing) && (it.isPrimaryMain || it.lensType == LensType.WIDE) }
-            } else if (targetZ < 0.95f) {
+            } else {
                 val currentFacing = engine.selectedLens.value?.facing
                 engine.availableLenses.value.firstOrNull { (currentFacing == null || it.facing == currentFacing) && it.lensType == LensType.ULTRAWIDE }
-            } else null
+            }
 
             if (effectiveTargetLens != null) {
                 if (!engine.isRunningOnLens(effectiveTargetLens)) {

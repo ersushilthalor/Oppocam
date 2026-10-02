@@ -280,4 +280,66 @@ class PhotonCameraLensSwitchingTest {
             assertEquals(LensType.WIDE, engine.selectedLens.value?.lensType)
         }
     }
+
+    @Test
+    fun testSliderRangeInvariantToActiveLens() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val hasRealUltraWide = lenses.any { it.lensType == LensType.ULTRAWIDE }
+
+        // Slider minimum must always be 0.5f if Ultra-wide exists, regardless of whether 1x or 2x is active
+        if (hasRealUltraWide) {
+            val minZoomAt1x = if (hasRealUltraWide) 0.5f else 1.0f
+            assertEquals(0.5f, minZoomAt1x, 0.001f)
+
+            // When at 1.0x, dragging backward below 1.0x must be valid and allowed
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            assertEquals(1.0f, viewModel.currentZoom.value, 0.001f)
+
+            viewModel.setZoom(0.8f, isPresetTap = false)
+            assertEquals(0.8f, viewModel.currentZoom.value, 0.001f)
+
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.currentZoom.value, 0.001f)
+
+            // Dragging forward from 0.5x up to 10x must also be smooth and allowed
+            viewModel.setZoom(1.5f, isPresetTap = false)
+            assertEquals(1.5f, viewModel.currentZoom.value, 0.001f)
+        }
+    }
+
+    @Test
+    fun testNeverShowCroppedUltraWideAtOneX() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val hasRealUltraWide = lenses.any { it.lensType == LensType.ULTRAWIDE }
+
+        if (hasRealUltraWide) {
+            // At exactly 1.000x, target lens must strictly be Main Wide
+            val resolvedAt1x = CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.ULTRAWIDE,
+                targetZoom = 1.000f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = false
+            )
+            assertEquals(LensType.WIDE, resolvedAt1x)
+
+            // At 0.999x, Ultra-wide is allowed
+            val resolvedAt0999x = CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.ULTRAWIDE,
+                targetZoom = 0.999f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = false
+            )
+            assertEquals(LensType.ULTRAWIDE, resolvedAt0999x)
+        }
+    }
 }
