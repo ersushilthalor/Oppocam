@@ -437,4 +437,127 @@ class CinemaPipelineVerificationTest {
             try { tempDest.delete() } catch (ignored: Exception) {}
         }
     }
+
+    @Test
+    fun testVibrantGreenLutSelectiveFoliageBoostAndSkinToneProtection() {
+        assertTrue(
+            "Vibrant Green / Punchy Green LUT must be in displayPresets",
+            CinematicLut.displayPresets.contains(CinematicLut.VIBRANT_GREEN)
+        )
+        assertEquals("Vibrant Green / Punchy Green", CinematicLut.VIBRANT_GREEN.label)
+
+        val baseConfig = CinemaConfig(
+            colorProfile = CinemaColorProfile.NATIVE,
+            selectedLut = CinematicLut.NONE
+        )
+        val vibrantGreenConfig = CinemaConfig(
+            colorProfile = CinemaColorProfile.NATIVE,
+            selectedLut = CinematicLut.VIBRANT_GREEN,
+            lutIntensity = 1.0f
+        )
+
+        // 1. Test Foliage / Green pixel (e.g. natural leaf green)
+        val foliageR = 0.24f
+        val foliageG = 0.56f
+        val foliageB = 0.20f
+        val baseFoliage = CinemaColorPipeline.evaluatePixel(foliageR, foliageG, foliageB, baseConfig)
+        val gradedFoliage = CinemaColorPipeline.evaluatePixel(foliageR, foliageG, foliageB, vibrantGreenConfig)
+
+        val baseFoliageSat = maxOf(baseFoliage[0], baseFoliage[1], baseFoliage[2]) -
+                minOf(baseFoliage[0], baseFoliage[1], baseFoliage[2])
+        val gradedFoliageSat = maxOf(gradedFoliage[0], gradedFoliage[1], gradedFoliage[2]) -
+                minOf(gradedFoliage[0], gradedFoliage[1], gradedFoliage[2])
+
+        assertTrue(
+            "Foliage green saturation must be noticeably boosted ($gradedFoliageSat > ${baseFoliageSat * 1.25f})",
+            gradedFoliageSat > baseFoliageSat * 1.25f
+        )
+        assertTrue(
+            "Green channel dominance over red/blue must increase for punchy greens",
+            (gradedFoliage[1] - gradedFoliage[0]) > (baseFoliage[1] - baseFoliage[0]) + 0.10f
+        )
+
+        // 2. Test Human Skin Tone pixel (natural warm skin: R=0.76, G=0.58, B=0.48)
+        val skinR = 0.76f
+        val skinG = 0.58f
+        val skinB = 0.48f
+        val baseSkin = CinemaColorPipeline.evaluatePixel(skinR, skinG, skinB, baseConfig)
+        val gradedSkin = CinemaColorPipeline.evaluatePixel(skinR, skinG, skinB, vibrantGreenConfig)
+
+        val baseSkinSat = maxOf(baseSkin[0], baseSkin[1], baseSkin[2]) -
+                minOf(baseSkin[0], baseSkin[1], baseSkin[2])
+        val gradedSkinSat = maxOf(gradedSkin[0], gradedSkin[1], gradedSkin[2]) -
+                minOf(gradedSkin[0], gradedSkin[1], gradedSkin[2])
+
+        // MOST IMPORTANT: Do not increase skin saturation or make skin unnaturally orange/red
+        assertTrue(
+            "Skin saturation must NOT increase ($gradedSkinSat <= $baseSkinSat + 0.005f)",
+            gradedSkinSat <= baseSkinSat + 0.005f
+        )
+        val baseSkinRedOrangeSpread = baseSkin[0] - baseSkin[1]
+        val gradedSkinRedOrangeSpread = gradedSkin[0] - gradedSkin[1]
+        assertTrue(
+            "Skin must not become more orange/red ($gradedSkinRedOrangeSpread <= $baseSkinRedOrangeSpread + 0.002f)",
+            gradedSkinRedOrangeSpread <= baseSkinRedOrangeSpread + 0.002f
+        )
+
+        // Keep skin tones natural, clean and slightly bright/fair-looking
+        val baseSkinLuma = 0.2126f * baseSkin[0] + 0.7152f * baseSkin[1] + 0.0722f * baseSkin[2]
+        val gradedSkinLuma = 0.2126f * gradedSkin[0] + 0.7152f * gradedSkin[1] + 0.0722f * gradedSkin[2]
+        assertTrue(
+            "Skin tone should remain clean and slightly bright/fair-looking ($gradedSkinLuma >= $baseSkinLuma)",
+            gradedSkinLuma >= baseSkinLuma
+        )
+    }
+
+    @Test
+    fun testIndependentShadowsHighlightsAndSkinProtectedVibrance() {
+        val neutralConfig = CinemaConfig(
+            colorProfile = CinemaColorProfile.NATIVE,
+            selectedLut = CinematicLut.NONE,
+            shadows = 0f,
+            highlights = 0f,
+            vibrance = 0f
+        )
+
+        // 1. Shadows independence: affects dark regions much more than highlights
+        val shadowsLiftConfig = neutralConfig.copy(shadows = 0.8f)
+        val darkModifiedByShadows = CinemaColorPipeline.evaluatePixel(0.15f, 0.15f, 0.15f, shadowsLiftConfig)
+        val brightModifiedByShadows = CinemaColorPipeline.evaluatePixel(0.85f, 0.85f, 0.85f, shadowsLiftConfig)
+        val shadowLiftOnDark = darkModifiedByShadows[0] - 0.15f
+        val shadowLiftOnBright = abs(brightModifiedByShadows[0] - 0.85f)
+        assertTrue("Shadows control must lift dark pixels ($shadowLiftOnDark > 0.05f)", shadowLiftOnDark > 0.05f)
+        assertEquals("Shadows control must leave bright highlights untouched", 0.0f, shadowLiftOnBright, 0.001f)
+
+        // 2. Highlights independence: affects bright regions while leaving deep shadows untouched
+        val highlightsConfig = neutralConfig.copy(highlights = -0.8f)
+        val darkModifiedByHighlights = CinemaColorPipeline.evaluatePixel(0.15f, 0.15f, 0.15f, highlightsConfig)
+        val brightModifiedByHighlights = CinemaColorPipeline.evaluatePixel(0.85f, 0.85f, 0.85f, highlightsConfig)
+        val highlightChangeOnDark = abs(darkModifiedByHighlights[0] - 0.15f)
+        val highlightPullOnBright = 0.85f - brightModifiedByHighlights[0]
+        assertEquals("Highlights control must leave dark shadows untouched", 0.0f, highlightChangeOnDark, 0.001f)
+        assertTrue("Highlights control must adjust bright pixels ($highlightPullOnBright > 0.05f)", highlightPullOnBright > 0.05f)
+
+        // 3. Vibrance independence and skin-tone protection
+        val vibranceConfig = neutralConfig.copy(vibrance = 0.9f)
+        val mutedFoliage = CinemaColorPipeline.evaluatePixel(0.32f, 0.48f, 0.34f, vibranceConfig)
+        val mutedFoliageBaseSat = 0.48f - 0.32f
+        val mutedFoliageVibSat = maxOf(mutedFoliage[0], mutedFoliage[1], mutedFoliage[2]) -
+                minOf(mutedFoliage[0], mutedFoliage[1], mutedFoliage[2])
+        assertTrue(
+            "Vibrance must noticeably increase saturation of muted non-skin colors ($mutedFoliageVibSat > $mutedFoliageBaseSat)",
+            mutedFoliageVibSat > mutedFoliageBaseSat * 1.25f
+        )
+
+        val skinPixel = CinemaColorPipeline.evaluatePixel(0.76f, 0.58f, 0.48f, vibranceConfig)
+        val skinBaseSat = 0.76f - 0.48f
+        val skinVibSat = maxOf(skinPixel[0], skinPixel[1], skinPixel[2]) -
+                minOf(skinPixel[0], skinPixel[1], skinPixel[2])
+        val skinSatIncreaseRatio = skinVibSat / skinBaseSat
+        val nonSkinSatIncreaseRatio = mutedFoliageVibSat / mutedFoliageBaseSat
+        assertTrue(
+            "Vibrance must protect skin tones from oversaturation ($skinSatIncreaseRatio << $nonSkinSatIncreaseRatio)",
+            skinSatIncreaseRatio < 1.10f && nonSkinSatIncreaseRatio > skinSatIncreaseRatio + 0.20f
+        )
+    }
 }

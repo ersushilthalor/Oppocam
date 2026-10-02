@@ -714,6 +714,24 @@ fun CinemaSettingsWindow(
                         valueRange = 0.0f..1.0f,
                         onValueChange = { onConfigChange(config.copy(washedOut = it)) }
                     )
+                    CinemaSliderRow(
+                        label = "Shadows",
+                        value = config.shadows,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(shadows = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Highlights",
+                        value = config.highlights,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(highlights = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Vibrance",
+                        value = config.vibrance,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(vibrance = it)) }
+                    )
 
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(
@@ -729,7 +747,8 @@ fun CinemaSettingsWindow(
                                         saturation = 1.0f,
                                         washedOut = 0.0f,
                                         shadows = 0.0f,
-                                        highlights = 0.0f
+                                        highlights = 0.0f,
+                                        vibrance = 0.0f
                                     )
                                 )
                             }

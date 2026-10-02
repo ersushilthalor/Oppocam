@@ -594,15 +594,14 @@ fun Viewfinder(
                             } else {
                                 cinemaConfig
                             }
-                            val cinemaMatrix = com.example.camera.engine.CinemaColorPipeline.computeCinemaColorMatrix(
+                            com.example.camera.engine.CinemaColorPipeline.applyToView(
+                                view = textureView,
                                 config = effectiveConfig,
                                 rec2020Params = rec2020AutoToneParams,
                                 includeCreativeLut = effectiveConfig?.isLutPreviewEnabled ?: true
                             )
-                            if (cinemaMatrix != null) {
-                                colorMatrix.postConcat(cinemaMatrix)
-                                hasFilter = true
-                            }
+                            textureView.invalidate()
+                            return@AndroidView
                         } else if (cameraMode == CameraMode.PORTRAIT && portraitConfig != null) {
                             com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)

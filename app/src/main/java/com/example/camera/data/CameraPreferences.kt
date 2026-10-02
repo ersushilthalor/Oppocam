@@ -451,6 +451,10 @@ class CameraPreferences(context: Context) {
         get() = prefs.getFloat("pref_cinema_saturation", 1.0f)
         set(value) = prefs.edit().putFloat("pref_cinema_saturation", value).apply()
 
+    var cinemaVibrance: Float
+        get() = prefs.getFloat("pref_cinema_vibrance", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_vibrance", value).apply()
+
     var cinemaSharpness: com.example.camera.model.CinemaSharpness
         get() {
             val name = prefs.getString("pref_cinema_sharpness", com.example.camera.model.CinemaSharpness.NATURAL.name)
@@ -504,6 +508,7 @@ class CameraPreferences(context: Context) {
                     "COOL_DRAMATIC" -> com.example.camera.model.CinematicLut.COOL_THRILLER
                     "HIGH_CONTRAST_CINEMA" -> com.example.camera.model.CinematicLut.BLEACH_BYPASS
                     "SOFT_FILM" -> com.example.camera.model.CinematicLut.FUJI_ETERNA
+                    "PUNCHY_GREEN" -> com.example.camera.model.CinematicLut.VIBRANT_GREEN
                     else -> com.example.camera.model.CinematicLut.valueOf(name)
                 }
             } catch (e: Exception) {
@@ -565,6 +570,7 @@ class CameraPreferences(context: Context) {
             exposure = cinemaExposure,
             washedOut = cinemaWashedOut,
             saturation = cinemaSaturation,
+            vibrance = cinemaVibrance,
             sharpness = cinemaSharpness,
             noiseReduction = cinemaNoiseReduction,
             exposureCompensation = cinemaExposureCompensation,
@@ -599,6 +605,7 @@ class CameraPreferences(context: Context) {
         cinemaExposure = config.exposure
         cinemaWashedOut = config.washedOut
         cinemaSaturation = config.saturation
+        cinemaVibrance = config.vibrance
         cinemaSharpness = config.sharpness
         cinemaNoiseReduction = config.noiseReduction
         cinemaExposureCompensation = config.exposureCompensation

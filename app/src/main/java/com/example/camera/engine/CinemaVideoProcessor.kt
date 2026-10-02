@@ -62,15 +62,22 @@ object CinemaVideoProcessor {
             return inputFile
         }
 
+        val includeLut = config.isBakeLutToOutput
+        val hasGrading = CinemaColorPipeline.hasActiveTransform(
+            config = config,
+            rec2020Params = rec2020Params,
+            includeCreativeLut = includeLut
+        )
         val colorMatrix = CinemaColorPipeline.computeCinemaColorMatrix(
             config = config,
             rec2020Params = rec2020Params,
-            includeCreativeLut = true
+            includeCreativeLut = includeLut,
+            forGpuShader = true
         )
         val normalizedRot = ((orientationDegrees % 360) + 360) % 360
 
         // If no grading transform is needed, return original file directly
-        if (colorMatrix == null) {
+        if (!hasGrading) {
             Log.d(TAG, "Video does not need grading, skipping post-processing")
             return inputFile
         }
@@ -269,6 +276,10 @@ object CinemaVideoProcessor {
             val uSTMatrixHandle = GLES20.glGetUniformLocation(programId, "uSTMatrix")
             val uColorMatrixHandle = GLES20.glGetUniformLocation(programId, "uColorMatrix")
             val uColorOffsetHandle = GLES20.glGetUniformLocation(programId, "uColorOffset")
+            val uShadowsHandle = GLES20.glGetUniformLocation(programId, "uShadows")
+            val uHighlightsHandle = GLES20.glGetUniformLocation(programId, "uHighlights")
+            val uVibranceHandle = GLES20.glGetUniformLocation(programId, "uVibrance")
+            val uVibrantGreenIntensityHandle = GLES20.glGetUniformLocation(programId, "uVibrantGreenIntensity")
             val aPositionHandle = GLES20.glGetAttribLocation(programId, "aPosition")
             val aTextureCoordHandle = GLES20.glGetAttribLocation(programId, "aTextureCoord")
 
@@ -409,6 +420,13 @@ object CinemaVideoProcessor {
                                 GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
                                 GLES20.glUniformMatrix4fv(uColorMatrixHandle, 1, false, glColorMat, 0)
                                 GLES20.glUniform4fv(uColorOffsetHandle, 1, glColorOffset, 0)
+                                GLES20.glUniform1f(uShadowsHandle, config.shadows.coerceIn(-1f, 1f))
+                                GLES20.glUniform1f(uHighlightsHandle, config.highlights.coerceIn(-1f, 1f))
+                                GLES20.glUniform1f(uVibranceHandle, config.vibrance.coerceIn(-1f, 1f))
+                                GLES20.glUniform1f(
+                                    uVibrantGreenIntensityHandle,
+                                    CinemaColorPipeline.getVibrantGreenLutIntensity(config, config.isBakeLutToOutput)
+                                )
 
                                 vertexBuffer.position(0)
                                 GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vertexBuffer)
@@ -560,15 +578,89 @@ object CinemaVideoProcessor {
 
         val fragmentShaderCode = """
             #extension GL_OES_EGL_image_external : require
-            precision mediump float;
+            precision highp float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
             uniform mat4 uColorMatrix;
             uniform vec4 uColorOffset;
+            uniform float uShadows;
+            uniform float uHighlights;
+            uniform float uVibrance;
+            uniform float uVibrantGreenIntensity;
             void main() {
-                vec4 c = texture2D(sTexture, vTextureCoord);
-                vec4 graded = uColorMatrix * vec4(c.rgb, 1.0) + uColorOffset;
-                gl_FragColor = vec4(clamp(graded.rgb, 0.0, 1.0), c.a);
+                vec4 src = texture2D(sTexture, vTextureCoord);
+                vec4 graded = uColorMatrix * vec4(src.rgb, 1.0) + uColorOffset;
+                vec3 c = clamp(graded.rgb, 0.0, 1.0);
+
+                // 1. Independent Shadows & Highlights Tonal Sculpting
+                if (abs(uShadows) > 0.001 || abs(uHighlights) > 0.001) {
+                    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float shadowMask = 1.0 - smoothstep(0.0, 0.65, luma);
+                    float shadowDelta = uShadows * 0.22 * shadowMask * (1.0 - luma);
+                    float highlightMask = smoothstep(0.35, 1.0, luma);
+                    float highlightDelta = uHighlights * 0.22 * highlightMask * luma;
+                    c = clamp(c + (shadowDelta + highlightDelta), 0.0, 1.0);
+                }
+
+                // Skin-tone protection mask (R > G > B with natural warm human skin ratios)
+                float lumaPre = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                float rgDiff = c.r - c.g;
+                float gbDiff = c.g - c.b;
+                float rbDiff = c.r - c.b;
+                float skinHueMask = smoothstep(0.015, 0.085, rgDiff) *
+                                    smoothstep(-0.01, 0.045, gbDiff) *
+                                    smoothstep(0.035, 0.13, rbDiff) *
+                                    (1.0 - smoothstep(0.40, 0.65, rgDiff));
+                float skinLumaMask = smoothstep(0.06, 0.18, lumaPre) *
+                                     (1.0 - smoothstep(0.90, 0.99, lumaPre));
+                float skinWeight = clamp(skinHueMask * skinLumaMask, 0.0, 1.0);
+
+                // 2. Independent Vibrance with Skin-Tone Protection
+                if (abs(uVibrance) > 0.001) {
+                    float maxC = max(c.r, max(c.g, c.b));
+                    float minC = min(c.r, min(c.g, c.b));
+                    float sat = maxC - minC;
+                    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float skinAtten = (uVibrance > 0.0) ? (1.0 - 0.85 * skinWeight) : 1.0;
+                    float satWeight = (uVibrance > 0.0) ? clamp(1.0 - sat * 0.75, 0.15, 1.0) : 1.0;
+                    float vibScale = 1.0 + uVibrance * 0.65 * satWeight * skinAtten;
+                    c = clamp(vec3(luma) + (c - vec3(luma)) * vibScale, 0.0, 1.0);
+                }
+
+                // 3. Selective Vibrant Green / Punchy Green LUT
+                if (uVibrantGreenIntensity > 0.001) {
+                    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float greenDomR = smoothstep(-0.035, 0.075, c.g - c.r);
+                    float greenDomB = smoothstep(0.015, 0.12, c.g - c.b);
+                    float greenWeight = clamp(greenDomR * greenDomB * (1.0 - skinWeight), 0.0, 1.0);
+
+                    if (greenWeight > 0.001) {
+                        float gw = greenWeight * uVibrantGreenIntensity;
+                        float chromaScale = 1.0 + 0.72 * gw;
+                        vec3 gc = vec3(luma) + (c - vec3(luma)) * chromaScale;
+                        float greenExcess = max(0.0, c.g - (c.r + c.b) * 0.5);
+                        gc.g += greenExcess * 0.38 * gw + 0.025 * gw;
+                        gc.r -= greenExcess * 0.18 * gw;
+                        gc.b -= greenExcess * 0.12 * gw;
+                        float foliageContrast = 1.0 + 0.10 * gw;
+                        c = clamp((gc - 0.5) * foliageContrast + 0.5, 0.0, 1.0);
+                    }
+
+                    if (skinWeight > 0.001) {
+                        float sw = skinWeight * uVibrantGreenIntensity;
+                        float skinLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                        float cleanChromaScale = 1.0 - 0.05 * sw;
+                        vec3 sc = vec3(skinLuma) + (c - vec3(skinLuma)) * cleanChromaScale;
+                        float fairLift = 0.052 * sw * (1.0 - skinLuma * 0.25);
+                        float excessOrange = max(0.0, sc.r - sc.g - 0.12);
+                        sc.r = sc.r - excessOrange * 0.12 * sw + fairLift * 0.92;
+                        sc.g = sc.g + fairLift * 1.04;
+                        sc.b = sc.b + fairLift * 1.08;
+                        c = clamp(sc, 0.0, 1.0);
+                    }
+                }
+
+                gl_FragColor = vec4(c, src.a);
             }
         """.trimIndent()
 

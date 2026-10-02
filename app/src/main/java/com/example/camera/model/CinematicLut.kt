@@ -189,7 +189,27 @@ enum class CinematicLut(
         )
     ),
 
-    // 9. Clean Log (Mastering)
+    // 9. Vibrant Green / Punchy Green (Selective Foliage Boost & Skin Protection)
+    VIBRANT_GREEN(
+        id = "vibrant_green",
+        label = "Vibrant Green / Punchy Green",
+        description = "Lush, punchy saturated greens and foliage with selective skin-tone protection for natural, clean, slightly bright & fair skin",
+        category = "Nature",
+        accentColor = Color(0xFF00E676),
+        contrast = 1.08f,
+        saturation = 1.00f,
+        highlightRollOff = 0.58f,
+        shadowToe = 0.01f,
+        warmCoolOffset = 0.00f,
+        matrixValues = floatArrayOf(
+            0.99f, -0.02f, 0.02f, 0f, 2f,
+            -0.08f, 1.24f, -0.08f, 0f, 3f,
+            -0.02f, -0.02f, 1.04f, 0f, 3f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    ),
+
+    // 10. Clean Log (Mastering)
     NONE(
         id = "clean_log",
         label = "Clean Log",
@@ -204,7 +224,7 @@ enum class CinematicLut(
         matrixValues = null
     ),
 
-    // 10. Custom Imported .cube LUT
+    // 11. Custom Imported .cube LUT
     CUSTOM(
         id = "custom_cube",
         label = "Custom (.cube)",
@@ -220,6 +240,25 @@ enum class CinematicLut(
     ),
 
     // Legacy aliases for backwards compatibility
+    PUNCHY_GREEN(
+        id = "punchy_green",
+        label = "Vibrant Green / Punchy Green",
+        description = "Lush, punchy saturated greens and foliage with selective skin-tone protection",
+        category = "Nature",
+        accentColor = Color(0xFF00E676),
+        contrast = 1.08f,
+        saturation = 1.00f,
+        highlightRollOff = 0.58f,
+        shadowToe = 0.01f,
+        warmCoolOffset = 0.00f,
+        matrixValues = floatArrayOf(
+            0.99f, -0.02f, 0.02f, 0f, 2f,
+            -0.08f, 1.24f, -0.08f, 0f, 3f,
+            -0.02f, -0.02f, 1.04f, 0f, 3f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    ),
+
     FILMIC_NEUTRAL(
         id = "filmic_neutral",
         label = "Rec.709 Standard",
@@ -290,6 +329,9 @@ enum class CinematicLut(
         matrixValues = null
     );
 
+    val isVibrantGreenLut: Boolean
+        get() = this == VIBRANT_GREEN || this == PUNCHY_GREEN
+
     /**
      * Primary user-facing presets (excluding internal aliases).
      */
@@ -303,6 +345,7 @@ enum class CinematicLut(
             WARM_SUNSET,
             COOL_THRILLER,
             MUTED_FILM,
+            VIBRANT_GREEN,
             NONE,
             CUSTOM
         )
