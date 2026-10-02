@@ -320,6 +320,7 @@ fun CameraScreen(
                 portraitConfig = portraitConfig,
                 videoAdjustments = videoAdjustments,
                 selectedVideoPipeline = selectedVideoPipeline,
+                customVideoPipelineConfig = customVideoPipelineConfig,
                 rec2020AutoToneParams = rec2020AutoToneParams,
                 proSaturation = proSaturation,
                 proContrast = proContrast,

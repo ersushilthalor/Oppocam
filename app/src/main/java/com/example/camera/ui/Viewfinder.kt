@@ -96,6 +96,7 @@ fun Viewfinder(
     portraitConfig: PortraitConfig? = null,
     videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
     selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
+    customVideoPipelineConfig: com.example.camera.videopipeline.CustomVideoPipelineConfig? = null,
     rec2020AutoToneParams: com.example.camera.engine.Rec2020AutoToneParams? = null,
     proSaturation: Float = 0f,
     proContrast: Float = 1.0f,

@@ -165,6 +165,12 @@ abstract class BaseVideoPipeline(
         lastAppliedHeight = -1
     }
 
+    fun invalidateShader() {
+        runtimeShaderInstance = null
+        lastAppliedWidth = -1
+        lastAppliedHeight = -1
+    }
+
     override fun processVideo(inputFile: File, outputFile: File, orientationDegrees: Int): File {
         return VideoPipelineTranscoder.processVideo(
             inputFile = inputFile,
