@@ -1,5 +1,6 @@
 package com.example.camera.dualvideo.gl
 
+import android.graphics.Matrix as AndroidMatrix
 import android.graphics.SurfaceTexture
 import android.opengl.*
 import android.os.Handler
@@ -20,10 +21,14 @@ import java.nio.FloatBuffer
  * - Texture 2 (Secondary Camera stream)
  *
  * Composites both live streams with zero latency onto:
- * 1. Viewfinder preview window (TextureView surface)
+ * 1. Viewfinder preview window (TextureView surface) - matches standard 9:16 Video mode
  * 2. MediaCodec recording surface (during video recording)
  *
- * Supports PiP, Split Top/Bottom, and Split Left/Right with exact orientation & aspect ratio correction.
+ * Fully fixes:
+ * - Upright portrait orientation for back camera (90° sensor) and front camera (270° sensor with selfie mirror)
+ * - True uniform aspect-ratio center-crop scaling for all layouts (PiP, Split Top/Bottom, Side by Side)
+ *   so the camera image is never stretched or squished
+ * - Exact video timebase (starting at PTS 0, perfectly spaced at target FPS), eliminating the 12-hour duration bug
  */
 class DualVideoGLCompositor(
     private val outputWidth: Int,
@@ -65,6 +70,9 @@ class DualVideoGLCompositor(
     private var previewEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var recordEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
 
+    private var previewWidth = 0
+    private var previewHeight = 0
+
     private var programId = 0
     private var uMVPMatrixHandle = 0
     private var uSTMatrixHandle = 0
@@ -89,14 +97,29 @@ class DualVideoGLCompositor(
     private val secondaryTransformMatrix = FloatArray(16)
     private val identityMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
 
+    private var isPrimaryFront = false
+    private var primarySensorOrientation = 90
+    private var isSecondaryFront = true
+    private var secondarySensorOrientation = 270
+
     private var currentLayout: DualVideoLayout = DualVideoLayout.PIP
     private var currentPipPosition: PipPosition = PipPosition.TOP_RIGHT
+
+    private var targetFps = 30
+    private var frameIntervalNs = 1_000_000_000L / 30
 
     private var glThread: HandlerThread? = null
     private var glHandler: Handler? = null
 
     @Volatile
     private var isRecording = false
+    private var recordingStartNs: Long = 0L
+    private var lastRecordFrameTimeNs: Long = 0L
+    private var recordedFrameCount: Long = 0L
+
+    private val localTexMatrix = FloatArray(16)
+    private val finalTexMatrix = FloatArray(16)
+    private val matrixValues = FloatArray(9)
 
     private val fullQuadVertices: FloatBuffer = ByteBuffer.allocateDirect(4 * 3 * 4).run {
         order(ByteOrder.nativeOrder())
@@ -135,6 +158,28 @@ class DualVideoGLCompositor(
             initGL()
             createCameraSurfaces()
             onReady()
+        }
+    }
+
+    fun setFps(fps: Int) {
+        glHandler?.post {
+            targetFps = fps.coerceIn(15, 60)
+            frameIntervalNs = 1_000_000_000L / targetFps
+        }
+    }
+
+    fun setCameraInfo(
+        isPrimaryFront: Boolean,
+        primaryOrientation: Int,
+        isSecondaryFront: Boolean,
+        secondaryOrientation: Int
+    ) {
+        glHandler?.post {
+            this.isPrimaryFront = isPrimaryFront
+            this.primarySensorOrientation = primaryOrientation
+            this.isSecondaryFront = isSecondaryFront
+            this.secondarySensorOrientation = secondaryOrientation
+            requestRender()
         }
     }
 
@@ -204,14 +249,18 @@ class DualVideoGLCompositor(
     }
 
     private fun createCameraSurfaces() {
+        // Camera HAL stream configuration map natively supplies landscape frame buffers (e.g. 1920x1080)
+        val camBufW = maxOf(outputWidth, outputHeight)
+        val camBufH = minOf(outputWidth, outputHeight)
+
         surfaceTexturePrimary = SurfaceTexture(textureIdPrimary).apply {
-            setDefaultBufferSize(outputWidth, outputHeight)
+            setDefaultBufferSize(camBufW, camBufH)
             setOnFrameAvailableListener({ requestRender() }, glHandler)
         }
         surfacePrimary = Surface(surfaceTexturePrimary)
 
         surfaceTextureSecondary = SurfaceTexture(textureIdSecondary).apply {
-            setDefaultBufferSize(outputWidth, outputHeight)
+            setDefaultBufferSize(camBufW, camBufH)
             setOnFrameAvailableListener({ requestRender() }, glHandler)
         }
         surfaceSecondary = Surface(surfaceTextureSecondary)
@@ -223,6 +272,8 @@ class DualVideoGLCompositor(
                 EGL14.eglDestroySurface(eglDisplay, previewEglSurface)
                 previewEglSurface = EGL14.EGL_NO_SURFACE
             }
+            previewWidth = width
+            previewHeight = height
             if (surface != null && surface.isValid) {
                 val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
                 previewEglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, surfaceAttribs, 0)
@@ -241,6 +292,9 @@ class DualVideoGLCompositor(
                 val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
                 recordEglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, surfaceAttribs, 0)
                 isRecording = true
+                recordingStartNs = 0L
+                lastRecordFrameTimeNs = 0L
+                recordedFrameCount = 0L
             } else {
                 isRecording = false
             }
@@ -254,6 +308,9 @@ class DualVideoGLCompositor(
                 EGL14.eglDestroySurface(eglDisplay, recordEglSurface)
                 recordEglSurface = EGL14.EGL_NO_SURFACE
             }
+            recordingStartNs = 0L
+            lastRecordFrameTimeNs = 0L
+            recordedFrameCount = 0L
         }
     }
 
@@ -289,21 +346,34 @@ class DualVideoGLCompositor(
             surfaceTextureSecondary?.getTransformMatrix(secondaryTransformMatrix)
         } catch (ignored: Exception) {}
 
-        val nowNs = System.nanoTime()
-
-        // 1. Render to on-screen Preview Viewfinder
-        if (previewEglSurface != EGL14.EGL_NO_SURFACE) {
+        // 1. Render to on-screen Preview Viewfinder (exact 9:16 aspect ratio box)
+        if (previewEglSurface != EGL14.EGL_NO_SURFACE && previewWidth > 0 && previewHeight > 0) {
             EGL14.eglMakeCurrent(eglDisplay, previewEglSurface, previewEglSurface, eglContext)
-            drawCompositeLayout(outputWidth, outputHeight)
+            drawCompositeLayout(previewWidth, previewHeight)
             EGL14.eglSwapBuffers(eglDisplay, previewEglSurface)
         }
 
-        // 2. Render to MediaCodec Recording Encoder Surface with exact presentation timestamp
+        // 2. Render to MediaCodec Recording Encoder Surface with exact paced presentation timestamps
         if (isRecording && recordEglSurface != EGL14.EGL_NO_SURFACE) {
-            EGL14.eglMakeCurrent(eglDisplay, recordEglSurface, recordEglSurface, eglContext)
-            drawCompositeLayout(outputWidth, outputHeight)
-            EGLExt.eglPresentationTimeANDROID(eglDisplay, recordEglSurface, nowNs)
-            EGL14.eglSwapBuffers(eglDisplay, recordEglSurface)
+            val nowNs = System.nanoTime()
+            if (recordingStartNs == 0L) {
+                recordingStartNs = nowNs
+                lastRecordFrameTimeNs = nowNs
+                recordedFrameCount = 0L
+            }
+
+            val elapsedSinceLast = nowNs - lastRecordFrameTimeNs
+            // Encode if at least 85% of target frame interval elapsed, or on the very first frame
+            if (elapsedSinceLast >= (frameIntervalNs * 0.85f) || recordedFrameCount == 0L) {
+                lastRecordFrameTimeNs = nowNs
+                val ptsNs = recordedFrameCount * frameIntervalNs
+                recordedFrameCount++
+
+                EGL14.eglMakeCurrent(eglDisplay, recordEglSurface, recordEglSurface, eglContext)
+                drawCompositeLayout(outputWidth, outputHeight)
+                EGLExt.eglPresentationTimeANDROID(eglDisplay, recordEglSurface, ptsNs)
+                EGL14.eglSwapBuffers(eglDisplay, recordEglSurface)
+            }
         }
     }
 
@@ -318,15 +388,22 @@ class DualVideoGLCompositor(
 
         when (currentLayout) {
             DualVideoLayout.PIP -> {
-                // Background: Fullscreen Primary Camera
+                // Background: Fullscreen Primary Camera (9:16 canvas)
                 GLES20.glViewport(0, 0, width, height)
-                drawQuad(textureIdPrimary, primaryTransformMatrix, 1.0f)
+                drawCamera(
+                    textureId = textureIdPrimary,
+                    stMatrix = primaryTransformMatrix,
+                    isFront = isPrimaryFront,
+                    sensorOrientation = primarySensorOrientation,
+                    viewportWidth = width,
+                    viewportHeight = height
+                )
 
-                // Foreground: Floating Picture-in-Picture Secondary Camera
-                val pipW = (width * 0.36f).toInt()
-                val pipH = (height * 0.28f).toInt()
+                // Foreground: Floating Picture-in-Picture Secondary Camera (9:16 portrait aspect)
+                val pipW = (width * 0.34f).toInt()
+                val pipH = (height * 0.34f).toInt()
                 val marginX = (width * 0.04f).toInt()
-                val marginY = (height * 0.05f).toInt()
+                val marginY = (height * 0.06f).toInt()
 
                 val (pipX, pipY) = when (currentPipPosition) {
                     PipPosition.TOP_RIGHT -> Pair(width - pipW - marginX, height - pipH - marginY)
@@ -335,10 +412,19 @@ class DualVideoGLCompositor(
                     PipPosition.BOTTOM_LEFT -> Pair(marginX, marginY)
                 }
 
-                GLES20.glViewport(pipX, pipY, pipW, pipH)
                 GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
                 GLES20.glScissor(pipX, pipY, pipW, pipH)
-                drawQuad(textureIdSecondary, secondaryTransformMatrix, 1.0f)
+                GLES20.glViewport(pipX, pipY, pipW, pipH)
+
+                drawCamera(
+                    textureId = textureIdSecondary,
+                    stMatrix = secondaryTransformMatrix,
+                    isFront = isSecondaryFront,
+                    sensorOrientation = secondarySensorOrientation,
+                    viewportWidth = pipW,
+                    viewportHeight = pipH
+                )
+
                 GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
             }
 
@@ -346,15 +432,29 @@ class DualVideoGLCompositor(
                 val halfH = height / 2
 
                 // Top Viewport: Primary Camera
-                GLES20.glViewport(0, halfH, width, halfH)
                 GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
-                GLES20.glScissor(0, halfH, width, halfH)
-                drawQuad(textureIdPrimary, primaryTransformMatrix, 1.0f)
+                GLES20.glScissor(0, halfH, width, height - halfH)
+                GLES20.glViewport(0, halfH, width, height - halfH)
+                drawCamera(
+                    textureId = textureIdPrimary,
+                    stMatrix = primaryTransformMatrix,
+                    isFront = isPrimaryFront,
+                    sensorOrientation = primarySensorOrientation,
+                    viewportWidth = width,
+                    viewportHeight = height - halfH
+                )
 
                 // Bottom Viewport: Secondary Camera
-                GLES20.glViewport(0, 0, width, halfH)
                 GLES20.glScissor(0, 0, width, halfH)
-                drawQuad(textureIdSecondary, secondaryTransformMatrix, 1.0f)
+                GLES20.glViewport(0, 0, width, halfH)
+                drawCamera(
+                    textureId = textureIdSecondary,
+                    stMatrix = secondaryTransformMatrix,
+                    isFront = isSecondaryFront,
+                    sensorOrientation = secondarySensorOrientation,
+                    viewportWidth = width,
+                    viewportHeight = halfH
+                )
                 GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
             }
 
@@ -362,21 +462,90 @@ class DualVideoGLCompositor(
                 val halfW = width / 2
 
                 // Left Viewport: Primary Camera
-                GLES20.glViewport(0, 0, halfW, height)
                 GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
                 GLES20.glScissor(0, 0, halfW, height)
-                drawQuad(textureIdPrimary, primaryTransformMatrix, 1.0f)
+                GLES20.glViewport(0, 0, halfW, height)
+                drawCamera(
+                    textureId = textureIdPrimary,
+                    stMatrix = primaryTransformMatrix,
+                    isFront = isPrimaryFront,
+                    sensorOrientation = primarySensorOrientation,
+                    viewportWidth = halfW,
+                    viewportHeight = height
+                )
 
                 // Right Viewport: Secondary Camera
-                GLES20.glViewport(halfW, 0, halfW, height)
-                GLES20.glScissor(halfW, 0, halfW, height)
-                drawQuad(textureIdSecondary, secondaryTransformMatrix, 1.0f)
+                GLES20.glScissor(halfW, 0, width - halfW, height)
+                GLES20.glViewport(halfW, 0, width - halfW, height)
+                drawCamera(
+                    textureId = textureIdSecondary,
+                    stMatrix = secondaryTransformMatrix,
+                    isFront = isSecondaryFront,
+                    sensorOrientation = secondarySensorOrientation,
+                    viewportWidth = width - halfW,
+                    viewportHeight = height
+                )
                 GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
             }
         }
 
         GLES20.glDisableVertexAttribArray(aPositionHandle)
         GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
+    }
+
+    /**
+     * Renders a camera frame upright and uniform center-cropped (no non-uniform stretching or squishing).
+     */
+    private fun drawCamera(
+        textureId: Int,
+        stMatrix: FloatArray,
+        isFront: Boolean,
+        sensorOrientation: Int,
+        viewportWidth: Int,
+        viewportHeight: Int
+    ) {
+        if (viewportWidth <= 0 || viewportHeight <= 0) return
+
+        val targetAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
+        // Native camera sensor aspect ratio when upright in portrait (e.g. 1080 / 1920 = 9 / 16)
+        val camAspect = minOf(outputWidth, outputHeight).toFloat() / maxOf(outputWidth, outputHeight).toFloat()
+
+        val scaleX: Float
+        val scaleY: Float
+        if (targetAspect > camAspect) {
+            // Viewport is wider than upright camera frame -> fit width, crop height uniformly
+            scaleX = 1.0f
+            scaleY = camAspect / targetAspect
+        } else {
+            // Viewport is taller than upright camera frame -> fit height, crop width uniformly
+            scaleX = targetAspect / camAspect
+            scaleY = 1.0f
+        }
+
+        val matrix2d = AndroidMatrix().apply {
+            postTranslate(-0.5f, -0.5f)
+            postScale(scaleX, scaleY)
+            if (isFront) {
+                postScale(-1.0f, 1.0f) // Horizontal mirror for natural selfie preview & video
+                val rot = if (sensorOrientation == 270) 90f else -90f
+                postRotate(rot)
+            } else {
+                val rot = if (sensorOrientation == 90) -90f else 90f
+                postRotate(rot)
+            }
+            postTranslate(0.5f, 0.5f)
+        }
+
+        matrix2d.getValues(matrixValues)
+        // Convert 3x3 affine matrix to 4x4 OpenGL column-major matrix
+        localTexMatrix[0] = matrixValues[0]; localTexMatrix[1] = matrixValues[3]; localTexMatrix[2] = 0f; localTexMatrix[3] = 0f
+        localTexMatrix[4] = matrixValues[1]; localTexMatrix[5] = matrixValues[4]; localTexMatrix[6] = 0f; localTexMatrix[7] = 0f
+        localTexMatrix[8] = 0f;              localTexMatrix[9] = 0f;              localTexMatrix[10] = 1f; localTexMatrix[11] = 0f
+        localTexMatrix[12] = matrixValues[2]; localTexMatrix[13] = matrixValues[5]; localTexMatrix[14] = 0f; localTexMatrix[15] = 1f
+
+        Matrix.multiplyMM(finalTexMatrix, 0, stMatrix, 0, localTexMatrix, 0)
+
+        drawQuad(textureId, finalTexMatrix, 1.0f)
     }
 
     private fun drawQuad(textureId: Int, stMatrix: FloatArray, alpha: Float) {

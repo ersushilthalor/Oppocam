@@ -26,6 +26,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -66,38 +67,64 @@ fun DualVideoScreen(
     val state by dualEngine.uiState.collectAsState()
     var isResolutionDialogOpen by remember { mutableStateOf(false) }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
             .testTag("dual_video_screen")
     ) {
-        // 1. Live Dual Camera OpenGL Viewfinder
-        AndroidView(
-            factory = { ctx ->
-                TextureView(ctx).apply {
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                            dualEngine.setPreviewSurface(Surface(st), w, h)
-                        }
+        val containerWidth = maxWidth
+        val containerHeight = maxHeight
 
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                            dualEngine.setPreviewSurface(Surface(st), w, h)
-                        }
+        // Exactly matches normal Video mode 9:16 portrait framing (16:9 vertical frame)
+        val targetRatio = 16f / 9f
+        val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
+            containerWidth to (containerWidth * targetRatio)
+        } else {
+            (containerHeight / targetRatio) to containerHeight
+        }
 
-                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                            dualEngine.setPreviewSurface(null, 0, 0)
-                            return true
-                        }
+        // 1. Live Dual Camera OpenGL Viewfinder - centered in 9:16 aspect ratio box
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = targetWidth, height = targetHeight)
+                    .clipToBounds()
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        TextureView(ctx).apply {
+                            surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                                    val effW = if (this@apply.width > 0) this@apply.width else w
+                                    val effH = if (this@apply.height > 0) this@apply.height else h
+                                    dualEngine.setPreviewSurface(Surface(st), effW, effH)
+                                }
 
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-                    }
-                }
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("dual_video_viewfinder")
-        )
+                                override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+                                    val effW = if (this@apply.width > 0) this@apply.width else w
+                                    val effH = if (this@apply.height > 0) this@apply.height else h
+                                    dualEngine.setPreviewSurface(Surface(st), effW, effH)
+                                }
+
+                                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                    dualEngine.setPreviewSurface(null, 0, 0)
+                                    return true
+                                }
+
+                                override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("dual_video_viewfinder")
+                )
+            }
+        }
 
         // 2. Top Bar Controls
         Column(
@@ -168,8 +195,15 @@ fun DualVideoScreen(
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
                     modifier = Modifier.clickable { isResolutionDialogOpen = true }.testTag("dual_video_res_chip")
                 ) {
+                    val pW = state.config.resolution.portraitWidth
+                    val pH = state.config.resolution.portraitHeight
+                    val resTag = when {
+                        pW >= 1080 || pH >= 1920 -> "1080p"
+                        pW >= 720 || pH >= 1280 -> "720p"
+                        else -> "480p"
+                    }
                     Text(
-                        text = "${state.config.resolution.height}p ${state.config.fps}fps",
+                        text = "$resTag ${state.config.fps}fps",
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -534,7 +568,7 @@ fun DualVideoScreen(
 
                         Text("Resolution:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         state.capability.supportedResolutions.forEach { res ->
-                            val isSelected = state.config.resolution.width == res.width && state.config.resolution.height == res.height
+                            val isSelected = state.config.resolution.portraitWidth == res.portraitWidth && state.config.resolution.portraitHeight == res.portraitHeight
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,

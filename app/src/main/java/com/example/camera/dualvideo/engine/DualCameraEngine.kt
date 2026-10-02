@@ -58,7 +58,7 @@ class DualCameraEngine(
         // 1. Detect Hardware Concurrent Capability
         val cap = DualCameraCapabilityDetector.detectCapability(context, availableLenses)
         val defaultPair = cap.supportedPairs.firstOrNull()
-        val defaultRes = cap.supportedResolutions.firstOrNull() ?: DualVideoResolution(1920, 1080, "1080p")
+        val defaultRes = cap.supportedResolutions.firstOrNull() ?: DualVideoResolution(1080, 1920, "1080p")
         val defaultFps = if (cap.supportedFps.contains(30)) 30 else (cap.supportedFps.firstOrNull() ?: 30)
 
         val backLenses = availableLenses.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
@@ -86,15 +86,40 @@ class DualCameraEngine(
             config = config
         )
 
-        // 2. Start GL Compositor
-        val glComp = DualVideoGLCompositor(defaultRes.width, defaultRes.height)
+        // 2. Start GL Compositor with native portrait dimensions
+        val glComp = DualVideoGLCompositor(defaultRes.portraitWidth, defaultRes.portraitHeight)
+        glComp.setFps(defaultFps)
         compositor = glComp
+        updateCompositorCameraInfo(primLens, secLens)
         glComp.start {
             // Once GL textures and surfaces are created, open both cameras
             cameraHandler?.post {
                 openBothCameras()
             }
         }
+    }
+
+    private fun updateCompositorCameraInfo(
+        prim: LensInfo? = _uiState.value.primaryLens,
+        sec: LensInfo? = _uiState.value.secondaryLens
+    ) {
+        if (prim == null || sec == null) return
+        val isPrimFront = (prim.facing == CameraCharacteristics.LENS_FACING_FRONT)
+        val primOrient = try {
+            cameraManager.getCameraCharacteristics(prim.cameraId).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isPrimFront) 270 else 90)
+        } catch (e: Exception) { if (isPrimFront) 270 else 90 }
+
+        val isSecFront = (sec.facing == CameraCharacteristics.LENS_FACING_FRONT)
+        val secOrient = try {
+            cameraManager.getCameraCharacteristics(sec.cameraId).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isSecFront) 270 else 90)
+        } catch (e: Exception) { if (isSecFront) 270 else 90 }
+
+        compositor?.setCameraInfo(
+            isPrimaryFront = isPrimFront,
+            primaryOrientation = primOrient,
+            isSecondaryFront = isSecFront,
+            secondaryOrientation = secOrient
+        )
     }
 
     fun setPreviewSurface(surface: Surface?, width: Int, height: Int) {
@@ -248,11 +273,13 @@ class DualCameraEngine(
         val newConfig = _uiState.value.config.copy(resolution = resolution)
         _uiState.value = _uiState.value.copy(config = newConfig)
 
-        // Recreate compositor with new resolution
+        // Recreate compositor with new portrait resolution
         cameraHandler?.post {
             compositor?.release()
-            val glComp = DualVideoGLCompositor(resolution.width, resolution.height)
+            val glComp = DualVideoGLCompositor(resolution.portraitWidth, resolution.portraitHeight)
+            glComp.setFps(newConfig.fps)
             compositor = glComp
+            updateCompositorCameraInfo()
             glComp.setLayout(newConfig.layout, newConfig.pipPosition)
             glComp.start {
                 cameraHandler?.post {
@@ -266,6 +293,7 @@ class DualCameraEngine(
         if (_uiState.value.isRecording) return
         val newConfig = _uiState.value.config.copy(fps = fps)
         _uiState.value = _uiState.value.copy(config = newConfig)
+        compositor?.setFps(fps)
     }
 
     fun setAudioEnabled(enabled: Boolean) {
@@ -284,6 +312,7 @@ class DualCameraEngine(
             primaryLens = targetLens,
             isSwitchingLens = true
         )
+        updateCompositorCameraInfo(prim = targetLens)
 
         cameraHandler?.post {
             try {
@@ -382,6 +411,7 @@ class DualCameraEngine(
             primaryLens = oldSec,
             secondaryLens = oldPrim
         )
+        updateCompositorCameraInfo(prim = oldSec, sec = oldPrim)
 
         cameraHandler?.post {
             openBothCameras()
@@ -393,14 +423,13 @@ class DualCameraEngine(
         val config = _uiState.value.config
 
         try {
-            val orientation = getOrientationHint()
             val rec = DualVideoRecorder(
                 context = context,
-                videoWidth = config.resolution.width,
-                videoHeight = config.resolution.height,
+                videoWidth = config.resolution.portraitWidth,
+                videoHeight = config.resolution.portraitHeight,
                 frameRate = config.fps,
                 isAudioEnabled = config.isAudioEnabled,
-                orientationHint = orientation
+                orientationHint = 0
             )
             val encoderSurface = rec.prepare()
             compositor?.setRecordingSurface(encoderSurface)

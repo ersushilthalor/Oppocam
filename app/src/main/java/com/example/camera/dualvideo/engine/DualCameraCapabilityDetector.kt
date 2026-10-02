@@ -160,12 +160,14 @@ object DualCameraCapabilityDetector {
         }
 
         val sortedResolutions = commonResolutions.sortedByDescending { it.width * it.height }.map { size ->
+            val pW = minOf(size.width, size.height)
+            val pH = maxOf(size.width, size.height)
             val label = when {
-                size.width >= 1920 -> "1080p Full HD (${size.width}x${size.height})"
-                size.width >= 1280 -> "720p HD (${size.width}x${size.height})"
-                else -> "480p SD (${size.width}x${size.height})"
+                pW >= 1080 || pH >= 1920 -> "1080p Full HD (${pW}x${pH})"
+                pW >= 720 || pH >= 1280 -> "720p HD (${pW}x${pH})"
+                else -> "480p SD (${pW}x${pH})"
             }
-            DualVideoResolution(size.width, size.height, label)
+            DualVideoResolution(pW, pH, label)
         }
 
         // 4. Find Supported Frame Rates

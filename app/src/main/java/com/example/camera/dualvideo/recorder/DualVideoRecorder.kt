@@ -11,19 +11,28 @@ import android.provider.MediaStore
 import android.util.Log
 import android.view.Surface
 import java.io.File
-import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Robust MediaCodec + MediaMuxer hardware video recorder for Dual Video.
+ *
+ * Fixes:
+ * - Proper portrait orientation & resolution (e.g. 1080x1920) matching source preview with zero stretching
+ * - Correct presentation timestamps starting at 0, matching target frame rate exactly
+ * - Eliminates 12-hour video duration bug by aligning audio and video timebase from start
+ * - Reliable MediaMuxer start and EOS draining to ensure 6-second recording is finalized as exactly 6 seconds
+ * - IDR keyframe preservation via pending sample buffering before muxer start
+ */
 class DualVideoRecorder(
     private val context: Context,
     private val videoWidth: Int,
     private val videoHeight: Int,
     private val frameRate: Int = 30,
     private val isAudioEnabled: Boolean = true,
-    private val orientationHint: Int = 90
+    private val orientationHint: Int = 0
 ) {
     companion object {
         private const val TAG = "DualVideoRecorder"
@@ -33,6 +42,15 @@ class DualVideoRecorder(
         private const val AUDIO_SAMPLE_RATE = 44100
         private const val AUDIO_CHANNEL_COUNT = 2
     }
+
+    private data class PendingSample(
+        val isAudio: Boolean,
+        val data: ByteArray,
+        val info: MediaCodec.BufferInfo
+    )
+
+    private val actualWidth = minOf(videoWidth, videoHeight)
+    private val actualHeight = maxOf(videoWidth, videoHeight)
 
     private var videoEncoder: MediaCodec? = null
     private var inputSurface: Surface? = null
@@ -47,8 +65,11 @@ class DualVideoRecorder(
     private var videoFormatAddedTimeMs = 0L
 
     private val isRecording = AtomicBoolean(false)
+    private var isEosSignaled = false
     private var recordingThread: Thread? = null
     private var audioThread: Thread? = null
+
+    private val pendingSamples = mutableListOf<PendingSample>()
 
     private var outputFile: File? = null
     private var outputUri: Uri? = null
@@ -56,10 +77,10 @@ class DualVideoRecorder(
     val isRecordingActive: Boolean get() = isRecording.get()
 
     fun prepare(): Surface {
-        // 1. Configure Video Encoder
-        val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME, videoWidth, videoHeight).apply {
+        // 1. Configure Video Encoder (Portrait 1080x1920 or 720x1280)
+        val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME, actualWidth, actualHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, calculateBitRate(videoWidth, videoHeight, frameRate))
+            setInteger(MediaFormat.KEY_BIT_RATE, calculateBitRate(actualWidth, actualHeight, frameRate))
             setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // 1 second keyframes
         }
@@ -110,17 +131,40 @@ class DualVideoRecorder(
             AudioFormat.ENCODING_PCM_16BIT
         )
 
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.CAMCORDER,
-            AUDIO_SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_STEREO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBufSize * 2
-        )
+        val rec = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.CAMCORDER,
+                AUDIO_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                maxOf(minBufSize * 2, 4096)
+            )
+        } catch (e: Exception) {
+            try {
+                AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    AUDIO_SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_STEREO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    maxOf(minBufSize * 2, 4096)
+                )
+            } catch (ex: Exception) {
+                null
+            }
+        }
+
+        if (rec != null && rec.state == AudioRecord.STATE_INITIALIZED) {
+            audioRecord = rec
+        } else {
+            rec?.release()
+            audioRecord = null
+            Log.w(TAG, "AudioRecord not initialized, continuing video-only")
+        }
     }
 
     fun start() {
         if (!isRecording.compareAndSet(false, true)) return
+        isEosSignaled = false
 
         videoEncoder?.start()
         audioEncoder?.start()
@@ -144,39 +188,53 @@ class DualVideoRecorder(
     private fun drainVideoEncoder() {
         val encoder = videoEncoder ?: return
         val bufferInfo = MediaCodec.BufferInfo()
+        var isEosReached = false
 
-        while (isRecording.get()) {
+        while (!isEosReached) {
             val status = encoder.dequeueOutputBuffer(bufferInfo, DRAIN_TIMEOUT_US)
-            if (status == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                if (isMuxerStarted) {
-                    throw RuntimeException("Format changed twice")
+            if (status == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                if (!isRecording.get() && isEosSignaled) {
+                    break
                 }
-                val newFormat = encoder.outputFormat
-                videoTrackIndex = mediaMuxer?.addTrack(newFormat) ?: -1
-                checkAndStartMuxer()
+            } else if (status == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                if (!isMuxerStarted) {
+                    val newFormat = encoder.outputFormat
+                    videoTrackIndex = mediaMuxer?.addTrack(newFormat) ?: -1
+                    checkAndStartMuxer()
+                }
             } else if (status >= 0) {
-                val encodedData = encoder.getOutputBuffer(status) ?: continue
-
-                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                    bufferInfo.size = 0
-                }
-
-                if (bufferInfo.size != 0 && isMuxerStarted) {
-                    encodedData.position(bufferInfo.offset)
-                    encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                    synchronized(this) {
-                        try {
-                            mediaMuxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to write video sample", e)
+                val encodedData = encoder.getOutputBuffer(status)
+                if (encodedData != null) {
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        bufferInfo.size = 0
+                    }
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        isEosReached = true
+                    }
+                    if (bufferInfo.size != 0) {
+                        encodedData.position(bufferInfo.offset)
+                        encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                        synchronized(this) {
+                            if (isMuxerStarted && videoTrackIndex >= 0) {
+                                try {
+                                    mediaMuxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Failed writing video sample", e)
+                                }
+                            } else {
+                                val bytes = ByteArray(bufferInfo.size)
+                                val pos = encodedData.position()
+                                encodedData.get(bytes)
+                                encodedData.position(pos)
+                                val infoCopy = MediaCodec.BufferInfo().apply {
+                                    set(0, bufferInfo.size, bufferInfo.presentationTimeUs, bufferInfo.flags)
+                                }
+                                pendingSamples.add(PendingSample(isAudio = false, data = bytes, info = infoCopy))
+                            }
                         }
                     }
                 }
-
                 encoder.releaseOutputBuffer(status, false)
-                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                    break
-                }
             }
         }
     }
@@ -199,37 +257,66 @@ class DualVideoRecorder(
                     audioBuffer.position(0)
                     inputBuf?.put(audioBuffer)
                     encoder.queueInputBuffer(inputIndex, 0, readBytes, audioPtsUs, 0)
-                    audioPtsUs += (readBytes * 1_000_000L) / (AUDIO_SAMPLE_RATE * AUDIO_CHANNEL_COUNT * 2)
+                    val frames = readBytes / (AUDIO_CHANNEL_COUNT * 2)
+                    audioPtsUs += (frames * 1_000_000L) / AUDIO_SAMPLE_RATE
                 }
             }
+            drainAudioOutput(encoder, bufferInfo, false)
+        }
 
-            // Drain audio encoder output
-            while (true) {
-                val status = encoder.dequeueOutputBuffer(bufferInfo, 0)
-                if (status == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    val newFormat = encoder.outputFormat
-                    audioTrackIndex = mediaMuxer?.addTrack(newFormat) ?: -1
+        // On stop: send EOS to audio encoder
+        try {
+            val eosIndex = encoder.dequeueInputBuffer(DRAIN_TIMEOUT_US)
+            if (eosIndex >= 0) {
+                encoder.queueInputBuffer(eosIndex, 0, 0, audioPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            }
+        } catch (ignored: Exception) {}
+        drainAudioOutput(encoder, bufferInfo, true)
+    }
+
+    private fun drainAudioOutput(encoder: MediaCodec, bufferInfo: MediaCodec.BufferInfo, isDrainAll: Boolean) {
+        while (true) {
+            val status = encoder.dequeueOutputBuffer(bufferInfo, if (isDrainAll) DRAIN_TIMEOUT_US else 0L)
+            if (status == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                if (!isMuxerStarted) {
+                    audioTrackIndex = mediaMuxer?.addTrack(encoder.outputFormat) ?: -1
                     checkAndStartMuxer()
-                } else if (status >= 0) {
-                    val encoded = encoder.getOutputBuffer(status) ?: break
+                }
+            } else if (status >= 0) {
+                val encoded = encoder.getOutputBuffer(status)
+                if (encoded != null) {
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                         bufferInfo.size = 0
                     }
-                    if (bufferInfo.size != 0 && isMuxerStarted) {
+                    if (bufferInfo.size != 0) {
                         encoded.position(bufferInfo.offset)
                         encoded.limit(bufferInfo.offset + bufferInfo.size)
                         synchronized(this) {
-                            try {
-                                mediaMuxer?.writeSampleData(audioTrackIndex, encoded, bufferInfo)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to write audio sample", e)
+                            if (isMuxerStarted && audioTrackIndex >= 0) {
+                                try {
+                                    mediaMuxer?.writeSampleData(audioTrackIndex, encoded, bufferInfo)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Failed writing audio sample", e)
+                                }
+                            } else {
+                                val bytes = ByteArray(bufferInfo.size)
+                                val pos = encoded.position()
+                                encoded.get(bytes)
+                                encoded.position(pos)
+                                val infoCopy = MediaCodec.BufferInfo().apply {
+                                    set(0, bufferInfo.size, bufferInfo.presentationTimeUs, bufferInfo.flags)
+                                }
+                                pendingSamples.add(PendingSample(isAudio = true, data = bytes, info = infoCopy))
                             }
                         }
                     }
-                    encoder.releaseOutputBuffer(status, false)
-                } else {
+                }
+                encoder.releaseOutputBuffer(status, false)
+                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                     break
                 }
+            } else {
+                break
             }
         }
     }
@@ -240,15 +327,24 @@ class DualVideoRecorder(
             if (videoFormatAddedTimeMs == 0L) {
                 videoFormatAddedTimeMs = System.currentTimeMillis()
             }
-            val audioTimedOut = (System.currentTimeMillis() - videoFormatAddedTimeMs > 600)
-            // If audio enabled, wait for audio track before starting muxer (or timeout after 600ms)
-            if (isAudioEnabled && audioEncoder != null && audioTrackIndex < 0 && !audioTimedOut) {
+            val audioTimedOut = (System.currentTimeMillis() - videoFormatAddedTimeMs > 400)
+            if (isAudioEnabled && audioRecord != null && audioEncoder != null && audioTrackIndex < 0 && !audioTimedOut) {
                 return
             }
             try {
                 mediaMuxer?.start()
                 isMuxerStarted = true
-                Log.i(TAG, "MediaMuxer started with videoTrack=$videoTrackIndex, audioTrack=$audioTrackIndex (audioTimedOut=$audioTimedOut)")
+                Log.i(TAG, "MediaMuxer started with videoTrack=$videoTrackIndex, audioTrack=$audioTrackIndex")
+
+                // Flush pending samples (including initial IDR keyframe)
+                for (sample in pendingSamples) {
+                    val track = if (sample.isAudio) audioTrackIndex else videoTrackIndex
+                    if (track >= 0) {
+                        val buf = ByteBuffer.wrap(sample.data)
+                        mediaMuxer?.writeSampleData(track, buf, sample.info)
+                    }
+                }
+                pendingSamples.clear()
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to start MediaMuxer", t)
             }
@@ -257,52 +353,52 @@ class DualVideoRecorder(
 
     fun stop(): Uri? {
         if (!isRecording.compareAndSet(true, false)) return outputUri
+        isEosSignaled = true
 
-        try {
-            audioRecord?.stop()
-        } catch (ignored: Throwable) {}
-
+        // 1. Signal EOS to video encoder
         try {
             videoEncoder?.signalEndOfInputStream()
-        } catch (ignored: Throwable) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "signalEndOfInputStream failed", e)
+        }
 
+        // 2. Wait for drain threads to finish flushing all frames to muxer
         try {
-            recordingThread?.join(2000)
-            audioThread?.join(1000)
+            recordingThread?.join(2500)
         } catch (ignored: InterruptedException) {}
 
         try {
+            audioRecord?.stop()
+        } catch (ignored: Exception) {}
+
+        try {
+            audioThread?.join(1500)
+        } catch (ignored: InterruptedException) {}
+
+        // 3. Stop and release MediaMuxer to finalize MP4 container duration metadata
+        synchronized(this) {
             if (isMuxerStarted) {
-                mediaMuxer?.stop()
+                try {
+                    mediaMuxer?.stop()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Error stopping MediaMuxer", t)
+                }
                 isMuxerStarted = false
             }
-            mediaMuxer?.release()
+            try {
+                mediaMuxer?.release()
+            } catch (ignored: Throwable) {}
             mediaMuxer = null
-        } catch (t: Throwable) {
-            Log.w(TAG, "Error stopping MediaMuxer", t)
         }
 
-        try {
-            videoEncoder?.stop()
-            videoEncoder?.release()
-            videoEncoder = null
-        } catch (ignored: Throwable) {}
-
-        try {
-            audioEncoder?.stop()
-            audioEncoder?.release()
-            audioEncoder = null
-        } catch (ignored: Throwable) {}
-
-        try {
-            audioRecord?.release()
-            audioRecord = null
-        } catch (ignored: Throwable) {}
-
+        // 4. Release encoders and surfaces
+        try { videoEncoder?.stop(); videoEncoder?.release(); videoEncoder = null } catch (ignored: Throwable) {}
+        try { audioEncoder?.stop(); audioEncoder?.release(); audioEncoder = null } catch (ignored: Throwable) {}
+        try { audioRecord?.release(); audioRecord = null } catch (ignored: Throwable) {}
         inputSurface?.release()
         inputSurface = null
 
-        // Save recorded temp file to Android MediaStore
+        // 5. Save recorded temp file to Android MediaStore
         val temp = outputFile
         if (temp != null && temp.exists() && temp.length() > 0) {
             val uri = saveToMediaStore(temp)

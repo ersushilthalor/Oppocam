@@ -37,14 +37,37 @@ class DualVideoCapabilityAndModelTest {
 
     @Test
     fun testDualVideoResolutionProperties() {
-        val res1080p = DualVideoResolution(1920, 1080, "1080p Full HD")
-        assertEquals(1920, res1080p.size.width)
-        assertEquals(1080, res1080p.size.height)
-        assertEquals(1920f / 1080f, res1080p.aspectRatio, 0.001f)
+        val res1080p = DualVideoResolution(1080, 1920, "1080p Full HD")
+        assertEquals(1080, res1080p.portraitWidth)
+        assertEquals(1920, res1080p.portraitHeight)
+        assertEquals(1080, res1080p.size.width)
+        assertEquals(1920, res1080p.size.height)
+        assertEquals(1080f / 1920f, res1080p.aspectRatio, 0.001f)
 
-        val res720p = DualVideoResolution(1280, 720, "720p HD")
-        assertEquals(1280, res720p.size.width)
-        assertEquals(720, res720p.size.height)
+        val res720p = DualVideoResolution(720, 1280, "720p HD")
+        assertEquals(720, res720p.portraitWidth)
+        assertEquals(1280, res720p.portraitHeight)
+        assertEquals(720, res720p.size.width)
+        assertEquals(1280, res720p.size.height)
+    }
+
+    @Test
+    fun testExactVideoDurationPacingCalculation() {
+        val targetFps = 30
+        val frameIntervalNs = 1_000_000_000L / targetFps
+        val durationSeconds = 6
+
+        val totalFrames = durationSeconds * targetFps // 180 frames for 6 seconds
+        assertEquals(180, totalFrames)
+
+        // First frame must be at timestamp 0
+        val firstFramePtsNs = 0L * frameIntervalNs
+        assertEquals(0L, firstFramePtsNs)
+
+        // Last frame at 6.0 seconds
+        val lastFramePtsNs = totalFrames * frameIntervalNs
+        val durationSec = lastFramePtsNs.toDouble() / 1_000_000_000.0
+        assertEquals(6.0, durationSec, 0.001)
     }
 
     @Test

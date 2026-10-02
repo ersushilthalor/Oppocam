@@ -22,8 +22,10 @@ data class DualVideoResolution(
     val height: Int,
     val label: String
 ) {
-    val size: Size get() = Size(width, height)
-    val aspectRatio: Float get() = width.toFloat() / height.toFloat()
+    val portraitWidth: Int get() = minOf(width, height)
+    val portraitHeight: Int get() = maxOf(width, height)
+    val size: Size get() = Size(portraitWidth, portraitHeight)
+    val aspectRatio: Float get() = portraitWidth.toFloat() / portraitHeight.toFloat()
 }
 
 data class DualCameraPair(
@@ -45,7 +47,7 @@ data class DualVideoCapability(
 data class DualVideoConfig(
     val layout: DualVideoLayout = DualVideoLayout.PIP,
     val pipPosition: PipPosition = PipPosition.TOP_RIGHT,
-    val resolution: DualVideoResolution = DualVideoResolution(1920, 1080, "1080p Full HD (1920x1080)"),
+    val resolution: DualVideoResolution = DualVideoResolution(1080, 1920, "1080p Full HD (1080x1920)"),
     val fps: Int = 30,
     val isAudioEnabled: Boolean = true
 )
