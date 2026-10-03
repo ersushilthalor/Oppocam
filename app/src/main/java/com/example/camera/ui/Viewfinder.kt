@@ -248,7 +248,7 @@ fun Viewfinder(
                     previewBufferSize = previewBufferSize,
                     targetRatio = targetRatioCalc,
                     sensorOrientation = sensorOrientation,
-                    isHorizonLockEnabled = isHorizonLockEnabled && cameraMode == CameraMode.VIDEO,
+                    isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
                     horizonRollDegrees = horizonRollDegrees,
                     horizonNormX = horizonNormX,
                     horizonNormY = horizonNormY,
@@ -281,7 +281,7 @@ fun Viewfinder(
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
         val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
-        val currentIsHorizonLock by rememberUpdatedState(isHorizonLockEnabled && cameraMode == CameraMode.VIDEO)
+        val currentIsHorizonLock by rememberUpdatedState(isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA))
         val currentHorizonRoll by rememberUpdatedState(horizonRollDegrees)
         val currentHorizonNormX by rememberUpdatedState(horizonNormX)
         val currentHorizonNormY by rememberUpdatedState(horizonNormY)
@@ -529,7 +529,7 @@ fun Viewfinder(
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
-                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && cameraMode == CameraMode.VIDEO, horizonRollDegrees, horizonNormX, horizonNormY, isDollyZoomActive && cameraMode == CameraMode.VIDEO, dollyCropState?.scaleFactor ?: 1.0f, dollyCropState?.focusNormX ?: 0.5f, dollyCropState?.focusNormY ?: 0.5f)
+                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA), horizonRollDegrees, horizonNormX, horizonNormY, isDollyZoomActive && cameraMode == CameraMode.VIDEO, dollyCropState?.scaleFactor ?: 1.0f, dollyCropState?.focusNormX ?: 0.5f, dollyCropState?.focusNormY ?: 0.5f)
                         }
 
                         // Outline provider for corner radius clipping on hardware accelerated TextureView

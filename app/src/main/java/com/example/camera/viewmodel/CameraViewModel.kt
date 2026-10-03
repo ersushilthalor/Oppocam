@@ -1128,7 +1128,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _isMoreModesOpen.value = true
         }
 
-        if (mode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
+        if ((mode == CameraMode.VIDEO || mode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
             engine.setHorizonLockEnabled(true)
             switchToRealUltraWideIfAvailable()
         }
@@ -1665,7 +1665,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!enabled) {
             setHorizonLockEnabled(false)
         }
-        showToast(if (enabled) "Horizontal Lock: Available in Video Mode" else "Horizontal Lock: Disabled")
+        showToast(if (enabled) "Horizontal Lock: Available in Video & Cinema Mode" else "Horizontal Lock: Disabled")
     }
 
     fun toggleHorizontalLockSetting() {

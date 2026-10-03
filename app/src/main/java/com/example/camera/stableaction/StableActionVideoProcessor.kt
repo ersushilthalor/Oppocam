@@ -51,7 +51,8 @@ object StableActionVideoProcessor {
         inputFile: File,
         outputFile: File,
         trajectory: List<StableActionHorizonEngine.TrajectoryPoint>,
-        aspectRatio: Float = 16f / 9f
+        aspectRatio: Float = 16f / 9f,
+        orientationDegrees: Int = -1
     ): File {
         if (!inputFile.exists() || inputFile.length() <= 0L) {
             Log.w(TAG, "Input file does not exist or is empty: ${inputFile.absolutePath}")
@@ -75,7 +76,8 @@ object StableActionVideoProcessor {
             val success = transcodeVideoWithHorizonLock(
                 inputFile = inputFile,
                 outputFile = outputFile,
-                trajectory = trajectory
+                trajectory = trajectory,
+                orientationDegrees = orientationDegrees
             )
 
             if (success && outputFile.exists() && outputFile.length() > 0L) {
@@ -139,7 +141,8 @@ object StableActionVideoProcessor {
     private fun transcodeVideoWithHorizonLock(
         inputFile: File,
         outputFile: File,
-        trajectory: List<StableActionHorizonEngine.TrajectoryPoint>
+        trajectory: List<StableActionHorizonEngine.TrajectoryPoint>,
+        orientationDegrees: Int = -1
     ): Boolean {
         var extractor: MediaExtractor? = null
         var decoder: MediaCodec? = null
@@ -169,6 +172,8 @@ object StableActionVideoProcessor {
             } finally {
                 try { retriever.release() } catch (ignored: Exception) {}
             }
+
+            val finalRotation = if (inputRotation != 0) inputRotation else if (orientationDegrees >= 0) orientationDegrees else 0
 
             extractor = MediaExtractor().apply {
                 setDataSource(inputFile.absolutePath)
@@ -320,8 +325,8 @@ object StableActionVideoProcessor {
             }
 
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4).apply {
-                if (inputRotation != 0) {
-                    setOrientationHint(inputRotation)
+                if (finalRotation != 0) {
+                    setOrientationHint(finalRotation)
                 }
             }
 
@@ -417,22 +422,28 @@ object StableActionVideoProcessor {
                                 // Interpolate exact roll angle and lateral shift from trajectory
                                 val motion = interpolateMotion(trajectory, relPtsUs)
                                 val rollDeg = Math.toDegrees(motion.rollRad.toDouble()).toFloat()
-                                val angleDeg = -rollDeg
+
+                                // In Viewfinder.kt, angleDeg = -horizonRollDegrees is applied to android.graphics.Matrix.postRotate.
+                                // In android.graphics.Matrix (where +Y is down), a negative angle rotates counter-clockwise.
+                                // In OpenGL NDC (where +Y is up), counter-clockwise rotation around +Z is POSITIVE.
+                                // Hence, rotating by +rollDeg in OpenGL counter-rotates the horizon,
+                                // exactly matching the counter-rotation in Viewfinder.kt.
+                                val counterRotationDegrees = rollDeg
 
                                 // Apply isotropic counter-rotation & safe crop strictly matching Viewfinder.kt
                                 Matrix.setIdentityM(mvpMatrix, 0)
 
-                                // Lateral translation shift (gimbal effect) rotated by angleDeg matching Viewfinder.kt
-                                val rad = Math.toRadians(angleDeg.toDouble())
+                                // Lateral translation shift (gimbal effect) rotated by roll angle matching Viewfinder.kt
+                                val rad = Math.toRadians(rollDeg.toDouble())
                                 val cosA = kotlin.math.cos(rad).toFloat()
                                 val sinA = kotlin.math.sin(rad).toFloat()
                                 val rotNormX = motion.normX * cosA - motion.normY * sinA
                                 val rotNormY = motion.normX * sinA + motion.normY * cosA
 
-                                // Map screen-space shift into buffer coordinates according to inputRotation
+                                // Map screen-space shift into buffer coordinates according to finalRotation
                                 val normShiftX: Float
                                 val normShiftY: Float
-                                when (inputRotation) {
+                                when (finalRotation) {
                                     90 -> {
                                         normShiftX = -rotNormY
                                         normShiftY = rotNormX
@@ -462,8 +473,8 @@ object StableActionVideoProcessor {
                                 // 3. Compensate for aspect ratio so rotation is isotropic in pixel space
                                 Matrix.scaleM(mvpMatrix, 0, 1f, bufferAspect, 1f)
 
-                                // 4. Counter-rotate to level the horizon
-                                Matrix.rotateM(mvpMatrix, 0, angleDeg, 0f, 0f, 1f)
+                                // 4. Counter-rotate to level the horizon matching Viewfinder
+                                Matrix.rotateM(mvpMatrix, 0, counterRotationDegrees, 0f, 0f, 1f)
 
                                 // 5. Invert aspect ratio compensation
                                 Matrix.scaleM(mvpMatrix, 0, 1f, 1f / bufferAspect, 1f)

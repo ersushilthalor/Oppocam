@@ -399,8 +399,8 @@ fun CameraScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-        // 1b. Dedicated Horizon Lock On-Screen Indicator (Video Mode)
-        if (cameraMode == CameraMode.VIDEO && isHorizontalLockSettingEnabled && isHorizonLockEnabled) {
+        // 1b. Dedicated Horizon Lock On-Screen Indicator (Video & Cinema Mode)
+        if ((cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) && isHorizontalLockSettingEnabled && isHorizonLockEnabled) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)

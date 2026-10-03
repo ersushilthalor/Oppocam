@@ -820,8 +820,9 @@ fun TopControlBar(
             TopBarAlignment.COMPACT_RIGHT -> Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.End)
         }
 
+        val cinemaButtonCount = 6 + (if (isHorizontalLockSettingEnabled) 1 else 0)
         val videoButtonCount = 6 + (if (isHorizontalLockSettingEnabled) 1 else 0) + (if (isDollyZoomSettingEnabled) 1 else 0)
-        val shouldScroll = (if (isVideoFamily) videoButtonCount else visibleItems.size) > 5
+        val shouldScroll = (if (cameraMode == CameraMode.CINEMA) cinemaButtonCount else if (cameraMode == CameraMode.VIDEO) videoButtonCount else visibleItems.size) > 5
         val topScrollState = rememberScrollState()
 
         Row(
@@ -836,6 +837,9 @@ fun TopControlBar(
             if (cameraMode == CameraMode.CINEMA) {
                 // Pure icon buttons for Cinema mode: no raw 8/10 or text pills
                 flashButton()
+                if (isHorizontalLockSettingEnabled) {
+                    horizonLockButton()
+                }
                 timerAudioButton()
                 gridAssistButton()
                 evButton()

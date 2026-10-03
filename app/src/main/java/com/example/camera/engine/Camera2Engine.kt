@@ -2019,7 +2019,7 @@ class Camera2Engine(private val context: Context) {
             gyroStabilizationEngine.start()
         }
 
-        val horizonLockActiveInVideo = (mode == CameraMode.VIDEO) && (_isHorizonLockEnabled.value ||
+        val horizonLockActiveInVideo = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA) && (_isHorizonLockEnabled.value ||
                 (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive))
         if (horizonLockActiveInVideo) {
             _isHorizonLockEnabled.value = true
@@ -5568,7 +5568,7 @@ class Camera2Engine(private val context: Context) {
         }
 
         val isHorizonActive = _isHorizonLockEnabled.value ||
-                (currentMode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
+                ((currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
         if (isHorizonActive) {
             _isHorizonLockEnabled.value = true
             stableActionHorizonEngine.start()
@@ -6208,7 +6208,7 @@ class Camera2Engine(private val context: Context) {
     private fun startVideoTimer() {
         _videoDurationSeconds.value = 0
         val isHorizonActive = _isHorizonLockEnabled.value ||
-                (currentMode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
+                ((currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
         if (isHorizonActive) {
             _isHorizonLockEnabled.value = true
             stableActionHorizonEngine.start()
@@ -6303,7 +6303,7 @@ class Camera2Engine(private val context: Context) {
         recordingVideoPipeline = _selectedVideoPipeline.value
 
         val wasHorizonLockActive = _isHorizonLockEnabled.value ||
-                (currentMode == CameraMode.VIDEO && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
+                ((currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
         val horizonTrajectory = if (wasHorizonLockActive) {
             val list = stableActionHorizonEngine.stopRecordingTrajectory()
             if (list.isNotEmpty()) list else listOf(
@@ -6318,6 +6318,8 @@ class Camera2Engine(private val context: Context) {
 
         val wasDollyZoomActive = _isDollyZoomActive.value
         val dollyTrajectory = if (wasDollyZoomActive) dollyZoomEngine.stopRecordingTrajectory() else emptyList()
+
+        val lockedOrientationHint = preparedVideoGeometry?.orientationHint ?: getVideoOrientationHint()
 
         val activeCustomRecorder = customPipelineRecorder
         customPipelineRecorder = null
@@ -6392,6 +6394,7 @@ class Camera2Engine(private val context: Context) {
                     effectiveFileName = effectiveFileName,
                     effectiveMimeType = effectiveMimeType,
                     isFrontFacing = isFrontFacing,
+                    lockedOrientationHint = lockedOrientationHint,
                     notifyComplete = notifyComplete
                 )
             } catch (e: Exception) {
@@ -6420,6 +6423,7 @@ class Camera2Engine(private val context: Context) {
         effectiveFileName: String,
         effectiveMimeType: String,
         isFrontFacing: Boolean,
+        lockedOrientationHint: Int,
         notifyComplete: (Uri?) -> Unit
     ) {
         if (rawRecordedFile == null || !rawRecordedFile.exists() || rawRecordedFile.length() <= 0L) {
@@ -6430,17 +6434,17 @@ class Camera2Engine(private val context: Context) {
 
         var fileToSave = rawRecordedFile
         var gradedFile: File? = null
+        val intermediateFiles = mutableListOf<File>()
 
         try {
             if (isCinema) {
                 try {
-                    val orientationHint = getVideoOrientationHint()
                     val procDest = File(rawRecordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.mp4")
                     val processed = CinemaVideoProcessor.processCinemaVideo(
                         inputFile = rawRecordedFile,
                         outputFile = procDest,
                         config = snapCinemaConfig,
-                        orientationDegrees = orientationHint,
+                        orientationDegrees = lockedOrientationHint,
                         rec2020Params = snapRec2020Params
                     )
                     if (processed.exists() && processed.length() > 0L && processed != rawRecordedFile) {
@@ -6450,16 +6454,22 @@ class Camera2Engine(private val context: Context) {
                 } catch (e: Exception) {
                     Log.e(TAG, "Error applying Cinema LUT to final video", e)
                 }
-            } else if (wasHorizonLockActive) {
+            }
+
+            if (wasHorizonLockActive) {
                 try {
-                    val procDest = File(rawRecordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${rawRecordedFile.extension}")
+                    val procDest = File(rawRecordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${fileToSave.extension}")
                     val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
                         inputFile = fileToSave,
                         outputFile = procDest,
                         trajectory = horizonTrajectory,
-                        aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                        aspectRatio = getTargetAspectRatioForMode(if (isCinema) CameraMode.CINEMA else CameraMode.VIDEO),
+                        orientationDegrees = lockedOrientationHint
                     )
                     if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                        if (fileToSave != rawRecordedFile) {
+                            intermediateFiles.add(fileToSave)
+                        }
                         fileToSave = processed
                         gradedFile = processed
                     }
@@ -6468,14 +6478,17 @@ class Camera2Engine(private val context: Context) {
                 }
             } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
                 try {
-                    val procDest = File(rawRecordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${rawRecordedFile.extension}")
+                    val procDest = File(rawRecordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${fileToSave.extension}")
                     val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
                         inputFile = fileToSave,
                         outputFile = procDest,
                         trajectory = dollyTrajectory,
-                        aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                        aspectRatio = getTargetAspectRatioForMode(if (isCinema) CameraMode.CINEMA else CameraMode.VIDEO)
                     )
                     if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                        if (fileToSave != rawRecordedFile) {
+                            intermediateFiles.add(fileToSave)
+                        }
                         fileToSave = processed
                         gradedFile = processed
                     }
@@ -6486,16 +6499,17 @@ class Camera2Engine(private val context: Context) {
 
             if (needsPipelinePostPass && !isCinema && snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
                 try {
-                    val orientationHint = getVideoOrientationHint()
-                    val procDest = File(rawRecordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${rawRecordedFile.extension}")
+                    val procDest = File(rawRecordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${fileToSave.extension}")
                     val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
                         inputFile = fileToSave,
                         outputFile = procDest,
                         type = snapVideoPipeline,
-                        orientationDegrees = orientationHint
+                        orientationDegrees = lockedOrientationHint
                     )
                     if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                        try { gradedFile?.delete() } catch (_: Exception) {}
+                        if (fileToSave != rawRecordedFile) {
+                            intermediateFiles.add(fileToSave)
+                        }
                         fileToSave = processed
                         gradedFile = processed
                     }
@@ -6537,6 +6551,7 @@ class Camera2Engine(private val context: Context) {
             Log.e(TAG, "Error finalizing recorded video", e)
             notifyComplete(null)
         } finally {
+            intermediateFiles.forEach { try { it.delete() } catch (_: Exception) {} }
             try { gradedFile?.delete() } catch (ignored: Exception) {}
             try { rawRecordedFile.delete() } catch (ignored: Exception) {}
             updateStorageStats()
