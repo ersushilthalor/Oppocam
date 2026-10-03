@@ -549,6 +549,79 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean("pref_cinema_bake_lut", true)
         set(value) = prefs.edit().putBoolean("pref_cinema_bake_lut", value).apply()
 
+    // Cinema Color Fine-Tuning 18 Controls
+    var cinemaTemperature: Float
+        get() = prefs.getFloat("pref_cinema_temperature", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_temperature", value).apply()
+
+    var cinemaTint: Float
+        get() = prefs.getFloat("pref_cinema_tint", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_tint", value).apply()
+
+    var cinemaWhites: Float
+        get() = prefs.getFloat("pref_cinema_whites", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_whites", value).apply()
+
+    var cinemaBlacks: Float
+        get() = prefs.getFloat("pref_cinema_blacks", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_blacks", value).apply()
+
+    var cinemaMidtones: Float
+        get() = prefs.getFloat("pref_cinema_midtones", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_midtones", value).apply()
+
+    var cinemaBlackLevel: Float
+        get() = prefs.getFloat("pref_cinema_black_level", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_black_level", value).apply()
+
+    var cinemaHighlightRolloff: Float
+        get() = prefs.getFloat("pref_cinema_hl_rolloff", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_hl_rolloff", value).apply()
+
+    var cinemaShadowRolloff: Float
+        get() = prefs.getFloat("pref_cinema_sh_rolloff", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_sh_rolloff", value).apply()
+
+    var cinemaLocalContrast: Float
+        get() = prefs.getFloat("pref_cinema_local_contrast", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_local_contrast", value).apply()
+
+    var cinemaLumaCurve: Float
+        get() = prefs.getFloat("pref_cinema_luma_curve", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_luma_curve", value).apply()
+
+    var cinemaColorTransform: Float
+        get() = prefs.getFloat("pref_cinema_color_transform", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_color_transform", value).apply()
+
+    var cinemaChromaStrength: Float
+        get() = prefs.getFloat("pref_cinema_chroma_strength", 1.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_chroma_strength", value).apply()
+
+    var cinemaLumaNoiseReduction: Float
+        get() = prefs.getFloat("pref_cinema_luma_nr", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_luma_nr", value).apply()
+
+    var cinemaChromaNoiseReduction: Float
+        get() = prefs.getFloat("pref_cinema_chroma_nr", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_chroma_nr", value).apply()
+
+    var cinemaFineSharpening: Float
+        get() = prefs.getFloat("pref_cinema_fine_sharpening", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_fine_sharpening", value).apply()
+
+    var cinemaMicroContrast: Float
+        get() = prefs.getFloat("pref_cinema_micro_contrast", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_micro_contrast", value).apply()
+
+    var cinemaToneMappingStrength: Float
+        get() = prefs.getFloat("pref_cinema_tonemapping", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_tonemapping", value).apply()
+
+    var cinemaOutputGamma: Float
+        get() = prefs.getFloat("pref_cinema_output_gamma", 1.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_output_gamma", value).apply()
+
     fun getCinemaConfig(): com.example.camera.model.CinemaConfig {
         return com.example.camera.model.CinemaConfig(
             videoFps = cinemaFps,
@@ -578,7 +651,25 @@ class CameraPreferences(context: Context) {
             manualIso = cinemaManualIso,
             manualShutterSpeedNs = cinemaManualShutterSpeedNs,
             lutIntensity = cinemaLutIntensity,
-            isBakeLutToOutput = cinemaIsBakeLutToOutput
+            isBakeLutToOutput = cinemaIsBakeLutToOutput,
+            temperature = cinemaTemperature,
+            tint = cinemaTint,
+            whites = cinemaWhites,
+            blacks = cinemaBlacks,
+            midtones = cinemaMidtones,
+            blackLevel = cinemaBlackLevel,
+            highlightRolloff = cinemaHighlightRolloff,
+            shadowRolloff = cinemaShadowRolloff,
+            localContrast = cinemaLocalContrast,
+            lumaCurve = cinemaLumaCurve,
+            colorTransform = cinemaColorTransform,
+            chromaStrength = cinemaChromaStrength,
+            lumaNoiseReduction = cinemaLumaNoiseReduction,
+            chromaNoiseReduction = cinemaChromaNoiseReduction,
+            fineSharpening = cinemaFineSharpening,
+            microContrast = cinemaMicroContrast,
+            toneMappingStrength = cinemaToneMappingStrength,
+            outputGamma = cinemaOutputGamma
         )
     }
 
@@ -614,6 +705,24 @@ class CameraPreferences(context: Context) {
         cinemaManualShutterSpeedNs = config.manualShutterSpeedNs
         cinemaLutIntensity = config.lutIntensity
         cinemaIsBakeLutToOutput = config.isBakeLutToOutput
+        cinemaTemperature = config.temperature
+        cinemaTint = config.tint
+        cinemaWhites = config.whites
+        cinemaBlacks = config.blacks
+        cinemaMidtones = config.midtones
+        cinemaBlackLevel = config.blackLevel
+        cinemaHighlightRolloff = config.highlightRolloff
+        cinemaShadowRolloff = config.shadowRolloff
+        cinemaLocalContrast = config.localContrast
+        cinemaLumaCurve = config.lumaCurve
+        cinemaColorTransform = config.colorTransform
+        cinemaChromaStrength = config.chromaStrength
+        cinemaLumaNoiseReduction = config.lumaNoiseReduction
+        cinemaChromaNoiseReduction = config.chromaNoiseReduction
+        cinemaFineSharpening = config.fineSharpening
+        cinemaMicroContrast = config.microContrast
+        cinemaToneMappingStrength = config.toneMappingStrength
+        cinemaOutputGamma = config.outputGamma
     }
 
     // Upgraded Night Mode Preferences

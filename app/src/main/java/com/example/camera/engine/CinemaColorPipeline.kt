@@ -44,7 +44,7 @@ object CinemaColorPipeline {
 
     /**
      * Returns true if any Cinema color grading stage (log profile, primary grade controls,
-     * selective Shadows/Highlights/Vibrance, or Creative LUT) is active.
+     * selective Shadows/Highlights/Vibrance, Creative LUT, or Color Fine-Tuning) is active.
      */
     fun hasActiveTransform(
         config: CinemaConfig?,
@@ -52,6 +52,7 @@ object CinemaColorPipeline {
         includeCreativeLut: Boolean = true
     ): Boolean {
         if (config == null) return false
+        if (config.hasColorFineTuning) return true
         if (computeCinemaColorMatrix(config, rec2020Params, includeCreativeLut, forGpuShader = false) != null) {
             return true
         }
@@ -83,14 +84,15 @@ object CinemaColorPipeline {
     }
 
     /**
-     * Returns true if selective per-pixel shader processing (Vibrant Green LUT or
-     * independent Shadows / Highlights / Vibrance) is active.
+     * Returns true if selective per-pixel shader processing (Vibrant Green LUT,
+     * independent Shadows / Highlights / Vibrance, or Color Fine-Tuning) is active.
      */
     fun requiresSelectiveShader(
         config: CinemaConfig?,
         includeCreativeLut: Boolean = true
     ): Boolean {
         if (config == null) return false
+        if (config.hasColorFineTuning) return true
         val vibrantGreenActive = getVibrantGreenLutIntensity(config, includeCreativeLut) > 0.001f
         val selectiveControlsActive = config.shadows != 0.0f ||
                 config.highlights != 0.0f ||
@@ -402,6 +404,98 @@ object CinemaColorPipeline {
             hasPrimary = true
         }
 
+        // 7. White Balance (Temperature & Tint) fallback matrix
+        if (!forGpuShader && (config.temperature != 0.0f || config.tint != 0.0f)) {
+            val tempShift = config.temperature.coerceIn(-1.0f, 1.0f) * 0.28f
+            val tintShift = config.tint.coerceIn(-1.0f, 1.0f) * 0.22f
+            val rMul = (1.0f + tempShift) * (1.0f - tintShift * 0.5f)
+            val gMul = 1.0f + tintShift
+            val bMul = (1.0f - tempShift) * (1.0f - tintShift * 0.5f)
+            val wbMatrix = ColorMatrix(floatArrayOf(
+                rMul, 0f, 0f, 0f, 0f,
+                0f, gMul, 0f, 0f, 0f,
+                0f, 0f, bMul, 0f, 0f,
+                0f, 0f, 0f, 1f, 0f
+            ))
+            gradeMatrix.postConcat(wbMatrix)
+            hasPrimary = true
+        }
+
+        // 8. Black Level Pedestal Offset fallback matrix
+        if (!forGpuShader && config.blackLevel != 0.0f) {
+            val blOffset = config.blackLevel.coerceIn(-1.0f, 1.0f) * 38.25f
+            val blMatrix = ColorMatrix(floatArrayOf(
+                1f, 0f, 0f, 0f, blOffset,
+                0f, 1f, 0f, 0f, blOffset,
+                0f, 0f, 1f, 0f, blOffset,
+                0f, 0f, 0f, 1f, 0f
+            ))
+            gradeMatrix.postConcat(blMatrix)
+            hasPrimary = true
+        }
+
+        // 9. Whites, Blacks, Midtones fallback matrix
+        if (!forGpuShader && (config.whites != 0.0f || config.blacks != 0.0f || config.midtones != 0.0f)) {
+            val wGain = 1.0f + config.whites.coerceIn(-1.0f, 1.0f) * 0.18f
+            val bOffset = config.blacks.coerceIn(-1.0f, 1.0f) * 16.0f
+            val midC = 1.0f + config.midtones.coerceIn(-1.0f, 1.0f) * 0.20f
+            val midOffset = (1.0f - midC) * 128f + bOffset
+            val scale = wGain * midC
+            val tonalMatrix = ColorMatrix(floatArrayOf(
+                scale, 0f, 0f, 0f, midOffset,
+                0f, scale, 0f, 0f, midOffset,
+                0f, 0f, scale, 0f, midOffset,
+                0f, 0f, 0f, 1f, 0f
+            ))
+            gradeMatrix.postConcat(tonalMatrix)
+            hasPrimary = true
+        }
+
+        // 10. Chroma Strength fallback matrix
+        if (!forGpuShader && config.chromaStrength != 1.0f) {
+            val chrMatrix = ColorMatrix()
+            chrMatrix.setSaturation(config.chromaStrength.coerceIn(0.0f, 2.0f))
+            gradeMatrix.postConcat(chrMatrix)
+            hasPrimary = true
+        }
+
+        // 11. Color Matrix / Transform fallback matrix
+        if (!forGpuShader && config.colorTransform != 0.0f) {
+            val ct = config.colorTransform.coerceIn(-1.0f, 1.0f)
+            val ctWeight = kotlin.math.abs(ct)
+            val r0 = if (ct > 0) 1.08f else 1.05f
+            val r1 = if (ct > 0) -0.05f else -0.02f
+            val r2 = if (ct > 0) -0.03f else -0.03f
+            val g0 = if (ct > 0) -0.02f else -0.05f
+            val g1 = if (ct > 0) 1.06f else 1.08f
+            val g2 = if (ct > 0) -0.04f else -0.03f
+            val b0 = if (ct > 0) -0.04f else 0.01f
+            val b1 = if (ct > 0) -0.03f else -0.03f
+            val b2 = if (ct > 0) 1.07f else 1.06f
+            val ctMat = ColorMatrix(floatArrayOf(
+                1f * (1f - ctWeight) + r0 * ctWeight, r1 * ctWeight, r2 * ctWeight, 0f, 0f,
+                g0 * ctWeight, 1f * (1f - ctWeight) + g1 * ctWeight, g2 * ctWeight, 0f, 0f,
+                b0 * ctWeight, b1 * ctWeight, 1f * (1f - ctWeight) + b2 * ctWeight, 0f, 0f,
+                0f, 0f, 0f, 1f, 0f
+            ))
+            gradeMatrix.postConcat(ctMat)
+            hasPrimary = true
+        }
+
+        // 12. Output Gamma fallback matrix approximation
+        if (!forGpuShader && config.outputGamma != 1.0f) {
+            val gammaGain = (1.0f / config.outputGamma.coerceIn(0.5f, 1.5f)).coerceIn(0.6f, 1.8f)
+            val gammaOffset = (1.0f - gammaGain) * 64f
+            val gammaMat = ColorMatrix(floatArrayOf(
+                gammaGain, 0f, 0f, 0f, gammaOffset,
+                0f, gammaGain, 0f, 0f, gammaOffset,
+                0f, 0f, gammaGain, 0f, gammaOffset,
+                0f, 0f, 0f, 1f, 0f
+            ))
+            gradeMatrix.postConcat(gammaMat)
+            hasPrimary = true
+        }
+
         return if (hasPrimary) gradeMatrix else null
     }
 
@@ -589,22 +683,109 @@ object CinemaColorPipeline {
             b = nb.coerceIn(0f, 1f)
         }
 
-        // 1. Independent Shadows & Highlights Tonal Recovery
-        val shadows = config.shadows.coerceIn(-1f, 1f)
-        val highlights = config.highlights.coerceIn(-1f, 1f)
-        if (shadows != 0f || highlights != 0f) {
-            val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
-            // Shadow mask: concentrated in darks (luma < 0.55), zero in highlights
-            val shadowMask = (1.0f - smoothstep(0.0f, 0.65f, luma))
-            val shadowDelta = shadows * 0.22f * shadowMask * (1.0f - luma)
-            // Highlight mask: concentrated in brights (luma > 0.45), zero in shadows
-            val highlightMask = smoothstep(0.35f, 1.0f, luma)
-            val highlightDelta = highlights * 0.22f * highlightMask * luma
+        // =========================================================================
+        // STAGE 1: EXPOSURE & WHITE BALANCE (Temperature, Tint)
+        // =========================================================================
+        if (config.temperature != 0.0f || config.tint != 0.0f) {
+            val tempShift = config.temperature.coerceIn(-1.0f, 1.0f) * 0.28f
+            val tintShift = config.tint.coerceIn(-1.0f, 1.0f) * 0.22f
+            r = (r * (1.0f + tempShift) * (1.0f - tintShift * 0.5f)).coerceIn(0f, 1f)
+            g = (g * (1.0f + tintShift)).coerceIn(0f, 1f)
+            b = (b * (1.0f - tempShift) * (1.0f - tintShift * 0.5f)).coerceIn(0f, 1f)
+        }
 
-            val totalDelta = shadowDelta + highlightDelta
-            r = (r + totalDelta).coerceIn(0f, 1f)
-            g = (g + totalDelta).coerceIn(0f, 1f)
-            b = (b + totalDelta).coerceIn(0f, 1f)
+        // =========================================================================
+        // STAGE 2: TONAL ADJUSTMENTS
+        // =========================================================================
+        if (config.blackLevel != 0.0f) {
+            val bl = config.blackLevel.coerceIn(-1.0f, 1.0f) * 0.15f
+            r = (r + bl).coerceIn(0f, 1f)
+            g = (g + bl).coerceIn(0f, 1f)
+            b = (b + bl).coerceIn(0f, 1f)
+        }
+
+        val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
+
+        val blacks = config.blacks.coerceIn(-1.0f, 1.0f)
+        val deltaBlacks = if (blacks != 0f) {
+            val wBlacks = 1.0f - smoothstep(0.0f, 0.25f, luma)
+            blacks * 0.22f * wBlacks * (1.0f - luma)
+        } else 0f
+
+        val shadows = config.shadows.coerceIn(-1f, 1f)
+        val deltaShadows = if (shadows != 0f) {
+            val shadowMask = 1.0f - smoothstep(0.0f, 0.65f, luma)
+            shadows * 0.22f * shadowMask * (1.0f - luma)
+        } else 0f
+
+        val midtones = config.midtones.coerceIn(-1.0f, 1.0f)
+        val deltaMidtones = if (midtones != 0f) {
+            val wMidtones = 4.0f * luma * (1.0f - luma)
+            midtones * 0.25f * wMidtones
+        } else 0f
+
+        val highlights = config.highlights.coerceIn(-1f, 1f)
+        val deltaHighlights = if (highlights != 0f) {
+            val highlightMask = smoothstep(0.35f, 1.0f, luma)
+            highlights * 0.22f * highlightMask * luma
+        } else 0f
+
+        val whites = config.whites.coerceIn(-1.0f, 1.0f)
+        val deltaWhites = if (whites != 0f) {
+            val wWhites = smoothstep(0.70f, 1.0f, luma)
+            whites * 0.25f * wWhites * luma
+        } else 0f
+
+        val shadowRolloff = config.shadowRolloff.coerceIn(-1.0f, 1.0f)
+        val deltaShadowRolloff = if (shadowRolloff != 0f) {
+            val toeWeight = (1.0f - smoothstep(0.0f, 0.38f, luma)) * smoothstep(0.0f, 0.18f, luma)
+            shadowRolloff * 0.18f * toeWeight
+        } else 0f
+
+        val highlightRolloff = config.highlightRolloff.coerceIn(-1.0f, 1.0f)
+        val deltaHighlightRolloff = if (highlightRolloff != 0f) {
+            val kneeWeight = smoothstep(0.62f, 1.0f, luma)
+            -highlightRolloff * 0.20f * kneeWeight * (luma - 0.62f)
+        } else 0f
+
+        val lumaCurve = config.lumaCurve.coerceIn(-1.0f, 1.0f)
+        val deltaLumaCurve = if (lumaCurve != 0f) {
+            val curveFactor = 1.0f + lumaCurve * 0.65f
+            val shapedLuma = if (luma < 0.5f) {
+                0.5f * (2.0f * luma).pow(curveFactor)
+            } else {
+                1.0f - 0.5f * (2.0f * (1.0f - luma)).pow(curveFactor)
+            }
+            shapedLuma - luma
+        } else 0f
+
+        val totalTonalDelta = deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve
+        if (totalTonalDelta != 0f) {
+            r = (r + totalTonalDelta).coerceIn(0f, 1f)
+            g = (g + totalTonalDelta).coerceIn(0f, 1f)
+            b = (b + totalTonalDelta).coerceIn(0f, 1f)
+        }
+
+        // =========================================================================
+        // STAGE 3: COLOR TRANSFORM (Color Matrix, Chroma Strength, Vibrance, LUT)
+        // =========================================================================
+        val ct = config.colorTransform.coerceIn(-1.0f, 1.0f)
+        if (ct != 0f) {
+            val ctWeight = kotlin.math.abs(ct)
+            val filmR = if (ct > 0) (1.08f * r - 0.05f * g - 0.03f * b) else (1.05f * r - 0.02f * g - 0.03f * b)
+            val filmG = if (ct > 0) (-0.02f * r + 1.06f * g - 0.04f * b) else (-0.05f * r + 1.08f * g - 0.03f * b)
+            val filmB = if (ct > 0) (-0.04f * r - 0.03f * g + 1.07f * b) else (0.01f * r - 0.03f * g + 1.06f * b)
+            r = (r * (1f - ctWeight) + filmR * ctWeight).coerceIn(0f, 1f)
+            g = (g * (1f - ctWeight) + filmG * ctWeight).coerceIn(0f, 1f)
+            b = (b * (1f - ctWeight) + filmB * ctWeight).coerceIn(0f, 1f)
+        }
+
+        val chromaStr = config.chromaStrength.coerceIn(0.0f, 2.0f)
+        if (chromaStr != 1.0f) {
+            val curL = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            r = (curL + (r - curL) * chromaStr).coerceIn(0f, 1f)
+            g = (curL + (g - curL) * chromaStr).coerceIn(0f, 1f)
+            b = (curL + (b - curL) * chromaStr).coerceIn(0f, 1f)
         }
 
         // Compute skin-tone protection weight (human skin: R > G > B with warm peach/beige/brown ratios)
@@ -626,41 +807,35 @@ object CinemaColorPipeline {
             val maxC = max(r, max(g, b))
             val minC = min(r, min(g, b))
             val sat = maxC - minC
-            val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
-            // Positive vibrance selectively boosts muted non-skin colors; skin tones are protected
+            val curLuma = 0.2126f * r + 0.7152f * g + 0.0722f * b
             val skinAttenuation = if (vibrance > 0f) (1.0f - 0.85f * skinWeight) else 1.0f
             val satWeight = if (vibrance > 0f) (1.0f - sat * 0.75f).coerceIn(0.15f, 1.0f) else 1.0f
             val vibScale = 1.0f + vibrance * 0.65f * satWeight * skinAttenuation
-            r = (luma + (r - luma) * vibScale).coerceIn(0f, 1f)
-            g = (luma + (g - luma) * vibScale).coerceIn(0f, 1f)
-            b = (luma + (b - luma) * vibScale).coerceIn(0f, 1f)
+            r = (curLuma + (r - curLuma) * vibScale).coerceIn(0f, 1f)
+            g = (curLuma + (g - curLuma) * vibScale).coerceIn(0f, 1f)
+            b = (curLuma + (b - curLuma) * vibScale).coerceIn(0f, 1f)
         }
 
         // 3. Selective Vibrant Green / Punchy Green LUT
         val vGreen = getVibrantGreenLutIntensity(config, includeCreativeLut)
         if (vGreen > 0.001f) {
-            val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
-            // Selective green/foliage mask: targets yellow-greens, emerald foliage, and deep forest greens
-            // Strictly multiplied by (1 - skinWeight) so skin tones are never affected by the green boost
+            val lumaGreen = 0.2126f * r + 0.7152f * g + 0.0722f * b
             val greenDomR = smoothstep(-0.035f, 0.075f, g - r)
             val greenDomB = smoothstep(0.015f, 0.12f, g - b)
             val greenWeight = (greenDomR * greenDomB * (1.0f - skinWeight)).coerceIn(0f, 1f)
 
             if (greenWeight > 0.001f) {
                 val gw = greenWeight * vGreen
-                // Noticeably boost green saturation, vibrance, and punch
                 val chromaScale = 1.0f + 0.72f * gw
-                var gr = luma + (r - luma) * chromaScale
-                var gg = luma + (g - luma) * chromaScale
-                var gb = luma + (b - luma) * chromaScale
+                var gr = lumaGreen + (r - lumaGreen) * chromaScale
+                var gg = lumaGreen + (g - lumaGreen) * chromaScale
+                var gb = lumaGreen + (b - lumaGreen) * chromaScale
 
-                // Extra foliage punch: enrich green channel separation and deepen red/blue contrast in foliage
                 val greenExcess = (g - (r + b) * 0.5f).coerceAtLeast(0f)
                 gg += greenExcess * 0.38f * gw + 0.025f * gw
                 gr -= greenExcess * 0.18f * gw
                 gb -= greenExcess * 0.12f * gw
 
-                // Subtle punchy contrast S-curve on foliage
                 val foliageContrast = 1.0f + 0.10f * gw
                 r = ((gr - 0.5f) * foliageContrast + 0.5f).coerceIn(0f, 1f)
                 g = ((gg - 0.5f) * foliageContrast + 0.5f).coerceIn(0f, 1f)
@@ -670,14 +845,11 @@ object CinemaColorPipeline {
             if (skinWeight > 0.001f) {
                 val sw = skinWeight * vGreen
                 val skinLuma = 0.2126f * r + 0.7152f * g + 0.0722f * b
-                // Protect skin tones: prevent any saturation increase or unnatural orange/red cast
-                // Keep skin tones natural, clean, and slightly bright/fair-looking
                 val cleanChromaScale = 1.0f - 0.05f * sw
                 var sr = skinLuma + (r - skinLuma) * cleanChromaScale
                 var sg = skinLuma + (g - skinLuma) * cleanChromaScale
                 var sb = skinLuma + (b - skinLuma) * cleanChromaScale
 
-                // Gentle fairness lift & clean undertone balance (prevents orange/red heaviness)
                 val fairLift = 0.052f * sw * (1.0f - skinLuma * 0.25f)
                 val excessOrange = (sr - sg - 0.12f).coerceAtLeast(0f)
                 sr = sr - excessOrange * 0.12f * sw + fairLift * 0.92f
@@ -690,13 +862,46 @@ object CinemaColorPipeline {
             }
         }
 
+        // =========================================================================
+        // STAGE 4: TONE MAPPING (ACES Filmic Tone Mapping)
+        // =========================================================================
+        val tmStr = config.toneMappingStrength.coerceIn(0.0f, 1.0f)
+        if (tmStr > 0.001f) {
+            fun aces(x: Float): Float = ((x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f)).coerceIn(0f, 1f)
+            r = (r * (1f - tmStr) + aces(r) * tmStr).coerceIn(0f, 1f)
+            g = (g * (1f - tmStr) + aces(g) * tmStr).coerceIn(0f, 1f)
+            b = (b * (1f - tmStr) + aces(b) * tmStr).coerceIn(0f, 1f)
+        }
+
+        // =========================================================================
+        // STAGE 5 & 6: NOISE REDUCTION & DETAIL/SHARPENING (Single pixel fallback)
+        // =========================================================================
+        if (config.localContrast != 0.0f) {
+            val lc = config.localContrast.coerceIn(-1.0f, 1.0f)
+            val curL = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            val contrastDelta = (curL - 0.5f) * lc * 0.22f * (4.0f * curL * (1.0f - curL))
+            r = (r + contrastDelta).coerceIn(0f, 1f)
+            g = (g + contrastDelta).coerceIn(0f, 1f)
+            b = (b + contrastDelta).coerceIn(0f, 1f)
+        }
+
+        // =========================================================================
+        // STAGE 7: OUTPUT GAMMA
+        // =========================================================================
+        val gamma = config.outputGamma.coerceIn(0.5f, 1.5f)
+        if (kotlin.math.abs(gamma - 1.0f) > 0.001f) {
+            r = r.pow(gamma).coerceIn(0f, 1f)
+            g = g.pow(gamma).coerceIn(0f, 1f)
+            b = b.pow(gamma).coerceIn(0f, 1f)
+        }
+
         return floatArrayOf(r, g, b)
     }
 
     /**
      * Applies the Cinema color pipeline to the live Viewfinder TextureView.
      * Uses hardware AGSL RuntimeShader on Android 13+ (API 33+) when selective per-pixel grading
-     * (Vibrant Green / Punchy Green LUT, Shadows, Highlights, or Vibrance) is active,
+     * (Vibrant Green / Punchy Green LUT, Shadows, Highlights, Vibrance, or Fine-Tuning) is active,
      * with seamless fallback to RenderEffect / Paint ColorMatrixColorFilter.
      */
     fun applyToView(
@@ -751,6 +956,26 @@ object CinemaColorPipeline {
                     getVibrantGreenLutIntensity(config, includeCreativeLut)
                 )
 
+                // 18 Cinema Color Fine-Tuning Uniforms
+                shader.setFloatUniform("uTemperature", config.temperature.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uTint", config.tint.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uWhites", config.whites.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uBlacks", config.blacks.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uMidtones", config.midtones.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uBlackLevel", config.blackLevel.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uHighlightRolloff", config.highlightRolloff.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uShadowRolloff", config.shadowRolloff.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uLocalContrast", config.localContrast.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uLumaCurve", config.lumaCurve.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uColorTransform", config.colorTransform.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uChromaStrength", config.chromaStrength.coerceIn(0f, 2f))
+                shader.setFloatUniform("uToneMappingStrength", config.toneMappingStrength.coerceIn(0f, 1f))
+                shader.setFloatUniform("uLumaNoiseReduction", config.lumaNoiseReduction.coerceIn(0f, 1f))
+                shader.setFloatUniform("uChromaNoiseReduction", config.chromaNoiseReduction.coerceIn(0f, 1f))
+                shader.setFloatUniform("uSharpening", config.fineSharpening.coerceIn(0f, 1f))
+                shader.setFloatUniform("uMicroContrast", config.microContrast.coerceIn(-1f, 1f))
+                shader.setFloatUniform("uOutputGamma", config.outputGamma.coerceIn(0.5f, 1.5f))
+
                 val effect = RenderEffect.createRuntimeShaderEffect(shader, "inputShader")
                 view.setRenderEffect(effect)
                 if (view.layerType != View.LAYER_TYPE_NONE) {
@@ -803,26 +1028,121 @@ object CinemaColorPipeline {
         uniform float uHighlights;
         uniform float uVibrance;
         uniform float uVibrantGreenIntensity;
+        uniform float uTemperature;
+        uniform float uTint;
+        uniform float uWhites;
+        uniform float uBlacks;
+        uniform float uMidtones;
+        uniform float uBlackLevel;
+        uniform float uHighlightRolloff;
+        uniform float uShadowRolloff;
+        uniform float uLocalContrast;
+        uniform float uLumaCurve;
+        uniform float uColorTransform;
+        uniform float uChromaStrength;
+        uniform float uToneMappingStrength;
+        uniform float uLumaNoiseReduction;
+        uniform float uChromaNoiseReduction;
+        uniform float uSharpening;
+        uniform float uMicroContrast;
+        uniform float uOutputGamma;
 
         half4 main(float2 fragCoord) {
             half4 src = inputShader.eval(fragCoord);
             float3 c = float3(src.r, src.g, src.b);
 
-            // 1. Base 4x5 Cinema ColorMatrix
+            // Sample cross neighbors for noise reduction & detail enhancement
+            float3 cUp = float3(inputShader.eval(fragCoord + float2(0.0, -1.0)).rgb);
+            float3 cDown = float3(inputShader.eval(fragCoord + float2(0.0, 1.0)).rgb);
+            float3 cLeft = float3(inputShader.eval(fragCoord + float2(-1.0, 0.0)).rgb);
+            float3 cRight = float3(inputShader.eval(fragCoord + float2(1.0, 0.0)).rgb);
+
+            // Base 4x5 Cinema ColorMatrix
             float3 graded;
             graded.r = dot(uMatRow0, c) + uMatOffset.r;
             graded.g = dot(uMatRow1, c) + uMatOffset.g;
             graded.b = dot(uMatRow2, c) + uMatOffset.b;
             c = clamp(graded, 0.0, 1.0);
 
-            // 2. Independent Shadows & Highlights Tonal Sculpting
-            if (abs(uShadows) > 0.001 || abs(uHighlights) > 0.001) {
-                float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
-                float shadowMask = 1.0 - smoothstep(0.0, 0.65, luma);
-                float shadowDelta = uShadows * 0.22 * shadowMask * (1.0 - luma);
-                float highlightMask = smoothstep(0.35, 1.0, luma);
-                float highlightDelta = uHighlights * 0.22 * highlightMask * luma;
-                c = clamp(c + (shadowDelta + highlightDelta), 0.0, 1.0);
+            // =========================================================================
+            // STAGE 1: EXPOSURE & WHITE BALANCE (Temperature, Tint)
+            // =========================================================================
+            if (abs(uTemperature) > 0.001 || abs(uTint) > 0.001) {
+                float tempShift = uTemperature * 0.28;
+                float tintShift = uTint * 0.22;
+                c.r = c.r * (1.0 + tempShift) * (1.0 - tintShift * 0.5);
+                c.g = c.g * (1.0 + tintShift);
+                c.b = c.b * (1.0 - tempShift) * (1.0 - tintShift * 0.5);
+                c = clamp(c, 0.0, 1.0);
+            }
+
+            // =========================================================================
+            // STAGE 2: TONAL ADJUSTMENTS
+            // =========================================================================
+            if (abs(uBlackLevel) > 0.001) {
+                c = clamp(c + float3(uBlackLevel * 0.15), 0.0, 1.0);
+            }
+
+            float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+
+            float wBlacks = 1.0 - smoothstep(0.0, 0.25, luma);
+            float deltaBlacks = uBlacks * 0.22 * wBlacks * (1.0 - luma);
+
+            float shadowMask = 1.0 - smoothstep(0.0, 0.65, luma);
+            float deltaShadows = uShadows * 0.22 * shadowMask * (1.0 - luma);
+
+            float wMidtones = 4.0 * luma * (1.0 - luma);
+            float deltaMidtones = uMidtones * 0.25 * wMidtones;
+
+            float highlightMask = smoothstep(0.35, 1.0, luma);
+            float deltaHighlights = uHighlights * 0.22 * highlightMask * luma;
+
+            float wWhites = smoothstep(0.70, 1.0, luma);
+            float deltaWhites = uWhites * 0.25 * wWhites * luma;
+
+            float deltaShadowRolloff = 0.0;
+            if (abs(uShadowRolloff) > 0.001) {
+                float toeWeight = (1.0 - smoothstep(0.0, 0.38, luma)) * smoothstep(0.0, 0.18, luma);
+                deltaShadowRolloff = uShadowRolloff * 0.18 * toeWeight;
+            }
+
+            float deltaHighlightRolloff = 0.0;
+            if (abs(uHighlightRolloff) > 0.001) {
+                float kneeWeight = smoothstep(0.62, 1.0, luma);
+                deltaHighlightRolloff = -uHighlightRolloff * 0.20 * kneeWeight * (luma - 0.62);
+            }
+
+            float deltaLumaCurve = 0.0;
+            if (abs(uLumaCurve) > 0.001) {
+                float curveFactor = 1.0 + uLumaCurve * 0.65;
+                float shapedLuma = (luma < 0.5) ? 
+                    0.5 * pow(2.0 * luma, curveFactor) : 
+                    1.0 - 0.5 * pow(2.0 * (1.0 - luma), curveFactor);
+                deltaLumaCurve = shapedLuma - luma;
+            }
+
+            c = clamp(c + float3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
+
+            // =========================================================================
+            // STAGE 3: COLOR TRANSFORM (Matrix cross-talk, Chroma Strength, Vibrance, Green LUT)
+            // =========================================================================
+            if (abs(uColorTransform) > 0.001) {
+                float3 filmColor;
+                if (uColorTransform > 0.0) {
+                    filmColor.r = 1.08 * c.r - 0.05 * c.g - 0.03 * c.b;
+                    filmColor.g = -0.02 * c.r + 1.06 * c.g - 0.04 * c.b;
+                    filmColor.b = -0.04 * c.r - 0.03 * c.g + 1.07 * c.b;
+                } else {
+                    filmColor.r = 1.05 * c.r - 0.02 * c.g - 0.03 * c.b;
+                    filmColor.g = -0.05 * c.r + 1.08 * c.g - 0.03 * c.b;
+                    filmColor.b = 0.01 * c.r - 0.03 * c.g + 1.06 * c.b;
+                }
+                c = clamp(mix(c, filmColor, abs(uColorTransform)), 0.0, 1.0);
+            }
+
+            if (abs(uChromaStrength - 1.0) > 0.001) {
+                float curLuma = dot(c, float3(0.2126, 0.7152, 0.0722));
+                c = clamp(float3(curLuma) + (c - float3(curLuma)) * uChromaStrength, 0.0, 1.0);
             }
 
             // Skin-tone protection mask (R > G > B with natural warm human skin ratios)
@@ -838,21 +1158,21 @@ object CinemaColorPipeline {
                                  (1.0 - smoothstep(0.90, 0.99, lumaPre));
             float skinWeight = clamp(skinHueMask * skinLumaMask, 0.0, 1.0);
 
-            // 3. Independent Vibrance with Skin-Tone Protection
+            // Independent Vibrance with Skin-Tone Protection
             if (abs(uVibrance) > 0.001) {
                 float maxC = max(c.r, max(c.g, c.b));
                 float minC = min(c.r, min(c.g, c.b));
                 float sat = maxC - minC;
-                float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+                float lumaVib = dot(c, float3(0.2126, 0.7152, 0.0722));
                 float skinAtten = (uVibrance > 0.0) ? (1.0 - 0.85 * skinWeight) : 1.0;
                 float satWeight = (uVibrance > 0.0) ? clamp(1.0 - sat * 0.75, 0.15, 1.0) : 1.0;
                 float vibScale = 1.0 + uVibrance * 0.65 * satWeight * skinAtten;
-                c = clamp(float3(luma) + (c - float3(luma)) * vibScale, 0.0, 1.0);
+                c = clamp(float3(lumaVib) + (c - float3(lumaVib)) * vibScale, 0.0, 1.0);
             }
 
-            // 4. Selective Vibrant Green / Punchy Green LUT
+            // Selective Vibrant Green / Punchy Green LUT
             if (uVibrantGreenIntensity > 0.001) {
-                float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+                float lumaGreen = dot(c, float3(0.2126, 0.7152, 0.0722));
                 float greenDomR = smoothstep(-0.035, 0.075, c.g - c.r);
                 float greenDomB = smoothstep(0.015, 0.12, c.g - c.b);
                 float greenWeight = clamp(greenDomR * greenDomB * (1.0 - skinWeight), 0.0, 1.0);
@@ -860,7 +1180,7 @@ object CinemaColorPipeline {
                 if (greenWeight > 0.001) {
                     float gw = greenWeight * uVibrantGreenIntensity;
                     float chromaScale = 1.0 + 0.72 * gw;
-                    float3 gc = float3(luma) + (c - float3(luma)) * chromaScale;
+                    float3 gc = float3(lumaGreen) + (c - float3(lumaGreen)) * chromaScale;
                     float greenExcess = max(0.0, c.g - (c.r + c.b) * 0.5);
                     gc.g += greenExcess * 0.38 * gw + 0.025 * gw;
                     gc.r -= greenExcess * 0.18 * gw;
@@ -881,6 +1201,83 @@ object CinemaColorPipeline {
                     sc.b = sc.b + fairLift * 1.08;
                     c = clamp(sc, 0.0, 1.0);
                 }
+            }
+
+            // =========================================================================
+            // STAGE 4: TONE MAPPING (ACES Filmic Tone Mapping)
+            // =========================================================================
+            if (uToneMappingStrength > 0.001) {
+                float3 aces = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
+                c = mix(c, aces, uToneMappingStrength);
+            }
+
+            // =========================================================================
+            // STAGE 5: NOISE REDUCTION
+            // =========================================================================
+            if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
+                float lCenter = dot(c, float3(0.2126, 0.7152, 0.0722));
+                float lUp = dot(cUp, float3(0.2126, 0.7152, 0.0722));
+                float lDown = dot(cDown, float3(0.2126, 0.7152, 0.0722));
+                float lLeft = dot(cLeft, float3(0.2126, 0.7152, 0.0722));
+                float lRight = dot(cRight, float3(0.2126, 0.7152, 0.0722));
+
+                if (uLumaNoiseReduction > 0.001) {
+                    float wU = exp(-pow((lUp - lCenter) * 12.0, 2.0));
+                    float wD = exp(-pow((lDown - lCenter) * 12.0, 2.0));
+                    float wL = exp(-pow((lLeft - lCenter) * 12.0, 2.0));
+                    float wR = exp(-pow((lRight - lCenter) * 12.0, 2.0));
+                    float wSum = 1.0 + wU + wD + wL + wR;
+                    float smoothLuma = (lCenter + lUp * wU + lDown * wD + lLeft * wL + lRight * wR) / wSum;
+                    float lumaDelta = (smoothLuma - lCenter) * uLumaNoiseReduction;
+                    c = clamp(c + float3(lumaDelta), 0.0, 1.0);
+                }
+
+                if (uChromaNoiseReduction > 0.001) {
+                    float3 chrCenter = c - float3(dot(c, float3(0.2126, 0.7152, 0.0722)));
+                    float3 chrUp = cUp - float3(lUp);
+                    float3 chrDown = cDown - float3(lDown);
+                    float3 chrLeft = cLeft - float3(lLeft);
+                    float3 chrRight = cRight - float3(lRight);
+                    float wU = exp(-pow((lUp - lCenter) * 8.0, 2.0));
+                    float wD = exp(-pow((lDown - lCenter) * 8.0, 2.0));
+                    float wL = exp(-pow((lLeft - lCenter) * 8.0, 2.0));
+                    float wR = exp(-pow((lRight - lCenter) * 8.0, 2.0));
+                    float wSum = 1.0 + wU + wD + wL + wR;
+                    float3 smoothChroma = (chrCenter + chrUp * wU + chrDown * wD + chrLeft * wL + chrRight * wR) / wSum;
+                    float curLuma = dot(c, float3(0.2126, 0.7152, 0.0722));
+                    c = clamp(float3(curLuma) + mix(chrCenter, smoothChroma, uChromaNoiseReduction), 0.0, 1.0);
+                }
+            }
+
+            // =========================================================================
+            // STAGE 6: DETAIL & SHARPENING
+            // =========================================================================
+            if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
+                float3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
+                float3 highPass = c - neighborAvg;
+
+                if (uSharpening > 0.001) {
+                    c = clamp(c + highPass * (uSharpening * 2.2), 0.0, 1.0);
+                }
+
+                if (abs(uMicroContrast) > 0.001) {
+                    float3 microDetail = sign(highPass) * pow(abs(highPass), float3(0.80));
+                    c = clamp(c + microDetail * (uMicroContrast * 0.9), 0.0, 1.0);
+                }
+
+                if (abs(uLocalContrast) > 0.001) {
+                    float lCur = dot(c, float3(0.2126, 0.7152, 0.0722));
+                    float lAvg = dot(neighborAvg, float3(0.2126, 0.7152, 0.0722));
+                    float localDelta = (lCur - lAvg) * uLocalContrast * 0.85;
+                    c = clamp(c + float3(localDelta), 0.0, 1.0);
+                }
+            }
+
+            // =========================================================================
+            // STAGE 7: OUTPUT GAMMA
+            // =========================================================================
+            if (abs(uOutputGamma - 1.0) > 0.001) {
+                c = pow(clamp(c, 0.0, 1.0), float3(uOutputGamma));
             }
 
             return half4(half(c.r), half(c.g), half(c.b), src.a);

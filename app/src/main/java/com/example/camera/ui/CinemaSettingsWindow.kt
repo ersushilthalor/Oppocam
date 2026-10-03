@@ -716,15 +716,22 @@ fun CinemaSettingsWindow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                CinemaSectionHeader(title = "COLOR FINE-TUNING", badge = if (showFineTuning) "Hide" else "Expand")
+                val fineTuningStatus = when {
+                    showFineTuning -> "Hide"
+                    config.hasColorFineTuning -> "Active (Custom)"
+                    else -> "Expand"
+                }
+                CinemaSectionHeader(title = "COLOR FINE-TUNING", badge = fineTuningStatus)
             }
 
             AnimatedVisibility(visible = showFineTuning) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp)
+                        .padding(top = 4.dp)
                 ) {
+                    // STAGE 1: EXPOSURE & WHITE BALANCE
+                    CinemaSubSectionHeader("1. EXPOSURE & WHITE BALANCE")
                     CinemaSliderRow(
                         label = "Live Exposure",
                         value = config.exposure,
@@ -732,28 +739,25 @@ fun CinemaSettingsWindow(
                         onValueChange = { onConfigChange(config.copy(exposure = it)) }
                     )
                     CinemaSliderRow(
-                        label = "Contrast S-Curve",
-                        value = config.contrast,
+                        label = "Temperature",
+                        value = config.temperature,
                         valueRange = -1.0f..1.0f,
-                        onValueChange = { onConfigChange(config.copy(contrast = it)) }
+                        onValueChange = { onConfigChange(config.copy(temperature = it)) }
                     )
                     CinemaSliderRow(
-                        label = "Saturation",
-                        value = config.saturation,
-                        valueRange = 0.0f..2.0f,
-                        onValueChange = { onConfigChange(config.copy(saturation = it)) }
-                    )
-                    CinemaSliderRow(
-                        label = "Washed-Out Recovery",
-                        value = config.washedOut,
-                        valueRange = 0.0f..1.0f,
-                        onValueChange = { onConfigChange(config.copy(washedOut = it)) }
-                    )
-                    CinemaSliderRow(
-                        label = "Shadows",
-                        value = config.shadows,
+                        label = "Tint",
+                        value = config.tint,
                         valueRange = -1.0f..1.0f,
-                        onValueChange = { onConfigChange(config.copy(shadows = it)) }
+                        onValueChange = { onConfigChange(config.copy(tint = it)) }
+                    )
+
+                    // STAGE 2: TONAL ADJUSTMENTS
+                    CinemaSubSectionHeader("2. TONAL ADJUSTMENTS")
+                    CinemaSliderRow(
+                        label = "Whites",
+                        value = config.whites,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(whites = it)) }
                     )
                     CinemaSliderRow(
                         label = "Highlights",
@@ -762,13 +766,142 @@ fun CinemaSettingsWindow(
                         onValueChange = { onConfigChange(config.copy(highlights = it)) }
                     )
                     CinemaSliderRow(
+                        label = "Highlight Roll-off",
+                        value = config.highlightRolloff,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(highlightRolloff = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Midtones",
+                        value = config.midtones,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(midtones = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Shadows",
+                        value = config.shadows,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(shadows = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Shadow Roll-off",
+                        value = config.shadowRolloff,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(shadowRolloff = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Blacks",
+                        value = config.blacks,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(blacks = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Black Level",
+                        value = config.blackLevel,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(blackLevel = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Contrast S-Curve",
+                        value = config.contrast,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(contrast = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Luma Curve",
+                        value = config.lumaCurve,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(lumaCurve = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Washed-Out Recovery",
+                        value = config.washedOut,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(washedOut = it)) }
+                    )
+
+                    // STAGE 3: COLOR TRANSFORM
+                    CinemaSubSectionHeader("3. COLOR TRANSFORM")
+                    CinemaSliderRow(
+                        label = "Color Matrix",
+                        value = config.colorTransform,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(colorTransform = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Chroma Strength",
+                        value = config.chromaStrength,
+                        valueRange = 0.0f..2.0f,
+                        onValueChange = { onConfigChange(config.copy(chromaStrength = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Saturation",
+                        value = config.saturation,
+                        valueRange = 0.0f..2.0f,
+                        onValueChange = { onConfigChange(config.copy(saturation = it)) }
+                    )
+                    CinemaSliderRow(
                         label = "Vibrance",
                         value = config.vibrance,
                         valueRange = -1.0f..1.0f,
                         onValueChange = { onConfigChange(config.copy(vibrance = it)) }
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    // STAGE 4: TONE MAPPING
+                    CinemaSubSectionHeader("4. TONE MAPPING")
+                    CinemaSliderRow(
+                        label = "Tone Map Strength",
+                        value = config.toneMappingStrength,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(toneMappingStrength = it)) }
+                    )
+
+                    // STAGE 5: NOISE REDUCTION
+                    CinemaSubSectionHeader("5. NOISE REDUCTION")
+                    CinemaSliderRow(
+                        label = "Luma NR",
+                        value = config.lumaNoiseReduction,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(lumaNoiseReduction = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Chroma NR",
+                        value = config.chromaNoiseReduction,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(chromaNoiseReduction = it)) }
+                    )
+
+                    // STAGE 6: DETAIL & SHARPENING
+                    CinemaSubSectionHeader("6. DETAIL & SHARPENING")
+                    CinemaSliderRow(
+                        label = "Sharpening",
+                        value = config.fineSharpening,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(fineSharpening = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Micro-Contrast",
+                        value = config.microContrast,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(microContrast = it)) }
+                    )
+                    CinemaSliderRow(
+                        label = "Local Contrast",
+                        value = config.localContrast,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onConfigChange(config.copy(localContrast = it)) }
+                    )
+
+                    // STAGE 7: OUTPUT GAMMA
+                    CinemaSubSectionHeader("7. OUTPUT GAMMA")
+                    CinemaSliderRow(
+                        label = "Output Gamma",
+                        value = config.outputGamma,
+                        valueRange = 0.5f..1.5f,
+                        onValueChange = { onConfigChange(config.copy(outputGamma = it)) }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
                     Box(
                         modifier = Modifier
                             .align(Alignment.End)
@@ -783,7 +916,25 @@ fun CinemaSettingsWindow(
                                         washedOut = 0.0f,
                                         shadows = 0.0f,
                                         highlights = 0.0f,
-                                        vibrance = 0.0f
+                                        vibrance = 0.0f,
+                                        temperature = 0.0f,
+                                        tint = 0.0f,
+                                        whites = 0.0f,
+                                        blacks = 0.0f,
+                                        midtones = 0.0f,
+                                        blackLevel = 0.0f,
+                                        highlightRolloff = 0.0f,
+                                        shadowRolloff = 0.0f,
+                                        localContrast = 0.0f,
+                                        lumaCurve = 0.0f,
+                                        colorTransform = 0.0f,
+                                        chromaStrength = 1.0f,
+                                        lumaNoiseReduction = 0.0f,
+                                        chromaNoiseReduction = 0.0f,
+                                        fineSharpening = 0.0f,
+                                        microContrast = 0.0f,
+                                        toneMappingStrength = 0.0f,
+                                        outputGamma = 1.0f
                                     )
                                 )
                             }
@@ -798,7 +949,7 @@ fun CinemaSettingsWindow(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Reset Sliders",
+                                text = "Reset All Sliders",
                                 color = Color.White.copy(alpha = 0.7f),
                                 fontSize = 11.sp
                             )
@@ -808,6 +959,18 @@ fun CinemaSettingsWindow(
             }
         }
     }
+}
+
+@Composable
+private fun CinemaSubSectionHeader(title: String) {
+    Text(
+        text = title,
+        color = Color(0xFFFFD54F).copy(alpha = 0.85f),
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.8.sp,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+    )
 }
 
 @Composable

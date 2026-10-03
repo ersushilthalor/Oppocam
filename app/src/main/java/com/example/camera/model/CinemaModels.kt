@@ -131,8 +131,46 @@ data class CinemaConfig(
     val manualShutterSpeedNs: Long? = null, // null for Auto, or 1/24s, 1/48s (180°), 1/50s, 1/96s, 1/120s
     val isBakeLutToOutput: Boolean = true, // Default true: LUT is baked to output video automatically
     val isLutPreviewEnabled: Boolean = true, // Default true: LUT preview is always active
-    val lutIntensity: Float = 1.0f // 0.0f (0% neutral baseline) to 1.0f (100% full LUT grade)
+    val lutIntensity: Float = 1.0f, // 0.0f (0% neutral baseline) to 1.0f (100% full LUT grade)
+
+    // Cinema Color Fine-Tuning Controls (18 Authentic ISP & Grading parameters)
+    // 1. Exposure / White Balance
+    val temperature: Float = 0.0f,       // -1.0f (Cool/Blue) to +1.0f (Warm/Amber)
+    val tint: Float = 0.0f,              // -1.0f (Magenta) to +1.0f (Green)
+    // 2. Tonal Adjustments
+    val whites: Float = 0.0f,            // -1.0f to +1.0f (High specular luminance adjustment)
+    val blacks: Float = 0.0f,            // -1.0f to +1.0f (Deep shadow luminance adjustment)
+    val midtones: Float = 0.0f,          // -1.0f to +1.0f (Middle-gray luminance adjustment)
+    val blackLevel: Float = 0.0f,        // -1.0f to +1.0f (Black pedestal baseline offset)
+    val highlightRolloff: Float = 0.0f,  // -1.0f to +1.0f (Smooth highlight transition & knee roll-off)
+    val shadowRolloff: Float = 0.0f,     // -1.0f to +1.0f (Smooth shadow transition & toe roll-off)
+    val localContrast: Float = 0.0f,     // -1.0f to +1.0f (Clarity & local contrast enhancement)
+    val lumaCurve: Float = 0.0f,         // -1.0f to +1.0f (Non-linear luminance curve shaping)
+    // 3. Color Transform
+    val colorTransform: Float = 0.0f,    // -1.0f to +1.0f (RGB color matrix cross-talk & gamut separation)
+    val chromaStrength: Float = 1.0f,    // 0.0f (0% mono) to 2.0f (200% chroma), default 1.0f
+    // 4. Tone Mapping
+    val toneMappingStrength: Float = 0.0f, // 0.0f (Linear/Off) to 1.0f (ACES filmic tone mapping)
+    // 5. Noise Reduction
+    val lumaNoiseReduction: Float = 0.0f,   // 0.0f (Off) to 1.0f (Max luma spatial bilateral filtering)
+    val chromaNoiseReduction: Float = 0.0f, // 0.0f (Off) to 1.0f (Max chroma color despecle filtering)
+    // 6. Detail / Sharpening
+    val fineSharpening: Float = 0.0f,    // 0.0f (Off) to 1.0f (High-pass unsharp mask convolution)
+    val microContrast: Float = 0.0f,     // -1.0f to +1.0f (Fine texture & micro-detail enhancement)
+    // 7. Output Gamma
+    val outputGamma: Float = 1.0f        // 0.5f to 1.5f (Final transfer power function, default 1.0f neutral)
 ) {
+    val sharpening: Float get() = fineSharpening
+    val highlightRollOff: Float get() = highlightRolloff
+    val shadowRollOff: Float get() = shadowRolloff
+    val hasFineTuning: Boolean get() = hasColorFineTuning
+
+    val hasColorFineTuning: Boolean
+        get() = temperature != 0.0f || tint != 0.0f || whites != 0.0f || blacks != 0.0f ||
+                midtones != 0.0f || blackLevel != 0.0f || highlightRolloff != 0.0f || shadowRolloff != 0.0f ||
+                localContrast != 0.0f || lumaCurve != 0.0f || colorTransform != 0.0f || chromaStrength != 1.0f ||
+                lumaNoiseReduction != 0.0f || chromaNoiseReduction != 0.0f || fineSharpening != 0.0f ||
+                microContrast != 0.0f || toneMappingStrength != 0.0f || outputGamma != 1.0f
     val isHlg10: Boolean get() = colorProfile == CinemaColorProfile.HLG10
     val effectiveColorSpace: CinemaColorSpace get() = if (colorProfile == CinemaColorProfile.HLG10) CinemaColorSpace.REC_2020 else colorSpace
     val effectiveBitDepth: LogBitDepth get() = logBitDepth

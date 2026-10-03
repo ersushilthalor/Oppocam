@@ -913,5 +913,154 @@ class CinemaPipelineVerificationTest {
             }
         }
     }
+
+    @Test
+    fun testCinemaConfigFineTuningDefaultsNeutral() {
+        val defaultConfig = CinemaConfig()
+        assertFalse("Default CinemaConfig must not trigger fine tuning", defaultConfig.hasColorFineTuning)
+        assertEquals(0.0f, defaultConfig.temperature, 0.0001f)
+        assertEquals(0.0f, defaultConfig.tint, 0.0001f)
+        assertEquals(0.0f, defaultConfig.whites, 0.0001f)
+        assertEquals(0.0f, defaultConfig.blacks, 0.0001f)
+        assertEquals(0.0f, defaultConfig.midtones, 0.0001f)
+        assertEquals(0.0f, defaultConfig.blackLevel, 0.0001f)
+        assertEquals(0.0f, defaultConfig.highlightRolloff, 0.0001f)
+        assertEquals(0.0f, defaultConfig.shadowRolloff, 0.0001f)
+        assertEquals(0.0f, defaultConfig.localContrast, 0.0001f)
+        assertEquals(0.0f, defaultConfig.lumaCurve, 0.0001f)
+        assertEquals(0.0f, defaultConfig.colorTransform, 0.0001f)
+        assertEquals(1.0f, defaultConfig.chromaStrength, 0.0001f)
+        assertEquals(0.0f, defaultConfig.toneMappingStrength, 0.0001f)
+        assertEquals(0.0f, defaultConfig.lumaNoiseReduction, 0.0001f)
+        assertEquals(0.0f, defaultConfig.chromaNoiseReduction, 0.0001f)
+        assertEquals(0.0f, defaultConfig.fineSharpening, 0.0001f)
+        assertEquals(0.0f, defaultConfig.microContrast, 0.0001f)
+        assertEquals(1.0f, defaultConfig.outputGamma, 0.0001f)
+    }
+
+    @Test
+    fun testCinemaColorPipelineFineTuningActiveTriggers() {
+        val baseConfig = CinemaConfig()
+        assertFalse(CinemaColorPipeline.requiresSelectiveShader(baseConfig))
+
+        val warmConfig = baseConfig.copy(temperature = 0.5f)
+        assertTrue(warmConfig.hasColorFineTuning)
+        assertTrue(CinemaColorPipeline.hasActiveTransform(warmConfig))
+        assertTrue(CinemaColorPipeline.requiresSelectiveShader(warmConfig))
+
+        val neutralPixel = floatArrayOf(0.5f, 0.5f, 0.5f)
+        val warmResult = CinemaColorPipeline.evaluatePixel(neutralPixel[0], neutralPixel[1], neutralPixel[2], warmConfig)
+        assertTrue("Warm temperature must boost red relative to blue", warmResult[0] > warmResult[2])
+
+        val coolConfig = baseConfig.copy(temperature = -0.5f)
+        val coolResult = CinemaColorPipeline.evaluatePixel(neutralPixel[0], neutralPixel[1], neutralPixel[2], coolConfig)
+        assertTrue("Cool temperature must boost blue relative to red", coolResult[2] > coolResult[0])
+    }
+
+    @Test
+    fun testCinemaColorPipelineTonalAndLumaAdjustments() {
+        val baseConfig = CinemaConfig()
+        // Test Black Level
+        val liftedBlack = CinemaColorPipeline.evaluatePixel(0.0f, 0.0f, 0.0f, baseConfig.copy(blackLevel = 0.5f))
+        assertTrue("Black level lift must brighten deep black", liftedBlack[0] > 0.0f)
+
+        // Test Midtones
+        val midResult = CinemaColorPipeline.evaluatePixel(0.5f, 0.5f, 0.5f, baseConfig.copy(midtones = 0.8f))
+        assertTrue("Positive midtones must brighten middle-gray", midResult[0] > 0.5f)
+
+        // Test Whites
+        val whiteResult = CinemaColorPipeline.evaluatePixel(0.85f, 0.85f, 0.85f, baseConfig.copy(whites = 0.8f))
+        assertTrue("Positive whites must brighten upper highlights", whiteResult[0] > 0.85f)
+
+        // Test Output Gamma
+        val gammaBright = CinemaColorPipeline.evaluatePixel(0.25f, 0.25f, 0.25f, baseConfig.copy(outputGamma = 0.7f))
+        assertTrue("Gamma < 1.0 must lift midtone luminance", gammaBright[0] > 0.25f)
+    }
+
+    @Test
+    fun testCinemaColorPipelineNoClippingOrNaNOnExtremeValues() {
+        val extremeConfig = CinemaConfig(
+            temperature = 1.0f,
+            tint = 1.0f,
+            whites = 1.0f,
+            blacks = 1.0f,
+            midtones = 1.0f,
+            blackLevel = 1.0f,
+            highlightRolloff = 1.0f,
+            shadowRolloff = 1.0f,
+            localContrast = 1.0f,
+            lumaCurve = 1.0f,
+            colorTransform = 1.0f,
+            chromaStrength = 2.0f,
+            toneMappingStrength = 1.0f,
+            lumaNoiseReduction = 1.0f,
+            chromaNoiseReduction = 1.0f,
+            fineSharpening = 1.0f,
+            microContrast = 1.0f,
+            outputGamma = 0.5f
+        )
+        val testInputs = listOf(
+            floatArrayOf(0.0f, 0.0f, 0.0f),
+            floatArrayOf(0.1f, 0.2f, 0.3f),
+            floatArrayOf(0.5f, 0.5f, 0.5f),
+            floatArrayOf(0.9f, 0.8f, 0.7f),
+            floatArrayOf(1.0f, 1.0f, 1.0f)
+        )
+        for (input in testInputs) {
+            val result = CinemaColorPipeline.evaluatePixel(input[0], input[1], input[2], extremeConfig)
+            for (c in result) {
+                assertFalse("Result must not be NaN", c.isNaN())
+                assertFalse("Result must not be Infinite", c.isInfinite())
+                assertTrue("Result must be clamped in [0, 1], got $c", c in 0.0f..1.0f)
+            }
+        }
+    }
+
+    @Test
+    fun testPreferencesSaveAndRestoreFineTuningControls() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        val customConfig = CinemaConfig(
+            temperature = 0.35f,
+            tint = -0.25f,
+            whites = 0.40f,
+            blacks = -0.15f,
+            midtones = 0.20f,
+            blackLevel = 0.05f,
+            highlightRolloff = 0.30f,
+            shadowRolloff = -0.10f,
+            localContrast = 0.50f,
+            lumaCurve = 0.22f,
+            colorTransform = -0.45f,
+            chromaStrength = 1.35f,
+            toneMappingStrength = 0.80f,
+            lumaNoiseReduction = 0.60f,
+            chromaNoiseReduction = 0.75f,
+            fineSharpening = 0.45f,
+            microContrast = 0.30f,
+            outputGamma = 1.15f
+        )
+        prefs.saveCinemaConfig(customConfig)
+        val loaded = prefs.getCinemaConfig()
+
+        assertEquals(0.35f, loaded.temperature, 0.001f)
+        assertEquals(-0.25f, loaded.tint, 0.001f)
+        assertEquals(0.40f, loaded.whites, 0.001f)
+        assertEquals(-0.15f, loaded.blacks, 0.001f)
+        assertEquals(0.20f, loaded.midtones, 0.001f)
+        assertEquals(0.05f, loaded.blackLevel, 0.001f)
+        assertEquals(0.30f, loaded.highlightRolloff, 0.001f)
+        assertEquals(-0.10f, loaded.shadowRolloff, 0.001f)
+        assertEquals(0.50f, loaded.localContrast, 0.001f)
+        assertEquals(0.22f, loaded.lumaCurve, 0.001f)
+        assertEquals(-0.45f, loaded.colorTransform, 0.001f)
+        assertEquals(1.35f, loaded.chromaStrength, 0.001f)
+        assertEquals(0.80f, loaded.toneMappingStrength, 0.001f)
+        assertEquals(0.60f, loaded.lumaNoiseReduction, 0.001f)
+        assertEquals(0.75f, loaded.chromaNoiseReduction, 0.001f)
+        assertEquals(0.45f, loaded.fineSharpening, 0.001f)
+        assertEquals(0.30f, loaded.microContrast, 0.001f)
+        assertEquals(1.15f, loaded.outputGamma, 0.001f)
+        assertTrue(loaded.hasColorFineTuning)
+    }
 }
 
