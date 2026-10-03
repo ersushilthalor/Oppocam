@@ -295,27 +295,133 @@ class CinemaPipelineVerificationTest {
 
     @Test
     fun testRealProResSoftwareRecordingPipeline() {
-        val recorder = CinemaSoftwareRecordingEngine(context)
         val tempDest = File(context.cacheDir, "test_prores_real.mov")
-
         try {
-            // ProRes recording must initialize genuine ProRes 422 10-bit software encoder
-            // and QuickTime MOV container
-            val surface = recorder.startRecording(
+            val width = 320
+            val height = 240
+            val session = com.example.camera.engine.prores.ProResSoftwareRecordingSession(
+                context = context,
                 destFile = tempDest,
-                width = 1280,
-                height = 720,
+                width = width,
+                height = height,
                 fps = 24,
-                bitrate = 60_000_000,
-                codec = CinemaCodec.PRORES,
-                bitDepth = LogBitDepth.BIT_10,
-                isAudioEnabled = false
+                isAudioEnabled = true,
+                colorProfile = CinemaColorProfile.REC_2020,
+                colorSpace = CinemaColorSpace.REC_2020
             )
-            assertNotNull("Surface should be created for ProRes 422 recording", surface)
-            val outFile = recorder.stopRecording()
-            assertNotNull("Recorded file should exist", outFile)
+            session.start()
+
+            // Generate genuine YUV_420_888 frame data:
+            // Y plane: 320x240, U/V planes: 160x120
+            val yBytes = ByteArray(width * height) { (it % 256).toByte() }
+            val halfW = (width + 1) / 2
+            val halfH = (height + 1) / 2
+            val uBytes = ByteArray(halfW * halfH) { 128.toByte() }
+            val vBytes = ByteArray(halfW * halfH) { 128.toByte() }
+
+            // Encode 3 real video frames
+            for (i in 0 until 3) {
+                session.encodeManualFrame(
+                    yBytes = yBytes,
+                    uBytes = uBytes,
+                    vBytes = vBytes,
+                    yRowStride = width,
+                    uRowStride = halfW,
+                    vRowStride = halfW,
+                    uPixelStride = 1,
+                    vPixelStride = 1
+                )
+            }
+
+            val outFile = session.stop()
+            assertNotNull("Recorded file should exist and finalize successfully", outFile)
             assertTrue("Output file must exist", outFile!!.exists())
             assertTrue("Output file must have .mov extension", outFile.name.endsWith(".mov", ignoreCase = true))
+            assertTrue("Output file must be non-empty (>1024 bytes)", outFile.length() > 1024L)
+
+            // Deep MOV container verification: check ftyp, mdat, and moov atoms
+            val bytes = outFile.readBytes()
+            assertTrue("File must be at least 64 bytes", bytes.size >= 64)
+
+            // Check ftyp atom
+            val ftypType = String(bytes, 4, 4, Charsets.US_ASCII)
+            val brand = String(bytes, 8, 4, Charsets.US_ASCII)
+            assertEquals("ftyp", ftypType)
+            assertEquals("qt  ", brand)
+
+            // Search for mdat and moov atoms
+            val fileContentStr = String(bytes, Charsets.ISO_8859_1)
+            assertTrue("Output MOV must contain 'mdat' atom", fileContentStr.contains("mdat"))
+            assertTrue("Output MOV must contain 'moov' atom", fileContentStr.contains("moov"))
+            assertTrue("Output MOV must contain 'mvhd' movie header atom", fileContentStr.contains("mvhd"))
+            assertTrue("Output MOV must contain 'trak' track atom", fileContentStr.contains("trak"))
+            assertTrue("Output MOV must contain 'apcn' ProRes 422 sample entry", fileContentStr.contains("apcn"))
+            assertTrue("Output MOV must contain 'Apple ProRes 422' compressor name", fileContentStr.contains("Apple ProRes 422"))
+        } finally {
+            try { tempDest.delete() } catch (ignored: Exception) {}
+        }
+    }
+
+    @Test
+    fun testProResZeroFramesAbortsWithoutCorruptOutput() {
+        val tempDest = File(context.cacheDir, "test_prores_zero_frames.mov")
+        try {
+            val session = com.example.camera.engine.prores.ProResSoftwareRecordingSession(
+                context = context,
+                destFile = tempDest,
+                width = 640,
+                height = 480,
+                fps = 24,
+                isAudioEnabled = false,
+                colorProfile = CinemaColorProfile.NATIVE,
+                colorSpace = CinemaColorSpace.REC_709
+            )
+            session.start()
+            // Do NOT encode any frames
+            val outFile = session.stop()
+            assertNull("Session with 0 encoded frames must return null and abort cleanly", outFile)
+            assertFalse("Corrupted/incomplete temp file must be cleaned up", tempDest.exists())
+        } finally {
+            try { tempDest.delete() } catch (ignored: Exception) {}
+        }
+    }
+
+    @Test
+    fun testQuickTimeProResMuxerDynamicAtomSizes() {
+        val tempDest = File(context.cacheDir, "test_muxer_dynamic_atoms.mov")
+        try {
+            val muxer = com.example.camera.engine.prores.QuickTimeProResMuxer(
+                outputFile = tempDest,
+                width = 1920,
+                height = 1080,
+                fps = 24,
+                isAudioEnabled = true
+            )
+            muxer.start()
+
+            // Write 2 dummy ProRes frames (using valid ProRes magic header)
+            val dummyFrame = ByteArray(4096)
+            java.nio.ByteBuffer.wrap(dummyFrame).apply {
+                putInt(4096)
+                putInt(com.example.camera.engine.prores.ProResEncoder.MAGIC_ICPF)
+            }
+            muxer.writeVideoFrame(dummyFrame)
+            muxer.writeVideoFrame(dummyFrame)
+
+            // Write uncompressed stereo PCM audio chunk (48kHz * 2 channels * 2 bytes = 4 bytes per frame)
+            val audioPcm = ByteArray(3840) // 960 frames
+            muxer.writeAudioChunk(audioPcm, audioPcm.size)
+
+            val success = muxer.finish()
+            assertTrue("Muxer finish should succeed with video & audio", success)
+            assertTrue("File must exist", tempDest.exists())
+            assertTrue("File length must be > 8KB", tempDest.length() > 8192L)
+
+            val contentStr = String(tempDest.readBytes(), Charsets.ISO_8859_1)
+            assertTrue("Must contain 'stsd'", contentStr.contains("stsd"))
+            assertTrue("Must contain 'apcn'", contentStr.contains("apcn"))
+            assertTrue("Must contain 'sowt' for PCM audio", contentStr.contains("sowt"))
+            assertTrue("Must contain 'smhd' sound media header", contentStr.contains("smhd"))
         } finally {
             try { tempDest.delete() } catch (ignored: Exception) {}
         }
@@ -627,4 +733,84 @@ class CinemaPipelineVerificationTest {
             skinSatIncreaseRatio < 1.10f && nonSkinSatIncreaseRatio > skinSatIncreaseRatio + 0.20f
         )
     }
+
+    @Test
+    fun testProResEncoderChromaSubsamplingWithStrides() {
+        val width = 128
+        val height = 96
+        val encoder = com.example.camera.engine.prores.ProResEncoder(width, height)
+
+        // Realistic Camera2 YUV_420_888 layout:
+        // Y: rowStride = 160 (with 32 padding bytes), pixelStride = 1
+        // UV: interleaved or semi-planar, rowStride = 160, pixelStride = 2
+        val yRowStride = 160
+        val uvRowStride = 160
+        val uPixelStride = 2
+        val vPixelStride = 2
+
+        val yBytes = ByteArray(yRowStride * height) { (it % 256).toByte() }
+        val uvHeight = (height + 1) / 2
+        val uBytes = ByteArray(uvRowStride * uvHeight) { 110.toByte() }
+        val vBytes = ByteArray(uvRowStride * uvHeight) { 140.toByte() }
+
+        val encoded = encoder.encodeFrame(
+            yPlane = yBytes,
+            uPlane = uBytes,
+            vPlane = vBytes,
+            yRowStride = yRowStride,
+            uRowStride = uvRowStride,
+            vRowStride = uvRowStride,
+            uPixelStride = uPixelStride,
+            vPixelStride = vPixelStride
+        )
+
+        assertNotNull("Encoded frame should not be null", encoded)
+        assertTrue("Encoded frame size must be positive (> 256 bytes)", encoded.size > 256)
+
+        // Verify ProRes container magic 'icpf' (0x69637066)
+        val bb = java.nio.ByteBuffer.wrap(encoded)
+        val frameSize = bb.getInt()
+        val magic = bb.getInt()
+        assertEquals("Encoded frame size field must match byte array length", encoded.size, frameSize)
+        assertEquals("ProRes magic must be 'icpf'", com.example.camera.engine.prores.ProResEncoder.MAGIC_ICPF, magic)
+    }
+
+    @Test
+    fun testVp9EncoderCapabilitySurfaceRequirement() {
+        // Calling isVp9EncodingSupported with requireSurface=true must be robust and safe
+        val supported = DeviceCompatibilityManager.isVp9EncodingSupported(
+            width = 1920,
+            height = 1080,
+            fps = 30,
+            requireSurface = true
+        )
+        // Check that hasEncoderForMime in CinemaSoftwareRecordingEngine accurately rejects when unsupported
+        val engine = CinemaSoftwareRecordingEngine(context)
+        // If device has no VP9 surface encoder, startRecording with VP9 must throw IllegalStateException
+        if (!supported) {
+            val tempDest = File(context.cacheDir, "test_vp9_surface.webm")
+            try {
+                var caught = false
+                try {
+                    engine.startRecording(
+                        destFile = tempDest,
+                        width = 1920,
+                        height = 1080,
+                        fps = 30,
+                        bitrate = 10_000_000,
+                        codec = CinemaCodec.VP9,
+                        bitDepth = LogBitDepth.BIT_8,
+                        isAudioEnabled = false
+                    )
+                } catch (e: IllegalStateException) {
+                    caught = true
+                    assertTrue("Exception message should clearly indicate missing surface encoder", e.message?.contains("VP9") == true)
+                }
+                assertTrue("VP9 startRecording must fail when genuine surface encoder is absent", caught)
+            } finally {
+                try { tempDest.delete() } catch (_: Exception) {}
+            }
+        }
+    }
 }
+

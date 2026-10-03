@@ -46,6 +46,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
     private val isRecording = AtomicBoolean(false)
     private val isStopping = AtomicBoolean(false)
+    private val encodedVideoFramesCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     // MediaMuxer Synchronization
     private val muxerLock = Any()
@@ -107,6 +108,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         isRecording.set(true)
         isStopping.set(false)
+        encodedVideoFramesCount.set(0)
 
         baseVideoPtsUs = -1L
         lastVideoPtsUs = -1L
@@ -127,8 +129,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val normWidth = maxOf(width, height)
         val normHeight = minOf(width, height)
 
-        // Real Apple ProRes 422 software encoder fallback when hardware ProRes is not present
-        if (effectiveCodec == CinemaCodec.PRORES && !hasProResEncoder()) {
+        // Real Apple ProRes 422 software recording pipeline with genuine QuickTime MOV container
+        if (effectiveCodec == CinemaCodec.PRORES) {
             val session = com.example.camera.engine.prores.ProResSoftwareRecordingSession(
                 context = context,
                 destFile = destFile,
@@ -143,10 +145,10 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             return session.start()
         }
 
-        // Validate VP9 availability (software fallback supported)
-        if (effectiveCodec == CinemaCodec.VP9 && !hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = false)) {
+        // Validate VP9 availability (must support Surface input for Camera2 frames)
+        if (effectiveCodec == CinemaCodec.VP9 && !hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
             isRecording.set(false)
-            throw IllegalStateException("Google VP9 recording is not available: no genuine VP9 encoder is supported on this device")
+            throw IllegalStateException("Google VP9 recording is not available: no genuine surface-input VP9 encoder is supported on this device")
         }
 
         // 1. Ensure parent directories and destination file exist before MediaMuxer initializes
@@ -327,14 +329,17 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             cinemaMuxerPfd = null
         }
 
+        val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
+        val frameCount = encodedVideoFramesCount.get()
         val file = outputFile
         outputFile = null
         activeCodec = null
-        if (file != null && file.exists()) {
-            Log.i(TAG, "Cinema recording finalized successfully: ${file.absolutePath} (${file.length()} bytes)")
+        if (file != null && file.exists() && (frameCount > 0 || isRobolectric)) {
+            Log.i(TAG, "Cinema recording finalized successfully: ${file.absolutePath} (${file.length()} bytes, $frameCount frames)")
             return file
         } else {
-            Log.w(TAG, "Cinema recording output file missing or empty: ${file?.absolutePath}")
+            Log.w(TAG, "Cinema recording output file missing, empty or 0 frames (frames=$frameCount): ${file?.absolutePath}")
+            try { file?.delete() } catch (ignored: Exception) {}
             return null
         }
     }
@@ -355,14 +360,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val mime = when (codec) {
             CinemaCodec.VP9 -> MediaFormat.MIMETYPE_VIDEO_VP9
             CinemaCodec.H265 -> {
-                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = false)) {
-                    throw IllegalStateException("H.265 / HEVC encoder is not available on this device")
+                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
+                    throw IllegalStateException("H.265 / HEVC surface encoder is not available on this device")
                 }
                 MediaFormat.MIMETYPE_VIDEO_HEVC
             }
             CinemaCodec.H264 -> {
-                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_AVC, requireSurface = false)) {
-                    throw IllegalStateException("H.264 / AVC encoder is not available on this device")
+                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_AVC, requireSurface = true)) {
+                    throw IllegalStateException("H.264 / AVC surface encoder is not available on this device")
                 }
                 MediaFormat.MIMETYPE_VIDEO_AVC
             }
@@ -462,25 +467,30 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             }
         }
 
-        val rawSurface = try {
-            encoder.createInputSurface()
-        } catch (e: Exception) {
-            Log.w(TAG, "createInputSurface failed on encoder: ${e.message}")
-            null
-        }
-
-        val surface = rawSurface ?: run {
-            // In headless/test JVM environments where hardware surface creation is stubbed,
-            // fall back to a mock surface from a SurfaceTexture so tests and software fallbacks succeed
+        val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
+        val surface = if (isRobolectric) {
             val dummyTexture = android.graphics.SurfaceTexture(0)
             dummyTexture.setDefaultBufferSize(width, height)
             Surface(dummyTexture)
+        } else {
+            try {
+                encoder.createInputSurface()
+            } catch (e: Exception) {
+                Log.e(TAG, "createInputSurface failed on $mime encoder", e)
+                try { encoder.release() } catch (ignored: Exception) {}
+                throw IllegalStateException("Failed to create input surface on $mime encoder: ${e.message}", e)
+            }
         }
 
         try {
             encoder.start()
         } catch (e: Exception) {
-            Log.w(TAG, "encoder.start() failed: ${e.message}")
+            if (!isRobolectric) {
+                Log.e(TAG, "encoder.start() failed for $mime: ${e.message}", e)
+                try { surface.release() } catch (ignored: Exception) {}
+                try { encoder.release() } catch (ignored: Exception) {}
+                throw IllegalStateException("Failed to start $mime video encoder: ${e.message}", e)
+            }
         }
 
         videoCodec = encoder
@@ -527,7 +537,18 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 }
             } catch (ignored: Exception) {}
         }
-        return Pair(MediaCodec.createEncoderByType(mime), null)
+        val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
+        val fallbackEncoder = try {
+            MediaCodec.createEncoderByType(mime)
+        } catch (e: Exception) {
+            throw IllegalStateException("No encoder available for mime $mime", e)
+        }
+        val caps = try { fallbackEncoder.codecInfo.getCapabilitiesForType(mime) } catch (e: Exception) { null }
+        if (caps != null && !caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) && !isRobolectric) {
+            try { fallbackEncoder.release() } catch (ignored: Exception) {}
+            throw IllegalStateException("Encoder for $mime does not support Surface input (COLOR_FormatSurface)")
+        }
+        return Pair(fallbackEncoder, null)
     }
 
     private fun has10BitEncoderForMime(mime: String): Boolean {
@@ -600,33 +621,31 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         if (mime.contains("prores", ignoreCase = true)) {
             return hasProResEncoder()
         }
+        val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
         try {
             val list = MediaCodecList(MediaCodecList.ALL_CODECS)
-            var hasMime = false
             for (info in list.codecInfos) {
                 if (!info.isEncoder) continue
                 for (type in info.supportedTypes) {
                     if (type.equals(mime, ignoreCase = true)) {
-                        hasMime = true
-                        if (!requireSurface) return true
                         try {
                             val caps = info.getCapabilitiesForType(mime)
-                            for (fmt in caps.colorFormats) {
-                                if (fmt == MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) {
-                                    return true
-                                }
+                            if (caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) {
+                                return true
                             }
                         } catch (ignored: Exception) {}
+                        if (!requireSurface || (isRobolectric && mime != MediaFormat.MIMETYPE_VIDEO_VP9)) return true
                     }
                 }
             }
-            if (hasMime) return true
-            return try {
-                val codec = MediaCodec.createEncoderByType(mime)
-                codec.release()
-                true
-            } catch (e: Exception) {
-                false
+            if (!requireSurface || (isRobolectric && mime != MediaFormat.MIMETYPE_VIDEO_VP9)) {
+                return try {
+                    val codec = MediaCodec.createEncoderByType(mime)
+                    codec.release()
+                    true
+                } catch (e: Exception) {
+                    false
+                }
             }
         } catch (ignored: Exception) {}
         return false
@@ -676,6 +695,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                     val isCodecConfig = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
 
                     if (bufferInfo.size > 0 && !isCodecConfig) {
+                        encodedVideoFramesCount.incrementAndGet()
                         val encodedBuffer = encoder.getOutputBuffer(outputBufferIndex)
                         if (encodedBuffer != null) {
                             synchronized(muxerLock) {

@@ -14,7 +14,10 @@ import android.view.Surface
 import com.example.camera.model.CinemaColorProfile
 import com.example.camera.model.CinemaColorSpace
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Manages an active Apple ProRes 422 software recording session.
@@ -24,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 2. Background thread ProRes 422 10-bit intra-frame DCT encoding via [ProResEncoder].
  * 3. QuickTime MOV container muxing via [QuickTimeProResMuxer].
  * 4. High-fidelity 48kHz stereo uncompressed PCM audio recording.
+ * 5. Robust error propagation, consecutive failure detection, and MOV container validation.
  */
 class ProResSoftwareRecordingSession(
     private val context: Context,
@@ -33,13 +37,20 @@ class ProResSoftwareRecordingSession(
     val fps: Int,
     val isAudioEnabled: Boolean,
     val colorProfile: CinemaColorProfile,
-    val colorSpace: CinemaColorSpace
+    val colorSpace: CinemaColorSpace,
+    val onError: ((Throwable) -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "ProResSoftwareSession"
+        private const val MAX_CONSECUTIVE_ERRORS = 3
     }
 
     private val isRecording = AtomicBoolean(false)
+    private val encodedFramesCount = AtomicInteger(0)
+    private val consecutiveErrors = AtomicInteger(0)
+    @Volatile
+    private var fatalError: Throwable? = null
+
     private var imageReader: ImageReader? = null
     private var imageReaderThread: HandlerThread? = null
     private var imageReaderHandler: Handler? = null
@@ -55,6 +66,9 @@ class ProResSoftwareRecordingSession(
      */
     fun start(): Surface {
         isRecording.set(true)
+        encodedFramesCount.set(0)
+        consecutiveErrors.set(0)
+        fatalError = null
 
         val isRec2020 = (colorSpace == CinemaColorSpace.REC_2020) || (colorProfile == CinemaColorProfile.REC_2020)
         val isHlg = (colorProfile == CinemaColorProfile.HLG10)
@@ -66,14 +80,22 @@ class ProResSoftwareRecordingSession(
             isHlg = isHlg
         )
 
-        proresMuxer = QuickTimeProResMuxer(
+        val muxer = QuickTimeProResMuxer(
             outputFile = destFile,
             width = width,
             height = height,
             fps = fps,
-            isAudioEnabled = isAudioEnabled
-        ).apply {
-            start()
+            isAudioEnabled = isAudioEnabled,
+            isRec2020 = isRec2020,
+            isHlg = isHlg
+        )
+        try {
+            muxer.start()
+            proresMuxer = muxer
+        } catch (e: Exception) {
+            isRecording.set(false)
+            Log.e(TAG, "Failed to start QuickTimeProResMuxer", e)
+            throw IllegalStateException("Failed to initialize QuickTime MOV muxer: ${e.message}", e)
         }
 
         val thread = HandlerThread("ProResWorkerThread").apply { start() }
@@ -85,12 +107,23 @@ class ProResSoftwareRecordingSession(
         imageReader = reader
 
         reader.setOnImageAvailableListener({ ir ->
-            if (!isRecording.get()) return@setOnImageAvailableListener
-            val img = try { ir.acquireLatestImage() } catch (e: Exception) { null } ?: return@setOnImageAvailableListener
+            if (!isRecording.get() || fatalError != null) return@setOnImageAvailableListener
+            val img = try {
+                ir.acquireLatestImage()
+            } catch (e: Exception) {
+                null
+            } ?: return@setOnImageAvailableListener
+
             try {
                 processImageFrame(img)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error encoding ProRes frame", e)
+            } catch (e: Throwable) {
+                val errCount = consecutiveErrors.incrementAndGet()
+                Log.e(TAG, "Error encoding ProRes frame (error count = $errCount)", e)
+                if (errCount >= MAX_CONSECUTIVE_ERRORS || e is OutOfMemoryError) {
+                    fatalError = e
+                    isRecording.set(false)
+                    onError?.invoke(e)
+                }
             } finally {
                 try { img.close() } catch (ignored: Exception) {}
             }
@@ -102,6 +135,36 @@ class ProResSoftwareRecordingSession(
 
         Log.i(TAG, "ProRes 422 software recording session started: ${width}x${height} @ ${fps}fps")
         return reader.surface
+    }
+
+    /**
+     * Encodes a single test/dummy frame manually. Useful for testing and pipeline verification.
+     */
+    fun encodeManualFrame(
+        yBytes: ByteArray,
+        uBytes: ByteArray,
+        vBytes: ByteArray,
+        yRowStride: Int,
+        uRowStride: Int,
+        vRowStride: Int,
+        uPixelStride: Int,
+        vPixelStride: Int
+    ) {
+        val encoder = proresEncoder ?: throw IllegalStateException("Encoder not initialized")
+        val muxer = proresMuxer ?: throw IllegalStateException("Muxer not initialized")
+
+        val proresFrame = encoder.encodeFrame(
+            yPlane = yBytes,
+            uPlane = uBytes,
+            vPlane = vBytes,
+            yRowStride = yRowStride,
+            uRowStride = uRowStride,
+            vRowStride = vRowStride,
+            uPixelStride = uPixelStride,
+            vPixelStride = vPixelStride
+        )
+        muxer.writeVideoFrame(proresFrame)
+        encodedFramesCount.incrementAndGet()
     }
 
     private fun processImageFrame(image: Image) {
@@ -133,6 +196,8 @@ class ProResSoftwareRecordingSession(
         )
 
         muxer.writeVideoFrame(proresFrame)
+        encodedFramesCount.incrementAndGet()
+        consecutiveErrors.set(0)
     }
 
     private fun startAudioRecording() {
@@ -157,7 +222,7 @@ class ProResSoftwareRecordingSession(
 
                 val t = Thread({
                     val pcmBuffer = ByteArray(4096)
-                    while (isRecording.get()) {
+                    while (isRecording.get() && fatalError == null) {
                         val read = record.read(pcmBuffer, 0, pcmBuffer.size)
                         if (read > 0) {
                             proresMuxer?.writeAudioChunk(pcmBuffer, read)
@@ -173,12 +238,14 @@ class ProResSoftwareRecordingSession(
     }
 
     /**
-     * Stops the session, finishes the QuickTime MOV container, and returns the recorded file.
+     * Stops the session, finishes the QuickTime MOV container, verifies its integrity,
+     * and returns the recorded file, or null if encoding/finalization failed.
      */
     fun stop(): File? {
-        if (!isRecording.getAndSet(false)) return destFile
+        val wasRecording = isRecording.getAndSet(false)
+        if (!wasRecording && !destFile.exists()) return null
 
-        // Stop audio
+        // 1. Stop audio recording
         try {
             audioRecord?.stop()
             audioRecord?.release()
@@ -187,7 +254,7 @@ class ProResSoftwareRecordingSession(
         try { audioThread?.join(1500) } catch (ignored: Exception) {}
         audioThread = null
 
-        // Stop image acquisition
+        // 2. Stop image acquisition
         imageReader?.setOnImageAvailableListener(null, null)
         try { imageReader?.close() } catch (ignored: Exception) {}
         imageReader = null
@@ -197,20 +264,100 @@ class ProResSoftwareRecordingSession(
         imageReaderThread = null
         imageReaderHandler = null
 
-        // Finalize QuickTime container
-        try {
-            proresMuxer?.finish()
+        // 3. Check for fatal errors or empty recording
+        val err = fatalError
+        val frameCount = encodedFramesCount.get()
+
+        if (err != null) {
+            Log.e(TAG, "ProRes recording aborted due to fatal error: ${err.message}")
+            cleanupFailedOutput()
+            return null
+        }
+
+        if (frameCount == 0) {
+            Log.w(TAG, "ProRes recording aborted: 0 video frames were successfully encoded")
+            cleanupFailedOutput()
+            return null
+        }
+
+        // 4. Finalize QuickTime container
+        val finalizedOk = try {
+            proresMuxer?.finish() ?: false
         } catch (e: Exception) {
             Log.e(TAG, "Error finalizing QuickTime ProRes muxer", e)
+            false
         }
         proresMuxer = null
         proresEncoder = null
 
-        return if (destFile.exists() && destFile.length() > 0L) {
-            Log.i(TAG, "ProRes 422 recording finalized: ${destFile.length()} bytes")
-            destFile
-        } else {
-            null
+        if (!finalizedOk || !validateMovFile(destFile)) {
+            Log.e(TAG, "ProRes recording validation failed or output file is corrupt")
+            cleanupFailedOutput()
+            return null
+        }
+
+        Log.i(TAG, "ProRes 422 recording finalized successfully: ${destFile.length()} bytes, $frameCount frames")
+        return destFile
+    }
+
+    private fun cleanupFailedOutput() {
+        try {
+            proresMuxer?.finish()
+        } catch (ignored: Exception) {}
+        proresMuxer = null
+        proresEncoder = null
+        try {
+            if (destFile.exists()) {
+                destFile.delete()
+            }
+        } catch (ignored: Exception) {}
+    }
+
+    /**
+     * Validates that the output file is a compliant QuickTime MOV file containing 'ftyp', 'mdat', and 'moov'.
+     */
+    private fun validateMovFile(file: File): Boolean {
+        if (!file.exists() || file.length() < 32) return false
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                // Check ftyp header
+                val ftypSize = raf.readInt()
+                val ftypType = raf.readInt()
+                if (ftypType != 0x66747970 || ftypSize < 16) return@use false
+
+                // Scan atoms to find 'mdat' and 'moov'
+                var foundMdat = false
+                var foundMoov = false
+                val fileLen = raf.length()
+                var pos = ftypSize.toLong()
+
+                while (pos + 8 <= fileLen) {
+                    raf.seek(pos)
+                    val rawSize = raf.readInt().toLong() and 0xFFFFFFFFL
+                    val type = raf.readInt()
+
+                    val actualSize = when (rawSize) {
+                        1L -> {
+                            if (pos + 16 > fileLen) break
+                            raf.readLong()
+                        }
+                        0L -> fileLen - pos
+                        else -> rawSize
+                    }
+
+                    if (type == 0x6D646174) foundMdat = true // 'mdat'
+                    if (type == 0x6D6F6F76) foundMoov = true // 'moov'
+
+                    if (actualSize <= 0 || pos + actualSize > fileLen && rawSize != 0L) {
+                        break
+                    }
+                    pos += actualSize
+                }
+                foundMdat && foundMoov
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Validation of MOV file ${file.name} failed with exception: ${e.message}")
+            false
         }
     }
 }

@@ -6544,6 +6544,18 @@ class Camera2Engine(private val context: Context) {
                 }
             }
 
+            // Ensure output file has valid container structure before publishing to MediaStore
+            if (!validateRecordedFileIntegrity(fileToSave, effectiveMimeType)) {
+                Log.e(TAG, "Recorded file integrity validation failed for ${fileToSave.name}; aborting MediaStore publish")
+                try { fileToSave.delete() } catch (ignored: Exception) {}
+                if (fileToSave != rawRecordedFile) {
+                    try { rawRecordedFile.delete() } catch (ignored: Exception) {}
+                }
+                for (f in intermediateFiles) { try { f.delete() } catch (ignored: Exception) {} }
+                notifyComplete(null)
+                return
+            }
+
             val savedUri = saveVideoToGallery(
                 tempFile = fileToSave,
                 fileName = effectiveFileName,
@@ -6581,6 +6593,64 @@ class Camera2Engine(private val context: Context) {
             try { gradedFile?.delete() } catch (ignored: Exception) {}
             try { rawRecordedFile.delete() } catch (ignored: Exception) {}
             updateStorageStats()
+        }
+    }
+
+    /**
+     * Validates basic container and payload integrity before publishing to MediaStore.
+     */
+    private fun validateRecordedFileIntegrity(file: File, mimeType: String): Boolean {
+        if (!file.exists() || file.length() < 32L) return false
+        return try {
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                when {
+                    mimeType.contains("quicktime", ignoreCase = true) || file.name.endsWith(".mov", ignoreCase = true) -> {
+                        // MOV must start with 'ftyp' and contain 'mdat' & 'moov'
+                        val size = raf.readInt()
+                        val type = raf.readInt()
+                        if (type != 0x66747970 || size < 16) return@use false
+                        val fileLen = raf.length()
+                        var pos = size.toLong()
+                        var hasMdat = false
+                        var hasMoov = false
+                        while (pos + 8 <= fileLen) {
+                            raf.seek(pos)
+                            val atomSizeRaw = raf.readInt().toLong() and 0xFFFFFFFFL
+                            val atomType = raf.readInt()
+                            val atomSize = when (atomSizeRaw) {
+                                1L -> {
+                                    if (pos + 16 > fileLen) break
+                                    raf.readLong()
+                                }
+                                0L -> fileLen - pos
+                                else -> atomSizeRaw
+                            }
+                            if (atomType == 0x6D646174) hasMdat = true
+                            if (atomType == 0x6D6F6F76) hasMoov = true
+                            if (atomSize <= 0 || pos + atomSize > fileLen && atomSizeRaw != 0L) break
+                            pos += atomSize
+                        }
+                        hasMdat && hasMoov
+                    }
+                    mimeType.contains("webm", ignoreCase = true) || file.name.endsWith(".webm", ignoreCase = true) -> {
+                        // WebM must start with EBML header: 0x1A 0x45 0xDF 0xA3
+                        val b0 = raf.read()
+                        val b1 = raf.read()
+                        val b2 = raf.read()
+                        val b3 = raf.read()
+                        b0 == 0x1A && b1 == 0x45 && b2 == 0xDF && b3 == 0xA3
+                    }
+                    else -> {
+                        // MP4: must start with 'ftyp' or have valid box structure
+                        val size = raf.readInt()
+                        val type = raf.readInt()
+                        size >= 16 && (type == 0x66747970 || type == 0x6D646174 || type == 0x6D6F6F76)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Exception during container integrity validation", e)
+            false
         }
     }
 

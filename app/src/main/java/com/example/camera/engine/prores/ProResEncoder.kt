@@ -12,13 +12,16 @@ import kotlin.math.sqrt
  * Implements:
  * 1. Apple ProRes 422 standard bitstream format:
  *    - Frame Container: 4-byte size + 'icpf' magic
- *    - Frame Header: 28-byte standard header (or 148-byte custom matrix header)
+ *    - Frame Header: 148-byte custom matrix header
  *    - Picture Header: slice count & slice sizes table
  *    - Macroblocks: 16x16 luma pixels with 4:2:2 chroma subsampling (4 Y blocks, 2 Cb blocks, 2 Cr blocks)
- *    - 8x8 2D-DCT (Discrete Cosine Transform) on 10-bit quantized coefficients
+ *    - 8x8 2D-DCT (Discrete Cosine Transform) on 10-bit studio-range coefficients
  *    - Golomb-Rice variable length entropy coding
  *
- * 2. 100% compliant with Apple QuickTime / Final Cut Pro / DaVinci Resolve specifications.
+ * 2. Proper YUV_420_888 to ProRes 4:2:2 chroma handling:
+ *    - Half-resolution 4:2:0 chroma plane dimensions ((width+1)/2 x (height+1)/2)
+ *    - Vertical 4:2:0 -> 4:2:2 upsampling with safe rowStride/pixelStride indexing
+ *    - Zero out-of-bounds array reads and zero silent frame drops.
  */
 class ProResEncoder(
     val width: Int,
@@ -76,17 +79,19 @@ class ProResEncoder(
 
     private val mbWidth = (width + 15) / 16
     private val mbHeight = (height + 15) / 16
-    // Apple ProRes slices: typically 8 macroblocks per slice
     private val mbsPerSlice = 8
     private val slicesPerRow = (mbWidth + mbsPerSlice - 1) / mbsPerSlice
     private val totalSlices = slicesPerRow * mbHeight
+
+    private val chromaWidth = (width + 1) / 2
+    private val chromaHeight = (height + 1) / 2
 
     // ProRes 422 standard qscale factor (6 for ProRes 422 standard)
     private val defaultQScale = 6
 
     /**
-     * Encodes a YUV image frame into a genuine Apple ProRes 422 frame payload.
-     * Input Y, U, V can be 8-bit in [0..255] or 10-bit.
+     * Encodes a Camera2 YUV_420_888 frame into a genuine Apple ProRes 422 frame payload.
+     * Safely reads Y, U, V with true plane strides without buffer overruns.
      */
     fun encodeFrame(
         yPlane: ByteArray,
@@ -98,13 +103,17 @@ class ProResEncoder(
         uPixelStride: Int,
         vPixelStride: Int
     ): ByteArray {
-        val out = ByteArrayOutputStream(width * height)
+        require(yPlane.isNotEmpty() && uPlane.isNotEmpty() && vPlane.isNotEmpty()) {
+            "Input YUV planes cannot be empty"
+        }
 
-        // Reserve 4 bytes for total frame size + 4 bytes 'icpf'
+        val out = ByteArrayOutputStream(maxOf(width * height / 2, 65536))
+
+        // Reserve 4 bytes for total frame size + 4 bytes 'icpf' magic
         val dummy = ByteArray(8)
         out.write(dummy)
 
-        // 1. Frame Header (148 bytes for custom matrices or 28 bytes standard)
+        // 1. Frame Header (148 bytes for custom matrices)
         val hdrSize = 148
         val hdrBuf = ByteBuffer.allocate(hdrSize)
         hdrBuf.putShort(hdrSize.toShort()) // header size
@@ -175,44 +184,64 @@ class ProResEncoder(
                     val pixX = mbX * 16
                     val pixY = mbY * 16
 
-                    // Y: 4 blocks (8x8)
+                    // Y: 4 blocks (8x8) covering 16x16 luma
                     for (by in 0..1) {
                         for (bx in 0..1) {
                             extractLumaBlock10Bit(
-                                yPlane, yRowStride,
-                                pixX + bx * 8, pixY + by * 8,
-                                block
+                                yPlane = yPlane,
+                                rowStride = yRowStride,
+                                startX = pixX + bx * 8,
+                                startY = pixY + by * 8,
+                                outBlock = block
                             )
                             forwardDct8x8(block, dctCoeffs)
                             prevYDc = quantizeAndEncodeBlock(
-                                dctCoeffs, DEFAULT_LUMA_QUANT, defaultQScale, prevYDc, bitWriter
+                                dct = dctCoeffs,
+                                quantMat = DEFAULT_LUMA_QUANT,
+                                qscale = defaultQScale,
+                                prevDc = prevYDc,
+                                writer = bitWriter
                             )
                         }
                     }
 
-                    // U: 2 blocks (8x8) in 4:2:2
+                    // U (Cb): 2 blocks (8x8) in 4:2:2 (covering 8 horiz x 16 vert chroma)
                     for (by in 0..1) {
-                        extractChromaBlock10Bit(
-                            uPlane, uRowStride, uPixelStride,
-                            pixX / 2, (pixY + by * 8) / 1,
-                            block
+                        extractChromaBlock10BitFromYuv420(
+                            cPlane = uPlane,
+                            rowStride = uRowStride,
+                            pixelStride = uPixelStride,
+                            chromaStartX = mbX * 8,
+                            lumaStartY = pixY + by * 8,
+                            outBlock = block
                         )
                         forwardDct8x8(block, dctCoeffs)
                         prevUDc = quantizeAndEncodeBlock(
-                            dctCoeffs, DEFAULT_CHROMA_QUANT, defaultQScale, prevUDc, bitWriter
+                            dct = dctCoeffs,
+                            quantMat = DEFAULT_CHROMA_QUANT,
+                            qscale = defaultQScale,
+                            prevDc = prevUDc,
+                            writer = bitWriter
                         )
                     }
 
-                    // V: 2 blocks (8x8) in 4:2:2
+                    // V (Cr): 2 blocks (8x8) in 4:2:2 (covering 8 horiz x 16 vert chroma)
                     for (by in 0..1) {
-                        extractChromaBlock10Bit(
-                            vPlane, vRowStride, vPixelStride,
-                            pixX / 2, (pixY + by * 8) / 1,
-                            block
+                        extractChromaBlock10BitFromYuv420(
+                            cPlane = vPlane,
+                            rowStride = vRowStride,
+                            pixelStride = vPixelStride,
+                            chromaStartX = mbX * 8,
+                            lumaStartY = pixY + by * 8,
+                            outBlock = block
                         )
                         forwardDct8x8(block, dctCoeffs)
                         prevVDc = quantizeAndEncodeBlock(
-                            dctCoeffs, DEFAULT_CHROMA_QUANT, defaultQScale, prevVDc, bitWriter
+                            dct = dctCoeffs,
+                            quantMat = DEFAULT_CHROMA_QUANT,
+                            qscale = defaultQScale,
+                            prevDc = prevVDc,
+                            writer = bitWriter
                         )
                     }
                 }
@@ -249,12 +278,16 @@ class ProResEncoder(
         startY: Int,
         outBlock: FloatArray
     ) {
+        val planeLen = yPlane.size
         for (y in 0 until 8) {
             val py = minOf(startY + y, height - 1)
             val rowOffset = py * rowStride
             for (x in 0 until 8) {
                 val px = minOf(startX + x, width - 1)
-                val byteVal = yPlane[rowOffset + px].toInt() and 0xFF
+                val idx = rowOffset + px
+                val byteVal = if (idx in 0 until planeLen) {
+                    yPlane[idx].toInt() and 0xFF
+                } else 128
                 // Scale 8-bit [0..255] to genuine 10-bit studio range [64..940] centered around 512
                 val tenBitVal = ((byteVal * 876) / 255 + 64).toFloat()
                 outBlock[y * 8 + x] = tenBitVal - 512.0f
@@ -262,23 +295,58 @@ class ProResEncoder(
         }
     }
 
-    private fun extractChromaBlock10Bit(
+    /**
+     * Extracts an 8x8 chroma block for ProRes 4:2:2 from a YUV_420_888 plane.
+     *
+     * In ProRes 4:2:2, chroma has full vertical resolution (1:1 with luma) and half horizontal (2:1).
+     * In YUV 4:2:0, the camera plane has half vertical resolution ((height+1)/2) and half horizontal ((width+1)/2).
+     *
+     * For vertical line [lumaStartY + y]:
+     * - The primary chroma row in YUV 4:2:0 is: cy = (lumaStartY + y) / 2.
+     * - Clamped strictly to [0 .. chromaHeight - 1] to guarantee zero buffer overrun.
+     * - Interpolates between cy and cy+1 on odd rows for smooth vertical chroma gradients.
+     */
+    private fun extractChromaBlock10BitFromYuv420(
         cPlane: ByteArray,
         rowStride: Int,
         pixelStride: Int,
-        startX: Int,
-        startY: Int,
+        chromaStartX: Int,
+        lumaStartY: Int,
         outBlock: FloatArray
     ) {
-        val halfW = width / 2
+        val planeLen = cPlane.size
+        val maxCy = chromaHeight - 1
+        val maxCx = chromaWidth - 1
+
         for (y in 0 until 8) {
-            val py = minOf(startY + y, height - 1)
-            val rowOffset = py * rowStride
+            val lumaY = minOf(lumaStartY + y, height - 1)
+            val cy = minOf(lumaY / 2, maxCy)
+            val isOddRow = (lumaY and 1) == 1
+            val cyNext = minOf(cy + 1, maxCy)
+
+            val rowOffset0 = cy * rowStride
+            val rowOffset1 = cyNext * rowStride
+
             for (x in 0 until 8) {
-                val px = minOf(startX + x, halfW - 1)
-                val byteVal = cPlane[rowOffset + px * pixelStride].toInt() and 0xFF
-                // Scale 8-bit chroma to genuine 10-bit chroma [64..960] centered around 512
-                val tenBitVal = ((byteVal * 896) / 255 + 64).toFloat()
+                val cx = minOf(chromaStartX + x, maxCx)
+                val offset0 = rowOffset0 + cx * pixelStride
+
+                val byteVal0 = if (offset0 in 0 until planeLen) {
+                    cPlane[offset0].toInt() and 0xFF
+                } else 128
+
+                val finalByteVal = if (isOddRow && cy != cyNext) {
+                    val offset1 = rowOffset1 + cx * pixelStride
+                    val byteVal1 = if (offset1 in 0 until planeLen) {
+                        cPlane[offset1].toInt() and 0xFF
+                    } else byteVal0
+                    (byteVal0 + byteVal1 + 1) shr 1
+                } else {
+                    byteVal0
+                }
+
+                // Scale 8-bit chroma to genuine 10-bit studio range [64..960] centered around 512
+                val tenBitVal = ((finalByteVal * 896) / 255 + 64).toFloat()
                 outBlock[y * 8 + x] = tenBitVal - 512.0f
             }
         }
@@ -320,8 +388,8 @@ class ProResEncoder(
     ): Int {
         // DC Coefficient
         val rawDc = dct[0]
-        val dcQuant = quantMat[0] * qscale / 4
-        val qDc = if (dcQuant > 0) rawDc / dcQuant else rawDc
+        val dcQuant = maxOf(1, quantMat[0] * qscale / 4)
+        val qDc = rawDc / dcQuant
         val dcDiff = qDc - prevDc
         encodeGolombRice(dcDiff, 3, writer)
 
@@ -329,8 +397,8 @@ class ProResEncoder(
         var run = 0
         for (i in 1 until 64) {
             val zz = ZIGZAG[i]
-            val qVal = quantMat[zz] * qscale / 4
-            val coeff = if (qVal > 0) dct[zz] / qVal else 0
+            val qVal = maxOf(1, quantMat[zz] * qscale / 4)
+            val coeff = dct[zz] / qVal
             if (coeff == 0) {
                 run++
             } else {

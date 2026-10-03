@@ -177,6 +177,13 @@ object CinemaVideoProcessor {
             val is10BitMode = (config.logBitDepth == com.example.camera.model.LogBitDepth.BIT_10) || isHlg10
             val isVp9 = config.codec == com.example.camera.model.CinemaCodec.VP9
             val isHevc = config.codec == com.example.camera.model.CinemaCodec.H265 || isHlg10
+
+            // If VP9 is requested, verify that the device genuinely supports VP9 Surface encoding
+            if (isVp9 && !DeviceCompatibilityManager.isVp9EncodingSupported(outWidth, outHeight, inFps, requireSurface = true)) {
+                Log.w(TAG, "VP9 Surface encoder not supported for ${outWidth}x${outHeight} @ ${inFps}fps; skipping GPU re-encode and keeping source")
+                return false
+            }
+
             val encoderMime = when {
                 isVp9 -> MediaFormat.MIMETYPE_VIDEO_VP9
                 isHevc -> MediaFormat.MIMETYPE_VIDEO_HEVC
@@ -214,8 +221,24 @@ object CinemaVideoProcessor {
                 }
             }
 
+            val surfaceEncoderInfo = try {
+                val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+                list.codecInfos.firstOrNull { info ->
+                    info.isEncoder && info.supportedTypes.any { it.equals(encoderMime, ignoreCase = true) } &&
+                    try {
+                        val caps = info.getCapabilitiesForType(encoderMime)
+                        caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                    } catch (e: Exception) { false }
+                }
+            } catch (e: Exception) { null }
+
             encoder = try {
-                MediaCodec.createEncoderByType(encoderMime).apply {
+                val codec = if (surfaceEncoderInfo != null) {
+                    MediaCodec.createByCodecName(surfaceEncoderInfo.name)
+                } else {
+                    MediaCodec.createEncoderByType(encoderMime)
+                }
+                codec.apply {
                     configure(outFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 }
             } catch (e: Exception) {
@@ -226,12 +249,27 @@ object CinemaVideoProcessor {
                     setInteger(MediaFormat.KEY_FRAME_RATE, maxOf(inFps, 24))
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 }
-                MediaCodec.createEncoderByType(encoderMime).apply {
+                val codec = if (surfaceEncoderInfo != null) {
+                    MediaCodec.createByCodecName(surfaceEncoderInfo.name)
+                } else {
+                    MediaCodec.createEncoderByType(encoderMime)
+                }
+                codec.apply {
                     configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 }
             }
-            encoderSurface = encoder.createInputSurface()
-            encoder.start()
+            encoderSurface = try {
+                encoder.createInputSurface()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create input surface on $encoderMime encoder", e)
+                return false
+            }
+            try {
+                encoder.start()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start $encoderMime encoder", e)
+                return false
+            }
 
             // Setup EGL14 with encoderSurface
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
@@ -396,6 +434,7 @@ object CinemaVideoProcessor {
             var isEncoderEos = false
             var muxerVideoTrack = -1
             var muxerAudioTrack = -1
+            var processedVideoFrames = 0
             isMuxerStarted = false
 
             while (!isEncoderEos) {
@@ -490,6 +529,7 @@ object CinemaVideoProcessor {
                             val outputBuffer = encoder.getOutputBuffer(encIdx)
                             if (outputBuffer != null) {
                                 muxer.writeSampleData(muxerVideoTrack, outputBuffer, encBufferInfo)
+                                processedVideoFrames++
                             }
                         }
                         if ((encBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -538,6 +578,11 @@ object CinemaVideoProcessor {
             }
             try { muxer?.release() } catch (ignored: Exception) {}
             muxer = null
+
+            if (processedVideoFrames <= 0) {
+                Log.w(TAG, "Video transcode completed with 0 video frames; marking transcode failed")
+                return false
+            }
 
             return true
         } catch (e: Exception) {

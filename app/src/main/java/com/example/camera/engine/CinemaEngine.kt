@@ -64,7 +64,7 @@ class CinemaEngine(private val context: Context) {
                     if (!codecInfo.isEncoder) continue
                     for (type in codecInfo.supportedTypes) {
                         val caps = try { codecInfo.getCapabilitiesForType(type) } catch (e: Exception) { null } ?: continue
-                        val hasSurface = caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) || caps.colorFormats.isEmpty()
+                        val hasSurface = caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                         if (!hasSurface) continue
 
                         if (type.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)) {
@@ -104,22 +104,32 @@ class CinemaEngine(private val context: Context) {
             if (!hevcSupported) {
                 try {
                     val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+                    val caps = c.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+                    if (caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) {
+                        hevcSupported = true
+                    }
                     c.release()
-                    hevcSupported = true
                 } catch (ignored: Exception) {}
             }
             if (!avcSupported) {
                 try {
                     val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    val caps = c.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    if (caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) {
+                        avcSupported = true
+                    }
                     c.release()
-                    avcSupported = true
                 } catch (ignored: Exception) {}
             }
+            // For VP9, strictly verify that COLOR_FormatSurface is supported because Cinema frames are fed via Surface
             if (!vp9Supported) {
                 try {
                     val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_VP9)
+                    val caps = c.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_VP9)
+                    if (caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) {
+                        vp9Supported = true
+                    }
                     c.release()
-                    vp9Supported = true
                 } catch (ignored: Exception) {}
             }
 
@@ -138,7 +148,7 @@ class CinemaEngine(private val context: Context) {
             return CodecDetectionResult(
                 supportedCodecs = list,
                 hevc10BitSupported = hevc10BitSupported,
-                vp910BitSupported = vp910BitSupported,
+                vp910BitSupported = vp910BitSupported && vp9Supported,
                 proresSupported = true
             )
         }

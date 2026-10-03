@@ -139,6 +139,72 @@ object DeviceCompatibilityManager {
     }
 
     /**
+     * Checks whether the device hardware/system supports genuine Google VP9 video encoding,
+     * strictly verifying COLOR_FormatSurface when requireSurface is true.
+     */
+    fun isVp9EncodingSupported(
+        width: Int = 1920,
+        height: Int = 1080,
+        fps: Int = 30,
+        requireSurface: Boolean = true
+    ): Boolean {
+        try {
+            val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            for (info in codecList.codecInfos) {
+                if (!info.isEncoder) continue
+                val types = info.supportedTypes
+                if (types.any { it.equals(MediaFormat.MIMETYPE_VIDEO_VP9, ignoreCase = true) }) {
+                    try {
+                        val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_VP9)
+                        if (requireSurface && !caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) {
+                            continue
+                        }
+                        val videoCaps = caps.videoCapabilities
+                        if (videoCaps != null) {
+                            if (!videoCaps.isSizeSupported(width, height)) continue
+                            if (fps > 0 && !videoCaps.areSizeAndRateSupported(width, height, fps.toDouble())) continue
+                        }
+                        return true
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "VP9 codec capabilities inspection warning for ${info.name}: ${t.message}")
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed inspecting MediaCodecList for VP9: ${t.message}")
+        }
+        return false
+    }
+
+    /**
+     * Checks whether the device supports 10-bit VP9 encoding (Profile 2) with Surface input.
+     */
+    fun isVp9Profile2Supported(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        try {
+            val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            for (info in codecList.codecInfos) {
+                if (!info.isEncoder) continue
+                val types = info.supportedTypes
+                if (types.any { it.equals(MediaFormat.MIMETYPE_VIDEO_VP9, ignoreCase = true) }) {
+                    try {
+                        val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_VP9)
+                        if (!caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) continue
+                        for (pl in caps.profileLevels) {
+                            if (pl.profile == MediaCodecInfo.CodecProfileLevel.VP9Profile2 ||
+                                pl.profile == MediaCodecInfo.CodecProfileLevel.VP9Profile2HDR
+                            ) {
+                                return true
+                            }
+                        }
+                    } catch (ignored: Throwable) {}
+                }
+            }
+        } catch (ignored: Throwable) {}
+        return false
+    }
+
+    /**
      * Determines safe, verified video encoder parameters that will never crash MediaRecorder.prepare().
      */
     fun getValidatedVideoConfig(
