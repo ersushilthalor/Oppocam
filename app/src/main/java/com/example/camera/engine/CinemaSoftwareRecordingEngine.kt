@@ -145,10 +145,18 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             return session.start()
         }
 
-        // Validate VP9 availability (must support Surface input for Camera2 frames)
-        if (effectiveCodec == CinemaCodec.VP9 && !hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
-            isRecording.set(false)
-            throw IllegalStateException("Google VP9 recording is not available: no genuine surface-input VP9 encoder is supported on this device")
+        // Validate VP9 availability (must support Surface input for Camera2 frames, resolution, and fps)
+        if (effectiveCodec == CinemaCodec.VP9) {
+            val supported = DeviceCompatibilityManager.isVp9EncodingSupported(
+                width = normWidth,
+                height = normHeight,
+                fps = fps,
+                requireSurface = true
+            )
+            if (!supported) {
+                isRecording.set(false)
+                throw IllegalStateException("Google VP9 recording is not supported for ${normWidth}x${normHeight} @ ${fps}fps with Surface input on this device")
+            }
         }
 
         // 1. Ensure parent directories and destination file exist before MediaMuxer initializes
@@ -468,7 +476,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         }
 
         val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
-        val surface = if (isRobolectric) {
+        val surface = if (isRobolectric && codec != CinemaCodec.VP9) {
             val dummyTexture = android.graphics.SurfaceTexture(0)
             dummyTexture.setDefaultBufferSize(width, height)
             Surface(dummyTexture)
@@ -478,7 +486,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "createInputSurface failed on $mime encoder", e)
                 try { encoder.release() } catch (ignored: Exception) {}
-                throw IllegalStateException("Failed to create input surface on $mime encoder: ${e.message}", e)
+                throw IllegalStateException("Failed to create genuine input surface on $mime encoder: ${e.message}", e)
             }
         }
 
@@ -766,7 +774,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             if (hasEncoderForMime(MediaFormat.MIMETYPE_AUDIO_OPUS)) {
                 MediaFormat.MIMETYPE_AUDIO_OPUS
             } else {
-                Log.w(TAG, "Opus encoder not found on device for WebM container")
+                Log.w(TAG, "Opus encoder not found on device for WebM container; recording video-only WebM")
+                isAudioRequested = false
                 return
             }
         } else {

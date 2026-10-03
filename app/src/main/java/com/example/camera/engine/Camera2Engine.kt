@@ -5776,21 +5776,46 @@ class Camera2Engine(private val context: Context) {
 
             val recorderSurface: Surface
             if (isSoftwareCinema) {
+                if (cinemaCodec == CinemaCodec.VP9) {
+                    val isVp9Supported = DeviceCompatibilityManager.isVp9EncodingSupported(
+                        width = finalRecordWidth,
+                        height = finalRecordHeight,
+                        fps = targetFps,
+                        requireSurface = true
+                    )
+                    if (!isVp9Supported) {
+                        isStartingRecording.set(false)
+                        _isRecordingVideo.value = false
+                        try { tempFile.delete() } catch (_: Exception) {}
+                        onError("Google VP9 encoder does not support ${finalRecordWidth}x${finalRecordHeight} @ ${targetFps}fps with Surface input on this device. Please select a supported resolution or codec.")
+                        return
+                    }
+                }
                 isSoftwareCinemaRecording = true
                 val cinemaOrientationHint = getVideoOrientationHint()
-                recorderSurface = cinemaSoftwareRecorder.startRecording(
-                    destFile = tempFile,
-                    width = finalRecordWidth,
-                    height = finalRecordHeight,
-                    fps = targetFps,
-                    bitrate = bitrate,
-                    codec = cinemaCodec,
-                    bitDepth = if (is10BitRequested || isHlg10Active || cinemaCodec == CinemaCodec.PRORES) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
-                    isAudioEnabled = isAudioEnabled,
-                    orientationHint = cinemaOrientationHint,
-                    colorProfile = cinemaConfig.value.colorProfile,
-                    colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace
-                )
+                recorderSurface = try {
+                    cinemaSoftwareRecorder.startRecording(
+                        destFile = tempFile,
+                        width = finalRecordWidth,
+                        height = finalRecordHeight,
+                        fps = targetFps,
+                        bitrate = bitrate,
+                        codec = cinemaCodec,
+                        bitDepth = if (is10BitRequested && cinemaCapabilities.value.supportsEndToEnd10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
+                        isAudioEnabled = isAudioEnabled,
+                        orientationHint = cinemaOrientationHint,
+                        colorProfile = cinemaConfig.value.colorProfile,
+                        colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace
+                    )
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Failed starting software cinema recording: ${t.message}", t)
+                    isStartingRecording.set(false)
+                    _isRecordingVideo.value = false
+                    isSoftwareCinemaRecording = false
+                    try { tempFile.delete() } catch (_: Exception) {}
+                    onError("Failed starting Cinema recording: ${t.localizedMessage ?: t.message}")
+                    return
+                }
                 preparedVideoGeometry = PreparedVideoGeometry(
                     width = finalRecordWidth,
                     height = finalRecordHeight,

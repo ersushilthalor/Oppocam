@@ -512,26 +512,46 @@ fun CinemaSettingsWindow(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Codecs Row (Only actually supported codecs are rendered)
+                // Codecs Row (Only actually supported codecs are rendered / enabled)
                 val availableCodecs = capabilities.supportedCodecs
+                val resWidth = config.selectedResolution?.width ?: 1920
+                val resHeight = config.selectedResolution?.height ?: 1080
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     availableCodecs.forEach { codec ->
+                        val isCodecSupportedForCurrentConfig = when (codec) {
+                            CinemaCodec.VP9 -> com.example.camera.engine.DeviceCompatibilityManager.isVp9EncodingSupported(
+                                width = resWidth,
+                                height = resHeight,
+                                fps = config.videoFps,
+                                requireSurface = true
+                            )
+                            CinemaCodec.H265 -> com.example.camera.engine.DeviceCompatibilityManager.isHevcEncodingSupported(
+                                width = resWidth,
+                                height = resHeight,
+                                fps = config.videoFps
+                            )
+                            CinemaCodec.H264 -> true
+                            CinemaCodec.PRORES -> true
+                        }
                         val isSelected = config.codec == codec
                         CinemaPillChip(
-                            label = codec.label,
-                            isSelected = isSelected,
+                            label = if (isCodecSupportedForCurrentConfig) codec.label else "${codec.label} (N/A)",
+                            isSelected = isSelected && isCodecSupportedForCurrentConfig,
+                            enabled = isCodecSupportedForCurrentConfig,
                             modifier = Modifier.weight(1f),
                             onClick = {
-                                val newDepths = capabilities.getSupportedBitDepthsForCodec(codec)
-                                val sanitizedDepth = if (config.logBitDepth == LogBitDepth.BIT_10 && !newDepths.contains(LogBitDepth.BIT_10)) {
-                                    LogBitDepth.BIT_8
-                                } else {
-                                    config.logBitDepth
+                                if (isCodecSupportedForCurrentConfig) {
+                                    val newDepths = capabilities.getSupportedBitDepthsForCodec(codec)
+                                    val sanitizedDepth = if (config.logBitDepth == LogBitDepth.BIT_10 && !newDepths.contains(LogBitDepth.BIT_10)) {
+                                        LogBitDepth.BIT_8
+                                    } else {
+                                        config.logBitDepth
+                                    }
+                                    onConfigChange(config.copy(codec = codec, logBitDepth = sanitizedDepth))
                                 }
-                                onConfigChange(config.copy(codec = codec, logBitDepth = sanitizedDepth))
                             }
                         )
                     }
@@ -918,29 +938,35 @@ private fun CinemaPillChip(
     label: String,
     isSelected: Boolean,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .background(
-                if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.20f)
+                if (!enabled) Color.White.copy(alpha = 0.02f)
+                else if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.20f)
                 else Color.White.copy(alpha = 0.05f)
             )
             .border(
-                width = if (isSelected) 1.dp else 0.5.dp,
-                color = if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f) else Color.White.copy(alpha = 0.10f),
+                width = if (isSelected && enabled) 1.dp else 0.5.dp,
+                color = if (!enabled) Color.White.copy(alpha = 0.04f)
+                    else if (isSelected) Color(0xFFFFD54F).copy(alpha = 0.7f)
+                    else Color.White.copy(alpha = 0.10f),
                 shape = RoundedCornerShape(10.dp)
             )
-            .clickable { onClick() }
+            .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = 10.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.75f),
+            color = if (!enabled) Color.White.copy(alpha = 0.25f)
+                else if (isSelected) Color(0xFFFFD54F)
+                else Color.White.copy(alpha = 0.75f),
             fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+            fontWeight = if (isSelected && enabled) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )

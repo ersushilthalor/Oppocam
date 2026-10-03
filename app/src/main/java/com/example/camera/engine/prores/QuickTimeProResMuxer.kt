@@ -81,24 +81,34 @@ class QuickTimeProResMuxer(
 
     @Synchronized
     fun writeVideoFrame(proresFrame: ByteArray) {
-        val r = raf ?: return
-        val offset = r.filePointer
-        r.write(proresFrame)
-        videoSampleOffsets.add(offset)
-        videoSampleSizes.add(proresFrame.size)
-        currentMdatSize += proresFrame.size
+        val r = raf ?: throw IllegalStateException("QuickTime MOV muxer is not started or already closed")
+        try {
+            val offset = r.filePointer
+            r.write(proresFrame)
+            videoSampleOffsets.add(offset)
+            videoSampleSizes.add(proresFrame.size)
+            currentMdatSize += proresFrame.size
+        } catch (e: Exception) {
+            Log.e(TAG, "I/O error writing ProRes video frame", e)
+            throw e
+        }
     }
 
     @Synchronized
     fun writeAudioChunk(pcmData: ByteArray, length: Int) {
         if (!isAudioEnabled || length <= 0) return
         val r = raf ?: return
-        val offset = r.filePointer
-        r.write(pcmData, 0, length)
-        audioSampleOffsets.add(offset)
-        audioSampleSizes.add(length)
-        currentMdatSize += length
-        totalAudioFrames += (length / 4) // 4 bytes per stereo 16-bit frame (2 ch * 2 bytes)
+        try {
+            val offset = r.filePointer
+            r.write(pcmData, 0, length)
+            audioSampleOffsets.add(offset)
+            audioSampleSizes.add(length)
+            currentMdatSize += length
+            totalAudioFrames += (length / 4) // 4 bytes per stereo 16-bit frame (2 ch * 2 bytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "I/O error writing audio chunk", e)
+            throw e
+        }
     }
 
     val videoFrameCount: Int get() = videoSampleSizes.size
@@ -342,6 +352,24 @@ class QuickTimeProResMuxer(
                 base.putShort((-1).toShort()) // color table ID
                 apcnStream.write(base.array())
                 apcnStream.write(colr.array())
+
+                // pasp atom: 1:1 pixel aspect ratio (16 bytes)
+                val pasp = ByteBuffer.allocate(16).apply {
+                    putInt(16)
+                    putInt(0x70617370) // 'pasp'
+                    putInt(1) // hSpacing = 1
+                    putInt(1) // vSpacing = 1
+                }
+                apcnStream.write(pasp.array())
+
+                // fiel atom: progressive frame (10 bytes)
+                val fiel = ByteBuffer.allocate(10).apply {
+                    putInt(10)
+                    putInt(0x6669656C) // 'fiel'
+                    put(1) // field count = 1 (progressive)
+                    put(0) // field order = 0
+                }
+                apcnStream.write(fiel.array())
             }
 
             // stsd atom header: 8 bytes (version/flags + entry count) + apcnEntry

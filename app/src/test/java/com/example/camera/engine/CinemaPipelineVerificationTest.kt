@@ -776,6 +776,107 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
+    fun testProResBitstreamPictureHeaderAndSlices() {
+        val width = 64
+        val height = 64
+        val encoder = com.example.camera.engine.prores.ProResEncoder(width, height)
+
+        val yBytes = ByteArray(width * height) { 128.toByte() }
+        val uvHeight = (height + 1) / 2
+        val uvWidth = (width + 1) / 2
+        val uBytes = ByteArray(uvWidth * uvHeight) { 128.toByte() }
+        val vBytes = ByteArray(uvWidth * uvHeight) { 128.toByte() }
+
+        val encoded = encoder.encodeFrame(
+            yPlane = yBytes,
+            uPlane = uBytes,
+            vPlane = vBytes,
+            yRowStride = width,
+            uRowStride = uvWidth,
+            vRowStride = uvWidth,
+            uPixelStride = 1,
+            vPixelStride = 1
+        )
+
+        val bb = java.nio.ByteBuffer.wrap(encoded)
+        val frameSize = bb.getInt()
+        val magic = bb.getInt()
+        assertEquals(encoded.size, frameSize)
+        assertEquals(com.example.camera.engine.prores.ProResEncoder.MAGIC_ICPF, magic)
+
+        val hdrSize = bb.getShort().toInt() and 0xFFFF
+        assertEquals(148, hdrSize)
+
+        // Read up to picture header (offset = 8 + 148 = 156)
+        bb.position(8 + hdrSize)
+        val picHdrByte0 = bb.get().toInt() and 0xFF
+        assertEquals("ProRes picture header byte 0 must be 0x40 (8 << 3 bits)", 0x40, picHdrByte0)
+
+        val picDataSize = bb.getInt()
+        assertTrue("Picture data size must be positive", picDataSize > 0)
+
+        val totalSlices = bb.getShort().toInt() and 0xFFFF
+        assertTrue("Total slices must be > 0", totalSlices > 0)
+
+        val sliceFactor = bb.get().toInt() and 0xFF
+        assertEquals("Slice factor for 8 MBs per slice must be 0x30", 0x30, sliceFactor)
+
+        // Read first slice size from slice table
+        val firstSliceSize = bb.getShort().toInt() and 0xFFFF
+        assertTrue("Slice size must be > 6 bytes", firstSliceSize > 6)
+
+        // Skip remaining slice table entries
+        bb.position(8 + hdrSize + 8 + totalSlices * 2)
+        val sliceHdrByte0 = bb.get().toInt() and 0xFF
+        assertEquals("Slice header byte 0 must be 0x30 (6 << 3 bits)", 0x30, sliceHdrByte0)
+        val qscale = bb.get().toInt() and 0xFF
+        assertEquals(6, qscale)
+    }
+
+    @Test
+    fun testProResQuickTimeMovMuxerIntegrity() {
+        val tempDest = File(context.cacheDir, "test_prores_mux.mov")
+        try {
+            val muxer = com.example.camera.engine.prores.QuickTimeProResMuxer(
+                outputFile = tempDest,
+                width = 64,
+                height = 64,
+                fps = 24,
+                isAudioEnabled = false
+            )
+            muxer.start()
+
+            val encoder = com.example.camera.engine.prores.ProResEncoder(64, 64)
+            val dummyY = ByteArray(64 * 64) { 128.toByte() }
+            val dummyUV = ByteArray(32 * 32) { 128.toByte() }
+            val frame = encoder.encodeFrame(dummyY, dummyUV, dummyUV, 64, 32, 32, 1, 1)
+
+            muxer.writeVideoFrame(frame)
+            muxer.writeVideoFrame(frame)
+
+            val finished = muxer.finish()
+            assertTrue("Muxer finish must return true", finished)
+            assertTrue("MOV file must exist", tempDest.exists())
+            assertTrue("MOV file size must be > 512 bytes", tempDest.length() > 512)
+
+            // Validate atoms: ftyp -> mdat -> moov
+            java.io.RandomAccessFile(tempDest, "r").use { raf ->
+                val ftypSize = raf.readInt()
+                val ftypType = raf.readInt()
+                assertEquals("Must start with ftyp", 0x66747970, ftypType)
+
+                // Seek past ftyp
+                raf.seek(ftypSize.toLong())
+                val mdatRaw = raf.readInt().toLong() and 0xFFFFFFFFL
+                val mdatType = raf.readInt()
+                assertEquals("Second atom must be mdat", 0x6D646174, mdatType)
+            }
+        } finally {
+            try { tempDest.delete() } catch (_: Exception) {}
+        }
+    }
+
+    @Test
     fun testVp9EncoderCapabilitySurfaceRequirement() {
         // Calling isVp9EncodingSupported with requireSurface=true must be robust and safe
         val supported = DeviceCompatibilityManager.isVp9EncodingSupported(
