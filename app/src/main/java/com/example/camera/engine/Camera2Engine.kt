@@ -5672,8 +5672,9 @@ class Camera2Engine(private val context: Context) {
 
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val prefix = if (isCinema) "CINEMA_" else "VID_"
-            val extension = if (isCinema) "mp4" else "mp4"
-            val mimeType = "video/mp4"
+            val isVp9 = isCinema && cinemaCodec == CinemaCodec.VP9
+            val extension = if (isVp9) "webm" else "mp4"
+            val mimeType = if (isVp9) "video/webm" else "video/mp4"
             val fileName = "${prefix}$timeStamp.$extension"
 
             if (isCinema) {
@@ -6439,7 +6440,8 @@ class Camera2Engine(private val context: Context) {
         try {
             if (isCinema) {
                 try {
-                    val procDest = File(rawRecordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.mp4")
+                    val procExt = if (snapCinemaConfig.codec == CinemaCodec.VP9) "webm" else "mp4"
+                    val procDest = File(rawRecordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.$procExt")
                     val processed = CinemaVideoProcessor.processCinemaVideo(
                         inputFile = rawRecordedFile,
                         outputFile = procDest,

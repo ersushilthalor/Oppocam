@@ -63,12 +63,12 @@ class DualVideoGLCompositor(
         """
     }
 
-    private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
-    private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var eglDisplay: EGLDisplay? = null
+    private var eglContext: EGLContext? = null
     private var eglConfig: EGLConfig? = null
 
-    private var previewEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
-    private var recordEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var previewEglSurface: EGLSurface? = null
+    private var recordEglSurface: EGLSurface? = null
 
     private var previewWidth = 0
     private var previewHeight = 0
@@ -273,16 +273,18 @@ class DualVideoGLCompositor(
 
     fun setPreviewSurface(surface: Surface?, width: Int, height: Int, displayRotationDegrees: Int = 0) {
         glHandler?.post {
-            if (previewEglSurface != EGL14.EGL_NO_SURFACE) {
-                EGL14.eglDestroySurface(eglDisplay, previewEglSurface)
-                previewEglSurface = EGL14.EGL_NO_SURFACE
+            val disp = eglDisplay
+            val prevSurf = previewEglSurface
+            if (disp != null && prevSurf != null && prevSurf != EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroySurface(disp, prevSurf)
             }
+            previewEglSurface = null
             previewWidth = width
             previewHeight = height
             previewDisplayRotation = ((displayRotationDegrees % 360) + 360) % 360
-            if (surface != null && surface.isValid) {
+            if (disp != null && surface != null && surface.isValid) {
                 val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
-                previewEglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, surfaceAttribs, 0)
+                previewEglSurface = EGL14.eglCreateWindowSurface(disp, eglConfig, surface, surfaceAttribs, 0)
             }
             requestRender()
         }
@@ -304,16 +306,18 @@ class DualVideoGLCompositor(
         rotationDegrees: Int = 0
     ) {
         glHandler?.post {
-            if (recordEglSurface != EGL14.EGL_NO_SURFACE) {
-                EGL14.eglDestroySurface(eglDisplay, recordEglSurface)
-                recordEglSurface = EGL14.EGL_NO_SURFACE
+            val disp = eglDisplay
+            val recSurf = recordEglSurface
+            if (disp != null && recSurf != null && recSurf != EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroySurface(disp, recSurf)
             }
+            recordEglSurface = null
             recordWidth = if (width > 0) width else outputWidth
             recordHeight = if (height > 0) height else outputHeight
             recordingRotation = ((rotationDegrees % 360) + 360) % 360
-            if (surface != null && surface.isValid) {
+            if (disp != null && surface != null && surface.isValid) {
                 val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
-                recordEglSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, surfaceAttribs, 0)
+                recordEglSurface = EGL14.eglCreateWindowSurface(disp, eglConfig, surface, surfaceAttribs, 0)
                 isRecording = true
                 recordingStartNs = 0L
                 lastRecordFrameTimeNs = 0L
@@ -327,10 +331,12 @@ class DualVideoGLCompositor(
     fun stopRecording() {
         glHandler?.post {
             isRecording = false
-            if (recordEglSurface != EGL14.EGL_NO_SURFACE) {
-                EGL14.eglDestroySurface(eglDisplay, recordEglSurface)
-                recordEglSurface = EGL14.EGL_NO_SURFACE
+            val disp = eglDisplay
+            val recSurf = recordEglSurface
+            if (disp != null && recSurf != null && recSurf != EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroySurface(disp, recSurf)
             }
+            recordEglSurface = null
             recordingStartNs = 0L
             lastRecordFrameTimeNs = 0L
             recordedFrameCount = 0L
@@ -370,14 +376,19 @@ class DualVideoGLCompositor(
         } catch (ignored: Exception) {}
 
         // 1. Render to on-screen Preview Viewfinder (consistent with normal Video mode)
-        if (previewEglSurface != EGL14.EGL_NO_SURFACE && previewWidth > 0 && previewHeight > 0) {
-            EGL14.eglMakeCurrent(eglDisplay, previewEglSurface, previewEglSurface, eglContext)
+        val disp = eglDisplay
+        val ctx = eglContext
+        val prevSurf = previewEglSurface
+        val recSurf = recordEglSurface
+
+        if (disp != null && ctx != null && prevSurf != null && prevSurf != EGL14.EGL_NO_SURFACE && previewWidth > 0 && previewHeight > 0) {
+            EGL14.eglMakeCurrent(disp, prevSurf, prevSurf, ctx)
             drawCompositeLayout(previewWidth, previewHeight, previewDisplayRotation)
-            EGL14.eglSwapBuffers(eglDisplay, previewEglSurface)
+            EGL14.eglSwapBuffers(disp, prevSurf)
         }
 
         // 2. Render to MediaCodec Recording Encoder Surface with exact paced presentation timestamps
-        if (isRecording && recordEglSurface != EGL14.EGL_NO_SURFACE) {
+        if (isRecording && disp != null && ctx != null && recSurf != null && recSurf != EGL14.EGL_NO_SURFACE) {
             val nowNs = System.nanoTime()
             if (recordingStartNs == 0L) {
                 recordingStartNs = nowNs
@@ -392,10 +403,10 @@ class DualVideoGLCompositor(
                 val ptsNs = recordedFrameCount * frameIntervalNs
                 recordedFrameCount++
 
-                EGL14.eglMakeCurrent(eglDisplay, recordEglSurface, recordEglSurface, eglContext)
+                EGL14.eglMakeCurrent(disp, recSurf, recSurf, ctx)
                 drawCompositeLayout(recordWidth, recordHeight, recordingRotation)
-                EGLExt.eglPresentationTimeANDROID(eglDisplay, recordEglSurface, ptsNs)
-                EGL14.eglSwapBuffers(eglDisplay, recordEglSurface)
+                EGLExt.eglPresentationTimeANDROID(disp, recSurf, ptsNs)
+                EGL14.eglSwapBuffers(disp, recSurf)
             }
         }
     }
@@ -680,14 +691,19 @@ class DualVideoGLCompositor(
     fun release() {
         glHandler?.post {
             try {
-                if (previewEglSurface != EGL14.EGL_NO_SURFACE) {
-                    EGL14.eglDestroySurface(eglDisplay, previewEglSurface)
-                    previewEglSurface = EGL14.EGL_NO_SURFACE
+                val disp = eglDisplay
+                val prevSurf = previewEglSurface
+                if (disp != null && prevSurf != null && prevSurf != EGL14.EGL_NO_SURFACE) {
+                    EGL14.eglDestroySurface(disp, prevSurf)
                 }
-                if (recordEglSurface != EGL14.EGL_NO_SURFACE) {
-                    EGL14.eglDestroySurface(eglDisplay, recordEglSurface)
-                    recordEglSurface = EGL14.EGL_NO_SURFACE
+                previewEglSurface = null
+
+                val recSurf = recordEglSurface
+                if (disp != null && recSurf != null && recSurf != EGL14.EGL_NO_SURFACE) {
+                    EGL14.eglDestroySurface(disp, recSurf)
                 }
+                recordEglSurface = null
+
                 if (programId != 0) {
                     GLES20.glDeleteProgram(programId)
                     programId = 0
@@ -707,14 +723,17 @@ class DualVideoGLCompositor(
                 surfaceTextureSecondary?.release()
                 surfaceTextureSecondary = null
 
-                EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-                if (eglContext != EGL14.EGL_NO_CONTEXT) {
-                    EGL14.eglDestroyContext(eglDisplay, eglContext)
-                    eglContext = EGL14.EGL_NO_CONTEXT
-                }
-                if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
-                    EGL14.eglTerminate(eglDisplay)
-                    eglDisplay = EGL14.EGL_NO_DISPLAY
+                val ctx = eglContext
+                if (disp != null) {
+                    EGL14.eglMakeCurrent(disp, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+                    if (ctx != null && ctx != EGL14.EGL_NO_CONTEXT) {
+                        EGL14.eglDestroyContext(disp, ctx)
+                        eglContext = null
+                    }
+                    if (disp != EGL14.EGL_NO_DISPLAY) {
+                        EGL14.eglTerminate(disp)
+                        eglDisplay = null
+                    }
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "Error releasing GL compositor", t)

@@ -367,7 +367,8 @@ fun CinemaSettingsWindow(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Log Bit Depth Selector
+                // Log Bit Depth Selector (10-bit hidden when end-to-end 10-bit is unsupported)
+                val availableDepths = capabilities.supportedBitDepths
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -376,7 +377,7 @@ fun CinemaSettingsWindow(
                         .padding(3.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    LogBitDepth.entries.forEach { depth ->
+                    availableDepths.forEach { depth ->
                         val isSelected = config.logBitDepth == depth
                         Box(
                             modifier = Modifier
@@ -412,21 +413,22 @@ fun CinemaSettingsWindow(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Color Profile Chips
+                // Color Profile Chips (HLG10 hidden when 10-bit HDR is unsupported)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf(
+                    val allProfiles = listOf(
                         CinemaColorProfile.NATIVE to "Natural",
                         CinemaColorProfile.FLAT_LOG to "Flat Log",
                         CinemaColorProfile.REC_2020 to "Rec.2020 HDR",
                         CinemaColorProfile.HLG10 to "HLG10 HDR",
                         CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
                         CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log"
-                    ).forEach { (profile, label) ->
+                    )
+                    allProfiles.filter { capabilities.supportedColorProfiles.contains(it.first) }.forEach { (profile, label) ->
                         val isSelected = config.colorProfile == profile
                         CinemaPillChip(
                             label = label,
@@ -501,20 +503,16 @@ fun CinemaSettingsWindow(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Codecs Row
+                // Codecs Row (Only actually supported codecs are rendered)
+                val availableCodecs = capabilities.supportedCodecs
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf(
-                        CinemaCodec.H265 to "H.265 (HEVC)",
-                        CinemaCodec.H264 to "H.264 (AVC)",
-                        CinemaCodec.PRORES to "ProRes 422",
-                        CinemaCodec.VP9 to "VP9"
-                    ).forEach { (codec, label) ->
+                    availableCodecs.forEach { codec ->
                         val isSelected = config.codec == codec
                         CinemaPillChip(
-                            label = label,
+                            label = codec.label,
                             isSelected = isSelected,
                             modifier = Modifier.weight(1f),
                             onClick = { onConfigChange(config.copy(codec = codec)) }

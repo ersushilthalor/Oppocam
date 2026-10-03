@@ -172,10 +172,16 @@ object CinemaVideoProcessor {
             val outWidth = inWidth and 1.inv()
             val outHeight = inHeight and 1.inv()
 
-            // Setup MediaCodec Video Encoder
+            // Setup MediaCodec Video Encoder matching genuine codec & bit-depth
             val isHlg10 = config.colorProfile == com.example.camera.model.CinemaColorProfile.HLG10
+            val is10BitMode = (config.logBitDepth == com.example.camera.model.LogBitDepth.BIT_10) || isHlg10
+            val isVp9 = config.codec == com.example.camera.model.CinemaCodec.VP9
             val isHevc = config.codec == com.example.camera.model.CinemaCodec.H265 || isHlg10
-            var encoderMime = if (isHevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
+            val encoderMime = when {
+                isVp9 -> MediaFormat.MIMETYPE_VIDEO_VP9
+                isHevc -> MediaFormat.MIMETYPE_VIDEO_HEVC
+                else -> MediaFormat.MIMETYPE_VIDEO_AVC
+            }
             val outFormat = MediaFormat.createVideoFormat(encoderMime, outWidth, outHeight).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, maxOf(inBitrate, 25_000_000))
@@ -197,8 +203,12 @@ object CinemaVideoProcessor {
                         setInteger(MediaFormat.KEY_COLOR_STANDARD, colorStandard)
                         setInteger(MediaFormat.KEY_COLOR_TRANSFER, colorTransfer)
                         setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
-                        if (isHlg10) {
-                            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+                        if (is10BitMode) {
+                            if (encoderMime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+                                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+                            } else if (encoderMime == MediaFormat.MIMETYPE_VIDEO_VP9) {
+                                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.VP9Profile2)
+                            }
                         }
                     } catch (ignored: Exception) {}
                 }
@@ -209,7 +219,7 @@ object CinemaVideoProcessor {
                     configure(outFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 }
             } catch (e: Exception) {
-                encoderMime = MediaFormat.MIMETYPE_VIDEO_AVC
+                Log.w(TAG, "Failed to configure $encoderMime encoder with HDR/10-bit profile, retrying with standard baseline", e)
                 val fallbackFormat = MediaFormat.createVideoFormat(encoderMime, outWidth, outHeight).apply {
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                     setInteger(MediaFormat.KEY_BIT_RATE, maxOf(inBitrate, 20_000_000))
@@ -319,8 +329,16 @@ object CinemaVideoProcessor {
             decoder.start()
 
             // Setup MediaMuxer and preserve the recorded orientation hint metadata
-            muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            muxer.setOrientationHint(finalOrientationHint)
+            val isWebm = (config.codec == com.example.camera.model.CinemaCodec.VP9)
+            val muxerFormat = if (isWebm) MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM else MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
+            muxer = MediaMuxer(outputFile.absolutePath, muxerFormat)
+            if (!isWebm && finalOrientationHint >= 0) {
+                try {
+                    muxer.setOrientationHint(finalOrientationHint)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to set orientation hint on MediaMuxer", e)
+                }
+            }
 
             // Prepare geometry & uniforms
             val vertexBuffer = createFloatBuffer(floatArrayOf(

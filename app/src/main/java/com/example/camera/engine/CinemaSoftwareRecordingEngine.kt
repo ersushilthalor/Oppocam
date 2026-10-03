@@ -126,6 +126,16 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val normWidth = maxOf(width, height)
         val normHeight = minOf(width, height)
 
+        // Validate codec availability honestly without fake fallbacks
+        if (effectiveCodec == CinemaCodec.PRORES && !hasProResEncoder()) {
+            isRecording.set(false)
+            throw IllegalStateException("Apple ProRes 422 recording is not available: no genuine ProRes encoder is supported on this device")
+        }
+        if (effectiveCodec == CinemaCodec.VP9 && !hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
+            isRecording.set(false)
+            throw IllegalStateException("Google VP9 recording is not available: no genuine VP9 encoder is supported on this device")
+        }
+
         // 1. Ensure parent directories and destination file exist before MediaMuxer initializes
         try {
             destFile.parentFile?.mkdirs()
@@ -139,9 +149,13 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             throw IllegalStateException("Cannot create cinema temp file: ${e.message}", e)
         }
 
-        // 2. Setup MediaMuxer: Standard MP4 container for universal playback
-        val isWebm = false
-        val muxerOutputFormat = MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
+        // 2. Setup MediaMuxer: WebM container for VP9, MP4 container for H.264/H.265
+        val isWebm = (effectiveCodec == CinemaCodec.VP9)
+        val muxerOutputFormat = if (isWebm) {
+            MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM
+        } else {
+            MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
+        }
 
         synchronized(muxerLock) {
             try {
@@ -315,47 +329,32 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         is10Bit: Boolean,
         isWebm: Boolean
     ): Surface {
-        val is10BitMode = is10Bit || (codec == CinemaCodec.PRORES) || (activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10)
-        val mime = when {
-            isWebm -> {
+        val is10BitMode = (is10Bit || activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10) &&
+                (codec == CinemaCodec.H265 || codec == CinemaCodec.VP9 || codec == CinemaCodec.PRORES)
+        val mime = when (codec) {
+            CinemaCodec.VP9 -> {
+                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
+                    throw IllegalStateException("Google VP9 encoder with surface support is not available on this device")
+                }
                 MediaFormat.MIMETYPE_VIDEO_VP9
             }
-            activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10 -> {
+            CinemaCodec.H265 -> {
+                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
+                    throw IllegalStateException("H.265 / HEVC encoder with surface support is not available on this device")
+                }
                 MediaFormat.MIMETYPE_VIDEO_HEVC
             }
-            codec == CinemaCodec.VP9 -> {
-                if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
-                    MediaFormat.MIMETYPE_VIDEO_VP9
-                } else if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
-                    MediaFormat.MIMETYPE_VIDEO_HEVC
-                } else {
-                    MediaFormat.MIMETYPE_VIDEO_AVC
+            CinemaCodec.H264 -> {
+                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_AVC, requireSurface = true)) {
+                    throw IllegalStateException("H.264 / AVC encoder with surface support is not available on this device")
                 }
-            }
-            codec == CinemaCodec.H264 -> {
                 MediaFormat.MIMETYPE_VIDEO_AVC
             }
-            codec == CinemaCodec.PRORES -> {
-                // ProRes 422 10-bit mastering: HEVC Main 10 or HEVC / AVC in MP4
-                if (has10BitEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
-                    MediaFormat.MIMETYPE_VIDEO_HEVC
-                } else if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
-                    MediaFormat.MIMETYPE_VIDEO_HEVC
-                } else {
-                    MediaFormat.MIMETYPE_VIDEO_AVC
+            CinemaCodec.PRORES -> {
+                if (!hasProResEncoder()) {
+                    throw IllegalStateException("Apple ProRes 422 encoder is not available on this device")
                 }
-            }
-            codec == CinemaCodec.H265 -> {
-                if (is10BitMode && has10BitEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
-                    MediaFormat.MIMETYPE_VIDEO_HEVC
-                } else if (hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
-                    MediaFormat.MIMETYPE_VIDEO_HEVC
-                } else {
-                    MediaFormat.MIMETYPE_VIDEO_AVC
-                }
-            }
-            else -> {
-                MediaFormat.MIMETYPE_VIDEO_AVC
+                "video/prores"
             }
         }
 
@@ -439,40 +438,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 encoder.configure(retryFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 Log.i(TAG, "10-bit encoder configured successfully without level restriction")
             } catch (e2: Exception) {
-                Log.w(TAG, "Fallback to baseline encoder due to config failure", e2)
+                Log.w(TAG, "Fallback to baseline encoder for $mime due to config failure", e2)
                 val fallbackFormat = MediaFormat.createVideoFormat(mime, width, height).apply {
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                     setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                     setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 }
-                try {
-                    encoder.configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                } catch (e3: Exception) {
-                    Log.w(TAG, "Fallback to AVC baseline encoder due to HEVC config failure", e3)
-                    val avcEncoder = tryCreateSoftwareEncoder(MediaFormat.MIMETYPE_VIDEO_AVC)
-                    val avcFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
-                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                        setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                        setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                    }
-                    avcEncoder.configure(avcFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                    val surface = try {
-                        avcEncoder.createInputSurface()
-                    } catch (e: Exception) {
-                        null
-                    } ?: run {
-                        val dummyTexture = android.graphics.SurfaceTexture(0)
-                        dummyTexture.setDefaultBufferSize(width, height)
-                        Surface(dummyTexture)
-                    }
-                    try { avcEncoder.start() } catch (ignored: Exception) {}
-                    videoCodec = avcEncoder
-                    videoInputSurface = surface
-                    startVideoDrainThread(avcEncoder)
-                    return surface
-                }
+                encoder.configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             }
         }
 
@@ -594,13 +567,34 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         return MediaCodec.createEncoderByType(mime)
     }
 
-    private fun hasEncoderForMime(mime: String, requireSurface: Boolean = false): Boolean {
+    private fun hasProResEncoder(): Boolean {
         try {
-            val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            val list = MediaCodecList(MediaCodecList.ALL_CODECS)
+            for (info in list.codecInfos) {
+                if (!info.isEncoder) continue
+                for (type in info.supportedTypes) {
+                    if (type.contains("prores", ignoreCase = true)) {
+                        return true
+                    }
+                }
+                if (info.name.contains("prores", ignoreCase = true)) return true
+            }
+        } catch (ignored: Exception) {}
+        return false
+    }
+
+    private fun hasEncoderForMime(mime: String, requireSurface: Boolean = false): Boolean {
+        if (mime.contains("prores", ignoreCase = true)) {
+            return hasProResEncoder()
+        }
+        try {
+            val list = MediaCodecList(MediaCodecList.ALL_CODECS)
+            var hasMime = false
             for (info in list.codecInfos) {
                 if (!info.isEncoder) continue
                 for (type in info.supportedTypes) {
                     if (type.equals(mime, ignoreCase = true)) {
+                        hasMime = true
                         if (!requireSurface) return true
                         try {
                             val caps = info.getCapabilitiesForType(mime)
@@ -612,6 +606,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                         } catch (ignored: Exception) {}
                     }
                 }
+            }
+            if (hasMime) return true
+            return try {
+                val codec = MediaCodec.createEncoderByType(mime)
+                codec.release()
+                true
+            } catch (e: Exception) {
+                false
             }
         } catch (ignored: Exception) {}
         return false

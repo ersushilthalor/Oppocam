@@ -7,6 +7,7 @@ import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.TonemapCurve
+import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
@@ -45,35 +46,102 @@ class CinemaEngine(private val context: Context) {
         private const val TAG = "CinemaEngine"
         private const val CURVE_POINTS = 64
 
-        private val cachedHevc10BitSupported: Boolean by lazy {
-            var supported = false
+        private val cachedCodecDetection: CodecDetectionResult by lazy {
+            detectEncoders()
+        }
+
+        fun detectEncoders(): CodecDetectionResult {
+            var hevcSupported = false
+            var hevc10BitSupported = false
+            var avcSupported = false
+            var vp9Supported = false
+            var vp910BitSupported = false
+            var proresSupported = false
+
             try {
                 val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
                 for (codecInfo in codecList.codecInfos) {
                     if (!codecInfo.isEncoder) continue
                     for (type in codecInfo.supportedTypes) {
+                        val caps = try { codecInfo.getCapabilitiesForType(type) } catch (e: Exception) { null } ?: continue
+                        val hasSurface = caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) || caps.colorFormats.isEmpty()
+                        if (!hasSurface) continue
+
                         if (type.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)) {
-                            val caps = codecInfo.getCapabilitiesForType(type)
+                            hevcSupported = true
                             for (pl in caps.profileLevels) {
                                 if (pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
                                     pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
                                     pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus
                                 ) {
-                                    supported = true
+                                    hevc10BitSupported = true
                                     break
                                 }
                             }
+                        } else if (type.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
+                            avcSupported = true
+                        } else if (type.equals(MediaFormat.MIMETYPE_VIDEO_VP9, ignoreCase = true)) {
+                            vp9Supported = true
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                for (pl in caps.profileLevels) {
+                                    if (pl.profile == MediaCodecInfo.CodecProfileLevel.VP9Profile2 ||
+                                        pl.profile == MediaCodecInfo.CodecProfileLevel.VP9Profile2HDR
+                                    ) {
+                                        vp910BitSupported = true
+                                        break
+                                    }
+                                }
+                            }
+                        } else if (type.contains("prores", ignoreCase = true) || codecInfo.name.contains("prores", ignoreCase = true)) {
+                            proresSupported = true
                         }
-                        if (supported) break
                     }
-                    if (supported) break
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "HEVC 10-bit codec inspection error", e)
+                Log.w(TAG, "Error detecting codecs from MediaCodecList", e)
             }
-            supported
+
+            if (!hevcSupported) {
+                try {
+                    val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+                    c.release()
+                    hevcSupported = true
+                } catch (ignored: Exception) {}
+            }
+            if (!avcSupported) {
+                try {
+                    val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    c.release()
+                    avcSupported = true
+                } catch (ignored: Exception) {}
+            }
+
+            val list = mutableListOf<CinemaCodec>()
+            if (hevcSupported) list.add(CinemaCodec.H265)
+            if (avcSupported) list.add(CinemaCodec.H264)
+            if (vp9Supported) list.add(CinemaCodec.VP9)
+            if (proresSupported) list.add(CinemaCodec.PRORES)
+
+            if (list.isEmpty()) {
+                list.add(CinemaCodec.H265)
+                list.add(CinemaCodec.H264)
+            }
+
+            return CodecDetectionResult(
+                supportedCodecs = list,
+                hevc10BitSupported = hevc10BitSupported,
+                vp910BitSupported = vp910BitSupported,
+                proresSupported = proresSupported
+            )
         }
     }
+
+    data class CodecDetectionResult(
+        val supportedCodecs: List<CinemaCodec>,
+        val hevc10BitSupported: Boolean,
+        val vp910BitSupported: Boolean,
+        val proresSupported: Boolean
+    )
 
     var config: CinemaConfig = CinemaConfig()
         set(value) {
@@ -213,12 +281,32 @@ class CinemaEngine(private val context: Context) {
             }
         }
 
-        // 2. Check cached MediaCodec HEVC Main 10 hardware encoder support
-        val hevc10BitSupported = cachedHevc10BitSupported
+        // 2. Detect MediaCodec hardware & software encoders
+        val codecDetection = detectEncoders()
+        val has10BitEncoder = codecDetection.hevc10BitSupported || codecDetection.vp910BitSupported || codecDetection.proresSupported
 
-        val supports10Bit = dynamicRange10Bit || hevc10BitSupported
+        // 3. Genuine end-to-end 10-bit support requires BOTH Camera2 HAL and MediaCodec 10-bit encoder
+        val supportsEndToEnd10Bit = dynamicRange10Bit && has10BitEncoder
 
-        // 3. Inspect target FPS ranges
+        val supportedBitDepths = if (supportsEndToEnd10Bit) {
+            listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
+        } else {
+            listOf(LogBitDepth.OFF, LogBitDepth.BIT_8)
+        }
+
+        val supportedColorProfiles = mutableListOf(
+            CinemaColorProfile.NATIVE,
+            CinemaColorProfile.FLAT_LOG,
+            CinemaColorProfile.REC_2020
+        )
+        if (supportsEndToEnd10Bit) {
+            supportedColorProfiles.add(CinemaColorProfile.HLG10)
+        }
+        supportedColorProfiles.add(CinemaColorProfile.APPLE_LOG_2)
+        supportedColorProfiles.add(CinemaColorProfile.SAMSUNG_APV_LOG)
+        supportedColorProfiles.add(CinemaColorProfile.PROCESSED_JPEG)
+
+        // 4. Inspect target FPS ranges
         val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
         availableFpsRanges = fpsRanges
         val supportedFps = mutableListOf<Int>()
@@ -229,23 +317,39 @@ class CinemaEngine(private val context: Context) {
 
         _capabilities = CinemaHardwareCapabilities(
             supportsContrastCurve = supportsContrastCurve,
-            supports10BitRecording = supports10Bit,
-            supportsHevc10Bit = hevc10BitSupported,
+            supports10BitRecording = supportsEndToEnd10Bit,
+            supportsHevc10Bit = codecDetection.hevc10BitSupported,
+            supportsVp910Bit = codecDetection.vp910BitSupported,
             supportsDynamicRangeProfiles = dynamicRange10Bit,
             supportsRawSensorBypass = supportsEdgeOff || supportsNoiseOff || supportsContrastCurve,
+            supportsSoftwareVp9 = codecDetection.supportedCodecs.contains(CinemaCodec.VP9),
+            supportsSoftwareProRes = codecDetection.proresSupported,
+            isSoftware10BitSupported = supportsEndToEnd10Bit,
             supportedFpsList = supportedFps,
             supportedResolutions = availableVideoResolutions,
             isHardwareLogSupported = supportsContrastCurve,
-            is10BitAvailableOnHAL = supports10Bit
+            is10BitAvailableOnHAL = dynamicRange10Bit,
+            supportsEndToEnd10Bit = supportsEndToEnd10Bit,
+            supportedBitDepths = supportedBitDepths,
+            supportedCodecs = codecDetection.supportedCodecs,
+            supportedColorProfiles = supportedColorProfiles
         )
 
-        // If currently configured for 10-bit but hardware cannot do 10-bit, fallback honestly to 8-bit
-        if (config.logBitDepth == LogBitDepth.BIT_10 && !supports10Bit) {
-            config = config.copy(logBitDepth = LogBitDepth.BIT_8)
+        // Sanitize current config so no unsupported option is active
+        var sanitizedConfig = config
+        if (sanitizedConfig.logBitDepth == LogBitDepth.BIT_10 && !supportsEndToEnd10Bit) {
+            sanitizedConfig = sanitizedConfig.copy(logBitDepth = LogBitDepth.BIT_8)
         }
+        if (!codecDetection.supportedCodecs.contains(sanitizedConfig.codec)) {
+            sanitizedConfig = sanitizedConfig.copy(codec = codecDetection.supportedCodecs.firstOrNull() ?: CinemaCodec.H264)
+        }
+        if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && !supportsEndToEnd10Bit) {
+            sanitizedConfig = sanitizedConfig.copy(colorProfile = CinemaColorProfile.NATIVE)
+        }
+        config = sanitizedConfig
 
-        Log.d(TAG, "Configured CinemaEngine: contrastCurve=$supportsContrastCurve, 10bit=$supports10Bit, " +
-                "fps=$supportedFps, resolutions=${availableVideoResolutions.size}")
+        Log.d(TAG, "Configured CinemaEngine: contrastCurve=$supportsContrastCurve, endToEnd10bit=$supportsEndToEnd10Bit, " +
+                "codecs=${codecDetection.supportedCodecs}, fps=$supportedFps, resolutions=${availableVideoResolutions.size}")
     }
 
     /**

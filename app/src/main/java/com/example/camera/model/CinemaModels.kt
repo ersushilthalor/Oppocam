@@ -1,5 +1,8 @@
 package com.example.camera.model
 
+import android.media.MediaFormat
+import android.media.MediaMuxer
+
 enum class LogBitDepth(val label: String, val bitDepth: Int) {
     OFF("Off", 8),
     BIT_8("8 bit", 8),
@@ -9,14 +12,53 @@ enum class LogBitDepth(val label: String, val bitDepth: Int) {
 enum class CinemaCodec(
     val label: String,
     val description: String,
+    val mimeType: String,
     val fileExtension: String,
+    val containerFormat: Int,
+    val containerMime: String,
     val supports10Bit: Boolean,
     val isSoftwareEncoder: Boolean
 ) {
-    H265("H.265 / HEVC", "High-efficiency hardware/software encoder", "mp4", true, false),
-    H264("H.264 / AVC", "Universal broadcast compatible 8-bit encoder", "mp4", false, false),
-    VP9("VP9 (Software / HW)", "Google VP9 Profile 0/2 software 10-bit encoder", "webm", true, true),
-    PRORES("Apple ProRes 422", "Genuine intra-frame 10-bit 4:2:2 mastering codec", "mov", true, true)
+    H265(
+        "H.265 (HEVC)",
+        "High-efficiency video encoder",
+        MediaFormat.MIMETYPE_VIDEO_HEVC,
+        "mp4",
+        MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4,
+        "video/mp4",
+        true,
+        false
+    ),
+    H264(
+        "H.264 (AVC)",
+        "Universal broadcast compatible 8-bit encoder",
+        MediaFormat.MIMETYPE_VIDEO_AVC,
+        "mp4",
+        MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4,
+        "video/mp4",
+        false,
+        false
+    ),
+    VP9(
+        "VP9",
+        "Google VP9 video encoder in WebM container",
+        MediaFormat.MIMETYPE_VIDEO_VP9,
+        "webm",
+        MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM,
+        "video/webm",
+        true,
+        true
+    ),
+    PRORES(
+        "Apple ProRes 422",
+        "Genuine intra-frame 10-bit 4:2:2 mastering codec",
+        "video/prores",
+        "mov",
+        MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4,
+        "video/quicktime",
+        true,
+        true
+    )
 }
 
 enum class CinemaColorProfile(
@@ -59,7 +101,7 @@ enum class CinemaNoiseReduction(val label: String, val mode: Int) {
 }
 
 data class CinemaConfig(
-    val logBitDepth: LogBitDepth = LogBitDepth.BIT_10,
+    val logBitDepth: LogBitDepth = LogBitDepth.BIT_8,
     val codec: CinemaCodec = CinemaCodec.H265,
     val selectedLut: CinematicLut = CinematicLut.REC_709, // Default Rec.709 as requested
     val customLutPath: String? = null,
@@ -104,13 +146,24 @@ data class CinemaHardwareCapabilities(
     val supportsContrastCurve: Boolean = false,
     val supports10BitRecording: Boolean = false,
     val supportsHevc10Bit: Boolean = false,
+    val supportsVp910Bit: Boolean = false,
     val supportsDynamicRangeProfiles: Boolean = false,
     val supportsRawSensorBypass: Boolean = true,
-    val supportsSoftwareVp9: Boolean = true,
-    val supportsSoftwareProRes: Boolean = true,
-    val isSoftware10BitSupported: Boolean = true,
+    val supportsSoftwareVp9: Boolean = false,
+    val supportsSoftwareProRes: Boolean = false,
+    val isSoftware10BitSupported: Boolean = false,
     val supportedFpsList: List<Int> = listOf(24, 30, 60),
     val supportedResolutions: List<CameraResolution> = emptyList(),
     val isHardwareLogSupported: Boolean = false,
-    val is10BitAvailableOnHAL: Boolean = false
+    val is10BitAvailableOnHAL: Boolean = false,
+    val supportsEndToEnd10Bit: Boolean = false,
+    val supportedBitDepths: List<LogBitDepth> = listOf(LogBitDepth.OFF, LogBitDepth.BIT_8),
+    val supportedCodecs: List<CinemaCodec> = listOf(CinemaCodec.H265, CinemaCodec.H264),
+    val supportedColorProfiles: List<CinemaColorProfile> = listOf(
+        CinemaColorProfile.NATIVE,
+        CinemaColorProfile.FLAT_LOG,
+        CinemaColorProfile.REC_2020,
+        CinemaColorProfile.APPLE_LOG_2,
+        CinemaColorProfile.SAMSUNG_APV_LOG
+    )
 )

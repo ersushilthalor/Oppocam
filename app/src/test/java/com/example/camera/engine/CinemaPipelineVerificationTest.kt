@@ -294,29 +294,51 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
-    fun testProRes10BitSoftwareRecorderPipeline() {
+    fun testProResRejectedWithoutFakeFallbackWhenUnsupported() {
         val recorder = CinemaSoftwareRecordingEngine(context)
-        val tempDest = File(context.cacheDir, "test_prores_10bit.mp4")
+        val tempDest = File(context.cacheDir, "test_prores_unsupported.mov")
 
         try {
-            val surface = recorder.startRecording(
-                destFile = tempDest,
-                width = 1920,
-                height = 1080,
-                fps = 24,
-                bitrate = 90_000_000,
-                codec = CinemaCodec.PRORES,
-                bitDepth = LogBitDepth.BIT_10,
-                isAudioEnabled = false
-            )
-            assertNotNull("Surface should be generated for ProRes 10-bit recording", surface)
-
-            // Stopping recording should finalize the MP4 container
-            val outFile = recorder.stopRecording()
-            assertNotNull("Output file should be returned after stopping", outFile)
-            assertTrue("Destination file should exist", outFile?.exists() == true)
+            // Attempting to record ProRes on a device without a ProRes encoder must throw
+            // rather than secretly falling back to HEVC/AVC!
+            var thrown = false
+            try {
+                recorder.startRecording(
+                    destFile = tempDest,
+                    width = 1920,
+                    height = 1080,
+                    fps = 24,
+                    bitrate = 90_000_000,
+                    codec = CinemaCodec.PRORES,
+                    bitDepth = LogBitDepth.BIT_10,
+                    isAudioEnabled = false
+                )
+            } catch (e: IllegalStateException) {
+                thrown = true
+                assertTrue("Exception must state ProRes is unavailable", e.message?.contains("ProRes") == true)
+            }
+            assertTrue("ProRes recording without actual encoder must fail honestly without fake fallback", thrown)
         } finally {
             try { tempDest.delete() } catch (ignored: Exception) {}
+        }
+    }
+
+    @Test
+    fun testCodecAndBitDepthCapabilitiesHonesty() {
+        val detection = CinemaEngine.detectEncoders()
+        assertNotNull(detection)
+        assertTrue("Must support at least one standard video codec", detection.supportedCodecs.isNotEmpty())
+
+        // ProRes must not be reported as supported unless an actual encoder exists
+        if (!detection.proresSupported) {
+            assertFalse("ProRes must be hidden from supportedCodecs when no encoder exists", detection.supportedCodecs.contains(CinemaCodec.PRORES))
+        }
+
+        // Capabilities must only expose supported bit depths
+        val caps = cinemaEngine.capabilities
+        if (!caps.supportsEndToEnd10Bit) {
+            assertFalse("10-bit option must be completely hidden if not end-to-end supported", caps.supportedBitDepths.contains(LogBitDepth.BIT_10))
+            assertFalse("HLG10 HDR must be hidden if 10-bit is not end-to-end supported", caps.supportedColorProfiles.contains(CinemaColorProfile.HLG10))
         }
     }
 
