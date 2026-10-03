@@ -5673,8 +5673,17 @@ class Camera2Engine(private val context: Context) {
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val prefix = if (isCinema) "CINEMA_" else "VID_"
             val isVp9 = isCinema && cinemaCodec == CinemaCodec.VP9
-            val extension = if (isVp9) "webm" else "mp4"
-            val mimeType = if (isVp9) "video/webm" else "video/mp4"
+            val isProRes = isCinema && cinemaCodec == CinemaCodec.PRORES
+            val extension = when {
+                isVp9 -> "webm"
+                isProRes -> "mov"
+                else -> "mp4"
+            }
+            val mimeType = when {
+                isVp9 -> "video/webm"
+                isProRes -> "video/quicktime"
+                else -> "video/mp4"
+            }
             val fileName = "${prefix}$timeStamp.$extension"
 
             if (isCinema) {
@@ -6278,13 +6287,23 @@ class Camera2Engine(private val context: Context) {
         videoTimerJob?.cancel()
 
         val isCinema = (currentMode == CameraMode.CINEMA)
-        val rawFileName = currentVideoFileName ?: (if (isCinema) "CINEMA_${System.currentTimeMillis()}.mp4" else "VID_${System.currentTimeMillis()}.mp4")
-        val effectiveFileName = if (isCinema && !rawFileName.endsWith(".mp4", ignoreCase = true)) {
-            rawFileName.substringBeforeLast('.') + ".mp4"
-        } else {
-            rawFileName
-        }
-        val effectiveMimeType = if (isCinema) "video/mp4" else (currentVideoMimeType ?: "video/mp4")
+        val snapCodec = recordingCinemaConfig?.codec ?: cinemaConfig.value.codec
+        val defaultExt = if (isCinema) {
+            when (snapCodec) {
+                CinemaCodec.VP9 -> "webm"
+                CinemaCodec.PRORES -> "mov"
+                else -> "mp4"
+            }
+        } else "mp4"
+        val rawFileName = currentVideoFileName ?: (if (isCinema) "CINEMA_${System.currentTimeMillis()}.$defaultExt" else "VID_${System.currentTimeMillis()}.mp4")
+        val effectiveFileName = rawFileName
+        val effectiveMimeType = if (isCinema) {
+            when (snapCodec) {
+                CinemaCodec.VP9 -> "video/webm"
+                CinemaCodec.PRORES -> "video/quicktime"
+                else -> "video/mp4"
+            }
+        } else (currentVideoMimeType ?: "video/mp4")
         currentVideoFileName = null
         currentVideoMimeType = null
 
@@ -6439,22 +6458,27 @@ class Camera2Engine(private val context: Context) {
 
         try {
             if (isCinema) {
-                try {
-                    val procExt = if (snapCinemaConfig.codec == CinemaCodec.VP9) "webm" else "mp4"
-                    val procDest = File(rawRecordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.$procExt")
-                    val processed = CinemaVideoProcessor.processCinemaVideo(
-                        inputFile = rawRecordedFile,
-                        outputFile = procDest,
-                        config = snapCinemaConfig,
-                        orientationDegrees = lockedOrientationHint,
-                        rec2020Params = snapRec2020Params
-                    )
-                    if (processed.exists() && processed.length() > 0L && processed != rawRecordedFile) {
-                        fileToSave = processed
-                        gradedFile = processed
+                if (snapCinemaConfig.codec == CinemaCodec.PRORES) {
+                    // ProRes 422 software recording outputs directly in QuickTime MOV format
+                    fileToSave = rawRecordedFile
+                } else {
+                    try {
+                        val procExt = if (snapCinemaConfig.codec == CinemaCodec.VP9) "webm" else "mp4"
+                        val procDest = File(rawRecordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.$procExt")
+                        val processed = CinemaVideoProcessor.processCinemaVideo(
+                            inputFile = rawRecordedFile,
+                            outputFile = procDest,
+                            config = snapCinemaConfig,
+                            orientationDegrees = lockedOrientationHint,
+                            rec2020Params = snapRec2020Params
+                        )
+                        if (processed.exists() && processed.length() > 0L && processed != rawRecordedFile) {
+                            fileToSave = processed
+                            gradedFile = processed
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error applying Cinema LUT to final video", e)
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error applying Cinema LUT to final video", e)
                 }
             }
 

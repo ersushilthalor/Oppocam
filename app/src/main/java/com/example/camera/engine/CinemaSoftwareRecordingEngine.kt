@@ -42,6 +42,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var activeColorProfile: com.example.camera.model.CinemaColorProfile = com.example.camera.model.CinemaColorProfile.NATIVE
     private var activeColorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709
     private var outputFile: File? = null
+    private var activeProResSession: com.example.camera.engine.prores.ProResSoftwareRecordingSession? = null
 
     private val isRecording = AtomicBoolean(false)
     private val isStopping = AtomicBoolean(false)
@@ -122,16 +123,28 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             pendingAudioSamples.clear()
         }
 
-        val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (effectiveCodec == CinemaCodec.PRORES) || isHlg10
+        val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (effectiveCodec == CinemaCodec.PRORES)
         val normWidth = maxOf(width, height)
         val normHeight = minOf(width, height)
 
-        // Validate codec availability honestly without fake fallbacks
+        // Real Apple ProRes 422 software encoder fallback when hardware ProRes is not present
         if (effectiveCodec == CinemaCodec.PRORES && !hasProResEncoder()) {
-            isRecording.set(false)
-            throw IllegalStateException("Apple ProRes 422 recording is not available: no genuine ProRes encoder is supported on this device")
+            val session = com.example.camera.engine.prores.ProResSoftwareRecordingSession(
+                context = context,
+                destFile = destFile,
+                width = normWidth,
+                height = normHeight,
+                fps = fps,
+                isAudioEnabled = isAudioEnabled,
+                colorProfile = colorProfile,
+                colorSpace = activeColorSpace
+            )
+            activeProResSession = session
+            return session.start()
         }
-        if (effectiveCodec == CinemaCodec.VP9 && !hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
+
+        // Validate VP9 availability (software fallback supported)
+        if (effectiveCodec == CinemaCodec.VP9 && !hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = false)) {
             isRecording.set(false)
             throw IllegalStateException("Google VP9 recording is not available: no genuine VP9 encoder is supported on this device")
         }
@@ -223,6 +236,16 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
      * finalizes the container, and returns the recorded file.
      */
     fun stopRecording(): File? {
+        val proRes = activeProResSession
+        if (proRes != null) {
+            activeProResSession = null
+            isRecording.set(false)
+            isStopping.set(false)
+            val file = proRes.stop()
+            outputFile = null
+            activeCodec = null
+            return file
+        }
         if (!isRecording.getAndSet(false)) return outputFile
         isStopping.set(true)
 
@@ -329,34 +352,24 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         is10Bit: Boolean,
         isWebm: Boolean
     ): Surface {
-        val is10BitMode = (is10Bit || activeColorProfile == com.example.camera.model.CinemaColorProfile.HLG10) &&
-                (codec == CinemaCodec.H265 || codec == CinemaCodec.VP9 || codec == CinemaCodec.PRORES)
         val mime = when (codec) {
-            CinemaCodec.VP9 -> {
-                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_VP9, requireSurface = true)) {
-                    throw IllegalStateException("Google VP9 encoder with surface support is not available on this device")
-                }
-                MediaFormat.MIMETYPE_VIDEO_VP9
-            }
+            CinemaCodec.VP9 -> MediaFormat.MIMETYPE_VIDEO_VP9
             CinemaCodec.H265 -> {
-                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = true)) {
-                    throw IllegalStateException("H.265 / HEVC encoder with surface support is not available on this device")
+                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_HEVC, requireSurface = false)) {
+                    throw IllegalStateException("H.265 / HEVC encoder is not available on this device")
                 }
                 MediaFormat.MIMETYPE_VIDEO_HEVC
             }
             CinemaCodec.H264 -> {
-                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_AVC, requireSurface = true)) {
-                    throw IllegalStateException("H.264 / AVC encoder with surface support is not available on this device")
+                if (!hasEncoderForMime(MediaFormat.MIMETYPE_VIDEO_AVC, requireSurface = false)) {
+                    throw IllegalStateException("H.264 / AVC encoder is not available on this device")
                 }
                 MediaFormat.MIMETYPE_VIDEO_AVC
             }
-            CinemaCodec.PRORES -> {
-                if (!hasProResEncoder()) {
-                    throw IllegalStateException("Apple ProRes 422 encoder is not available on this device")
-                }
-                "video/prores"
-            }
+            CinemaCodec.PRORES -> "video/prores"
         }
+
+        val is10BitMode = is10Bit && (codec == CinemaCodec.H265 || codec == CinemaCodec.VP9 || codec == CinemaCodec.PRORES) && has10BitEncoderForMime(mime)
 
         // Create software/hardware encoder matching 10-bit capabilities
         val (encoder, supportedLevel) = findEncoder(mime, is10BitMode)

@@ -85,7 +85,7 @@ class ExampleUnitTest {
 
     @Test
     fun testCinemaColorProfilesExactSet() {
-        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "FLAT_LOG", "REC_2020", "HLG10", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
+        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "FLAT_LOG", "REC_2020", "HLG10", "HDR_LOG", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
         val actualProfiles = com.example.camera.model.CinemaColorProfile.entries.map { it.name }.toSet()
         assertEquals(expectedProfiles, actualProfiles)
         assertFalse("Old HLG must be completely removed", actualProfiles.contains("HLG"))

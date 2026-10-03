@@ -367,8 +367,8 @@ fun CinemaSettingsWindow(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Log Bit Depth Selector (10-bit hidden when end-to-end 10-bit is unsupported)
-                val availableDepths = capabilities.supportedBitDepths
+                // Log Bit Depth Selector (10-bit hidden when selected codec/hardware cannot generate genuine 10-bit)
+                val availableDepths = capabilities.getSupportedBitDepthsForCodec(config.codec)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -413,7 +413,7 @@ fun CinemaSettingsWindow(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Color Profile Chips (HLG10 hidden when 10-bit HDR is unsupported)
+                // Color Profile Chips (HLG10 and HDR Log always available)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -423,6 +423,7 @@ fun CinemaSettingsWindow(
                     val allProfiles = listOf(
                         CinemaColorProfile.NATIVE to "Natural",
                         CinemaColorProfile.FLAT_LOG to "Flat Log",
+                        CinemaColorProfile.HDR_LOG to "HDR Log",
                         CinemaColorProfile.REC_2020 to "Rec.2020 HDR",
                         CinemaColorProfile.HLG10 to "HLG10 HDR",
                         CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
@@ -435,13 +436,21 @@ fun CinemaSettingsWindow(
                             isSelected = isSelected,
                             onClick = {
                                 if (profile == CinemaColorProfile.HLG10) {
-                                    // ARIB STD-B67 standard: 10-bit HDR with Rec.2020 and HEVC (H.265)
+                                    // ARIB STD-B67 standard: Rec.2020 gamut. 8-bit default if 10-bit unsupported.
+                                    val canDo10Bit = capabilities.supports10BitRecording && (config.codec == CinemaCodec.H265 && capabilities.supportsHevc10Bit)
                                     onConfigChange(
                                         config.copy(
                                             colorProfile = CinemaColorProfile.HLG10,
                                             colorSpace = CinemaColorSpace.REC_2020,
-                                            logBitDepth = LogBitDepth.BIT_10,
-                                            codec = if (config.codec == CinemaCodec.H264) CinemaCodec.H265 else config.codec
+                                            logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
+                                            codec = if (config.codec == CinemaCodec.H264 && capabilities.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else config.codec
+                                        )
+                                    )
+                                } else if (profile == CinemaColorProfile.HDR_LOG) {
+                                    onConfigChange(
+                                        config.copy(
+                                            colorProfile = CinemaColorProfile.HDR_LOG,
+                                            colorSpace = CinemaColorSpace.REC_709
                                         )
                                     )
                                 } else {
@@ -515,7 +524,15 @@ fun CinemaSettingsWindow(
                             label = codec.label,
                             isSelected = isSelected,
                             modifier = Modifier.weight(1f),
-                            onClick = { onConfigChange(config.copy(codec = codec)) }
+                            onClick = {
+                                val newDepths = capabilities.getSupportedBitDepthsForCodec(codec)
+                                val sanitizedDepth = if (config.logBitDepth == LogBitDepth.BIT_10 && !newDepths.contains(LogBitDepth.BIT_10)) {
+                                    LogBitDepth.BIT_8
+                                } else {
+                                    config.logBitDepth
+                                }
+                                onConfigChange(config.copy(codec = codec, logBitDepth = sanitizedDepth))
+                            }
                         )
                     }
                 }

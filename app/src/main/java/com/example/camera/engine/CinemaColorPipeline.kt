@@ -121,7 +121,7 @@ object CinemaColorPipeline {
         // =========================================================================
         // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
         // =========================================================================
-        if (config.logBitDepth != LogBitDepth.OFF || config.colorProfile == CinemaColorProfile.HLG10) {
+        if (config.logBitDepth != LogBitDepth.OFF || config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG) {
             val technicalTransform = computeTechnicalInputTransform(config.colorProfile, rec2020Params)
             if (technicalTransform != null) {
                 masterMatrix.postConcat(technicalTransform)
@@ -275,6 +275,24 @@ object CinemaColorPipeline {
                 mat
             }
 
+            CinemaColorProfile.HDR_LOG -> {
+                // HDR Log Technical Transform:
+                // - Zero pedestal offset (strictly 0.0f): deep inky blacks without washed-out haze
+                // - Natural contrast calibration (1.08x)
+                // - Natural chroma saturation balance (1.08x) retaining rich highlights and shadows
+                val c = 1.08f
+                val mat = ColorMatrix(floatArrayOf(
+                    c, 0f, 0f, 0f, 0f,
+                    0f, c, 0f, 0f, 0f,
+                    0f, 0f, c, 0f, 0f,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+                val chroma = ColorMatrix()
+                chroma.setSaturation(1.08f)
+                mat.postConcat(chroma)
+                mat
+            }
+
             CinemaColorProfile.NATIVE -> null
         }
     }
@@ -398,7 +416,7 @@ object CinemaColorPipeline {
     ): ColorMatrix? {
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
-        if (lut == CinematicLut.NONE || intensity <= 0.001f || (config.colorProfile == CinemaColorProfile.HLG10 && lut == CinematicLut.REC_709)) return null
+        if (lut == CinematicLut.NONE || intensity <= 0.001f || ((config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG) && lut == CinematicLut.REC_709)) return null
 
         // When rendering on GPU shader (AGSL Viewfinder or OpenGL Video Processor),
         // VIBRANT_GREEN / PUNCHY_GREEN is executed via true per-pixel selective color masks
@@ -506,7 +524,7 @@ object CinemaColorPipeline {
         val profile = config.colorProfile
         val isGraded = lut != CinematicLut.NONE || profile != CinemaColorProfile.NATIVE
 
-        if (!isGraded || profile == CinemaColorProfile.HLG10) return null
+        if (!isGraded || profile == CinemaColorProfile.HLG10 || profile == CinemaColorProfile.HDR_LOG) return null
 
         // Filmic Output S-curve:
         // Anchors deep inky blacks (-3f) while softly compressing highlights (0.975x)

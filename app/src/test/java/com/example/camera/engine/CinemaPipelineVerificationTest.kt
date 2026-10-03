@@ -294,30 +294,28 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
-    fun testProResRejectedWithoutFakeFallbackWhenUnsupported() {
+    fun testRealProResSoftwareRecordingPipeline() {
         val recorder = CinemaSoftwareRecordingEngine(context)
-        val tempDest = File(context.cacheDir, "test_prores_unsupported.mov")
+        val tempDest = File(context.cacheDir, "test_prores_real.mov")
 
         try {
-            // Attempting to record ProRes on a device without a ProRes encoder must throw
-            // rather than secretly falling back to HEVC/AVC!
-            var thrown = false
-            try {
-                recorder.startRecording(
-                    destFile = tempDest,
-                    width = 1920,
-                    height = 1080,
-                    fps = 24,
-                    bitrate = 90_000_000,
-                    codec = CinemaCodec.PRORES,
-                    bitDepth = LogBitDepth.BIT_10,
-                    isAudioEnabled = false
-                )
-            } catch (e: IllegalStateException) {
-                thrown = true
-                assertTrue("Exception must state ProRes is unavailable", e.message?.contains("ProRes") == true)
-            }
-            assertTrue("ProRes recording without actual encoder must fail honestly without fake fallback", thrown)
+            // ProRes recording must initialize genuine ProRes 422 10-bit software encoder
+            // and QuickTime MOV container
+            val surface = recorder.startRecording(
+                destFile = tempDest,
+                width = 1280,
+                height = 720,
+                fps = 24,
+                bitrate = 60_000_000,
+                codec = CinemaCodec.PRORES,
+                bitDepth = LogBitDepth.BIT_10,
+                isAudioEnabled = false
+            )
+            assertNotNull("Surface should be created for ProRes 422 recording", surface)
+            val outFile = recorder.stopRecording()
+            assertNotNull("Recorded file should exist", outFile)
+            assertTrue("Output file must exist", outFile!!.exists())
+            assertTrue("Output file must have .mov extension", outFile.name.endsWith(".mov", ignoreCase = true))
         } finally {
             try { tempDest.delete() } catch (ignored: Exception) {}
         }
@@ -329,17 +327,64 @@ class CinemaPipelineVerificationTest {
         assertNotNull(detection)
         assertTrue("Must support at least one standard video codec", detection.supportedCodecs.isNotEmpty())
 
-        // ProRes must not be reported as supported unless an actual encoder exists
-        if (!detection.proresSupported) {
-            assertFalse("ProRes must be hidden from supportedCodecs when no encoder exists", detection.supportedCodecs.contains(CinemaCodec.PRORES))
-        }
+        // ProRes is supported via real ProRes 422 10-bit software encoder or hardware
+        assertTrue("ProRes must be supported", detection.proresSupported)
+        assertTrue("ProRes must be in supportedCodecs", detection.supportedCodecs.contains(CinemaCodec.PRORES))
 
-        // Capabilities must only expose supported bit depths
         val caps = cinemaEngine.capabilities
+        // HLG10 and HDR Log profiles must always be available
+        assertTrue("HLG10 must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.HLG10))
+        assertTrue("HDR Log must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.HDR_LOG))
+
+        // On devices without hardware 10-bit, standard codecs (H.264/H.265) hide 10-bit
         if (!caps.supportsEndToEnd10Bit) {
-            assertFalse("10-bit option must be completely hidden if not end-to-end supported", caps.supportedBitDepths.contains(LogBitDepth.BIT_10))
-            assertFalse("HLG10 HDR must be hidden if 10-bit is not end-to-end supported", caps.supportedColorProfiles.contains(CinemaColorProfile.HLG10))
+            val h264Depths = caps.getSupportedBitDepthsForCodec(CinemaCodec.H264)
+            assertFalse("10-bit option must be hidden for H.264", h264Depths.contains(LogBitDepth.BIT_10))
+            val h265Depths = caps.getSupportedBitDepthsForCodec(CinemaCodec.H265)
+            assertFalse("10-bit option must be hidden for H.265 on devices without 10-bit hardware", h265Depths.contains(LogBitDepth.BIT_10))
         }
+        // ProRes always supports 10-bit
+        val proresDepths = caps.getSupportedBitDepthsForCodec(CinemaCodec.PRORES)
+        assertTrue("ProRes must support 10-bit", proresDepths.contains(LogBitDepth.BIT_10))
+    }
+
+    @Test
+    fun testHdrLogProfileNaturalContrastAndHighlightLatitude() {
+        val config = CinemaConfig(
+            colorProfile = CinemaColorProfile.HDR_LOG,
+            colorSpace = CinemaColorSpace.REC_709,
+            shadows = 0f,
+            highlights = 0f,
+            contrast = 0f,
+            exposure = 0f
+        )
+        cinemaEngine.updateConfig(config)
+        val curve = cinemaEngine.getTonemapCurve()
+        assertNotNull(curve)
+
+        // 1. Inky black point: x=0.0 maps strictly to 0.0 (no milky pedestal lift)
+        val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, 0)
+        assertEquals(0.0f, blackPoint.x, 0.001f)
+        assertEquals("HDR Log must anchor strictly at 0.0f black level", 0.0f, blackPoint.y, 0.001f)
+
+        // 2. Middle gray (x=0.18): natural contrast, not flat/washed-out
+        val count = curve.getPointCount(TonemapCurve.CHANNEL_GREEN)
+        val midIdx = (count * 0.18f).toInt()
+        val midPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, midIdx)
+        assertTrue("HDR Log midtone should have natural non-flat contrast, got ${midPoint.y}", midPoint.y in 0.15f..0.40f)
+
+        // 3. Highlight shoulder (x > 0.5): rolls off smoothly up to 1.0 without hard clipping
+        val highPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, count - 1)
+        assertEquals(1.0f, highPoint.x, 0.001f)
+        assertEquals(1.0f, highPoint.y, 0.01f)
+
+        // 4. Viewfinder ColorMatrix
+        val matrix = CinemaColorPipeline.computeCinemaColorMatrix(config)
+        assertNotNull("HDR Log must produce a non-null ColorMatrix for live viewfinder", matrix)
+        val arr = matrix!!.array
+        assertTrue("Contrast diagonal must be >= 1.0", arr[0] >= 1.0f)
+        // Zero pedestal offset
+        assertEquals(0.0f, arr[4], 0.001f)
     }
 
     @Test

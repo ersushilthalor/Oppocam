@@ -68,6 +68,7 @@ enum class CinemaColorProfile(
 ) {
     NATIVE("Native", "iPhone-style natural video processing with true-to-life colors, balanced sky/ground, and intelligent shadow recovery", "Native"),
     FLAT_LOG("Flat", "Logarithmic dynamic range curve for color grading", "Flat Log"),
+    HDR_LOG("HDR Log", "High Dynamic Range Log profile preserving extended highlight latitude and shadow details with natural contrast", "HDR Log"),
     REC_2020("Rec.2020", "ITU-R BT.2020 wide color gamut transfer curve", "BT.2020"),
     HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10"),
     APPLE_LOG_2("Apple Log 2", "Apple Log 2 wide-gamut log transfer curve with extended highlight latitude and parabolic shadow retention", "Apple Log 2"),
@@ -134,8 +135,8 @@ data class CinemaConfig(
 ) {
     val isHlg10: Boolean get() = colorProfile == CinemaColorProfile.HLG10
     val effectiveColorSpace: CinemaColorSpace get() = if (colorProfile == CinemaColorProfile.HLG10) CinemaColorSpace.REC_2020 else colorSpace
-    val effectiveBitDepth: LogBitDepth get() = if (colorProfile == CinemaColorProfile.HLG10) LogBitDepth.BIT_10 else logBitDepth
-    val effectiveCodec: CinemaCodec get() = if (colorProfile == CinemaColorProfile.HLG10 && codec == CinemaCodec.H264) CinemaCodec.H265 else codec
+    val effectiveBitDepth: LogBitDepth get() = logBitDepth
+    val effectiveCodec: CinemaCodec get() = codec
     val isLogMode: Boolean get() = colorProfile != CinemaColorProfile.NATIVE || logBitDepth != LogBitDepth.OFF
     val activeLut: CinematicLut get() = selectedLut
     val shouldBakeLut: Boolean get() = selectedLut != CinematicLut.NONE && isBakeLutToOutput
@@ -150,8 +151,8 @@ data class CinemaHardwareCapabilities(
     val supportsDynamicRangeProfiles: Boolean = false,
     val supportsRawSensorBypass: Boolean = true,
     val supportsSoftwareVp9: Boolean = false,
-    val supportsSoftwareProRes: Boolean = false,
-    val isSoftware10BitSupported: Boolean = false,
+    val supportsSoftwareProRes: Boolean = true,
+    val isSoftware10BitSupported: Boolean = true,
     val supportedFpsList: List<Int> = listOf(24, 30, 60),
     val supportedResolutions: List<CameraResolution> = emptyList(),
     val isHardwareLogSupported: Boolean = false,
@@ -162,8 +163,36 @@ data class CinemaHardwareCapabilities(
     val supportedColorProfiles: List<CinemaColorProfile> = listOf(
         CinemaColorProfile.NATIVE,
         CinemaColorProfile.FLAT_LOG,
+        CinemaColorProfile.HDR_LOG,
         CinemaColorProfile.REC_2020,
+        CinemaColorProfile.HLG10,
         CinemaColorProfile.APPLE_LOG_2,
-        CinemaColorProfile.SAMSUNG_APV_LOG
+        CinemaColorProfile.SAMSUNG_APV_LOG,
+        CinemaColorProfile.PROCESSED_JPEG
     )
-)
+) {
+    /**
+     * Returns the bit depths that the selected codec can ACTUALLY encode.
+     * 10-bit option is only present if the selected encoder can genuinely output valid 10-bit files.
+     */
+    fun getSupportedBitDepthsForCodec(codec: CinemaCodec): List<LogBitDepth> {
+        return when (codec) {
+            CinemaCodec.PRORES -> listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
+            CinemaCodec.H265 -> {
+                if (supportsHevc10Bit && supports10BitRecording) {
+                    listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
+                } else {
+                    listOf(LogBitDepth.OFF, LogBitDepth.BIT_8)
+                }
+            }
+            CinemaCodec.VP9 -> {
+                if (supportsVp910Bit && supports10BitRecording) {
+                    listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
+                } else {
+                    listOf(LogBitDepth.OFF, LogBitDepth.BIT_8)
+                }
+            }
+            CinemaCodec.H264 -> listOf(LogBitDepth.OFF, LogBitDepth.BIT_8)
+        }
+    }
+}

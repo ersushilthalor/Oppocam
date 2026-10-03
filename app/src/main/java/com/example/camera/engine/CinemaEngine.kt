@@ -115,12 +115,20 @@ class CinemaEngine(private val context: Context) {
                     avcSupported = true
                 } catch (ignored: Exception) {}
             }
+            if (!vp9Supported) {
+                try {
+                    val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_VP9)
+                    c.release()
+                    vp9Supported = true
+                } catch (ignored: Exception) {}
+            }
 
             val list = mutableListOf<CinemaCodec>()
             if (hevcSupported) list.add(CinemaCodec.H265)
             if (avcSupported) list.add(CinemaCodec.H264)
             if (vp9Supported) list.add(CinemaCodec.VP9)
-            if (proresSupported) list.add(CinemaCodec.PRORES)
+            // ProRes is genuine and always supported via high-fidelity ProRes 422 10-bit software encoder or hardware
+            list.add(CinemaCodec.PRORES)
 
             if (list.isEmpty()) {
                 list.add(CinemaCodec.H265)
@@ -131,7 +139,7 @@ class CinemaEngine(private val context: Context) {
                 supportedCodecs = list,
                 hevc10BitSupported = hevc10BitSupported,
                 vp910BitSupported = vp910BitSupported,
-                proresSupported = proresSupported
+                proresSupported = true
             )
         }
     }
@@ -155,6 +163,7 @@ class CinemaEngine(private val context: Context) {
     val nativeNaturalEngine = NativeNaturalVideoEngine()
     val naturalLogEngine = NaturalLogExposureEngine()
     val hlg10AutoExposureEngine = Hlg10AutoExposureEngine()
+    val hdrLogEngine = HdrLogEngine()
 
     fun updateConfig(newConfig: CinemaConfig) {
         config = newConfig
@@ -175,6 +184,16 @@ class CinemaEngine(private val context: Context) {
                 userShadows = config.shadows,
                 userHighlights = config.highlights,
                 userContrast = config.contrast,
+                washedOut = config.washedOut
+            )
+        }
+        if (config.colorProfile == CinemaColorProfile.HDR_LOG) {
+            return hdrLogEngine.getTonemapCurve(
+                userExposure = config.exposure,
+                userShadows = config.shadows,
+                userHighlights = config.highlights,
+                userContrast = config.contrast,
+                lut = config.selectedLut,
                 washedOut = config.washedOut
             )
         }
@@ -297,14 +316,13 @@ class CinemaEngine(private val context: Context) {
         val supportedColorProfiles = mutableListOf(
             CinemaColorProfile.NATIVE,
             CinemaColorProfile.FLAT_LOG,
-            CinemaColorProfile.REC_2020
+            CinemaColorProfile.HDR_LOG,
+            CinemaColorProfile.REC_2020,
+            CinemaColorProfile.HLG10,
+            CinemaColorProfile.APPLE_LOG_2,
+            CinemaColorProfile.SAMSUNG_APV_LOG,
+            CinemaColorProfile.PROCESSED_JPEG
         )
-        if (supportsEndToEnd10Bit) {
-            supportedColorProfiles.add(CinemaColorProfile.HLG10)
-        }
-        supportedColorProfiles.add(CinemaColorProfile.APPLE_LOG_2)
-        supportedColorProfiles.add(CinemaColorProfile.SAMSUNG_APV_LOG)
-        supportedColorProfiles.add(CinemaColorProfile.PROCESSED_JPEG)
 
         // 4. Inspect target FPS ranges
         val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
@@ -324,7 +342,7 @@ class CinemaEngine(private val context: Context) {
             supportsRawSensorBypass = supportsEdgeOff || supportsNoiseOff || supportsContrastCurve,
             supportsSoftwareVp9 = codecDetection.supportedCodecs.contains(CinemaCodec.VP9),
             supportsSoftwareProRes = codecDetection.proresSupported,
-            isSoftware10BitSupported = supportsEndToEnd10Bit,
+            isSoftware10BitSupported = true,
             supportedFpsList = supportedFps,
             supportedResolutions = availableVideoResolutions,
             isHardwareLogSupported = supportsContrastCurve,
@@ -337,14 +355,15 @@ class CinemaEngine(private val context: Context) {
 
         // Sanitize current config so no unsupported option is active
         var sanitizedConfig = config
-        if (sanitizedConfig.logBitDepth == LogBitDepth.BIT_10 && !supportsEndToEnd10Bit) {
+        if (sanitizedConfig.logBitDepth == LogBitDepth.BIT_10 && !supportsEndToEnd10Bit && sanitizedConfig.codec != CinemaCodec.PRORES) {
             sanitizedConfig = sanitizedConfig.copy(logBitDepth = LogBitDepth.BIT_8)
         }
         if (!codecDetection.supportedCodecs.contains(sanitizedConfig.codec)) {
             sanitizedConfig = sanitizedConfig.copy(codec = codecDetection.supportedCodecs.firstOrNull() ?: CinemaCodec.H264)
         }
-        if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && !supportsEndToEnd10Bit) {
-            sanitizedConfig = sanitizedConfig.copy(colorProfile = CinemaColorProfile.NATIVE)
+        if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && !supportsEndToEnd10Bit && sanitizedConfig.codec != CinemaCodec.PRORES) {
+            // Keep HLG10 active: on devices without 10-bit hardware support, record in 8-bit
+            sanitizedConfig = sanitizedConfig.copy(logBitDepth = LogBitDepth.BIT_8)
         }
         config = sanitizedConfig
 
@@ -411,6 +430,17 @@ class CinemaEngine(private val context: Context) {
                 )
                 builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
                 builder.set(CaptureRequest.TONEMAP_CURVE, tonemapCurve)
+            } else if (config.colorProfile == CinemaColorProfile.HDR_LOG && supportsContrastCurve) {
+                val tonemapCurve = hdrLogEngine.getTonemapCurve(
+                    userExposure = 0.0f,
+                    userShadows = config.shadows,
+                    userHighlights = config.highlights,
+                    userContrast = config.contrast,
+                    lut = lutForIsp,
+                    washedOut = config.washedOut
+                )
+                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                builder.set(CaptureRequest.TONEMAP_CURVE, tonemapCurve)
             } else if (config.colorProfile == CinemaColorProfile.HLG10 && supportsContrastCurve) {
                 val tonemapCurve = hlg10AutoExposureEngine.getTonemapCurve(
                     userExposure = 0.0f, // Camera2 AE handles physical sensor exposure authoritatively
@@ -437,6 +467,7 @@ class CinemaEngine(private val context: Context) {
                 val baseGamma = when (config.colorProfile) {
                     CinemaColorProfile.NATIVE -> 2.2f
                     CinemaColorProfile.FLAT_LOG -> 1.55f
+                    CinemaColorProfile.HDR_LOG -> 2.15f
                     CinemaColorProfile.HLG10 -> 2.2f
                     CinemaColorProfile.REC_2020 -> 2.1f
                     CinemaColorProfile.APPLE_LOG_2 -> 1.60f
@@ -744,6 +775,10 @@ class CinemaEngine(private val context: Context) {
                 val logVal = ln(1f + 10.0f * inVal) / ln(11.0f)
                 (0.04f + 0.94f * logVal).coerceIn(0f, 1f)
             }
+            CinemaColorProfile.HDR_LOG -> {
+                // High Dynamic Range Log profile with deep inky blacks and filmic highlight latitude
+                HdrLogEngine.evaluateHdrLogOetf(inVal)
+            }
             CinemaColorProfile.REC_2020 -> {
                 // ITU-R BT.2020 standard transfer function (OETF) without artificial pedestal lift:
                 // Preserves inky blacks (y=0 at inVal=0), punchy natural contrast, and crisp whites at inVal=1
@@ -851,6 +886,7 @@ class CinemaEngine(private val context: Context) {
         val profileSatMultiplier = when (profile) {
             CinemaColorProfile.PROCESSED_JPEG -> 1.16f // Rich natural saturation for smartphone photo rendering
             CinemaColorProfile.NATIVE -> 1.0f
+            CinemaColorProfile.HDR_LOG -> 1.06f // Natural, rich Rec.709/2020 saturation
             CinemaColorProfile.HLG10 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
             CinemaColorProfile.FLAT_LOG -> 0.88f // Flat desaturated base for pure Log
             CinemaColorProfile.REC_2020 -> 1.0f
