@@ -65,6 +65,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val tapFocusConfig: StateFlow<TapFocusConfig> = _tapFocusConfig.asStateFlow()
 
     val isRecordingVideo: StateFlow<Boolean> = engine.isRecordingVideo
+    val isSavingVideo: StateFlow<Boolean> = engine.isSavingVideo
     val videoDurationSeconds: StateFlow<Int> = engine.videoDurationSeconds
     val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = engine.selectedVideoPipeline
 

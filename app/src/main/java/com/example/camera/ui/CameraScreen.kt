@@ -151,6 +151,7 @@ fun CameraScreen(
     val sensorOrientation by viewModel.engine.sensorOrientation.collectAsStateWithLifecycle()
     val storageStats by viewModel.engine.storageStats.collectAsStateWithLifecycle()
     val isRecordingVideo by viewModel.engine.isRecordingVideo.collectAsStateWithLifecycle()
+    val isSavingVideo by viewModel.isSavingVideo.collectAsStateWithLifecycle()
     val videoDurationSeconds by viewModel.engine.videoDurationSeconds.collectAsStateWithLifecycle()
     val isCapturing by viewModel.engine.isCapturing.collectAsStateWithLifecycle()
     val lastCapturedMedia by viewModel.engine.lastCapturedMedia.collectAsStateWithLifecycle()
@@ -545,6 +546,37 @@ fun CameraScreen(
                     )
                     Text(
                         text = "Recording motion...",
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
+        // Non-blocking video background saving indicator pill
+        if (isSavingVideo) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xCC0F172A),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.7f)),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = if (isMotionPhotoRecording) 116.dp else 74.dp)
+                    .testTag("video_saving_indicator")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(10.dp),
+                        strokeWidth = 1.5.dp,
+                        color = Color(0xFFF59E0B)
+                    )
+                    Text(
+                        text = "Saving video...",
                         color = Color.White,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium

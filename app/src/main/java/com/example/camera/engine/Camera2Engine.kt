@@ -462,6 +462,11 @@ class Camera2Engine(private val context: Context) {
     private val _isRecordingVideo = MutableStateFlow(false)
     val isRecordingVideo: StateFlow<Boolean> = _isRecordingVideo.asStateFlow()
 
+    private val _isSavingVideo = MutableStateFlow(false)
+    val isSavingVideo: StateFlow<Boolean> = _isSavingVideo.asStateFlow()
+    private val savingVideoJobsCount = java.util.concurrent.atomic.AtomicInteger(0)
+    private val sessionRestoredForStop = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private val _videoDurationSeconds = MutableStateFlow(0)
     val videoDurationSeconds: StateFlow<Int> = _videoDurationSeconds.asStateFlow()
 
@@ -6223,8 +6228,38 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    private fun restorePreviewSessionImmediate() {
+        isStoppingRecording.set(false)
+        if (sessionRestoredForStop.compareAndSet(false, true)) {
+            backgroundHandler?.post {
+                try {
+                    val previewSurf = getActivePreviewSurface()
+                    if (previewSurf != null && previewSurf.isValid && cameraDevice != null && captureSession != null) {
+                        val previewReq = (cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW) ?: previewRequestBuilder)?.apply {
+                            addTarget(previewSurf)
+                            applyCommonSettings(this)
+                        }
+                        if (previewReq != null) {
+                            synchronized(previewRequestLock) {
+                                previewRequestBuilder = previewReq
+                                captureSession?.setRepeatingRequest(previewReq.build(), captureCallback, backgroundHandler)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "Quick preview switch: ${e.message}")
+                }
+                createCameraCaptureSession()
+            }
+        }
+    }
+
     /**
      * Stop Video Recording
+     *
+     * Recording stops instantly with zero viewfinder freezing or UI blocking.
+     * All video encoding finalization, muxing, LUT/color grading, and gallery saving
+     * are executed asynchronously in background coroutines.
      */
     fun stopVideoRecording(onComplete: ((Uri?) -> Unit)? = null) {
         if (!_isRecordingVideo.value && !isSoftwareCinemaRecording) {
@@ -6236,6 +6271,7 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
+        sessionRestoredForStop.set(false)
         activeRecordingSurface = null
         _isRecordingVideo.value = false
         videoTimerJob?.cancel()
@@ -6283,6 +6319,18 @@ class Camera2Engine(private val context: Context) {
         val wasDollyZoomActive = _isDollyZoomActive.value
         val dollyTrajectory = if (wasDollyZoomActive) dollyZoomEngine.stopRecordingTrajectory() else emptyList()
 
+        val activeCustomRecorder = customPipelineRecorder
+        customPipelineRecorder = null
+        val activeMediaRecorder = mediaRecorder
+        mediaRecorder = null
+        val activePfd = videoRecordingFileDescriptor
+        videoRecordingFileDescriptor = null
+        val tempFile = currentRecordingTempFile
+        currentRecordingTempFile = null
+
+        savingVideoJobsCount.incrementAndGet()
+        _isSavingVideo.value = true
+
         // Dispatch stop and resource cleanup to background IO so UI thread never freezes
         engineScope.launch(Dispatchers.IO) {
             var callbackTriggered = false
@@ -6294,372 +6342,204 @@ class Camera2Engine(private val context: Context) {
             }
 
             try {
-                if (wasCustomPipelineRecording) {
-                    val activeCustomRecorder = customPipelineRecorder
-                    customPipelineRecorder = null
-                    val framesProcessed = activeCustomRecorder?.framesProcessedCount ?: 0
-                    val recordedFile = try {
-                        activeCustomRecorder?.stopAndRelease() ?: currentRecordingTempFile
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error stopping CustomVideoPipelineRecorder", e)
-                        currentRecordingTempFile
-                    }
-                    currentRecordingTempFile = null
-
-                    if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0L) {
-                        var fileToSave = recordedFile
-                        var gradedFile: File? = null
-                        var needsPipelinePostPass = (framesProcessed == 0)
-
-                        if (wasHorizonLockActive) {
-                            try {
-                                val procDest = File(recordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${recordedFile.extension}")
-                                val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    trajectory = horizonTrajectory,
-                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Stable Action Horizon Lock to custom pipeline video", e)
-                            }
-                        } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
-                            try {
-                                val procDest = File(recordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${recordedFile.extension}")
-                                val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    trajectory = dollyTrajectory,
-                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Dolly Zoom to custom pipeline video", e)
-                            }
-                        }
-
-                        if (needsPipelinePostPass && snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-                            try {
-                                val orientationHint = getVideoOrientationHint()
-                                val procDest = File(recordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${recordedFile.extension}")
-                                val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    type = snapVideoPipeline,
-                                    orientationDegrees = orientationHint
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    try { gradedFile?.delete() } catch (_: Exception) {}
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying ${snapVideoPipeline.title} fallback pass", e)
-                            }
-                        }
-
-                        try {
-                            val savedUri = saveVideoToGallery(
-                                tempFile = fileToSave,
-                                fileName = effectiveFileName,
-                                mimeType = effectiveMimeType,
-                                isCinema = false,
-                                isFrontFacing = isFrontFacing
-                            )
-                            if (savedUri != null) {
-                                _lastCapturedMedia.value = CapturedMedia(
-                                    uri = savedUri,
-                                    isVideo = true,
-                                    timestamp = System.currentTimeMillis(),
-                                    displayName = "${snapVideoPipeline.title} Video",
-                                    isFrontCamera = isFrontFacing
-                                )
-                                Log.i(TAG, "Custom pipeline (${snapVideoPipeline.title}) video saved: frames=$framesProcessed, size=${fileToSave.length()} bytes")
-                                notifyComplete(savedUri)
-                            } else {
-                                notifyComplete(null)
-                            }
+                var needsPipelinePostPass = true
+                val recordedFile: File? = when {
+                    wasCustomPipelineRecording -> {
+                        val framesProcessed = activeCustomRecorder?.framesProcessedCount ?: 0
+                        needsPipelinePostPass = (framesProcessed == 0)
+                        val f = try {
+                            activeCustomRecorder?.stopAndRelease() ?: tempFile
                         } catch (e: Exception) {
-                            Log.e(TAG, "Failed saving custom pipeline video", e)
-                            notifyComplete(null)
-                        } finally {
-                            try { gradedFile?.delete() } catch (ignored: Exception) {}
-                            try { recordedFile.delete() } catch (ignored: Exception) {}
-                            updateStorageStats()
+                            Log.w(TAG, "Error stopping CustomVideoPipelineRecorder", e)
+                            tempFile
                         }
-                    } else {
-                        Log.w(TAG, "Custom pipeline recordedFile was null or empty")
-                        notifyComplete(null)
+                        restorePreviewSessionImmediate()
+                        f
                     }
-                } else if (wasSoftwareCinema) {
-                    val recordedFile = try {
-                        cinemaSoftwareRecorder.stopRecording()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error stopping cinema software recorder", e)
-                        null
-                    }
-                    currentRecordingTempFile = null
-
-                    if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0L) {
-                        var fileToSave = recordedFile
-                        var gradedFile: File? = null
-                        if (isCinema) {
-                            try {
-                                val orientationHint = getVideoOrientationHint()
-                                val procDest = File(recordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.mp4")
-                                val processed = CinemaVideoProcessor.processCinemaVideo(
-                                    inputFile = recordedFile,
-                                    outputFile = procDest,
-                                    config = snapCinemaConfig,
-                                    orientationDegrees = orientationHint,
-                                    rec2020Params = snapRec2020Params
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != recordedFile) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Cinema LUT to final video", e)
-                            }
-                        } else if (wasHorizonLockActive) {
-                            try {
-                                val procDest = File(recordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${recordedFile.extension}")
-                                val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    trajectory = horizonTrajectory,
-                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Stable Action Horizon Lock to final cinema video", e)
-                            }
-                        } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
-                            try {
-                                val procDest = File(recordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${recordedFile.extension}")
-                                val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    trajectory = dollyTrajectory,
-                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Dolly Zoom to final cinema video", e)
-                            }
-                        } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-                            try {
-                                val orientationHint = getVideoOrientationHint()
-                                val procDest = File(recordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${recordedFile.extension}")
-                                val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    type = snapVideoPipeline,
-                                    orientationDegrees = orientationHint
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying ${snapVideoPipeline.title} video pipeline to final video", e)
-                            }
-                        }
-
-                        try {
-                            val savedUri = saveVideoToGallery(
-                                tempFile = fileToSave,
-                                fileName = effectiveFileName,
-                                mimeType = effectiveMimeType,
-                                isCinema = isCinema,
-                                isFrontFacing = isFrontFacing
-                            )
-                            if (savedUri != null) {
-                                val videoDisplayName = if (isCinema) {
-                                    "Cinema Video"
-                                } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-                                    "${snapVideoPipeline.title} Video"
-                                } else {
-                                    "Video"
-                                }
-                                _lastCapturedMedia.value = CapturedMedia(
-                                    uri = savedUri,
-                                    isVideo = true,
-                                    timestamp = System.currentTimeMillis(),
-                                    displayName = videoDisplayName,
-                                    isFrontCamera = isFrontFacing
-                                )
-                                Log.i(TAG, "Cinema software video successfully saved: size=${fileToSave.length()} bytes, uri=$savedUri")
-                                notifyComplete(savedUri)
-                            } else {
-                                notifyComplete(null)
-                            }
+                    wasSoftwareCinema -> {
+                        val f = try {
+                            cinemaSoftwareRecorder.stopRecording()
                         } catch (e: Exception) {
-                            Log.e(TAG, "Failed saving cinema recording", e)
-                            notifyComplete(null)
-                        } finally {
-                            try { gradedFile?.delete() } catch (ignored: Exception) {}
-                            try { recordedFile.delete() } catch (ignored: Exception) {}
-                            updateStorageStats()
+                            Log.w(TAG, "Error stopping cinema software recorder", e)
+                            null
                         }
-                    } else {
-                        Log.w(TAG, "Cinema recordedFile was null or empty")
-                        notifyComplete(null)
+                        restorePreviewSessionImmediate()
+                        f
                     }
-                } else {
-                    val mr = mediaRecorder
-                    mediaRecorder = null
-                    mr?.apply {
-                        try {
-                            stop()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "MediaRecorder stop failed", e)
+                    else -> {
+                        activeMediaRecorder?.apply {
+                            try { stop() } catch (e: Exception) { Log.w(TAG, "MediaRecorder stop failed", e) }
+                            try { reset() } catch (ignored: Throwable) {}
+                            try { release() } catch (ignored: Throwable) {}
                         }
-                        try { reset() } catch (ignored: Throwable) {}
-                        try { release() } catch (ignored: Throwable) {}
-                    }
-
-                    try { videoRecordingFileDescriptor?.close() } catch (ignored: Throwable) {}
-                    videoRecordingFileDescriptor = null
-
-                    val tempFile = currentRecordingTempFile
-                    currentRecordingTempFile = null
-
-                    if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
-                        var fileToSave = tempFile
-                        var gradedFile: File? = null
-                        if (isCinema) {
-                            try {
-                                val orientationHint = getVideoOrientationHint()
-                                val procDest = File(tempFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.mp4")
-                                val processed = CinemaVideoProcessor.processCinemaVideo(
-                                    inputFile = tempFile,
-                                    outputFile = procDest,
-                                    config = snapCinemaConfig,
-                                    orientationDegrees = orientationHint,
-                                    rec2020Params = snapRec2020Params
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != tempFile) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Cinema LUT to final video", e)
-                            }
-                        } else if (wasHorizonLockActive) {
-                            try {
-                                val procDest = File(tempFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${tempFile.extension}")
-                                val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    trajectory = horizonTrajectory,
-                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Stable Action Horizon Lock to final video", e)
-                            }
-                        } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
-                            try {
-                                val procDest = File(tempFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${tempFile.extension}")
-                                val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    trajectory = dollyTrajectory,
-                                    aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying Dolly Zoom to final video", e)
-                            }
-                        } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-                            try {
-                                val orientationHint = getVideoOrientationHint()
-                                val procDest = File(tempFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${tempFile.extension}")
-                                val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
-                                    inputFile = fileToSave,
-                                    outputFile = procDest,
-                                    type = snapVideoPipeline,
-                                    orientationDegrees = orientationHint
-                                )
-                                if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                                    fileToSave = processed
-                                    gradedFile = processed
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error applying ${snapVideoPipeline.title} video pipeline to final video", e)
-                            }
-                        }
-
-                        try {
-                            val savedUri = saveVideoToGallery(
-                                tempFile = fileToSave,
-                                fileName = effectiveFileName,
-                                mimeType = effectiveMimeType,
-                                isCinema = isCinema,
-                                isFrontFacing = isFrontFacing
-                            )
-                            if (savedUri != null) {
-                                val videoDisplayName = if (isCinema) {
-                                    "Cinema Video"
-                                } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-                                    "${snapVideoPipeline.title} Video"
-                                } else {
-                                    "Video"
-                                }
-                                _lastCapturedMedia.value = CapturedMedia(
-                                    uri = savedUri,
-                                    isVideo = true,
-                                    timestamp = System.currentTimeMillis(),
-                                    displayName = videoDisplayName,
-                                    isFrontCamera = isFrontFacing
-                                )
-                                Log.i(TAG, "Hardware recorded video successfully saved: size=${fileToSave.length()} bytes, uri=$savedUri")
-                                notifyComplete(savedUri)
-                            } else {
-                                notifyComplete(null)
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error finalizing recorded video", e)
-                            notifyComplete(null)
-                        } finally {
-                            try { gradedFile?.delete() } catch (ignored: Exception) {}
-                            try { tempFile.delete() } catch (ignored: Exception) {}
-                            updateStorageStats()
-                        }
-                    } else {
-                        notifyComplete(null)
+                        try { activePfd?.close() } catch (ignored: Throwable) {}
+                        restorePreviewSessionImmediate()
+                        tempFile
                     }
                 }
+
+                finalizeAndSaveRecordedVideo(
+                    rawRecordedFile = recordedFile,
+                    isCinema = isCinema,
+                    snapCinemaConfig = snapCinemaConfig,
+                    snapRec2020Params = snapRec2020Params,
+                    wasHorizonLockActive = wasHorizonLockActive,
+                    horizonTrajectory = horizonTrajectory,
+                    wasDollyZoomActive = wasDollyZoomActive,
+                    dollyTrajectory = dollyTrajectory,
+                    snapVideoPipeline = snapVideoPipeline,
+                    needsPipelinePostPass = needsPipelinePostPass,
+                    effectiveFileName = effectiveFileName,
+                    effectiveMimeType = effectiveMimeType,
+                    isFrontFacing = isFrontFacing,
+                    notifyComplete = notifyComplete
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping video recording in background", e)
                 notifyComplete(null)
             } finally {
-                isStoppingRecording.set(false)
-                // Restore standard preview session smoothly on backgroundHandler
-                backgroundHandler?.post {
-                    createCameraCaptureSession()
+                restorePreviewSessionImmediate()
+                if (savingVideoJobsCount.decrementAndGet() <= 0) {
+                    _isSavingVideo.value = false
                 }
             }
+        }
+    }
+
+    private suspend fun finalizeAndSaveRecordedVideo(
+        rawRecordedFile: File?,
+        isCinema: Boolean,
+        snapCinemaConfig: CinemaConfig,
+        snapRec2020Params: Rec2020AutoToneParams,
+        wasHorizonLockActive: Boolean,
+        horizonTrajectory: List<com.example.camera.stableaction.StableActionHorizonEngine.TrajectoryPoint>,
+        wasDollyZoomActive: Boolean,
+        dollyTrajectory: List<com.example.camera.dollyzoom.DollyTrajectoryPoint>,
+        snapVideoPipeline: com.example.camera.videopipeline.VideoPipelineType,
+        needsPipelinePostPass: Boolean,
+        effectiveFileName: String,
+        effectiveMimeType: String,
+        isFrontFacing: Boolean,
+        notifyComplete: (Uri?) -> Unit
+    ) {
+        if (rawRecordedFile == null || !rawRecordedFile.exists() || rawRecordedFile.length() <= 0L) {
+            Log.w(TAG, "Recorded file was null or empty, cannot finalize video")
+            notifyComplete(null)
+            return
+        }
+
+        var fileToSave = rawRecordedFile
+        var gradedFile: File? = null
+
+        try {
+            if (isCinema) {
+                try {
+                    val orientationHint = getVideoOrientationHint()
+                    val procDest = File(rawRecordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.mp4")
+                    val processed = CinemaVideoProcessor.processCinemaVideo(
+                        inputFile = rawRecordedFile,
+                        outputFile = procDest,
+                        config = snapCinemaConfig,
+                        orientationDegrees = orientationHint,
+                        rec2020Params = snapRec2020Params
+                    )
+                    if (processed.exists() && processed.length() > 0L && processed != rawRecordedFile) {
+                        fileToSave = processed
+                        gradedFile = processed
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error applying Cinema LUT to final video", e)
+                }
+            } else if (wasHorizonLockActive) {
+                try {
+                    val procDest = File(rawRecordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${rawRecordedFile.extension}")
+                    val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
+                        inputFile = fileToSave,
+                        outputFile = procDest,
+                        trajectory = horizonTrajectory,
+                        aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                    )
+                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                        fileToSave = processed
+                        gradedFile = processed
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error applying Stable Action Horizon Lock to final video", e)
+                }
+            } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
+                try {
+                    val procDest = File(rawRecordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${rawRecordedFile.extension}")
+                    val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
+                        inputFile = fileToSave,
+                        outputFile = procDest,
+                        trajectory = dollyTrajectory,
+                        aspectRatio = getTargetAspectRatioForMode(CameraMode.VIDEO)
+                    )
+                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                        fileToSave = processed
+                        gradedFile = processed
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error applying Dolly Zoom to final video", e)
+                }
+            }
+
+            if (needsPipelinePostPass && !isCinema && snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                try {
+                    val orientationHint = getVideoOrientationHint()
+                    val procDest = File(rawRecordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${rawRecordedFile.extension}")
+                    val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
+                        inputFile = fileToSave,
+                        outputFile = procDest,
+                        type = snapVideoPipeline,
+                        orientationDegrees = orientationHint
+                    )
+                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                        try { gradedFile?.delete() } catch (_: Exception) {}
+                        fileToSave = processed
+                        gradedFile = processed
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error applying ${snapVideoPipeline.title} video pipeline to final video", e)
+                }
+            }
+
+            val savedUri = saveVideoToGallery(
+                tempFile = fileToSave,
+                fileName = effectiveFileName,
+                mimeType = effectiveMimeType,
+                isCinema = isCinema,
+                isFrontFacing = isFrontFacing
+            )
+
+            if (savedUri != null) {
+                val videoDisplayName = if (isCinema) {
+                    "Cinema Video"
+                } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
+                    "${snapVideoPipeline.title} Video"
+                } else {
+                    "Video"
+                }
+                _lastCapturedMedia.value = CapturedMedia(
+                    uri = savedUri,
+                    isVideo = true,
+                    timestamp = System.currentTimeMillis(),
+                    displayName = videoDisplayName,
+                    isFrontCamera = isFrontFacing
+                )
+                Log.i(TAG, "Finalized video successfully saved: size=${fileToSave.length()} bytes, uri=$savedUri")
+                notifyComplete(savedUri)
+            } else {
+                Log.w(TAG, "Failed saving finalized video to gallery")
+                notifyComplete(null)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finalizing recorded video", e)
+            notifyComplete(null)
+        } finally {
+            try { gradedFile?.delete() } catch (ignored: Exception) {}
+            try { rawRecordedFile.delete() } catch (ignored: Exception) {}
+            updateStorageStats()
         }
     }
 
