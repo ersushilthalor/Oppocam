@@ -130,7 +130,7 @@ fun CinemaSettingsWindow(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "CINEMA",
+                        text = "PRO VIDEO",
                         color = Color.White,
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.ExtraBold,
@@ -138,7 +138,7 @@ fun CinemaSettingsWindow(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "PRO",
+                        text = "STUDIO",
                         color = Color(0xFFFFD54F),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -157,7 +157,7 @@ fun CinemaSettingsWindow(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Close,
-                        contentDescription = "Close Cinema Settings",
+                        contentDescription = "Close Pro Video Settings",
                         tint = Color.White.copy(alpha = 0.85f),
                         modifier = Modifier.size(13.dp)
                     )

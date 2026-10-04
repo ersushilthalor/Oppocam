@@ -44,7 +44,7 @@ enum class SettingsPage(val title: String, val subtitle: String, val icon: Image
     CUSTOM_PIPELINE("Custom Pipeline Settings", "Rec.2020 Natural Log • 38 ISP Controls", Icons.Outlined.Tune),
     DEPTH_PROCESSING("Depth Processing", "Depth Anything V2, MediaSWLF-I & Virtual Aperture", Icons.Outlined.Layers),
     VIDEO("Video Settings", "Resolution, Frame Rate, Codec & Bitrate", Icons.Outlined.Videocam),
-    CINEMA("Cinema Settings", "Log profiles, LUTs, Bit depth & Assist tools", Icons.Outlined.Movie),
+    CINEMA("Pro Video Settings", "Log profiles, LUTs, Bit depth & Assist tools", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
     NIGHT_MODE("Night Mode Settings", "Multi-Frame Fusion, Exposure & Tripod", Icons.Outlined.NightsStay),
     CAMERA_LENS("Camera & Lens Settings", "Hardware lenses & Viewfinder", Icons.Outlined.Lens),
@@ -482,6 +482,8 @@ fun SettingsDrawer(
                             uiCustomizationState = uiCustomizationState,
                             onSelectTemplate = onSelectTemplate,
                             onOpenCustomUiStudio = onOpenCustomUiStudio,
+                            onUpdateModeLayoutConfig = onUpdateModeLayoutConfig,
+                            onUpdateGlobalLayoutConfig = onUpdateGlobalLayoutConfig,
                             floatingWindowAppearance = floatingWindowAppearance,
                             onFloatingWindowTransparencyChange = onFloatingWindowTransparencyChange,
                             onFloatingWindowBlurStrengthChange = onFloatingWindowBlurStrengthChange,
@@ -909,9 +911,9 @@ private fun VideoSettingsPage(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = if (isCustomActive)
-                                    "ACTIVE: Cinema Mode Rec.2020 Natural Log replaces standard video pipeline with hardware ISP tonemap & 38 GPU shader controls."
+                                    "ACTIVE: Pro Video Rec.2020 Natural Log replaces standard video pipeline with hardware ISP tonemap & 38 GPU shader controls."
                                 else
-                                    "Enable Cinema Mode Natural Profile (Rec.2020 Log baseline). When disabled, normal video mode remains untouched.",
+                                    "Enable Pro Video Natural Profile (Rec.2020 Log baseline). When disabled, normal video mode remains untouched.",
                                 color = if (isCustomActive) Color(0xFFFFD54F).copy(alpha = 0.9f) else Color.White.copy(alpha = 0.60f),
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -1098,7 +1100,7 @@ private fun CinemaSettingsPage(
     ) {
         item {
             SettingsSegmentedCard(
-                title = "Cinema Color Profile",
+                title = "Pro Video Color Profile",
                 description = "Flat & Log curves preserve wide dynamic range for professional grading.",
                 options = listOf(
                     CinemaColorProfile.NATIVE to "Native",
@@ -1140,7 +1142,7 @@ private fun CinemaSettingsPage(
 
         item {
             SettingsSwitchCard(
-                title = "Cinema Waveform Monitor",
+                title = "Pro Video Waveform Monitor",
                 description = "Real-time luminance IRE waveform display in the viewfinder.",
                 isChecked = cinemaConfig.isWaveformEnabled,
                 onCheckedChange = { onCinemaConfigChange(cinemaConfig.copy(isWaveformEnabled = it)) },
@@ -1491,6 +1493,8 @@ private fun UiLayoutSettingsPage(
     uiCustomizationState: UiCustomizationState,
     onSelectTemplate: (UiTemplateType) -> Unit,
     onOpenCustomUiStudio: () -> Unit,
+    onUpdateModeLayoutConfig: (CameraMode, ModeLayoutConfig) -> Unit = { _, _ -> },
+    onUpdateGlobalLayoutConfig: (ModeLayoutConfig) -> Unit = {},
     floatingWindowAppearance: FloatingWindowAppearanceConfig,
     onFloatingWindowTransparencyChange: (Float) -> Unit,
     onFloatingWindowBlurStrengthChange: (Float) -> Unit,
@@ -1612,6 +1616,303 @@ private fun UiLayoutSettingsPage(
             )
         }
 
+        // 2a. Top Bar Controls & Icon Customization (Per Mode)
+        item {
+            var selectedModeForTopBar by remember { mutableStateOf(CameraMode.CINEMA) }
+            var expandedSlotItem by remember { mutableStateOf<TopControlItem?>(null) }
+            var showAddSlotMenu by remember { mutableStateOf(false) }
+
+            val currentModeConfig = remember(selectedModeForTopBar, uiCustomizationState) {
+                uiCustomizationState.getConfigForMode(selectedModeForTopBar)
+            }
+
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.4f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Top Bar Customization (Per Mode)",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Choose which top icons are shown, select actions, and set position (Left / Center / Right) independently for each camera mode.",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Mode Selector Chips
+                    val modeScroll = rememberScrollState()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(modeScroll),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        CameraMode.entries.forEach { mode ->
+                            val isSel = selectedModeForTopBar == mode
+                            FilterChip(
+                                selected = isSel,
+                                onClick = { selectedModeForTopBar = mode },
+                                label = {
+                                    Text(
+                                        text = mode.title,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 11.5.sp
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF2563EB),
+                                    selectedLabelColor = Color.White,
+                                    containerColor = Color.White.copy(alpha = 0.08f),
+                                    labelColor = Color.White.copy(alpha = 0.85f)
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Subheading & Add Slot Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${selectedModeForTopBar.title} Top Slots:",
+                            color = Color(0xFF64B5F6),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Box {
+                            TextButton(
+                                onClick = { showAddSlotMenu = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Add Slot", tint = Color(0xFF64B5F6), modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Add Slot", color = Color(0xFF64B5F6), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            DropdownMenu(
+                                expanded = showAddSlotMenu,
+                                onDismissRequest = { showAddSlotMenu = false },
+                                modifier = Modifier.background(Color(0xFF1E2435))
+                            ) {
+                                TopControlItem.entries.forEach { opt ->
+                                    val alreadyInOrder = currentModeConfig.topControlsOrder.contains(opt)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = opt.label + if (alreadyInOrder) " (already added)" else "",
+                                                color = if (alreadyInOrder) Color.Gray else Color.White,
+                                                fontSize = 12.sp
+                                            )
+                                        },
+                                        onClick = {
+                                            showAddSlotMenu = false
+                                            if (!alreadyInOrder) {
+                                                val updated = currentModeConfig.copy(
+                                                    topControlsOrder = currentModeConfig.topControlsOrder + opt,
+                                                    hiddenTopControls = currentModeConfig.hiddenTopControls - opt
+                                                )
+                                                onUpdateModeLayoutConfig(selectedModeForTopBar, updated)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Slots List
+                    currentModeConfig.topControlsOrder.forEachIndexed { index, item ->
+                        val isHidden = currentModeConfig.hiddenTopControls.contains(item)
+                        val curPos = currentModeConfig.getIconPosition(item)
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF181C28),
+                            border = BorderStroke(1.dp, if (!isHidden) Color(0xFF2563EB).copy(alpha = 0.35f) else Color.White.copy(alpha = 0.06f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Checkbox(
+                                            checked = !isHidden,
+                                            onCheckedChange = { visible ->
+                                                val set = currentModeConfig.hiddenTopControls.toMutableSet()
+                                                if (visible) set.remove(item) else set.add(item)
+                                                onUpdateModeLayoutConfig(selectedModeForTopBar, currentModeConfig.copy(hiddenTopControls = set))
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Text(
+                                            text = "Slot ${index + 1}: ${item.label}",
+                                            color = if (!isHidden) Color.White else Color.White.copy(alpha = 0.5f),
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+
+                                    Row {
+                                        IconButton(
+                                            enabled = index > 0,
+                                            onClick = {
+                                                val list = currentModeConfig.topControlsOrder.toMutableList()
+                                                val temp = list[index - 1]
+                                                list[index - 1] = item
+                                                list[index] = temp
+                                                onUpdateModeLayoutConfig(selectedModeForTopBar, currentModeConfig.copy(topControlsOrder = list))
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Default.ArrowUpward, contentDescription = "Move earlier", tint = if (index > 0) Color.White else Color.Gray, modifier = Modifier.size(15.dp))
+                                        }
+                                        IconButton(
+                                            enabled = index < currentModeConfig.topControlsOrder.size - 1,
+                                            onClick = {
+                                                val list = currentModeConfig.topControlsOrder.toMutableList()
+                                                val temp = list[index + 1]
+                                                list[index + 1] = item
+                                                list[index] = temp
+                                                onUpdateModeLayoutConfig(selectedModeForTopBar, currentModeConfig.copy(topControlsOrder = list))
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Default.ArrowDownward, contentDescription = "Move later", tint = if (index < currentModeConfig.topControlsOrder.size - 1) Color.White else Color.Gray, modifier = Modifier.size(15.dp))
+                                        }
+                                        if (currentModeConfig.topControlsOrder.size > 1) {
+                                            IconButton(
+                                                onClick = {
+                                                    val list = currentModeConfig.topControlsOrder.filterNot { it == item }
+                                                    val set = currentModeConfig.hiddenTopControls.filterNot { it == item }.toSet()
+                                                    onUpdateModeLayoutConfig(selectedModeForTopBar, currentModeConfig.copy(topControlsOrder = list, hiddenTopControls = set))
+                                                },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(Icons.Outlined.Delete, contentDescription = "Remove Slot", tint = Color(0xFFFF6B6B), modifier = Modifier.size(15.dp))
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                // Action selector dropdown button
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    Surface(
+                                        onClick = { expandedSlotItem = if (expandedSlotItem == item) null else item },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color(0xFF202636),
+                                        border = BorderStroke(1.dp, Color(0xFF3B82F6).copy(alpha = 0.4f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Action: ${item.label}",
+                                                color = Color(0xFF64B5F6),
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = expandedSlotItem == item,
+                                        onDismissRequest = { expandedSlotItem = null },
+                                        modifier = Modifier
+                                            .background(Color(0xFF1E2435))
+                                            .heightIn(max = 260.dp)
+                                    ) {
+                                        TopControlItem.entries.forEach { opt ->
+                                            val isCur = opt == item
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = opt.label,
+                                                        color = if (isCur) Color(0xFF64B5F6) else Color.White,
+                                                        fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                                                        fontSize = 12.sp
+                                                    )
+                                                },
+                                                onClick = {
+                                                    expandedSlotItem = null
+                                                    if (opt != item) {
+                                                        onUpdateModeLayoutConfig(selectedModeForTopBar, currentModeConfig.withItemAction(item, opt))
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                // Position selector
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Position:", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                                    TopIconPosition.entries.forEach { pos ->
+                                        val isPosSel = curPos == pos
+                                        Surface(
+                                            onClick = {
+                                                onUpdateModeLayoutConfig(selectedModeForTopBar, currentModeConfig.withIconPosition(item, pos))
+                                            },
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (isPosSel) Color(0xFF2563EB) else Color(0xFF222838),
+                                            border = BorderStroke(1.dp, if (isPosSel) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.08f)),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(28.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = pos.label,
+                                                    color = if (isPosSel) Color.White else Color.White.copy(alpha = 0.7f),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = if (isPosSel) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 2b. Viewfinder Corner Radius
         item {
             ViewfinderCornerRadiusCard(
@@ -1643,7 +1944,7 @@ private fun UiLayoutSettingsPage(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Scale the size of all floating settings windows (Video, Portrait, Cinema, Pipeline).",
+                                text = "Scale the size of all floating settings windows (Video, Portrait, Pro Video, Pipeline).",
                                 color = Color.White.copy(alpha = 0.6f),
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -1985,9 +2286,9 @@ private fun UiLayoutSettingsPage(
                         modifier = Modifier.padding(vertical = 10.dp)
                     )
 
-                    // Cinema Floating Window Section
+                    // Pro Video Floating Window Section
                     Text(
-                        text = "CINEMA FLOATING WINDOW",
+                        text = "PRO VIDEO FLOATING WINDOW",
                         color = Color(0xFFFFD54F),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
@@ -2009,14 +2310,14 @@ private fun UiLayoutSettingsPage(
                         }
                     )
                     FloatingContentToggleRow(
-                        label = "Cinema Resolution, Aspect & FPS",
+                        label = "Pro Video Resolution, Aspect & FPS",
                         checked = floatingWindowAppearance.showCinemaResolutionFps,
                         onCheckedChange = {
                             onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaResolutionFps = it))
                         }
                     )
                     FloatingContentToggleRow(
-                        label = "Cinema Gimbal & Stabilization",
+                        label = "Pro Video Gimbal & Stabilization",
                         checked = floatingWindowAppearance.showCinemaStabilization,
                         onCheckedChange = {
                             onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaStabilization = it))

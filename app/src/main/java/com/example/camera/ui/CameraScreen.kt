@@ -173,6 +173,8 @@ fun CameraScreen(
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
     val rec2020AutoToneParams by viewModel.rec2020AutoToneParams.collectAsStateWithLifecycle()
     val isCinemaSettingsOpen by viewModel.isCinemaSettingsOpen.collectAsStateWithLifecycle()
+    val isLogProfileWindowOpen by viewModel.isLogProfileWindowOpen.collectAsStateWithLifecycle()
+    val isLutWindowOpen by viewModel.isLutWindowOpen.collectAsStateWithLifecycle()
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
     val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
     val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
@@ -197,6 +199,18 @@ fun CameraScreen(
     if (isEvControlOpen) {
         BackHandler {
             viewModel.setEvControlOpen(false)
+        }
+    }
+
+    if (isLogProfileWindowOpen) {
+        BackHandler {
+            viewModel.setLogProfileWindowOpen(false)
+        }
+    }
+
+    if (isLutWindowOpen) {
+        BackHandler {
+            viewModel.setLutWindowOpen(false)
         }
     }
 
@@ -634,6 +648,10 @@ fun CameraScreen(
             selectedPortraitStyle = portraitConfig.selectedStyle,
             onPortraitStyleClick = { viewModel.togglePortraitStyleBar() },
             onCinemaSettingsClick = { viewModel.toggleCinemaSettings() },
+            onLogClick = { viewModel.toggleLogProfileWindow() },
+            isLogWindowOpen = isLogProfileWindowOpen,
+            onLutClick = { viewModel.toggleLutWindow() },
+            isLutWindowOpen = isLutWindowOpen,
             onCinemaEvChange = { ev ->
                 viewModel.updateCinemaConfig(cinemaConfig.copy(exposureCompensation = ev))
             },
@@ -875,7 +893,7 @@ fun CameraScreen(
             )
         }
 
-        // 3d. Dedicated Cinema Mode Settings Window (matching reference image)
+        // 3d. Dedicated Pro Video (Cinema) Mode Settings Window
         AnimatedVisibility(
             visible = cameraMode == CameraMode.CINEMA && isCinemaSettingsOpen,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
@@ -893,6 +911,94 @@ fun CameraScreen(
                 },
                 onDismissRequest = { viewModel.setCinemaSettingsOpen(false) },
                 modifier = Modifier.padding(horizontal = 14.dp)
+            )
+        }
+
+        // 3d_log. Dedicated Pro Video Log Profiles Floating Window
+        AnimatedVisibility(
+            visible = cameraMode == CameraMode.CINEMA && isLogProfileWindowOpen,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 56.dp)
+        ) {
+            com.example.camera.ui.components.LogProfileFloatingWindow(
+                config = cinemaConfig,
+                capabilities = cinemaCapabilities,
+                onSelectProfile = { profile ->
+                    viewModel.selectLogProfile(profile)
+                },
+                onSelectBitDepth = { depth ->
+                    viewModel.updateCinemaConfig(cinemaConfig.copy(logBitDepth = depth))
+                },
+                onDismissRequest = { viewModel.setLogProfileWindowOpen(false) }
+            )
+        }
+
+        // 3d_lut. Dedicated Pro Video Cinematic LUTs Floating Window
+        val customLutRepo = remember(context) { com.example.camera.data.CustomLutRepository(context) }
+        val customLuts by customLutRepo.customLuts.collectAsStateWithLifecycle()
+        val lutFilePickerLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocument()
+        ) { uri: android.net.Uri? ->
+            if (uri != null) {
+                var resolvedName: String? = null
+                try {
+                    context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (nameIdx >= 0 && cursor.moveToFirst()) {
+                            resolvedName = cursor.getString(nameIdx)
+                        }
+                    }
+                } catch (ignored: Exception) {}
+
+                val fileName = (resolvedName ?: uri.lastPathSegment?.substringAfterLast('/'))
+                    ?.removeSuffix(".cube")
+                    ?.takeIf { it.isNotBlank() } ?: "Custom Grade"
+
+                val imported = customLutRepo.importLut(uri, fileName)
+                if (imported != null) {
+                    android.widget.Toast.makeText(context, "Imported LUT: ${imported.title}", android.widget.Toast.LENGTH_SHORT).show()
+                    viewModel.selectCustomLut(imported.filePath, imported.title)
+                } else {
+                    android.widget.Toast.makeText(context, "Invalid or unsupported .cube file format", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = cameraMode == CameraMode.CINEMA && isLutWindowOpen,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 56.dp)
+        ) {
+            com.example.camera.ui.components.LutFloatingWindow(
+                config = cinemaConfig,
+                customLuts = customLuts,
+                onSelectLut = { lut ->
+                    viewModel.selectLut(lut)
+                },
+                onSelectCustomLut = { customLutItem ->
+                    viewModel.selectCustomLut(customLutItem.filePath, customLutItem.title)
+                },
+                onIntensityChange = { intensity ->
+                    viewModel.updateCinemaConfig(cinemaConfig.copy(lutIntensity = intensity))
+                },
+                onBakeToggle = { bake ->
+                    viewModel.updateCinemaConfig(cinemaConfig.copy(isBakeLutToOutput = bake))
+                },
+                onImportLutClick = {
+                    lutFilePickerLauncher.launch(arrayOf("*/*"))
+                },
+                onDeleteCustomLut = { lutId ->
+                    customLutRepo.deleteLut(lutId)
+                },
+                onDismissRequest = { viewModel.setLutWindowOpen(false) }
             )
         }
 

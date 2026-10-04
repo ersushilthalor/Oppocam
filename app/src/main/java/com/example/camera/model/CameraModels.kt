@@ -8,7 +8,7 @@ enum class CameraMode(val title: String) {
     PHOTO("Photo"),
     PORTRAIT("Portrait"),
     VIDEO("Video"),
-    CINEMA("Cinema"),
+    CINEMA("Pro Video"),
     NIGHT("Night"),
     DUAL_VIDEO("Dual Video"),
     MORE("More"),

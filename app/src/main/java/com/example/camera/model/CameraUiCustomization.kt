@@ -126,13 +126,29 @@ enum class TopBarAlignment(val label: String) {
     COMPACT_RIGHT("Right Grouped")
 }
 
+enum class TopIconPosition(val label: String) {
+    LEFT("Left"),
+    CENTER("Center"),
+    RIGHT("Right")
+}
+
 enum class TopControlItem(val id: String, val label: String) {
     FLASH("flash", "Flash / Torch"),
-    TIMER("timer", "Timer Countdown"),
+    TIMER("timer", "Timer Countdown / Audio"),
     GRID("grid", "Grid & Horizon Level"),
     RESOLUTION("resolution", "Photo/Video Resolution"),
     RAW("raw", "RAW Sensor Capture"),
     PRO_EXP("pro_exp", "Pro Manual Mode"),
+    LOG("log", "Log Profiles (Pro Video)"),
+    LUT("lut", "Cinematic LUTs (Pro Video)"),
+    PRO_VIDEO_SETTINGS("pro_video_settings", "Pro Video Settings"),
+    EV("ev", "Exposure Compensation (EV)"),
+    HORIZON_LOCK("horizon_lock", "Horizontal Lock"),
+    DOLLY_ZOOM("dolly_zoom", "Dolly Zoom"),
+    VIDEO_ADJUSTMENTS("video_adjustments", "Video Adjustments"),
+    MOTION_PHOTO("motion_photo", "Motion Photo"),
+    PORTRAIT_STYLE("portrait_style", "Portrait Style"),
+    PIPELINE("pipeline", "Custom Pipeline"),
     SETTINGS("settings", "Settings Gear")
 }
 
@@ -161,6 +177,7 @@ data class ModeLayoutConfig(
         TopControlItem.SETTINGS
     ),
     val hiddenTopControls: Set<TopControlItem> = emptySet(),
+    val topIconPositions: Map<TopControlItem, TopIconPosition> = emptyMap(),
     val topControlsIconSizeDp: Int = 20,
     val topControlsSpacingDp: Int = 16,
     val topBarAlignment: TopBarAlignment = TopBarAlignment.SPACE_BETWEEN,
@@ -187,6 +204,35 @@ data class ModeLayoutConfig(
     val customUiPhotoOverlayOpacity: Float = 0f,
     val viewfinderCornerRadiusDp: Int = 0
 ) {
+    fun getIconPosition(item: TopControlItem): TopIconPosition {
+        return topIconPositions[item] ?: when (item) {
+            TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK -> TopIconPosition.LEFT
+            TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
+            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PORTRAIT_STYLE, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
+        }
+    }
+
+    fun withIconPosition(item: TopControlItem, position: TopIconPosition): ModeLayoutConfig {
+        val updated = topIconPositions.toMutableMap()
+        updated[item] = position
+        return copy(topIconPositions = updated)
+    }
+
+    fun withItemAction(oldItem: TopControlItem, newItem: TopControlItem): ModeLayoutConfig {
+        val updatedOrder = topControlsOrder.map { if (it == oldItem) newItem else it }
+        val updatedHidden = hiddenTopControls.map { if (it == oldItem) newItem else it }.toSet()
+        val updatedPositions = topIconPositions.toMutableMap()
+        val oldPos = updatedPositions.remove(oldItem)
+        if (oldPos != null) {
+            updatedPositions[newItem] = oldPos
+        }
+        return copy(
+            topControlsOrder = updatedOrder,
+            hiddenTopControls = updatedHidden,
+            topIconPositions = updatedPositions
+        )
+    }
+
     fun getComposeAccentColor(): Color {
         return try {
             Color(android.graphics.Color.parseColor(accentColorHex))
@@ -239,6 +285,10 @@ data class ModeLayoutConfig(
         val hiddenTopArray = JSONArray()
         hiddenTopControls.forEach { hiddenTopArray.put(it.name) }
         json.put("hiddenTopControls", hiddenTopArray)
+
+        val posObj = JSONObject()
+        topIconPositions.forEach { (item, pos) -> posObj.put(item.name, pos.name) }
+        json.put("topIconPositions", posObj)
 
         json.put("topControlsIconSizeDp", topControlsIconSizeDp)
         json.put("topControlsSpacingDp", topControlsSpacingDp)
@@ -306,6 +356,20 @@ data class ModeLayoutConfig(
                 }
             }
 
+            val posMap = mutableMapOf<TopControlItem, TopIconPosition>()
+            val posObj = json.optJSONObject("topIconPositions")
+            if (posObj != null) {
+                val keys = posObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    try {
+                        val item = TopControlItem.valueOf(k)
+                        val pos = TopIconPosition.valueOf(posObj.getString(k))
+                        posMap[item] = pos
+                    } catch (ignored: Exception) {}
+                }
+            }
+
             return ModeLayoutConfig(
                 visibleModes = visibleModesList,
                 modeSelectorPosition = try {
@@ -329,6 +393,7 @@ data class ModeLayoutConfig(
                 showFlipButton = json.optBoolean("showFlipButton", true),
                 topControlsOrder = topOrderList,
                 hiddenTopControls = hiddenTopSet,
+                topIconPositions = posMap,
                 topControlsIconSizeDp = json.optInt("topControlsIconSizeDp", 24),
                 topControlsSpacingDp = json.optInt("topControlsSpacingDp", 16),
                 topBarAlignment = try {
@@ -375,10 +440,10 @@ data class UiCustomizationState(
     val customPresets: List<CustomUiPreset> = emptyList()
 ) {
     /**
-     * Resolves layout config for a given camera mode (mode-specific override if present, else global config).
+     * Resolves layout config for a given camera mode (mode-specific override if present, else default for that mode).
      */
     fun getConfigForMode(mode: CameraMode): ModeLayoutConfig {
-        return modeSpecificConfigs[mode] ?: globalConfig
+        return modeSpecificConfigs[mode] ?: CameraUiTemplates.getDefaultConfigForMode(mode, globalConfig)
     }
 
     fun toJson(): String {
@@ -469,6 +534,88 @@ data class CustomUiPreset(
 )
 
 object CameraUiTemplates {
+    fun getDefaultConfigForMode(mode: CameraMode, baseConfig: ModeLayoutConfig): ModeLayoutConfig {
+        return when (mode) {
+            CameraMode.CINEMA -> baseConfig.copy(
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH,
+                    TopControlItem.TIMER,
+                    TopControlItem.LOG,
+                    TopControlItem.LUT,
+                    TopControlItem.EV,
+                    TopControlItem.GRID,
+                    TopControlItem.SETTINGS
+                ),
+                topIconPositions = mapOf(
+                    TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.LOG to TopIconPosition.CENTER,
+                    TopControlItem.LUT to TopIconPosition.CENTER,
+                    TopControlItem.EV to TopIconPosition.CENTER,
+                    TopControlItem.GRID to TopIconPosition.RIGHT,
+                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                ),
+                hiddenTopControls = emptySet()
+            )
+            CameraMode.VIDEO -> baseConfig.copy(
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH,
+                    TopControlItem.TIMER,
+                    TopControlItem.RESOLUTION,
+                    TopControlItem.EV,
+                    TopControlItem.VIDEO_ADJUSTMENTS,
+                    TopControlItem.SETTINGS
+                ),
+                topIconPositions = mapOf(
+                    TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.RESOLUTION to TopIconPosition.CENTER,
+                    TopControlItem.EV to TopIconPosition.CENTER,
+                    TopControlItem.VIDEO_ADJUSTMENTS to TopIconPosition.RIGHT,
+                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                ),
+                hiddenTopControls = emptySet()
+            )
+            CameraMode.PHOTO -> baseConfig.copy(
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH,
+                    TopControlItem.TIMER,
+                    TopControlItem.RESOLUTION,
+                    TopControlItem.RAW,
+                    TopControlItem.GRID,
+                    TopControlItem.SETTINGS
+                ),
+                topIconPositions = mapOf(
+                    TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.RESOLUTION to TopIconPosition.CENTER,
+                    TopControlItem.RAW to TopIconPosition.CENTER,
+                    TopControlItem.GRID to TopIconPosition.RIGHT,
+                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                ),
+                hiddenTopControls = emptySet()
+            )
+            CameraMode.PORTRAIT -> baseConfig.copy(
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH,
+                    TopControlItem.TIMER,
+                    TopControlItem.RESOLUTION,
+                    TopControlItem.PORTRAIT_STYLE,
+                    TopControlItem.SETTINGS
+                ),
+                topIconPositions = mapOf(
+                    TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.RESOLUTION to TopIconPosition.CENTER,
+                    TopControlItem.PORTRAIT_STYLE to TopIconPosition.RIGHT,
+                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                ),
+                hiddenTopControls = emptySet()
+            )
+            else -> baseConfig
+        }
+    }
+
     fun getTemplateConfig(type: UiTemplateType): ModeLayoutConfig {
         return when (type) {
             UiTemplateType.STOCK_PIXEL -> ModeLayoutConfig(

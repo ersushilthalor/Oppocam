@@ -613,7 +613,7 @@ fun BottomControlBar(
                                     ),
                                     PixelModeEntry(
                                         tag = "mode_cinema",
-                                        label = "Cinema",
+                                        label = "Pro Video",
                                         isSelected = cameraMode == CameraMode.CINEMA,
                                         onSelect = {
                                             onSetManualProOpen(false)

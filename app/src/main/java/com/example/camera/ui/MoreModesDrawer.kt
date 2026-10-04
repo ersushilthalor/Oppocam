@@ -114,8 +114,8 @@ fun MoreModesDrawer(
                     )
                     MoreModeCard(
                         icon = Icons.Outlined.Movie,
-                        title = "Cinema Log",
-                        subtitle = "Raw-to-Log 10-Bit Studio",
+                        title = "Pro Video",
+                        subtitle = "Log Profiles, LUTs & 10-Bit Studio",
                         tag = "mode_card_cinema_log",
                         modifier = Modifier.weight(1f),
                         onClick = onSelectCinemaLog

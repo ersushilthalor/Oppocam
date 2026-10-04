@@ -349,7 +349,7 @@ fun LiveUiEditorDialog(
                                 color = Color.White
                             )
                             Text(
-                                text = if (targetModeScope == null) "Editing: Global (All Modes)" else "Editing: ${targetModeScope!!.name} Mode Only",
+                                text = if (targetModeScope == null) "Editing: Global (All Modes)" else "Editing: ${targetModeScope!!.title} Mode Only",
                                 fontSize = 12.sp,
                                 color = Color(0xFF64B5F6)
                             )
@@ -410,7 +410,7 @@ fun LiveUiEditorDialog(
                                 onClick = { targetModeScope = mode },
                                 label = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(mode.name)
+                                        Text(mode.title)
                                         if (hasOverride) {
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Box(
@@ -510,6 +510,8 @@ fun LiveUiEditorDialog(
                         )
                         EditorTab.TOP_BAR -> TopBarControlsEditor(
                             config = activeConfig,
+                            targetMode = targetModeScope,
+                            onSelectMode = { targetModeScope = it },
                             onUpdate = { updateConfig(it) }
                         )
                         EditorTab.ZOOM_VIEWFINDER -> ZoomAndViewfinderEditor(
@@ -636,6 +638,16 @@ fun LivePreviewCanvas(
                     TopControlItem.RESOLUTION -> Icons.Outlined.HighQuality
                     TopControlItem.RAW -> Icons.Outlined.RawOn
                     TopControlItem.PRO_EXP -> Icons.Outlined.Tune
+                    TopControlItem.LOG -> Icons.Outlined.Videocam
+                    TopControlItem.LUT -> Icons.Outlined.Palette
+                    TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
+                    TopControlItem.EV -> Icons.Filled.Exposure
+                    TopControlItem.HORIZON_LOCK -> Icons.Outlined.ScreenLockRotation
+                    TopControlItem.DOLLY_ZOOM -> Icons.Outlined.CenterFocusStrong
+                    TopControlItem.VIDEO_ADJUSTMENTS -> Icons.Outlined.Tune
+                    TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
+                    TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
+                    TopControlItem.PIPELINE -> Icons.Outlined.Tune
                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
                 }
                 Icon(
@@ -1324,20 +1336,101 @@ fun ShutterAndActionsEditor(
 @Composable
 fun TopBarControlsEditor(
     config: ModeLayoutConfig,
+    targetMode: CameraMode? = null,
+    onSelectMode: (CameraMode?) -> Unit = {},
     onUpdate: (ModeLayoutConfig) -> Unit
 ) {
+    var expandedSlotItem by remember { mutableStateOf<TopControlItem?>(null) }
+    var showAddSlotMenu by remember { mutableStateOf(false) }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Mode Selector Bar for Independent Customization
         item {
-            Text("Top Controls Alignment", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF131826),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.4f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "CUSTOMIZE PER MODE",
+                            color = Color(0xFF64B5F6),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF2563EB).copy(alpha = 0.25f)
+                        ) {
+                            Text(
+                                text = targetMode?.title ?: "Global Layout",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Customize top bar slots, actions, positions, and visibility independently for ${targetMode?.title ?: "all camera modes"}.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val modeScroll = rememberScrollState()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(modeScroll),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = targetMode == null,
+                            onClick = { onSelectMode(null) },
+                            label = { Text("Global", fontSize = 11.5.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFF2563EB),
+                                selectedLabelColor = Color.White
+                            )
+                        )
+                        CameraMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = targetMode == mode,
+                                onClick = { onSelectMode(mode) },
+                                label = { Text(mode.title, fontSize = 11.5.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF2563EB),
+                                    selectedLabelColor = Color.White
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Alignment & Density Options
+        item {
+            Text("Top Bar Alignment", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.5.sp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp),
+                    .padding(top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 TopBarAlignment.entries.forEach { align ->
@@ -1357,8 +1450,8 @@ fun TopBarControlsEditor(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Icon Size", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                Text("${config.topControlsIconSizeDp} dp", color = Color(0xFF64B5F6), fontWeight = FontWeight.Bold)
+                Text("Icon Size", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                Text("${config.topControlsIconSizeDp} dp", color = Color(0xFF64B5F6), fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
             Slider(
                 value = config.topControlsIconSizeDp.toFloat(),
@@ -1374,8 +1467,8 @@ fun TopBarControlsEditor(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Icon Spacing", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-                Text("${config.topControlsSpacingDp} dp", color = Color(0xFF64B5F6), fontWeight = FontWeight.Bold)
+                Text("Icon Spacing", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.sp)
+                Text("${config.topControlsSpacingDp} dp", color = Color(0xFF64B5F6), fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
             Slider(
                 value = config.topControlsSpacingDp.toFloat(),
@@ -1386,61 +1479,320 @@ fun TopBarControlsEditor(
         }
 
         item {
-            Text("Customize Top Bar Items (Toggle & Order)", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
-            Text("Hide or show individual toggles and rearrange their sequence.", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
-        }
-
-        items(config.topControlsOrder) { item ->
-            val isHidden = config.hiddenTopControls.contains(item)
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF191E2C),
-                modifier = Modifier.fillMaxWidth()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = !isHidden,
-                            onCheckedChange = { visible ->
-                                val set = config.hiddenTopControls.toMutableSet()
-                                if (visible) set.remove(item) else set.add(item)
-                                onUpdate(config.copy(hiddenTopControls = set))
-                            }
-                        )
-                        Text(item.label, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Column {
+                    Text("Top Icon Slots & Positions", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                    Text("Choose action/icon, position (Left/Center/Right), and visibility.", color = Color.White.copy(alpha = 0.6f), fontSize = 11.5.sp)
+                }
+                Box {
+                    Button(
+                        onClick = { showAddSlotMenu = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Slot", modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add Slot", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    Row {
-                        val curIdx = config.topControlsOrder.indexOf(item)
-                        IconButton(
-                            enabled = curIdx > 0,
-                            onClick = {
-                                val list = config.topControlsOrder.toMutableList()
-                                val temp = list[curIdx - 1]
-                                list[curIdx - 1] = item
-                                list[curIdx] = temp
-                                onUpdate(config.copy(topControlsOrder = list))
-                            }
-                        ) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = "Move left", tint = if (curIdx > 0) Color.White else Color.Gray, modifier = Modifier.size(18.dp))
+                    DropdownMenu(
+                        expanded = showAddSlotMenu,
+                        onDismissRequest = { showAddSlotMenu = false },
+                        modifier = Modifier.background(Color(0xFF1E2435))
+                    ) {
+                        TopControlItem.entries.forEach { itemOption ->
+                            val alreadyInOrder = config.topControlsOrder.contains(itemOption)
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = itemOption.label,
+                                            color = if (alreadyInOrder) Color.White.copy(alpha = 0.5f) else Color.White,
+                                            fontSize = 12.sp
+                                        )
+                                        if (alreadyInOrder) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("(added)", color = Color.Gray, fontSize = 10.sp)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showAddSlotMenu = false
+                                    if (!alreadyInOrder) {
+                                        val updatedOrder = config.topControlsOrder + itemOption
+                                        val updatedHidden = config.hiddenTopControls - itemOption
+                                        onUpdate(config.copy(topControlsOrder = updatedOrder, hiddenTopControls = updatedHidden))
+                                    }
+                                }
+                            )
                         }
-                        IconButton(
-                            enabled = curIdx < config.topControlsOrder.size - 1,
-                            onClick = {
-                                val list = config.topControlsOrder.toMutableList()
-                                val temp = list[curIdx + 1]
-                                list[curIdx + 1] = item
-                                list[curIdx] = temp
-                                onUpdate(config.copy(topControlsOrder = list))
+                    }
+                }
+            }
+        }
+
+        // List of Top Icon Slots
+        items(config.topControlsOrder) { item ->
+            val isHidden = config.hiddenTopControls.contains(item)
+            val currentPos = config.getIconPosition(item)
+            val slotIndex = config.topControlsOrder.indexOf(item) + 1
+
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF161B28),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (!isHidden) Color(0xFF2563EB).copy(alpha = 0.45f) else Color.White.copy(alpha = 0.08f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
+                ) {
+                    // Top Row: Slot #, Checkbox & Action Button with Dropdown
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Checkbox(
+                                checked = !isHidden,
+                                onCheckedChange = { visible ->
+                                    val set = config.hiddenTopControls.toMutableSet()
+                                    if (visible) set.remove(item) else set.add(item)
+                                    onUpdate(config.copy(hiddenTopControls = set))
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color.White.copy(alpha = 0.1f)
+                            ) {
+                                Text(
+                                    text = "Slot $slotIndex",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
                             }
+                        }
+
+                        // Reorder & Delete Buttons
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val curIdx = config.topControlsOrder.indexOf(item)
+                            IconButton(
+                                enabled = curIdx > 0,
+                                onClick = {
+                                    val list = config.topControlsOrder.toMutableList()
+                                    val temp = list[curIdx - 1]
+                                    list[curIdx - 1] = item
+                                    list[curIdx] = temp
+                                    onUpdate(config.copy(topControlsOrder = list))
+                                },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowUpward,
+                                    contentDescription = "Move earlier",
+                                    tint = if (curIdx > 0) Color.White else Color.Gray,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            IconButton(
+                                enabled = curIdx < config.topControlsOrder.size - 1,
+                                onClick = {
+                                    val list = config.topControlsOrder.toMutableList()
+                                    val temp = list[curIdx + 1]
+                                    list[curIdx + 1] = item
+                                    list[curIdx] = temp
+                                    onUpdate(config.copy(topControlsOrder = list))
+                                },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDownward,
+                                    contentDescription = "Move later",
+                                    tint = if (curIdx < config.topControlsOrder.size - 1) Color.White else Color.Gray,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            if (config.topControlsOrder.size > 1) {
+                                IconButton(
+                                    onClick = {
+                                        val list = config.topControlsOrder.filterNot { it == item }
+                                        val set = config.hiddenTopControls.filterNot { it == item }.toSet()
+                                        onUpdate(config.copy(topControlsOrder = list, hiddenTopControls = set))
+                                    },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = "Remove Slot",
+                                        tint = Color(0xFFFF6B6B),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Action Selector: Choose the action/icon for this slot
+                    Text(
+                        text = "Slot Action / Icon:",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Surface(
+                            onClick = { expandedSlotItem = if (expandedSlotItem == item) null else item },
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF1E2538),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6).copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.ArrowDownward, contentDescription = "Move right", tint = if (curIdx < config.topControlsOrder.size - 1) Color.White else Color.Gray, modifier = Modifier.size(18.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = when (item) {
+                                            TopControlItem.FLASH -> Icons.Outlined.FlashOn
+                                            TopControlItem.TIMER -> Icons.Outlined.Timer
+                                            TopControlItem.GRID -> Icons.Outlined.GridOn
+                                            TopControlItem.LOG -> Icons.Outlined.Videocam
+                                            TopControlItem.LUT -> Icons.Outlined.Palette
+                                            TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
+                                            TopControlItem.EV -> Icons.Filled.Exposure
+                                            TopControlItem.SETTINGS -> Icons.Outlined.Settings
+                                            TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
+                                            TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
+                                            else -> Icons.Outlined.Tune
+                                        },
+                                        contentDescription = null,
+                                        tint = Color(0xFF64B5F6),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = item.label,
+                                        color = Color.White,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select Action",
+                                    tint = Color.White.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = expandedSlotItem == item,
+                            onDismissRequest = { expandedSlotItem = null },
+                            modifier = Modifier
+                                .background(Color(0xFF1C2233))
+                                .heightIn(max = 280.dp)
+                        ) {
+                            TopControlItem.entries.forEach { opt ->
+                                val isCur = opt == item
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = when (opt) {
+                                                    TopControlItem.FLASH -> Icons.Outlined.FlashOn
+                                                    TopControlItem.TIMER -> Icons.Outlined.Timer
+                                                    TopControlItem.GRID -> Icons.Outlined.GridOn
+                                                    TopControlItem.LOG -> Icons.Outlined.Videocam
+                                                    TopControlItem.LUT -> Icons.Outlined.Palette
+                                                    TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
+                                                    TopControlItem.EV -> Icons.Filled.Exposure
+                                                    TopControlItem.SETTINGS -> Icons.Outlined.Settings
+                                                    TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
+                                                    TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
+                                                    else -> Icons.Outlined.Tune
+                                                },
+                                                contentDescription = null,
+                                                tint = if (isCur) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.7f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = opt.label,
+                                                color = if (isCur) Color(0xFF64B5F6) else Color.White,
+                                                fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                                                fontSize = 12.5.sp
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        expandedSlotItem = null
+                                        if (opt != item) {
+                                            onUpdate(config.withItemAction(item, opt))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Position Selector: Left / Center / Right
+                    Text(
+                        text = "Position:",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TopIconPosition.entries.forEach { pos ->
+                            val isPosSelected = currentPos == pos
+                            Surface(
+                                onClick = { onUpdate(config.withIconPosition(item, pos)) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isPosSelected) Color(0xFF2563EB) else Color(0xFF1E2435),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isPosSelected) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.12f)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = pos.label,
+                                        color = if (isPosSelected) Color.White else Color.White.copy(alpha = 0.7f),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (isPosSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
                         }
                     }
                 }

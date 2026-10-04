@@ -156,6 +156,10 @@ fun TopControlBar(
     onMotionPhotoClick: () -> Unit = {},
     isProActive: Boolean = false,
     onToggleProClick: () -> Unit = {},
+    onLogClick: () -> Unit = {},
+    isLogWindowOpen: Boolean = false,
+    onLutClick: () -> Unit = {},
+    isLutWindowOpen: Boolean = false,
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
 ) {
@@ -688,6 +692,71 @@ fun TopControlBar(
             }
         }
 
+        val logButton = @Composable {
+            val isLogActive = cinemaConfig.colorProfile != CinemaColorProfile.NATIVE || cinemaConfig.logBitDepth != LogBitDepth.OFF
+            Box(
+                modifier = Modifier
+                    .height(34.dp)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isLogWindowOpen || isLogActive) accentColor else null,
+                        isPill = true
+                    )
+                    .clickable { onLogClick() }
+                    .padding(horizontal = 11.dp)
+                    .testTag("pro_video_log_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "LOG",
+                    color = if (isLogWindowOpen || isLogActive) accentColor else Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.8.sp,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
+
+        val lutButton = @Composable {
+            val isLutActive = cinemaConfig.selectedLut != CinematicLut.NONE && cinemaConfig.selectedLut != CinematicLut.REC_709
+            Box(
+                modifier = Modifier
+                    .height(34.dp)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isLutWindowOpen || isLutActive) accentColor else null,
+                        isPill = true
+                    )
+                    .clickable { onLutClick() }
+                    .padding(horizontal = 9.dp)
+                    .testTag("pro_video_lut_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Palette,
+                        contentDescription = "LUT",
+                        tint = if (isLutWindowOpen || isLutActive) accentColor else Color.White,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = "LUT",
+                        color = if (isLutWindowOpen || isLutActive) accentColor else Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+
         val cinemaSettingsQuickButton = @Composable {
             IconButton(
                 onClick = onCinemaSettingsClick,
@@ -698,7 +767,7 @@ fun TopControlBar(
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Movie,
-                    contentDescription = "Cinema Settings",
+                    contentDescription = "Pro Video Settings",
                     tint = accentColor,
                     modifier = Modifier.size(iconSize)
                 )
@@ -808,21 +877,42 @@ fun TopControlBar(
             }
         }
 
-        val isVideoFamily = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
-
-        // Render Top Controls according to layoutConfig
-        val visibleItems = layoutConfig.topControlsOrder.filterNot { layoutConfig.hiddenTopControls.contains(it) }
-
-        val horizontalArrangement = when (layoutConfig.topBarAlignment) {
-            TopBarAlignment.SPACE_BETWEEN -> Arrangement.SpaceBetween
-            TopBarAlignment.CENTER -> Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.CenterHorizontally)
-            TopBarAlignment.COMPACT_LEFT -> Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.Start)
-            TopBarAlignment.COMPACT_RIGHT -> Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.End)
+        @Composable
+        fun RenderItem(item: TopControlItem) {
+            Box(
+                modifier = Modifier.wrapContentSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                when (item) {
+                    TopControlItem.FLASH -> flashButton()
+                    TopControlItem.TIMER -> timerAudioButton()
+                    TopControlItem.GRID -> gridAssistButton()
+                    TopControlItem.RESOLUTION -> primaryBadge()
+                    TopControlItem.RAW -> secondaryBadge()
+                    TopControlItem.PRO_EXP -> proExpButton()
+                    TopControlItem.LOG -> logButton()
+                    TopControlItem.LUT -> lutButton()
+                    TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
+                    TopControlItem.EV -> evButton()
+                    TopControlItem.HORIZON_LOCK -> horizonLockButton()
+                    TopControlItem.DOLLY_ZOOM -> dollyZoomButton()
+                    TopControlItem.VIDEO_ADJUSTMENTS -> videoAdjustmentsButton()
+                    TopControlItem.MOTION_PHOTO -> motionPhotoButton()
+                    TopControlItem.PORTRAIT_STYLE -> portraitStyleButton()
+                    TopControlItem.PIPELINE -> pipelineButton()
+                    TopControlItem.SETTINGS -> settingsButton()
+                }
+            }
         }
 
-        val cinemaButtonCount = 6 + (if (isHorizontalLockSettingEnabled) 1 else 0)
-        val videoButtonCount = 6 + (if (isHorizontalLockSettingEnabled) 1 else 0) + (if (isDollyZoomSettingEnabled) 1 else 0)
-        val shouldScroll = (if (cameraMode == CameraMode.CINEMA) cinemaButtonCount else if (cameraMode == CameraMode.VIDEO) videoButtonCount else visibleItems.size) > 5
+        // Render Top Controls according to layoutConfig and position
+        val visibleItems = layoutConfig.topControlsOrder.filterNot { layoutConfig.hiddenTopControls.contains(it) }
+
+        val leftItems = visibleItems.filter { layoutConfig.getIconPosition(it) == TopIconPosition.LEFT }
+        val centerItems = visibleItems.filter { layoutConfig.getIconPosition(it) == TopIconPosition.CENTER }
+        val rightItems = visibleItems.filter { layoutConfig.getIconPosition(it) == TopIconPosition.RIGHT }
+
+        val shouldScroll = visibleItems.size > 5
         val topScrollState = rememberScrollState()
 
         Row(
@@ -831,66 +921,55 @@ fun TopControlBar(
                 .then(
                     if (shouldScroll) Modifier.horizontalScroll(topScrollState) else Modifier
                 ),
-            horizontalArrangement = if (shouldScroll) Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally) else horizontalArrangement,
+            horizontalArrangement = if (shouldScroll) {
+                Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp.coerceAtLeast(8.dp), Alignment.CenterHorizontally)
+            } else {
+                when (layoutConfig.topBarAlignment) {
+                    TopBarAlignment.SPACE_BETWEEN -> Arrangement.SpaceBetween
+                    TopBarAlignment.CENTER -> Arrangement.Center
+                    TopBarAlignment.COMPACT_LEFT -> Arrangement.Start
+                    TopBarAlignment.COMPACT_RIGHT -> Arrangement.End
+                }
+            },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (cameraMode == CameraMode.CINEMA) {
-                // Pure icon buttons for Cinema mode: no raw 8/10 or text pills
-                flashButton()
-                if (isHorizontalLockSettingEnabled) {
-                    horizonLockButton()
+            if (shouldScroll || layoutConfig.topBarAlignment != TopBarAlignment.SPACE_BETWEEN) {
+                val orderedItems = if (layoutConfig.topIconPositions.isNotEmpty()) {
+                    leftItems + centerItems + rightItems
+                } else {
+                    visibleItems
                 }
-                timerAudioButton()
-                gridAssistButton()
-                evButton()
-                cinemaSettingsQuickButton()
-                settingsButton()
-            } else if (cameraMode == CameraMode.VIDEO) {
-                flashButton()
-                if (isHorizontalLockSettingEnabled) {
-                    horizonLockButton()
+                orderedItems.forEach { item ->
+                    RenderItem(item)
                 }
-                if (isDollyZoomSettingEnabled) {
-                    dollyZoomButton()
-                }
-                evButton()
-                videoAdjustmentsButton()
-                primaryBadge()
-                secondaryBadge()
-                settingsButton()
             } else {
-                visibleItems.forEach { item ->
-                    Box(
-                        modifier = Modifier.wrapContentSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        when (item) {
-                            TopControlItem.FLASH -> flashButton()
-                            TopControlItem.TIMER -> timerAudioButton()
-                            TopControlItem.GRID -> gridAssistButton()
-                            TopControlItem.RESOLUTION -> primaryBadge()
-                            TopControlItem.RAW -> secondaryBadge()
-                            TopControlItem.PRO_EXP -> proExpButton()
-                            TopControlItem.SETTINGS -> {
-                                if (cameraMode == CameraMode.PHOTO) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        motionPhotoButton()
-                                        Spacer(modifier = Modifier.width(layoutConfig.topControlsSpacingDp.dp))
-                                        pipelineButton()
-                                        Spacer(modifier = Modifier.width(layoutConfig.topControlsSpacingDp.dp))
-                                        settingsButton()
-                                    }
-                                } else if (cameraMode == CameraMode.PORTRAIT) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        portraitStyleButton()
-                                        Spacer(modifier = Modifier.width(layoutConfig.topControlsSpacingDp.dp))
-                                        settingsButton()
-                                    }
-                                } else {
-                                    settingsButton()
-                                }
-                            }
-                        }
+                // Left Group
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.Start)
+                ) {
+                    leftItems.forEach { item ->
+                        RenderItem(item)
+                    }
+                }
+
+                // Center Group
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.CenterHorizontally)
+                ) {
+                    centerItems.forEach { item ->
+                        RenderItem(item)
+                    }
+                }
+
+                // Right Group
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(layoutConfig.topControlsSpacingDp.dp, Alignment.End)
+                ) {
+                    rightItems.forEach { item ->
+                        RenderItem(item)
                     }
                 }
             }

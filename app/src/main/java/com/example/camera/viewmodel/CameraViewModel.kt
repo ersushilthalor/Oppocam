@@ -151,13 +151,94 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _isPortraitSettingsOpen = MutableStateFlow(false)
     val isPortraitSettingsOpen: StateFlow<Boolean> = _isPortraitSettingsOpen.asStateFlow()
 
-    // Cinema Mode State & Panel visibility
+    // Cinema / Pro Video Mode State & Panel visibility
     val cinemaConfig: StateFlow<CinemaConfig> = engine.cinemaConfig
     val cinemaCapabilities: StateFlow<CinemaHardwareCapabilities> = engine.cinemaCapabilities
     val rec2020AutoToneParams: StateFlow<com.example.camera.engine.Rec2020AutoToneParams> = engine.rec2020AutoToneParams
     val capabilities: StateFlow<HardwareCapabilities> = engine.capabilities
     private val _isCinemaSettingsOpen = MutableStateFlow(false)
     val isCinemaSettingsOpen: StateFlow<Boolean> = _isCinemaSettingsOpen.asStateFlow()
+
+    // Pro Video Log Profile Floating Window
+    private val _isLogProfileWindowOpen = MutableStateFlow(false)
+    val isLogProfileWindowOpen: StateFlow<Boolean> = _isLogProfileWindowOpen.asStateFlow()
+
+    fun setLogProfileWindowOpen(open: Boolean) {
+        _isLogProfileWindowOpen.value = open
+        if (open) {
+            _isLutWindowOpen.value = false
+            _isCinemaSettingsOpen.value = false
+        }
+    }
+
+    fun toggleLogProfileWindow() {
+        setLogProfileWindowOpen(!_isLogProfileWindowOpen.value)
+    }
+
+    // Pro Video LUT Floating Window
+    private val _isLutWindowOpen = MutableStateFlow(false)
+    val isLutWindowOpen: StateFlow<Boolean> = _isLutWindowOpen.asStateFlow()
+
+    fun setLutWindowOpen(open: Boolean) {
+        _isLutWindowOpen.value = open
+        if (open) {
+            _isLogProfileWindowOpen.value = false
+            _isCinemaSettingsOpen.value = false
+        }
+    }
+
+    fun toggleLutWindow() {
+        setLutWindowOpen(!_isLutWindowOpen.value)
+    }
+
+    fun selectLogProfile(profile: CinemaColorProfile) {
+        val current = cinemaConfig.value
+        val canDo10Bit = cinemaCapabilities.value.getSupportedBitDepthsForCodec(current.codec).contains(LogBitDepth.BIT_10)
+        val updated = if (profile == CinemaColorProfile.HLG10) {
+            current.copy(
+                colorProfile = CinemaColorProfile.HLG10,
+                colorSpace = CinemaColorSpace.REC_2020,
+                logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
+                codec = if (current.codec == CinemaCodec.H264 && cinemaCapabilities.value.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else current.codec
+            )
+        } else if (profile == CinemaColorProfile.HDR_LOG) {
+            current.copy(
+                colorProfile = CinemaColorProfile.HDR_LOG,
+                colorSpace = CinemaColorSpace.REC_2020,
+                logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8
+            )
+        } else {
+            current.copy(colorProfile = profile)
+        }
+        updateCinemaConfig(updated)
+        showToast("Log Profile: ${profile.label}")
+    }
+
+    fun selectLut(lut: CinematicLut) {
+        val current = cinemaConfig.value
+        val updated = current.copy(
+            selectedLut = lut,
+            customLutPath = null,
+            customLutName = null,
+            isBakeLutToOutput = true,
+            isLutPreviewEnabled = true
+        )
+        updateCinemaConfig(updated)
+        showToast("LUT Applied: ${lut.label}")
+    }
+
+    fun selectCustomLut(path: String, title: String) {
+        val current = cinemaConfig.value
+        val updated = current.copy(
+            selectedLut = CinematicLut.CUSTOM,
+            customLutPath = path,
+            customLutName = title,
+            isBakeLutToOutput = true,
+            isLutPreviewEnabled = true
+        )
+        updateCinemaConfig(updated)
+        showToast("Custom LUT: $title")
+    }
 
     // Floating Window Appearance (Transparency & Blur Strength)
     private val _floatingWindowAppearance = MutableStateFlow(preferences.getFloatingWindowAppearance())
