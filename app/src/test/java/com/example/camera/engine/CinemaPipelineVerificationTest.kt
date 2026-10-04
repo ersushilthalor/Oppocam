@@ -1062,5 +1062,133 @@ class CinemaPipelineVerificationTest {
         assertEquals(1.15f, loaded.outputGamma, 0.001f)
         assertTrue(loaded.hasColorFineTuning)
     }
+
+    @Test
+    fun testProRes10BitSoftwareDoesNotRequireHardwareEncoder() {
+        val capsNoHw = CinemaHardwareCapabilities(
+            supports10BitRecording = false,
+            supportsHevc10Bit = false,
+            supportsVp910Bit = false,
+            is10BitAvailableOnHAL = false,
+            supportsEndToEnd10Bit = false,
+            supportsSoftwareProRes = true,
+            isSoftware10BitSupported = true
+        )
+
+        // 1. ProRes MUST offer 10-bit even when hardware encoder supports only 8-bit
+        val proresDepths = capsNoHw.getSupportedBitDepthsForCodec(CinemaCodec.PRORES)
+        assertTrue("ProRes must offer 10-bit even when hardware 10-bit is absent", proresDepths.contains(LogBitDepth.BIT_10))
+
+        // 2. VP9 MUST NOT offer 10-bit when hardware VP9 10-bit is absent
+        val vp9Depths = capsNoHw.getSupportedBitDepthsForCodec(CinemaCodec.VP9)
+        assertFalse("VP9 must NOT offer 10-bit when hardware VP9 10-bit is absent", vp9Depths.contains(LogBitDepth.BIT_10))
+
+        // 3. Disabling VP9 10-bit must NOT disable ProRes software 10-bit
+        assertTrue("Disabling VP9 10-bit must not disable ProRes software 10-bit", proresDepths.contains(LogBitDepth.BIT_10))
+    }
+
+    @Test
+    fun testProResEncoder8BitTo10BitConversionAnd10BitNativeSupport() {
+        val width = 64
+        val height = 64
+
+        // Case A: 8-bit source -> Software ProRes converts to 10-bit
+        val encoder8b = com.example.camera.engine.prores.ProResEncoder(
+            width = width,
+            height = height,
+            isSource10Bit = false
+        )
+        assertFalse("isSource10Bit must be false for 8-bit camera source", encoder8b.isSource10Bit)
+
+        val yBytes8b = ByteArray(width * height) { 200.toByte() }
+        val uvBytes8b = ByteArray((width / 2) * (height / 2)) { 128.toByte() }
+
+        val frame8b = encoder8b.encodeFrame(
+            yPlane = yBytes8b,
+            uPlane = uvBytes8b,
+            vPlane = uvBytes8b,
+            yRowStride = width,
+            uRowStride = width / 2,
+            vRowStride = width / 2,
+            uPixelStride = 1,
+            vPixelStride = 1,
+            isSource10Bit = false
+        )
+        assertNotNull(frame8b)
+        assertTrue("Frame size must be positive", frame8b.size > 180)
+        val bb8b = java.nio.ByteBuffer.wrap(frame8b)
+        val frameSize8b = bb8b.getInt()
+        val magic8b = bb8b.getInt()
+        assertEquals("Encoded frame size field must match byte array length", frame8b.size, frameSize8b)
+        assertEquals("Must produce valid ProRes icpf frame", com.example.camera.engine.prores.ProResEncoder.MAGIC_ICPF, magic8b)
+
+        // Case B: Genuine 10-bit camera source (P010: 2 bytes per sample)
+        val encoder10b = com.example.camera.engine.prores.ProResEncoder(
+            width = width,
+            height = height,
+            isSource10Bit = true
+        )
+        assertTrue("isSource10Bit must be true for 10-bit camera source", encoder10b.isSource10Bit)
+
+        // 10-bit samples in little-endian 16-bit words (e.g. 800 in 10-bit: 800 shl 6 = 51200)
+        val yBytes10b = ByteArray(width * height * 2) { idx ->
+            if (idx % 2 == 0) 0x20.toByte() else 0x03.toByte() // 800 in 10-bit
+        }
+        val uvBytes10b = ByteArray((width / 2) * (height / 2) * 2) { idx ->
+            if (idx % 2 == 0) 0x00.toByte() else 0x02.toByte() // 512 midpoint
+        }
+
+        val frame10b = encoder10b.encodeFrame(
+            yPlane = yBytes10b,
+            uPlane = uvBytes10b,
+            vPlane = uvBytes10b,
+            yRowStride = width * 2,
+            uRowStride = (width / 2) * 2,
+            vRowStride = (width / 2) * 2,
+            uPixelStride = 2,
+            vPixelStride = 2,
+            isSource10Bit = true
+        )
+        assertNotNull(frame10b)
+        assertTrue("10-bit native encoded frame size must be positive", frame10b.size > 180)
+        val bb10b = java.nio.ByteBuffer.wrap(frame10b)
+        val frameSize10b = bb10b.getInt()
+        val magic10b = bb10b.getInt()
+        assertEquals("Encoded frame size field must match byte array length", frame10b.size, frameSize10b)
+        assertEquals("Must produce valid ProRes icpf frame from 10-bit source", com.example.camera.engine.prores.ProResEncoder.MAGIC_ICPF, magic10b)
+    }
+
+    @Test
+    fun testVp9NoSilentFallbackTo8Bit() {
+        // When 10-bit VP9 is requested on a system without VP9 Profile 2 hardware encoder,
+        // CinemaSoftwareRecordingEngine must fail with an explicit exception rather than silently recording 8-bit.
+        val isProfile2Supported = DeviceCompatibilityManager.isVp9Profile2Supported()
+        if (!isProfile2Supported) {
+            val engine = CinemaSoftwareRecordingEngine(context)
+            val tempDest = File(context.cacheDir, "test_vp9_10bit_honesty.webm")
+            try {
+                var caught = false
+                try {
+                    engine.startRecording(
+                        destFile = tempDest,
+                        width = 1920,
+                        height = 1080,
+                        fps = 30,
+                        bitrate = 15_000_000,
+                        codec = CinemaCodec.VP9,
+                        bitDepth = LogBitDepth.BIT_10,
+                        isAudioEnabled = false
+                    )
+                } catch (e: IllegalStateException) {
+                    caught = true
+                    assertTrue("Exception must state VP9 10-bit hardware recording is not supported",
+                        e.message?.contains("VP9") == true)
+                }
+                assertTrue("Must reject 10-bit VP9 request without silent 8-bit fallback", caught)
+            } finally {
+                try { tempDest.delete() } catch (_: Exception) {}
+            }
+        }
+    }
 }
 

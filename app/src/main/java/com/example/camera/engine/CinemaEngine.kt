@@ -82,7 +82,10 @@ class CinemaEngine(private val context: Context) {
                             avcSupported = true
                         } else if (type.equals(MediaFormat.MIMETYPE_VIDEO_VP9, ignoreCase = true)) {
                             vp9Supported = true
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            if (DeviceCompatibilityManager.isHardwareEncoder(codecInfo) &&
+                                caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) &&
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                            ) {
                                 for (pl in caps.profileLevels) {
                                     if (pl.profile == MediaCodecInfo.CodecProfileLevel.VP9Profile2 ||
                                         pl.profile == MediaCodecInfo.CodecProfileLevel.VP9Profile2HDR
@@ -317,7 +320,7 @@ class CinemaEngine(private val context: Context) {
         // 3. Genuine end-to-end 10-bit support requires BOTH Camera2 HAL and MediaCodec 10-bit encoder
         val supportsEndToEnd10Bit = dynamicRange10Bit && has10BitEncoder
 
-        val supportedBitDepths = if (supportsEndToEnd10Bit) {
+        val supportedBitDepths = if (supportsEndToEnd10Bit || codecDetection.proresSupported) {
             listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
         } else {
             listOf(LogBitDepth.OFF, LogBitDepth.BIT_8)
@@ -365,14 +368,15 @@ class CinemaEngine(private val context: Context) {
 
         // Sanitize current config so no unsupported option is active
         var sanitizedConfig = config
-        if (sanitizedConfig.logBitDepth == LogBitDepth.BIT_10 && !supportsEndToEnd10Bit && sanitizedConfig.codec != CinemaCodec.PRORES) {
+        val availableDepthsForCurrentCodec = _capabilities.getSupportedBitDepthsForCodec(sanitizedConfig.codec)
+        if (sanitizedConfig.logBitDepth == LogBitDepth.BIT_10 && !availableDepthsForCurrentCodec.contains(LogBitDepth.BIT_10)) {
             sanitizedConfig = sanitizedConfig.copy(logBitDepth = LogBitDepth.BIT_8)
         }
         if (!codecDetection.supportedCodecs.contains(sanitizedConfig.codec)) {
             sanitizedConfig = sanitizedConfig.copy(codec = codecDetection.supportedCodecs.firstOrNull() ?: CinemaCodec.H264)
         }
-        if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && !supportsEndToEnd10Bit && sanitizedConfig.codec != CinemaCodec.PRORES) {
-            // Keep HLG10 active: on devices without 10-bit hardware support, record in 8-bit
+        if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && !availableDepthsForCurrentCodec.contains(LogBitDepth.BIT_10)) {
+            // Keep HLG10 active: on codecs/devices without 10-bit support, record in 8-bit
             sanitizedConfig = sanitizedConfig.copy(logBitDepth = LogBitDepth.BIT_8)
         }
         config = sanitizedConfig

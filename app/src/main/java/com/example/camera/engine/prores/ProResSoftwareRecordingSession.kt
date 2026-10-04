@@ -7,6 +7,7 @@ import android.media.AudioRecord
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -38,6 +39,7 @@ class ProResSoftwareRecordingSession(
     val isAudioEnabled: Boolean,
     val colorProfile: CinemaColorProfile,
     val colorSpace: CinemaColorSpace,
+    val isSource10Bit: Boolean = false,
     val onError: ((Throwable) -> Unit)? = null
 ) {
     companion object {
@@ -50,6 +52,9 @@ class ProResSoftwareRecordingSession(
     private val consecutiveErrors = AtomicInteger(0)
     @Volatile
     private var fatalError: Throwable? = null
+
+    var actualIsSource10Bit: Boolean = isSource10Bit
+        private set
 
     private var imageReader: ImageReader? = null
     private var imageReaderThread: HandlerThread? = null
@@ -73,11 +78,36 @@ class ProResSoftwareRecordingSession(
         val isRec2020 = (colorSpace == CinemaColorSpace.REC_2020) || (colorProfile == CinemaColorProfile.REC_2020)
         val isHlg = (colorProfile == CinemaColorProfile.HLG10)
 
+        // Attempt highest-bit-depth camera source stream: YCBCR_P010 on Android 13+ (API 33+)
+        var reader: ImageReader? = null
+        var configured10BitSource = false
+
+        if (isSource10Bit && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                reader = ImageReader.newInstance(width, height, ImageFormat.YCBCR_P010, 4)
+                configured10BitSource = true
+                Log.i(TAG, "Configured 10-bit YCBCR_P010 camera source ImageReader")
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed creating YCBCR_P010 ImageReader, falling back to 8-bit YUV_420_888", t)
+                reader = null
+                configured10BitSource = false
+            }
+        }
+
+        if (reader == null) {
+            reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 4)
+            configured10BitSource = false
+            Log.i(TAG, "Configured 8-bit YUV_420_888 camera source ImageReader (converted to 10-bit in software ProRes encoder)")
+        }
+
+        actualIsSource10Bit = configured10BitSource
+
         proresEncoder = ProResEncoder(
             width = width,
             height = height,
             isRec2020 = isRec2020,
-            isHlg = isHlg
+            isHlg = isHlg,
+            isSource10Bit = configured10BitSource
         )
 
         val muxer = QuickTimeProResMuxer(
@@ -103,7 +133,6 @@ class ProResSoftwareRecordingSession(
         val handler = Handler(thread.looper)
         imageReaderHandler = handler
 
-        val reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 4)
         imageReader = reader
 
         reader.setOnImageAvailableListener({ ir ->
@@ -133,7 +162,7 @@ class ProResSoftwareRecordingSession(
             startAudioRecording()
         }
 
-        Log.i(TAG, "ProRes 422 software recording session started: ${width}x${height} @ ${fps}fps")
+        Log.i(TAG, "ProRes 422 software recording session started: ${width}x${height} @ ${fps}fps (source10Bit=$actualIsSource10Bit)")
         return reader.surface
     }
 
@@ -148,7 +177,8 @@ class ProResSoftwareRecordingSession(
         uRowStride: Int,
         vRowStride: Int,
         uPixelStride: Int,
-        vPixelStride: Int
+        vPixelStride: Int,
+        isSource10Bit: Boolean = actualIsSource10Bit
     ) {
         val encoder = proresEncoder ?: throw IllegalStateException("Encoder not initialized")
         val muxer = proresMuxer ?: throw IllegalStateException("Muxer not initialized")
@@ -161,7 +191,8 @@ class ProResSoftwareRecordingSession(
             uRowStride = uRowStride,
             vRowStride = vRowStride,
             uPixelStride = uPixelStride,
-            vPixelStride = vPixelStride
+            vPixelStride = vPixelStride,
+            isSource10Bit = isSource10Bit
         )
         muxer.writeVideoFrame(proresFrame)
         encodedFramesCount.incrementAndGet()
@@ -170,6 +201,14 @@ class ProResSoftwareRecordingSession(
     private fun processImageFrame(image: Image) {
         val encoder = proresEncoder ?: return
         val muxer = proresMuxer ?: return
+
+        val isImage10Bit = if (image.format == ImageFormat.YUV_420_888) {
+            false
+        } else {
+            image.format == ImageFormat.YCBCR_P010 ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && image.format == 0x36) ||
+            actualIsSource10Bit
+        }
 
         val planes = image.planes
         val yPlane = planes[0]
@@ -192,7 +231,8 @@ class ProResSoftwareRecordingSession(
             uRowStride = uPlane.rowStride,
             vRowStride = vPlane.rowStride,
             uPixelStride = uPlane.pixelStride,
-            vPixelStride = vPlane.pixelStride
+            vPixelStride = vPlane.pixelStride,
+            isSource10Bit = isImage10Bit
         )
 
         muxer.writeVideoFrame(proresFrame)

@@ -2138,10 +2138,16 @@ class Camera2Engine(private val context: Context) {
      */
     fun setCinemaConfig(newConfig: CinemaConfig) {
         val oldProfile = _cinemaConfig.value.colorProfile
-        cinemaEngine.config = newConfig
-        _cinemaConfig.value = newConfig
-        exposureCompensationIndex = newConfig.exposureCompensation
-        if (newConfig.colorProfile == CinemaColorProfile.HLG10 && oldProfile != CinemaColorProfile.HLG10) {
+        val supportedDepths = _cinemaCapabilities.value.getSupportedBitDepthsForCodec(newConfig.codec)
+        val sanitizedConfig = if (newConfig.logBitDepth == LogBitDepth.BIT_10 && !supportedDepths.contains(LogBitDepth.BIT_10)) {
+            newConfig.copy(logBitDepth = LogBitDepth.BIT_8)
+        } else {
+            newConfig
+        }
+        cinemaEngine.config = sanitizedConfig
+        _cinemaConfig.value = sanitizedConfig
+        exposureCompensationIndex = sanitizedConfig.exposureCompensation
+        if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && oldProfile != CinemaColorProfile.HLG10) {
             cinemaEngine.hlg10AutoExposureEngine.reset()
         }
         if (currentMode == CameraMode.CINEMA) {
@@ -5635,6 +5641,9 @@ class Camera2Engine(private val context: Context) {
                     supportedProfiles.contains(DynamicRangeProfiles.HDR10) ||
                     supportedProfiles.contains(DynamicRangeProfiles.HDR10_PLUS)
 
+            val isCameraSource10Bit = isCinema && has10BitDynamicRange &&
+                    (cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10 || isHlg10Active || cinemaCodec == CinemaCodec.PRORES)
+
             val is10BitRequested = isCinema &&
                     (cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10 || isHlg10Active || cinemaCodec == CinemaCodec.PRORES) &&
                     has10BitDynamicRange
@@ -5790,9 +5799,47 @@ class Camera2Engine(private val context: Context) {
                         onError("Google VP9 encoder does not support ${finalRecordWidth}x${finalRecordHeight} @ ${targetFps}fps with Surface input on this device. Please select a supported resolution or codec.")
                         return
                     }
+                    if (cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10) {
+                        val isVp9Profile2 = DeviceCompatibilityManager.isVp9Profile2Supported()
+                        if (!isVp9Profile2 || !has10BitDynamicRange) {
+                            isStartingRecording.set(false)
+                            _isRecordingVideo.value = false
+                            try { tempFile.delete() } catch (_: Exception) {}
+                            onError("Google VP9 10-bit hardware recording is not supported on this device.")
+                            return
+                        }
+                    }
+                }
+
+                if (cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10) {
+                    val supportedDepths = cinemaCapabilities.value.getSupportedBitDepthsForCodec(cinemaCodec)
+                    if (!supportedDepths.contains(LogBitDepth.BIT_10)) {
+                        isStartingRecording.set(false)
+                        _isRecordingVideo.value = false
+                        try { tempFile.delete() } catch (_: Exception) {}
+                        val msg = when (cinemaCodec) {
+                            CinemaCodec.VP9 -> "Google VP9 10-bit hardware recording is not supported on this device."
+                            CinemaCodec.H265 -> "HEVC 10-bit hardware recording is not supported on this device."
+                            CinemaCodec.H264 -> "H.264 does not support 10-bit recording."
+                            else -> "10-bit recording is not supported for ${cinemaCodec.label}."
+                        }
+                        onError(msg)
+                        return
+                    }
+                    if (cinemaCodec != CinemaCodec.PRORES && !has10BitDynamicRange) {
+                        isStartingRecording.set(false)
+                        _isRecordingVideo.value = false
+                        try { tempFile.delete() } catch (_: Exception) {}
+                        onError("Camera sensor does not support 10-bit dynamic range capture for ${cinemaCodec.label}.")
+                        return
+                    }
                 }
                 isSoftwareCinemaRecording = true
                 val cinemaOrientationHint = getVideoOrientationHint()
+                val cinemaTargetBitDepth = when (cinemaCodec) {
+                    CinemaCodec.PRORES -> LogBitDepth.BIT_10
+                    else -> cinemaConfig.value.logBitDepth
+                }
                 recorderSurface = try {
                     cinemaSoftwareRecorder.startRecording(
                         destFile = tempFile,
@@ -5801,11 +5848,12 @@ class Camera2Engine(private val context: Context) {
                         fps = targetFps,
                         bitrate = bitrate,
                         codec = cinemaCodec,
-                        bitDepth = if (is10BitRequested && cinemaCapabilities.value.supportsEndToEnd10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
+                        bitDepth = cinemaTargetBitDepth,
                         isAudioEnabled = isAudioEnabled,
                         orientationHint = cinemaOrientationHint,
                         colorProfile = cinemaConfig.value.colorProfile,
-                        colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace
+                        colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace,
+                        isSource10Bit = isCameraSource10Bit
                     )
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed starting software cinema recording: ${t.message}", t)
@@ -6224,7 +6272,7 @@ class Camera2Engine(private val context: Context) {
                             camera = camera,
                             previewSurface = previewSurf,
                             recorderSurface = recorderSurface,
-                            is10Bit = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES),
+                            is10Bit = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES && has10BitDynamicRange),
                             physicalCameraId = targetPhysId,
                             callback = sessionCallback
                         )

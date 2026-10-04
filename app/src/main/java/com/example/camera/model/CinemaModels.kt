@@ -217,14 +217,14 @@ data class CinemaHardwareCapabilities(
         return when (codec) {
             CinemaCodec.PRORES -> listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
             CinemaCodec.H265 -> {
-                if (supportsHevc10Bit && supports10BitRecording) {
+                if (supportsHevc10Bit && (supports10BitRecording || is10BitAvailableOnHAL)) {
                     listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
                 } else {
                     listOf(LogBitDepth.OFF, LogBitDepth.BIT_8)
                 }
             }
             CinemaCodec.VP9 -> {
-                if (supportsVp910Bit && supports10BitRecording) {
+                if (supportsVp910Bit && (supports10BitRecording || is10BitAvailableOnHAL)) {
                     listOf(LogBitDepth.OFF, LogBitDepth.BIT_8, LogBitDepth.BIT_10)
                 } else {
                     listOf(LogBitDepth.OFF, LogBitDepth.BIT_8)

@@ -118,7 +118,8 @@ class ProResEncoder(
         uRowStride: Int,
         vRowStride: Int,
         uPixelStride: Int,
-        vPixelStride: Int
+        vPixelStride: Int,
+        isSource10Bit: Boolean = this.isSource10Bit
     ): ByteArray {
         require(yPlane.isNotEmpty() && uPlane.isNotEmpty() && vPlane.isNotEmpty()) {
             "Input YUV planes cannot be empty"
@@ -198,7 +199,8 @@ class ProResEncoder(
                     vRowStride = vRowStride,
                     uPixelStride = uPixelStride,
                     vPixelStride = vPixelStride,
-                    tempBlock = block
+                    tempBlock = block,
+                    isSource10Bit = isSource10Bit
                 )
 
                 sliceTable[sliceIndex] = sliceBytes.size.toShort()
@@ -241,7 +243,8 @@ class ProResEncoder(
         vRowStride: Int,
         uPixelStride: Int,
         vPixelStride: Int,
-        tempBlock: FloatArray
+        tempBlock: FloatArray,
+        isSource10Bit: Boolean
     ): ByteArray {
         val numMbs = endMbX - startMbX
         val yBlocks = Array(numMbs * 4) { IntArray(64) }
@@ -264,7 +267,8 @@ class ProResEncoder(
                         rowStride = yRowStride,
                         startX = pixX + bx * 8,
                         startY = pixY + by * 8,
-                        outBlock = tempBlock
+                        outBlock = tempBlock,
+                        isSource10Bit = isSource10Bit
                     )
                     forwardDct8x8(tempBlock, yBlocks[yBlockIdx++])
                 }
@@ -278,7 +282,8 @@ class ProResEncoder(
                     pixelStride = uPixelStride,
                     chromaStartX = mbX * 8,
                     lumaStartY = pixY + by * 8,
-                    outBlock = tempBlock
+                    outBlock = tempBlock,
+                    isSource10Bit = isSource10Bit
                 )
                 forwardDct8x8(tempBlock, uBlocks[uBlockIdx++])
             }
@@ -291,7 +296,8 @@ class ProResEncoder(
                     pixelStride = vPixelStride,
                     chromaStartX = mbX * 8,
                     lumaStartY = pixY + by * 8,
-                    outBlock = tempBlock
+                    outBlock = tempBlock,
+                    isSource10Bit = isSource10Bit
                 )
                 forwardDct8x8(tempBlock, vBlocks[vBlockIdx++])
             }
@@ -432,21 +438,37 @@ class ProResEncoder(
         rowStride: Int,
         startX: Int,
         startY: Int,
-        outBlock: FloatArray
+        outBlock: FloatArray,
+        isSource10Bit: Boolean
     ) {
         val planeLen = yPlane.size
+        val yPixStride = if (isSource10Bit) 2 else 1
         for (y in 0 until 8) {
             val py = minOf(startY + y, height - 1)
             val rowOffset = py * rowStride
             for (x in 0 until 8) {
                 val px = minOf(startX + x, width - 1)
-                val idx = rowOffset + px
-                val byteVal = if (idx in 0 until planeLen) {
-                    yPlane[idx].toInt() and 0xFF
-                } else 128
-                // Standard linear 8-to-10 bit scaling: [0..255] -> [0..1023]
-                val tenBitVal = if (isSource10Bit) byteVal else ((byteVal shl 2) or (byteVal ushr 6))
-                outBlock[y * 8 + x] = tenBitVal.toFloat()
+                val tenBitVal: Float = if (isSource10Bit) {
+                    val idx = rowOffset + px * yPixStride
+                    if (idx + 1 < planeLen) {
+                        val b0 = yPlane[idx].toInt() and 0xFF
+                        val b1 = yPlane[idx + 1].toInt() and 0xFF
+                        val raw16 = b0 or (b1 shl 8)
+                        val v10 = if (raw16 > 1023) (raw16 ushr 6) and 0x3FF else raw16 and 0x3FF
+                        v10.toFloat()
+                    } else if (idx < planeLen) {
+                        val b0 = yPlane[idx].toInt() and 0xFF
+                        ((b0 shl 2) or (b0 ushr 6)).toFloat()
+                    } else 512.0f
+                } else {
+                    val idx = rowOffset + px
+                    val byteVal = if (idx in 0 until planeLen) {
+                        yPlane[idx].toInt() and 0xFF
+                    } else 128
+                    // Standard linear 8-to-10 bit scaling: [0..255] -> [0..1023]
+                    ((byteVal shl 2) or (byteVal ushr 6)).toFloat()
+                }
+                outBlock[y * 8 + x] = tenBitVal
             }
         }
     }
@@ -457,7 +479,8 @@ class ProResEncoder(
         pixelStride: Int,
         chromaStartX: Int,
         lumaStartY: Int,
-        outBlock: FloatArray
+        outBlock: FloatArray,
+        isSource10Bit: Boolean
     ) {
         val planeLen = cPlane.size
         val maxCy = chromaHeight - 1
@@ -476,22 +499,51 @@ class ProResEncoder(
                 val cx = minOf(chromaStartX + x, maxCx)
                 val offset0 = rowOffset0 + cx * pixelStride
 
-                val byteVal0 = if (offset0 in 0 until planeLen) {
-                    cPlane[offset0].toInt() and 0xFF
-                } else 128
+                val tenBitVal: Float = if (isSource10Bit) {
+                    val val0 = if (offset0 + 1 < planeLen) {
+                        val b0 = cPlane[offset0].toInt() and 0xFF
+                        val b1 = cPlane[offset0 + 1].toInt() and 0xFF
+                        val raw16 = b0 or (b1 shl 8)
+                        if (raw16 > 1023) (raw16 ushr 6) and 0x3FF else raw16 and 0x3FF
+                    } else if (offset0 < planeLen) {
+                        val b0 = cPlane[offset0].toInt() and 0xFF
+                        (b0 shl 2) or (b0 ushr 6)
+                    } else 512
 
-                val finalByteVal = if (isOddRow && cy != cyNext) {
-                    val offset1 = rowOffset1 + cx * pixelStride
-                    val byteVal1 = if (offset1 in 0 until planeLen) {
-                        cPlane[offset1].toInt() and 0xFF
-                    } else byteVal0
-                    (byteVal0 + byteVal1 + 1) shr 1
+                    val finalVal = if (isOddRow && cy != cyNext) {
+                        val offset1 = rowOffset1 + cx * pixelStride
+                        val val1 = if (offset1 + 1 < planeLen) {
+                            val b0 = cPlane[offset1].toInt() and 0xFF
+                            val b1 = cPlane[offset1 + 1].toInt() and 0xFF
+                            val raw16 = b0 or (b1 shl 8)
+                            if (raw16 > 1023) (raw16 ushr 6) and 0x3FF else raw16 and 0x3FF
+                        } else if (offset1 < planeLen) {
+                            val b0 = cPlane[offset1].toInt() and 0xFF
+                            (b0 shl 2) or (b0 ushr 6)
+                        } else val0
+                        (val0 + val1 + 1) shr 1
+                    } else {
+                        val0
+                    }
+                    finalVal.toFloat()
                 } else {
-                    byteVal0
+                    val byteVal0 = if (offset0 in 0 until planeLen) {
+                        cPlane[offset0].toInt() and 0xFF
+                    } else 128
+
+                    val finalByteVal = if (isOddRow && cy != cyNext) {
+                        val offset1 = rowOffset1 + cx * pixelStride
+                        val byteVal1 = if (offset1 in 0 until planeLen) {
+                            cPlane[offset1].toInt() and 0xFF
+                        } else byteVal0
+                        (byteVal0 + byteVal1 + 1) shr 1
+                    } else {
+                        byteVal0
+                    }
+                    ((finalByteVal shl 2) or (finalByteVal ushr 6)).toFloat()
                 }
 
-                val tenBitVal = if (isSource10Bit) finalByteVal else ((finalByteVal shl 2) or (finalByteVal ushr 6))
-                outBlock[y * 8 + x] = tenBitVal.toFloat()
+                outBlock[y * 8 + x] = tenBitVal
             }
         }
     }

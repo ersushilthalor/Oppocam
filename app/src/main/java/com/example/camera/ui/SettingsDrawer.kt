@@ -1111,15 +1111,19 @@ private fun CinemaSettingsPage(
             )
         }
 
+        val supportedDepths = cinemaCapabilities.getSupportedBitDepthsForCodec(cinemaConfig.codec)
+        val bitDepthOptions = mutableListOf<Pair<LogBitDepth, String>>()
+        if (supportedDepths.contains(LogBitDepth.BIT_10)) {
+            bitDepthOptions.add(LogBitDepth.BIT_10 to "10-bit Log")
+        }
+        bitDepthOptions.add(LogBitDepth.BIT_8 to "8-bit Standard")
+
         item {
             SettingsSegmentedCard(
                 title = "Log Bit Depth",
                 description = "10-bit delivers 1,024 shades per color channel to eliminate banding.",
-                options = listOf(
-                    LogBitDepth.BIT_10 to "10-bit Log",
-                    LogBitDepth.BIT_8 to "8-bit Standard"
-                ),
-                selectedOption = cinemaConfig.logBitDepth,
+                options = bitDepthOptions,
+                selectedOption = if (supportedDepths.contains(cinemaConfig.logBitDepth)) cinemaConfig.logBitDepth else LogBitDepth.BIT_8,
                 onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(logBitDepth = it)) }
             )
         }

@@ -176,8 +176,19 @@ object DeviceCompatibilityManager {
         return false
     }
 
+    fun isHardwareEncoder(info: MediaCodecInfo): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (info.isSoftwareOnly) return false
+            if (info.isHardwareAccelerated) return true
+        }
+        val name = info.name.lowercase()
+        return !name.startsWith("c2.android.") &&
+               !name.startsWith("omx.google.") &&
+               !name.startsWith("omx.ffmpeg.")
+    }
+
     /**
-     * Checks whether the device supports 10-bit VP9 encoding (Profile 2) with Surface input.
+     * Checks whether the device supports 10-bit VP9 encoding (Profile 2) with Surface input via hardware encoder.
      */
     fun isVp9Profile2Supported(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
@@ -185,6 +196,7 @@ object DeviceCompatibilityManager {
             val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             for (info in codecList.codecInfos) {
                 if (!info.isEncoder) continue
+                if (!isHardwareEncoder(info)) continue
                 val types = info.supportedTypes
                 if (types.any { it.equals(MediaFormat.MIMETYPE_VIDEO_VP9, ignoreCase = true) }) {
                     try {

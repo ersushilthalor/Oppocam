@@ -437,7 +437,7 @@ fun CinemaSettingsWindow(
                             onClick = {
                                 if (profile == CinemaColorProfile.HLG10) {
                                     // ARIB STD-B67 standard: Rec.2020 gamut. 8-bit default if 10-bit unsupported.
-                                    val canDo10Bit = capabilities.supports10BitRecording && (config.codec == CinemaCodec.H265 && capabilities.supportsHevc10Bit)
+                                    val canDo10Bit = capabilities.getSupportedBitDepthsForCodec(config.codec).contains(LogBitDepth.BIT_10)
                                     onConfigChange(
                                         config.copy(
                                             colorProfile = CinemaColorProfile.HLG10,

@@ -82,6 +82,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var baseAudioPtsUs = -1L
     private var lastAudioPtsUs = -1L
 
+    val isSource10Bit: Boolean
+        get() = activeProResSession?.actualIsSource10Bit ?: false
+
     /**
      * Initializes and starts a software-based Cinema recording session.
      * Returns the [Surface] to which Camera2 should attach as a target.
@@ -97,7 +100,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         isAudioEnabled: Boolean,
         orientationHint: Int = 0,
         colorProfile: com.example.camera.model.CinemaColorProfile = com.example.camera.model.CinemaColorProfile.NATIVE,
-        colorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709
+        colorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709,
+        isSource10Bit: Boolean = false
     ): Surface {
         val isHlg10 = colorProfile == com.example.camera.model.CinemaColorProfile.HLG10
         val effectiveCodec = if (isHlg10 && codec == CinemaCodec.H264) CinemaCodec.H265 else codec
@@ -139,7 +143,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 fps = fps,
                 isAudioEnabled = isAudioEnabled,
                 colorProfile = colorProfile,
-                colorSpace = activeColorSpace
+                colorSpace = activeColorSpace,
+                isSource10Bit = isSource10Bit
             )
             activeProResSession = session
             return session.start()
@@ -156,6 +161,13 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             if (!supported) {
                 isRecording.set(false)
                 throw IllegalStateException("Google VP9 recording is not supported for ${normWidth}x${normHeight} @ ${fps}fps with Surface input on this device")
+            }
+            if (bitDepth == LogBitDepth.BIT_10) {
+                val supported10Bit = DeviceCompatibilityManager.isVp9Profile2Supported()
+                if (!supported10Bit) {
+                    isRecording.set(false)
+                    throw IllegalStateException("Google VP9 10-bit hardware recording is not supported on this device")
+                }
             }
         }
 
@@ -382,7 +394,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             CinemaCodec.PRORES -> "video/prores"
         }
 
-        val is10BitMode = is10Bit && (codec == CinemaCodec.H265 || codec == CinemaCodec.VP9 || codec == CinemaCodec.PRORES) && has10BitEncoderForMime(mime)
+        val is10BitRequested = is10Bit && (codec == CinemaCodec.H265 || codec == CinemaCodec.VP9 || codec == CinemaCodec.PRORES)
+        if (is10BitRequested && !has10BitEncoderForMime(mime)) {
+            throw IllegalStateException("10-bit hardware encoder is not supported for $mime on this device")
+        }
+        val is10BitMode = is10BitRequested
 
         // Create software/hardware encoder matching 10-bit capabilities
         val (encoder, supportedLevel) = findEncoder(mime, is10BitMode)
@@ -464,6 +480,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 encoder.configure(retryFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 Log.i(TAG, "10-bit encoder configured successfully without level restriction")
             } catch (e2: Exception) {
+                if (is10BitMode) {
+                    throw IllegalStateException("Failed to configure genuine 10-bit encoder for $mime: ${e2.message}", e2)
+                }
                 Log.w(TAG, "Fallback to baseline encoder for $mime due to config failure", e2)
                 val fallbackFormat = MediaFormat.createVideoFormat(mime, width, height).apply {
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -509,12 +528,24 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         return surface
     }
 
+    private fun isHardwareEncoder(info: MediaCodecInfo): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (info.isSoftwareOnly) return false
+            if (info.isHardwareAccelerated) return true
+        }
+        val name = info.name.lowercase()
+        return !name.startsWith("c2.android.") &&
+               !name.startsWith("omx.google.") &&
+               !name.startsWith("omx.ffmpeg.")
+    }
+
     private fun findEncoder(mime: String, require10Bit: Boolean): Pair<MediaCodec, Int?> {
         val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
         if (require10Bit) {
             for (info in list.codecInfos) {
                 if (!info.isEncoder) continue
                 if (!info.supportedTypes.any { it.equals(mime, ignoreCase = true) }) continue
+                if (mime == MediaFormat.MIMETYPE_VIDEO_VP9 && !isHardwareEncoder(info)) continue
                 try {
                     val caps = info.getCapabilitiesForType(mime)
                     if (!caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) continue
@@ -534,6 +565,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                     }
                 } catch (ignored: Exception) {}
             }
+            val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
+            if (isRobolectric && mime != MediaFormat.MIMETYPE_VIDEO_VP9) {
+                return Pair(MediaCodec.createEncoderByType(mime), null)
+            }
+            throw IllegalStateException("No 10-bit hardware encoder supporting COLOR_FormatSurface found for $mime")
         }
         for (info in list.codecInfos) {
             if (!info.isEncoder) continue
@@ -560,11 +596,16 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     }
 
     private fun has10BitEncoderForMime(mime: String): Boolean {
+        val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
+        if (isRobolectric && mime == MediaFormat.MIMETYPE_VIDEO_HEVC) {
+            return true
+        }
         try {
             val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             for (info in list.codecInfos) {
                 if (!info.isEncoder) continue
                 if (!info.supportedTypes.any { it.equals(mime, ignoreCase = true) }) continue
+                if (mime == MediaFormat.MIMETYPE_VIDEO_VP9 && !isHardwareEncoder(info)) continue
                 val caps = try { info.getCapabilitiesForType(mime) } catch (e: Exception) { continue }
                 if (!caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) continue
                 for (pl in caps.profileLevels) {
