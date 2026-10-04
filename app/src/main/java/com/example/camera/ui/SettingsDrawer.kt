@@ -52,7 +52,7 @@ enum class SettingsPage(val title: String, val subtitle: String, val icon: Image
     CUSTOM_PIPELINE("Custom Pipeline Settings", "Rec.2020 Natural Log • 38 ISP Controls", Icons.Outlined.Tune),
     DEPTH_PROCESSING("Depth Processing", "Depth Anything V2, MediaSWLF-I & Virtual Aperture", Icons.Outlined.Layers),
     VIDEO("Video Settings", "Resolution, Frame Rate, Codec & Bitrate", Icons.Outlined.Videocam),
-    CINEMA("Pro Video Settings", "Log profiles, LUTs, Bit depth & Assist tools", Icons.Outlined.Movie),
+    CINEMA("Pro Video Settings", "Resolution, FPS, Bitrate, Codec, Noise Reduction, Sharpness, Log & LUTs", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
     NIGHT_MODE("Night Mode Settings", "Multi-Frame Fusion, Exposure & Tripod", Icons.Outlined.NightsStay),
     CAMERA_LENS("Camera & Lens Settings", "Hardware lenses & Viewfinder", Icons.Outlined.Lens),
@@ -339,11 +339,7 @@ fun SettingsDrawer(
                 if (targetPage == null) {
                     // 1. Categories Overview
                     SettingsOverviewPage(
-                        selectedTemplate = uiCustomizationState.selectedTemplate,
-                        onSelectTemplate = onSelectTemplate,
                         onSelectPage = { currentPage = it },
-                        viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
-                        onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange,
                         onResetAll = onResetAllSettings
                     )
                 } else {
@@ -469,9 +465,7 @@ fun SettingsDrawer(
                             gridType = gridType,
                             onGridTypeSelected = onGridTypeSelected,
                             horizonLeveler = horizonLeveler,
-                            onHorizonLevelerToggle = onHorizonLevelerToggle,
-                            viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
-                            onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange
+                            onHorizonLevelerToggle = onHorizonLevelerToggle
                         )
                         SettingsPage.STABILIZATION -> StabilizationSettingsPage(
                             mainCameraStabilizationMode = mainCameraStabilizationMode,
@@ -535,121 +529,14 @@ fun SettingsDrawer(
  */
 @Composable
 private fun SettingsOverviewPage(
-    selectedTemplate: UiTemplateType,
-    onSelectTemplate: (UiTemplateType) -> Unit,
     onSelectPage: (SettingsPage) -> Unit,
-    viewfinderCornerRadiusDp: Int,
-    onViewfinderCornerRadiusChange: (Int) -> Unit,
     onResetAll: () -> Unit
 ) {
-    val quickTemplates = remember {
-        listOf(
-            UiTemplateType.STOCK_PIXEL to "Pixel",
-            UiTemplateType.SAMSUNG to "One UI",
-            UiTemplateType.IPHONE to "iPhone",
-            UiTemplateType.VIVO to "Vivo",
-            UiTemplateType.MINIMAL_PRO to "Leica Pro",
-            UiTemplateType.FUTURISTIC_GLASS to "Cyber Glass",
-            UiTemplateType.DSLR_PRO to "DSLR",
-            UiTemplateType.IMMERSIVE_EDGE to "Immersive",
-            UiTemplateType.CUSTOM to "Custom UI"
-        )
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 8.dp)
     ) {
-        item {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
-                border = BorderStroke(1.dp, Color(0x33FFD54F)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Camera UI Template",
-                                color = Color.White,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Active: ${selectedTemplate.title}",
-                                color = Color(0xFFFFD54F),
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        TextButton(
-                            onClick = { onSelectPage(SettingsPage.UI_LAYOUT) },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "Floating Windows & More →",
-                                color = Color(0xFF8AB4F8),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Multi-row grid so One UI, iPhone, Vivo, Pixel, etc. are all immediately visible
-                    quickTemplates.chunked(3).forEach { rowItems ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 3.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            rowItems.forEach { (template, shortName) ->
-                                val isSelected = selectedTemplate == template
-                                Surface(
-                                    onClick = { onSelectTemplate(template) },
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.07f),
-                                    border = BorderStroke(
-                                        1.dp,
-                                        if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f)
-                                    ),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(38.dp)
-                                        .testTag("quick_template_${template.name.lowercase()}")
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = shortName,
-                                            color = if (isSelected) Color.Black else Color.White,
-                                            fontSize = 11.5.sp,
-                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                            maxLines = 1
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            ViewfinderCornerRadiusCard(
-                cornerRadiusDp = viewfinderCornerRadiusDp,
-                onCornerRadiusChange = onViewfinderCornerRadiusChange
-            )
-        }
-
         items(SettingsPage.entries.toTypedArray()) { page ->
             CategoryCard(
                 title = page.title,
@@ -2144,9 +2031,7 @@ private fun CameraLensSettingsPage(
     gridType: GridType,
     onGridTypeSelected: (GridType) -> Unit,
     horizonLeveler: Boolean,
-    onHorizonLevelerToggle: (Boolean) -> Unit,
-    viewfinderCornerRadiusDp: Int,
-    onViewfinderCornerRadiusChange: (Int) -> Unit
+    onHorizonLevelerToggle: (Boolean) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -2235,13 +2120,6 @@ private fun CameraLensSettingsPage(
                 options = listOf(30 to "30 FPS", 60 to "60 FPS", 120 to "120 FPS"),
                 selectedOption = viewfinderFps,
                 onOptionSelected = onViewfinderFpsSelected
-            )
-        }
-
-        item {
-            ViewfinderCornerRadiusCard(
-                cornerRadiusDp = viewfinderCornerRadiusDp,
-                onCornerRadiusChange = onViewfinderCornerRadiusChange
             )
         }
     }

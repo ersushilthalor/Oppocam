@@ -516,11 +516,26 @@ fun Viewfinder(
                                             } catch (ignored: Exception) {}
                                         }
                                     }
+
+                                    // Real-time floating window backdrop blur sampling
+                                    if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive) {
+                                        com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
+                                            textureView = this@apply,
+                                            blurStrength = floatingWindowBlurStrength
+                                        )
+                                    }
                                 }
                             }
                         }
                     },
                     update = { textureView ->
+                        // Sample background blur frame when windows are active
+                        if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
+                            com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
+                                textureView = textureView,
+                                blurStrength = floatingWindowBlurStrength
+                            )
+                        }
                         // Dynamically synchronize TextureView transformation with current dimensions and buffer size
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()

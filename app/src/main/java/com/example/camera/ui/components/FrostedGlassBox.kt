@@ -1,5 +1,6 @@
 package com.example.camera.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -11,17 +12,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.camera.model.FloatingWindowGlassStyle
+import kotlin.math.roundToInt
 
 /**
  * Authentic Glass Container with Physical Glass Styling:
@@ -49,6 +53,7 @@ fun FrostedGlassBox(
     content: @Composable BoxScope.() -> Unit
 ) {
     val appearance = LocalFloatingWindowAppearance.current
+    val blurredBackdrop by BackdropBlurManager.blurredBackdropState
     val baseDensity = androidx.compose.ui.platform.LocalDensity.current
     val effectiveScale = if (applyWindowScale) appearance.windowScale.coerceIn(0.75f, 1.25f) else 1.0f
     val scaledDensity = remember(baseDensity, effectiveScale) {
@@ -187,26 +192,67 @@ fun FrostedGlassBox(
                 )
         ) {
             // Layer 1: Real Optical Backdrop Blur
-            // When blurStrength > 0, an optical blur layer is applied directly to the glass substrate
-            if (blurStrength > 0.5f) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .blur(
-                            radius = effectiveBlurDp,
-                            edgeTreatment = BlurredEdgeTreatment.Unbounded
+            // Directly displays the camera viewfinder backdrop processed by BackdropBlurManager
+            var windowBoundsInRoot by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+
+            Canvas(
+                modifier = Modifier
+                    .matchParentSize()
+                    .onGloballyPositioned { coordinates ->
+                        val pos = coordinates.positionInRoot()
+                        val sz = coordinates.size
+                        windowBoundsInRoot = androidx.compose.ui.geometry.Rect(
+                            pos.x,
+                            pos.y,
+                            pos.x + sz.width,
+                            pos.y + sz.height
                         )
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = blurGlowAlpha),
-                                    baseTint.copy(alpha = (tintAlpha * 0.75f).coerceAtMost(0.85f)),
-                                    Color(0xFF05070D).copy(alpha = (tintAlpha * 0.95f).coerceAtMost(0.95f))
-                                ),
-                                radius = 900f
+                    }
+            ) {
+                val bmp = blurredBackdrop
+                if (bmp != null && !bmp.isRecycled) {
+                    val rootSize = BackdropBlurManager.rootWindowSize
+                    val rw = (rootSize?.width?.toFloat() ?: size.width).coerceAtLeast(1f)
+                    val rh = (rootSize?.height?.toFloat() ?: size.height).coerceAtLeast(1f)
+                    val bw = bmp.width.toFloat()
+                    val bh = bmp.height.toFloat()
+
+                    val scaleX = bw / rw
+                    val scaleY = bh / rh
+
+                    val bounds = windowBoundsInRoot
+                    val left = (bounds?.left ?: 0f).coerceIn(0f, rw)
+                    val top = (bounds?.top ?: 0f).coerceIn(0f, rh)
+                    val right = (bounds?.right ?: rw).coerceIn(left + 1f, rw)
+                    val bottom = (bounds?.bottom ?: rh).coerceIn(top + 1f, rh)
+
+                    val srcLeft = (left * scaleX).roundToInt().coerceIn(0, bmp.width - 1)
+                    val srcTop = (top * scaleY).roundToInt().coerceIn(0, bmp.height - 1)
+                    val srcRight = (right * scaleX).roundToInt().coerceIn(srcLeft + 1, bmp.width)
+                    val srcBottom = (bottom * scaleY).roundToInt().coerceIn(srcTop + 1, bmp.height)
+
+                    val srcRect = android.graphics.Rect(srcLeft, srcTop, srcRight, srcBottom)
+                    val dstRect = android.graphics.Rect(0, 0, size.width.roundToInt(), size.height.roundToInt())
+
+                    drawIntoCanvas { canvas ->
+                        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
+                            isAntiAlias = true
+                            isFilterBitmap = true
+                            isDither = true
+                        }
+                        canvas.nativeCanvas.drawBitmap(bmp, srcRect, dstRect, paint)
+                    }
+                } else {
+                    // Graceful fallback when camera frame is not yet available
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF141824).copy(alpha = 0.85f),
+                                Color(0xFF0A0C14).copy(alpha = 0.95f)
                             )
                         )
-                )
+                    )
+                }
             }
 
             // Layer 2: Translucent Tinted Glass Substrate (responds directly to Transparency slider)

@@ -307,9 +307,11 @@ fun CameraScreen(
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
 
     val isAnyWindowOpen = isPhotoFilterBarOpen || isPortraitStyleBarOpen ||
-            isCinemaSettingsOpen || isManualProOpen || isMoreModesOpen ||
+            isCinemaSettingsOpen || isLogProfileWindowOpen || isLutWindowOpen ||
+            isManualProOpen || isMoreModesOpen ||
             (cameraMode == CameraMode.PORTRAIT && isPortraitSettingsOpen) ||
-            isVideoSettingsPanelOpen || isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
+            isVideoSettingsPanelOpen || isCustomVideoPipelineSettingsOpen ||
+            isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
             isEvControlOpen
 

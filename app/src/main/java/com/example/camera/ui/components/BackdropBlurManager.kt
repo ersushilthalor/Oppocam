@@ -86,22 +86,87 @@ object BackdropBlurManager {
      * into a root-screen-aligned bitmap so floating windows show a 1:1 un-zoomed, pixel-free blur.
      */
     fun onViewfinderFrame(textureView: TextureView, blurStrength: Float) {
-        // Zero frame copy: Main viewfinder is single camera preview source with zero added latency
-    }
+        if (!isWindowActive) return
+        if (!textureView.isAvailable || textureView.width <= 0 || textureView.height <= 0) return
 
-    /**
-     * Instantly re-blurs the cached background when the user adjusts the Blur Strength slider.
-     */
-    fun onBlurStrengthChanged(newStrength: Float) {
-        currentBlurStrength = newStrength
-        val raw = lastRawSampleBitmap ?: return
-        if (raw.isRecycled) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (lastRawSampleBitmap != null && (now - lastSampleTime < MIN_SAMPLE_INTERVAL_MS)) {
+            return
+        }
+        if (processingJob?.isActive == true) {
+            return
+        }
 
-        scope.launch {
-            val pass1 = applyFastStackBlur(raw, newStrength * 0.85f)
-            val blurred = applyFastStackBlur(pass1, newStrength * 0.65f)
-            if (pass1 != blurred && !pass1.isRecycled) {
-                pass1.recycle()
+        currentBlurStrength = blurStrength
+        lastSampleTime = now
+
+        val rootW = rootWindowSize?.width ?: textureView.width
+        val rootH = rootWindowSize?.height ?: textureView.height
+        if (rootW <= 0 || rootH <= 0) return
+
+        val sampleW = SAMPLE_WIDTH
+        val sampleH = ((SAMPLE_WIDTH.toFloat() * rootH / rootW).roundToInt()).coerceIn(360, 960)
+
+        // Ensure reusableRootAlignedBitmap has correct dimensions
+        val rootBmp = reusableRootAlignedBitmap?.takeIf {
+            !it.isRecycled && it.width == sampleW && it.height == sampleH
+        } ?: Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888).also {
+            reusableRootAlignedBitmap = it
+        }
+
+        val bounds = viewfinderBoundsInRoot
+        if (bounds != null && rootW > 0 && rootH > 0) {
+            val left = (bounds.left / rootW * sampleW).roundToInt().coerceIn(0, sampleW)
+            val top = (bounds.top / rootH * sampleH).roundToInt().coerceIn(0, sampleH)
+            val right = (bounds.right / rootW * sampleW).roundToInt().coerceIn(left, sampleW)
+            val bottom = (bounds.bottom / rootH * sampleH).roundToInt().coerceIn(top, sampleH)
+            val tvSampleW = (right - left).coerceAtLeast(1)
+            val tvSampleH = (bottom - top).coerceAtLeast(1)
+
+            val tvBmp = reusableTextureBitmap?.takeIf {
+                !it.isRecycled && it.width == tvSampleW && it.height == tvSampleH
+            } ?: Bitmap.createBitmap(tvSampleW, tvSampleH, Bitmap.Config.ARGB_8888).also {
+                reusableTextureBitmap = it
+            }
+
+            try {
+                textureView.getBitmap(tvBmp)
+                val canvas = Canvas(rootBmp)
+                canvas.drawColor(android.graphics.Color.BLACK)
+                canvas.drawBitmap(tvBmp, left.toFloat(), top.toFloat(), null)
+            } catch (e: Exception) {
+                return
+            }
+        } else {
+            try {
+                textureView.getBitmap(rootBmp)
+            } catch (e: Exception) {
+                return
+            }
+        }
+
+        // Store downsampled raw frame into lastRawSampleBitmap for instant re-blurring on slider adjustments
+        val rawSample = lastRawSampleBitmap?.takeIf {
+            !it.isRecycled && it.width == sampleW && it.height == sampleH
+        } ?: Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888).also {
+            lastRawSampleBitmap = it
+        }
+
+        val copyCanvas = Canvas(rawSample)
+        copyCanvas.drawBitmap(rootBmp, 0f, 0f, null)
+
+        // Make an isolated copy for the background blur coroutine
+        val rawCopy = try {
+            Bitmap.createBitmap(rawSample)
+        } catch (e: Exception) {
+            return
+        }
+
+        val targetStrength = currentBlurStrength
+        processingJob = scope.launch {
+            val blurred = processBlur(rawCopy, targetStrength)
+            if (rawCopy != blurred && !rawCopy.isRecycled) {
+                rawCopy.recycle()
             }
             withContext(Dispatchers.Main) {
                 val old = blurredBackdropState.value
@@ -114,11 +179,65 @@ object BackdropBlurManager {
     }
 
     /**
+     * Instantly re-blurs the cached background when the user adjusts the Blur Strength slider.
+     */
+    fun onBlurStrengthChanged(newStrength: Float) {
+        currentBlurStrength = newStrength.coerceIn(0f, 50f)
+        val raw = lastRawSampleBitmap ?: return
+        if (raw.isRecycled) return
+
+        val rawCopy = try {
+            Bitmap.createBitmap(raw)
+        } catch (e: Exception) {
+            return
+        }
+
+        processingJob?.cancel()
+        processingJob = scope.launch {
+            val blurred = processBlur(rawCopy, currentBlurStrength)
+            if (rawCopy != blurred && !rawCopy.isRecycled) {
+                rawCopy.recycle()
+            }
+            withContext(Dispatchers.Main) {
+                val old = blurredBackdropState.value
+                blurredBackdropState.value = blurred
+                if (old != null && old != blurred && !old.isRecycled) {
+                    old.recycle()
+                }
+            }
+        }
+    }
+
+    /**
+     * Processes blur strength mapping:
+     * - 0.0: completely sharp backdrop (no blur applied)
+     * - 0.1 - 50.0: smooth progression up to clearly heavy frosted blur
+     */
+    fun processBlur(src: Bitmap, blurStrength: Float): Bitmap {
+        if (blurStrength <= 0.2f) {
+            return Bitmap.createBitmap(src)
+        }
+        val clampedStrength = blurStrength.coerceIn(0f, 50f)
+        val radius1 = (clampedStrength * 0.60f).roundToInt().coerceIn(1, 30)
+        val pass1 = applyFastStackBlur(src, radius1.toFloat())
+
+        if (clampedStrength > 6f) {
+            val radius2 = (clampedStrength * 0.45f).roundToInt().coerceIn(1, 24)
+            val pass2 = applyFastStackBlur(pass1, radius2.toFloat())
+            if (pass1 != pass2 && !pass1.isRecycled) {
+                pass1.recycle()
+            }
+            return pass2
+        }
+        return pass1
+    }
+
+    /**
      * Optimized Mario Klingemann StackBlur:
      * High-speed O(N) integer box-blur approximation with smooth Gaussian fall-off.
      */
     private fun applyFastStackBlur(src: Bitmap, blurStrength: Float): Bitmap {
-        val radius = (blurStrength * 0.70f).roundToInt().coerceIn(0, 32)
+        val radius = blurStrength.roundToInt().coerceIn(0, 32)
         if (radius < 1) {
             return Bitmap.createBitmap(src)
         }
