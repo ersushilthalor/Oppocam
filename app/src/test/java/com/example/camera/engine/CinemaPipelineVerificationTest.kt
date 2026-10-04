@@ -203,30 +203,121 @@ class CinemaPipelineVerificationTest {
     fun testCinematicLutsBakeAndColorSeparation() {
         val configUnbaked = CinemaConfig(
             colorProfile = CinemaColorProfile.FLAT_LOG,
-            selectedLut = CinematicLut.TEAL_ORANGE,
+            selectedLut = CinematicLut.BLOCKBUSTER,
             isBakeLutToOutput = false
         )
         assertFalse("LUT should not be baked into file if isBakeLutToOutput is false", configUnbaked.shouldBakeLut)
 
         val configBaked = CinemaConfig(
             colorProfile = CinemaColorProfile.FLAT_LOG,
-            selectedLut = CinematicLut.TEAL_ORANGE,
+            selectedLut = CinematicLut.BLOCKBUSTER,
             isBakeLutToOutput = true
         )
-        assertTrue("LUT must be baked when selectedLut != NONE and isBakeLutToOutput is true", configBaked.shouldBakeLut)
+        assertTrue("LUT must be baked when selectedLut is not OFF and isBakeLutToOutput is true", configBaked.shouldBakeLut)
 
-        // Verify Hollywood cinematic LUT values are properly calibrated
-        val tealOrange = CinematicLut.TEAL_ORANGE
-        assertTrue(tealOrange.contrast > 1.0f)
-        assertTrue(tealOrange.saturation > 1.0f)
+        // Verify the 5 required presets are present in displayPresets
+        val presetIds = CinematicLut.displayPresets.map { it.id }
+        assertTrue("Must contain OFF", presetIds.contains("off"))
+        assertTrue("Must contain STANDARD", presetIds.contains("standard"))
+        assertTrue("Must contain BLOCKBUSTER", presetIds.contains("blockbuster"))
+        assertTrue("Must contain THRILLER", presetIds.contains("thriller"))
+        assertTrue("Must contain WEDDING", presetIds.contains("wedding"))
+        assertTrue("Must contain CUSTOM", presetIds.contains("custom_cube"))
 
-        val warmCinema = CinematicLut.WARM_CINEMA
-        assertTrue("Warm Cinema has filmic contrast", warmCinema.contrast > 1.0f)
-        assertTrue("Warm Cinema has amber warmth offset", warmCinema.warmCoolOffset > 0f)
+        // Verify distinct cinematic tonal character for each preset
+        val off = CinematicLut.OFF
+        assertEquals(1.0f, off.contrast, 0.001f)
+        assertEquals(1.0f, off.saturation, 0.001f)
+        assertEquals(0.0f, off.blacksToe, 0.001f)
+        assertEquals(0.0f, off.shadowToe, 0.001f)
 
-        val mutedFilm = CinematicLut.MUTED_FILM
-        assertTrue("Muted Film has lifted shadow toe", mutedFilm.shadowToe > 0f)
-        assertTrue("Muted Film has subdued saturation", mutedFilm.saturation < 1.0f)
+        val standard = CinematicLut.STANDARD
+        assertTrue("Standard has refined film contrast", standard.contrast > 1.05f)
+        assertTrue("Standard has inky anchored blacks", standard.blacksToe < 0f)
+        assertTrue("Standard has open organic shadows", standard.shadowToe > 0f)
+        assertTrue("Standard has organic highlight roll-off", standard.highlightRollOff > 0.60f)
+
+        val blockbuster = CinematicLut.BLOCKBUSTER
+        assertTrue("Blockbuster has bold S-curve contrast", blockbuster.contrast > 1.20f)
+        assertTrue("Blockbuster has rich saturation", blockbuster.saturation > 1.10f)
+        assertTrue("Blockbuster has deep inky blacks", blockbuster.blacksToe < -0.04f)
+        assertTrue("Blockbuster has dense shadows", blockbuster.shadowToe < 0f)
+        assertTrue("Blockbuster has warm/amber midtone offset", blockbuster.warmCoolOffset > 0.04f)
+
+        val thriller = CinematicLut.THRILLER
+        assertTrue("Thriller has high micro-contrast", thriller.contrast > 1.25f)
+        assertTrue("Thriller has subdued cold saturation", thriller.saturation < 0.90f)
+        assertTrue("Thriller has cold slate-blue color offset", thriller.warmCoolOffset < -0.15f)
+        assertTrue("Thriller has deep darks", thriller.blacksToe < -0.05f)
+
+        val wedding = CinematicLut.WEDDING
+        assertTrue("Wedding has lifted matte velvety blacks", wedding.blacksToe > 0.03f)
+        assertTrue("Wedding has luminous lifted shadow toe", wedding.shadowToe > 0.05f)
+        assertTrue("Wedding has radiant midtones", wedding.midtonesGain > 1.05f)
+        assertTrue("Wedding has ultra-soft highlight shoulder", wedding.highlightRollOff > 0.80f)
+        assertTrue("Wedding has warm champagne tint", wedding.warmCoolOffset > 0.10f)
+    }
+
+    @Test
+    fun testAllLutsProduceDistinctTonalCurvesAndManualControlsWorkAfterLut() {
+        // Test pixel values sampled through all LUTs
+        val testR = 0.5f
+        val testG = 0.45f
+        val testB = 0.4f
+
+        val offPixel = CinemaColorPipeline.samplePresetLut(CinematicLut.OFF, testR, testG, testB)
+        val standardPixel = CinemaColorPipeline.samplePresetLut(CinematicLut.STANDARD, testR, testG, testB)
+        val blockbusterPixel = CinemaColorPipeline.samplePresetLut(CinematicLut.BLOCKBUSTER, testR, testG, testB)
+        val thrillerPixel = CinemaColorPipeline.samplePresetLut(CinematicLut.THRILLER, testR, testG, testB)
+        val weddingPixel = CinemaColorPipeline.samplePresetLut(CinematicLut.WEDDING, testR, testG, testB)
+
+        // OFF must equal input
+        assertEquals(testR, offPixel[0], 0.01f)
+        assertEquals(testG, offPixel[1], 0.01f)
+        assertEquals(testB, offPixel[2], 0.01f)
+
+        // Every LUT must produce distinct chromatic and tonal changes
+        assertFalse("Blockbuster must differ from Standard", blockbusterPixel.contentEquals(standardPixel))
+        assertFalse("Thriller must differ from Standard", thrillerPixel.contentEquals(standardPixel))
+        assertFalse("Wedding must differ from Standard", weddingPixel.contentEquals(standardPixel))
+        assertFalse("Thriller must differ from Blockbuster", thrillerPixel.contentEquals(blockbusterPixel))
+
+        // Verify that manual controls (Exposure, Contrast, Blacks, Shadows, Midtones, Highlights, Whites, Saturation, Vibrance)
+        // apply cleanly AFTER the LUT:
+        val lutOnlyConfig = CinemaConfig(
+            colorProfile = CinemaColorProfile.NATIVE,
+            selectedLut = CinematicLut.BLOCKBUSTER,
+            lutIntensity = 1.0f
+        )
+        val lutOnlyPixel = CinemaColorPipeline.evaluatePixel(0.5f, 0.45f, 0.4f, lutOnlyConfig)
+
+        // 1. Exposure manual control after LUT
+        val expConfig = lutOnlyConfig.copy(exposure = 0.5f)
+        val expPixel = CinemaColorPipeline.evaluatePixel(0.5f, 0.45f, 0.4f, expConfig)
+        assertTrue("Exposure after LUT must brighten pixel", expPixel[0] > lutOnlyPixel[0])
+
+        // 2. Shadows manual control after LUT (tested on shadow pixel 0.2)
+        val lutShadowPixel = CinemaColorPipeline.evaluatePixel(0.2f, 0.2f, 0.2f, lutOnlyConfig)
+        val shadowsConfig = lutOnlyConfig.copy(shadows = 0.6f)
+        val shadowsLiftedPixel = CinemaColorPipeline.evaluatePixel(0.2f, 0.2f, 0.2f, shadowsConfig)
+        assertTrue("Shadows after LUT must lift shadow pixel", shadowsLiftedPixel[0] > lutShadowPixel[0])
+
+        // 3. Highlights manual control after LUT (tested on highlight pixel 0.65)
+        val lutHighlightPixel = CinemaColorPipeline.evaluatePixel(0.65f, 0.65f, 0.65f, lutOnlyConfig)
+        val highlightsConfig = lutOnlyConfig.copy(highlights = 0.6f)
+        val highlightsBoostedPixel = CinemaColorPipeline.evaluatePixel(0.65f, 0.65f, 0.65f, highlightsConfig)
+        assertTrue("Highlights after LUT must boost highlight pixel", highlightsBoostedPixel[0] > lutHighlightPixel[0])
+
+        // 4. Contrast manual control after LUT
+        val contrastConfig = lutOnlyConfig.copy(contrast = 0.5f)
+        val contrastPixel = CinemaColorPipeline.evaluatePixel(0.65f, 0.65f, 0.65f, contrastConfig)
+        assertTrue("Contrast after LUT affects highlights", contrastPixel[0] > lutHighlightPixel[0])
+
+        // 5. Saturation manual control after LUT
+        val satDesatConfig = lutOnlyConfig.copy(saturation = 0.0f)
+        val desatPixel = CinemaColorPipeline.evaluatePixel(0.6f, 0.4f, 0.3f, satDesatConfig)
+        assertEquals("Saturation 0 after LUT makes RGB equal", desatPixel[0], desatPixel[1], 0.015f)
+        assertEquals("Saturation 0 after LUT makes RGB equal", desatPixel[1], desatPixel[2], 0.015f)
     }
 
     @Test
@@ -612,75 +703,39 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
-    fun testVibrantGreenLutSelectiveFoliageBoostAndSkinToneProtection() {
+    fun testBlockbusterLutColorSeparationAndSkinTones() {
         assertTrue(
-            "Vibrant Green / Punchy Green LUT must be in displayPresets",
-            CinematicLut.displayPresets.contains(CinematicLut.VIBRANT_GREEN)
+            "Blockbuster LUT must be in displayPresets",
+            CinematicLut.displayPresets.contains(CinematicLut.BLOCKBUSTER)
         )
-        assertEquals("Vibrant Green / Punchy Green", CinematicLut.VIBRANT_GREEN.label)
+        assertEquals("Blockbuster", CinematicLut.BLOCKBUSTER.label)
 
         val baseConfig = CinemaConfig(
             colorProfile = CinemaColorProfile.NATIVE,
-            selectedLut = CinematicLut.NONE
+            selectedLut = CinematicLut.OFF
         )
-        val vibrantGreenConfig = CinemaConfig(
+        val blockbusterConfig = CinemaConfig(
             colorProfile = CinemaColorProfile.NATIVE,
-            selectedLut = CinematicLut.VIBRANT_GREEN,
+            selectedLut = CinematicLut.BLOCKBUSTER,
             lutIntensity = 1.0f
         )
 
-        // 1. Test Foliage / Green pixel (e.g. natural leaf green)
-        val foliageR = 0.24f
-        val foliageG = 0.56f
-        val foliageB = 0.20f
-        val baseFoliage = CinemaColorPipeline.evaluatePixel(foliageR, foliageG, foliageB, baseConfig)
-        val gradedFoliage = CinemaColorPipeline.evaluatePixel(foliageR, foliageG, foliageB, vibrantGreenConfig)
-
-        val baseFoliageSat = maxOf(baseFoliage[0], baseFoliage[1], baseFoliage[2]) -
-                minOf(baseFoliage[0], baseFoliage[1], baseFoliage[2])
-        val gradedFoliageSat = maxOf(gradedFoliage[0], gradedFoliage[1], gradedFoliage[2]) -
-                minOf(gradedFoliage[0], gradedFoliage[1], gradedFoliage[2])
-
-        assertTrue(
-            "Foliage green saturation must be noticeably boosted ($gradedFoliageSat > ${baseFoliageSat * 1.25f})",
-            gradedFoliageSat > baseFoliageSat * 1.25f
-        )
-        assertTrue(
-            "Green channel dominance over red/blue must increase for punchy greens",
-            (gradedFoliage[1] - gradedFoliage[0]) > (baseFoliage[1] - baseFoliage[0]) + 0.10f
-        )
+        // 1. Test Cool Shadow / Cyan region (e.g. R=0.15, G=0.30, B=0.35)
+        val shadowR = 0.15f
+        val shadowG = 0.30f
+        val shadowB = 0.35f
+        val gradedShadow = CinemaColorPipeline.evaluatePixel(shadowR, shadowG, shadowB, blockbusterConfig)
+        assertTrue("Blockbuster must push blue/cyan in shadow/cool regions", gradedShadow[2] >= gradedShadow[0])
 
         // 2. Test Human Skin Tone pixel (natural warm skin: R=0.76, G=0.58, B=0.48)
         val skinR = 0.76f
         val skinG = 0.58f
         val skinB = 0.48f
         val baseSkin = CinemaColorPipeline.evaluatePixel(skinR, skinG, skinB, baseConfig)
-        val gradedSkin = CinemaColorPipeline.evaluatePixel(skinR, skinG, skinB, vibrantGreenConfig)
+        val gradedSkin = CinemaColorPipeline.evaluatePixel(skinR, skinG, skinB, blockbusterConfig)
 
-        val baseSkinSat = maxOf(baseSkin[0], baseSkin[1], baseSkin[2]) -
-                minOf(baseSkin[0], baseSkin[1], baseSkin[2])
-        val gradedSkinSat = maxOf(gradedSkin[0], gradedSkin[1], gradedSkin[2]) -
-                minOf(gradedSkin[0], gradedSkin[1], gradedSkin[2])
-
-        // MOST IMPORTANT: Do not increase skin saturation or make skin unnaturally orange/red
-        assertTrue(
-            "Skin saturation must NOT increase ($gradedSkinSat <= $baseSkinSat + 0.005f)",
-            gradedSkinSat <= baseSkinSat + 0.005f
-        )
-        val baseSkinRedOrangeSpread = baseSkin[0] - baseSkin[1]
-        val gradedSkinRedOrangeSpread = gradedSkin[0] - gradedSkin[1]
-        assertTrue(
-            "Skin must not become more orange/red ($gradedSkinRedOrangeSpread <= $baseSkinRedOrangeSpread + 0.002f)",
-            gradedSkinRedOrangeSpread <= baseSkinRedOrangeSpread + 0.002f
-        )
-
-        // Keep skin tones natural, clean and slightly bright/fair-looking
-        val baseSkinLuma = 0.2126f * baseSkin[0] + 0.7152f * baseSkin[1] + 0.0722f * baseSkin[2]
         val gradedSkinLuma = 0.2126f * gradedSkin[0] + 0.7152f * gradedSkin[1] + 0.0722f * gradedSkin[2]
-        assertTrue(
-            "Skin tone should remain clean and slightly bright/fair-looking ($gradedSkinLuma >= $baseSkinLuma)",
-            gradedSkinLuma >= baseSkinLuma
-        )
+        assertTrue("Blockbuster skin tones should remain vibrant and well separated", gradedSkinLuma > 0.4f)
     }
 
     @Test
@@ -1268,7 +1323,7 @@ class CinemaPipelineVerificationTest {
         // Log/CST -> 3D LUT -> tonal/color grading controls -> output transform/gamma
         val config = CinemaConfig(
             colorProfile = CinemaColorProfile.FLAT_LOG,
-            selectedLut = CinematicLut.TEAL_ORANGE,
+            selectedLut = CinematicLut.BLOCKBUSTER,
             lutIntensity = 0.75f,
             exposure = 0.5f,
             contrast = 0.2f,

@@ -685,18 +685,33 @@ class CinemaEngine(private val context: Context) {
                 y = (y - pedestalReduction + midtoneExpand).coerceIn(0f, 1f)
             }
 
-            // LUT highlight roll-off and shadow toe integration:
-            if (lut != CinematicLut.NONE) {
-                // LUT shadow toe (lift or deepen)
+            // LUT tonal adjustments (blacks, shadows, midtones, highlights, roll-off):
+            if (!lut.isOff) {
+                // LUT blacks toe (< 0.22)
+                if (lut.blacksToe != 0.0f && x < 0.22f) {
+                    val bWeight = (1.0f - x / 0.22f).pow(2.0f)
+                    y += lut.blacksToe * 0.12f * bWeight
+                }
+                // LUT shadow toe (< 0.40)
                 if (lut.shadowToe != 0.0f && x < 0.40f) {
                     val weight = (1.0f - x / 0.40f).pow(2.0f)
-                    y += lut.shadowToe * 0.12f * weight
+                    y += lut.shadowToe * 0.14f * weight
                 }
-                // LUT highlight roll-off compression
+                // LUT midtones gain
+                if (lut.midtonesGain != 1.0f) {
+                    val mWeight = (4.0f * x * (1.0f - x)).coerceIn(0f, 1f)
+                    y += (lut.midtonesGain - 1.0f) * 0.16f * mWeight
+                }
+                // LUT highlight roll-off compression (> 0.60)
                 if (lut.highlightRollOff > 0.5f && x > 0.60f) {
                     val factor = (lut.highlightRollOff - 0.5f) * 2.0f
                     val rollWeight = ((x - 0.60f) / 0.40f).pow(2.0f)
-                    y -= factor * 0.06f * rollWeight
+                    y -= factor * 0.07f * rollWeight
+                }
+                // LUT whites gain (> 0.75)
+                if (lut.whitesGain != 1.0f && x > 0.75f) {
+                    val wWeight = ((x - 0.75f) / 0.25f).pow(2.0f)
+                    y += (lut.whitesGain - 1.0f) * 0.14f * wWeight
                 }
             }
 
@@ -924,22 +939,14 @@ class CinemaEngine(private val context: Context) {
                 var cellVal = (1.0f - effectiveSat) * lum + effectiveSat * baseVal
 
                 // Blend in LUT's matrix color separation if available
-                if (lut != CinematicLut.NONE) {
+                if (!lut.isOff) {
                     val lutMatrix = when (lut) {
-                        CinematicLut.REC_709 -> floatArrayOf(1.00f, 0.00f, 0.00f, 0.00f, 1.00f, 0.00f, 0.00f, 0.00f, 1.00f)
-                        CinematicLut.KODAK_2383 -> floatArrayOf(1.14f, 0.01f, -0.04f, 0.01f, 1.05f, -0.02f, -0.05f, -0.02f, 0.92f)
-                        CinematicLut.FUJI_ETERNA -> floatArrayOf(1.02f, 0.02f, -0.01f, 0.01f, 1.01f, -0.01f, -0.02f, 0.01f, 0.98f)
-                        CinematicLut.TEAL_ORANGE -> floatArrayOf(1.22f, -0.06f, -0.08f, -0.03f, 1.08f, 0.03f, -0.10f, 0.06f, 1.24f)
-                        CinematicLut.BLEACH_BYPASS -> floatArrayOf(1.24f, 0.01f, -0.02f, 0.01f, 1.18f, 0.01f, -0.02f, 0.02f, 1.18f)
-                        CinematicLut.WARM_SUNSET -> floatArrayOf(1.16f, 0.02f, -0.05f, 0.02f, 1.06f, -0.03f, -0.06f, -0.02f, 0.90f)
-                        CinematicLut.COOL_THRILLER -> floatArrayOf(0.92f, -0.01f, 0.02f, -0.02f, 1.02f, 0.03f, 0.02f, 0.05f, 1.18f)
-                        CinematicLut.MUTED_FILM -> floatArrayOf(0.94f, 0.02f, 0.02f, 0.02f, 0.95f, 0.02f, 0.02f, 0.02f, 0.98f)
+                        CinematicLut.OFF -> null
+                        CinematicLut.STANDARD -> floatArrayOf(1.03f, 0.00f, -0.02f, -0.01f, 1.02f, -0.01f, -0.02f, -0.01f, 1.01f)
+                        CinematicLut.BLOCKBUSTER -> floatArrayOf(1.22f, -0.06f, -0.08f, -0.03f, 1.08f, 0.02f, -0.10f, 0.05f, 1.24f)
+                        CinematicLut.THRILLER -> floatArrayOf(0.90f, -0.02f, 0.02f, -0.03f, 0.98f, 0.04f, 0.03f, 0.06f, 1.20f)
+                        CinematicLut.WEDDING -> floatArrayOf(1.12f, 0.02f, -0.04f, 0.01f, 1.04f, -0.02f, -0.04f, 0.00f, 0.94f)
                         CinematicLut.CUSTOM -> config.customLutPath?.let { CubeLutParser.getOrLoad(it)?.matrix3x3 }
-                        CinematicLut.FILMIC_NEUTRAL -> floatArrayOf(1.00f, 0.00f, 0.00f, 0.00f, 1.00f, 0.00f, 0.00f, 0.00f, 1.00f)
-                        CinematicLut.WARM_CINEMA -> floatArrayOf(1.16f, 0.02f, -0.05f, 0.02f, 1.06f, -0.03f, -0.06f, -0.02f, 0.90f)
-                        CinematicLut.COOL_DRAMATIC -> floatArrayOf(0.92f, -0.01f, 0.02f, -0.02f, 1.02f, 0.03f, 0.02f, 0.05f, 1.18f)
-                        CinematicLut.HIGH_CONTRAST_CINEMA -> floatArrayOf(1.24f, 0.01f, -0.02f, 0.01f, 1.18f, 0.01f, -0.02f, 0.02f, 1.18f)
-                        CinematicLut.SOFT_FILM -> floatArrayOf(1.02f, 0.02f, -0.01f, 0.01f, 1.01f, -0.01f, -0.02f, 0.01f, 0.98f)
                         else -> null
                     }
                     if (lutMatrix != null) {

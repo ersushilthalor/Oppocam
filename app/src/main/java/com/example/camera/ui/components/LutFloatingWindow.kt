@@ -131,7 +131,7 @@ fun LutFloatingWindow(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Intensity Slider & Bake switch
-            if (config.selectedLut != CinematicLut.NONE) {
+            if (!config.selectedLut.isOff) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()

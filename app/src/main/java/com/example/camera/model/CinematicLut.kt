@@ -5,16 +5,19 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 
 /**
- * Authentic Hollywood-inspired Cinematic Look-Up Table (LUT) Presets for Log & Cinema grading.
+ * Authentic Cinematic Look-Up Table (LUT) Presets for Cinema & Video grading.
  *
  * Implements genuine film-style color grades affecting:
+ * - Colour (channel cross-talk, chromatic split, and gamut separation)
  * - Contrast & S-curve dynamics
- * - Tonal curve shaping (highlight shoulder & shadow toe)
- * - Highlight roll-off (organic compression without harsh clipping)
- * - Shadow rendering (lifted matte vs deep inky blacks)
- * - Saturation & chroma density
- * - Skin tone protection & radiant separation
- * - Color separation across RGB spectrum
+ * - Blacks (deep darks anchoring vs lifted matte blacks)
+ * - Shadows (lower tonal range sculpting)
+ * - Midtones (skin-tone fidelity & dynamic separation)
+ * - Highlights (shoulder curve sculpting)
+ * - Whites (specular roll-off & highlight retention)
+ * - Highlight & Shadow roll-off (organic transition without harsh clipping)
+ * - Saturation & Vibrance (chromatic density with skin protection)
+ * - Overall Tonal Curve
  */
 enum class CinematicLut(
     val id: String,
@@ -24,207 +27,143 @@ enum class CinematicLut(
     val accentColor: Color,
     val contrast: Float = 1.0f,
     val saturation: Float = 1.0f,
-    val highlightRollOff: Float = 0.5f,
+    val vibrance: Float = 0.0f,
+    val blacksToe: Float = 0.0f,
     val shadowToe: Float = 0.0f,
+    val midtonesGain: Float = 1.0f,
+    val highlightsGain: Float = 1.0f,
+    val whitesGain: Float = 1.0f,
+    val highlightRollOff: Float = 0.5f,
+    val shadowRollOff: Float = 0.0f,
     val warmCoolOffset: Float = 0.0f,
     val matrixValues: FloatArray? = null
 ) {
-    // 1. Rec.709 Default Reference Standard
-    REC_709(
-        id = "rec_709",
-        label = "Rec.709 Standard",
-        description = "Official ITU-R BT.709 broadcast film standard: pure natural colors, balanced skin tones, reference neutral baseline",
-        category = "Standard",
-        accentColor = Color(0xFFFFD54F),
-        contrast = 1.08f,
-        saturation = 1.00f,
-        highlightRollOff = 0.55f,
-        shadowToe = 0.00f,
-        warmCoolOffset = 0.00f,
-        matrixValues = floatArrayOf(
-            1.00f, 0.00f, 0.00f, 0f, 0f,
-            0.00f, 1.00f, 0.00f, 0f, 0f,
-            0.00f, 0.00f, 1.00f, 0f, 0f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 2. Kodak 2383 Print Stock (Hollywood Classic)
-    KODAK_2383(
-        id = "kodak_2383",
-        label = "Kodak 2383 Print",
-        description = "Hollywood iconic print stock: deep warm blacks, radiant golden skin tones, cyan sky roll-off, filmic density",
-        category = "Film Print",
-        accentColor = Color(0xFFFFB300),
-        contrast = 1.18f,
-        saturation = 1.10f,
-        highlightRollOff = 0.70f,
-        shadowToe = -0.02f,
-        warmCoolOffset = 0.12f,
-        matrixValues = floatArrayOf(
-            1.14f, 0.01f, -0.04f, 0f, 5f,
-            0.01f, 1.05f, -0.02f, 0f, 2f,
-            -0.05f, -0.02f, 0.92f, 0f, -3f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 3. Fuji ETERNA (Arthouse / Gentle Film)
-    FUJI_ETERNA(
-        id = "fuji_eterna",
-        label = "Fuji ETERNA",
-        description = "Arthouse & indie cinema favorite: gentle organic contrast, soft highlight shoulder, luminous pastel skin tones",
-        category = "Film Print",
-        accentColor = Color(0xFF81C784),
-        contrast = 1.04f,
-        saturation = 0.92f,
-        highlightRollOff = 0.85f,
-        shadowToe = 0.06f,
-        warmCoolOffset = -0.02f,
-        matrixValues = floatArrayOf(
-            1.02f, 0.02f, -0.01f, 0f, 4f,
-            0.01f, 1.01f, -0.01f, 0f, 3f,
-            -0.02f, 0.01f, 0.98f, 0f, 2f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 4. Teal & Orange (Hollywood Blockbuster)
-    TEAL_ORANGE(
-        id = "teal_orange",
-        label = "Teal & Orange",
-        description = "Blockbuster color separation: luminous amber skin tones sculpted against rich deep cyan-teal shadow contrast",
-        category = "Hollywood",
-        accentColor = Color(0xFF00E5FF),
-        contrast = 1.22f,
-        saturation = 1.15f,
-        highlightRollOff = 0.62f,
-        shadowToe = -0.04f,
-        warmCoolOffset = 0.08f,
-        matrixValues = floatArrayOf(
-            1.22f, -0.06f, -0.08f, 0f, 8f,
-            -0.03f, 1.08f, 0.03f, 0f, 2f,
-            -0.10f, 0.06f, 1.24f, 0f, 6f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 5. Bleach Bypass (Gritty Silver Retention)
-    BLEACH_BYPASS(
-        id = "bleach_bypass",
-        label = "Bleach Bypass",
-        description = "Gritty silver retention process: striking high contrast, muted saturation, intense darks, specular punch",
-        category = "Dramatic",
-        accentColor = Color(0xFFE0E0E0),
-        contrast = 1.32f,
-        saturation = 0.72f,
-        highlightRollOff = 0.40f,
-        shadowToe = -0.08f,
-        warmCoolOffset = -0.05f,
-        matrixValues = floatArrayOf(
-            1.24f, 0.01f, -0.02f, 0f, -4f,
-            0.01f, 1.18f, 0.01f, 0f, -3f,
-            -0.02f, 0.02f, 1.18f, 0f, -3f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 6. Warm Sunset / Golden Hour
-    WARM_SUNSET(
-        id = "warm_sunset",
-        label = "Golden Hour",
-        description = "Warm golden sunlight: radiant amber skin glow, creamy highlight shoulder, warm lifted shadow toe",
-        category = "Warmth",
-        accentColor = Color(0xFFFF7043),
-        contrast = 1.14f,
-        saturation = 1.12f,
-        highlightRollOff = 0.68f,
-        shadowToe = 0.04f,
-        warmCoolOffset = 0.22f,
-        matrixValues = floatArrayOf(
-            1.16f, 0.02f, -0.05f, 0f, 6f,
-            0.02f, 1.06f, -0.03f, 0f, 3f,
-            -0.06f, -0.02f, 0.90f, 0f, -4f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 7. Cool Thriller / Neo-Noir
-    COOL_THRILLER(
-        id = "cool_thriller",
-        label = "Neo Thriller",
-        description = "Moody neo-noir thriller: slate-blue shadows, sculpted cheekbones, crisp specular highlights",
-        category = "Dramatic",
-        accentColor = Color(0xFF4FC3F7),
-        contrast = 1.24f,
-        saturation = 0.95f,
-        highlightRollOff = 0.50f,
-        shadowToe = -0.03f,
-        warmCoolOffset = -0.16f,
-        matrixValues = floatArrayOf(
-            0.92f, -0.01f, 0.02f, 0f, -3f,
-            -0.02f, 1.02f, 0.03f, 0f, 1f,
-            0.02f, 0.05f, 1.18f, 0f, 8f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 8. Muted Arthouse
-    MUTED_FILM(
-        id = "muted_film",
-        label = "Muted Arthouse",
-        description = "Nostalgic vintage film: lifted matte charcoal shadows, desaturated earthy tones, delicate highlight roll-off",
-        category = "Vintage",
-        accentColor = Color(0xFFB0BEC5),
-        contrast = 1.06f,
-        saturation = 0.78f,
-        highlightRollOff = 0.80f,
-        shadowToe = 0.08f,
-        warmCoolOffset = -0.04f,
-        matrixValues = floatArrayOf(
-            0.94f, 0.02f, 0.02f, 0f, 5f,
-            0.02f, 0.95f, 0.02f, 0f, 5f,
-            0.02f, 0.02f, 0.98f, 0f, 7f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 9. Vibrant Green / Punchy Green (Selective Foliage Boost & Skin Protection)
-    VIBRANT_GREEN(
-        id = "vibrant_green",
-        label = "Vibrant Green / Punchy Green",
-        description = "Lush, punchy saturated greens and foliage with selective skin-tone protection for natural, clean, slightly bright & fair skin",
-        category = "Nature",
-        accentColor = Color(0xFF00E676),
-        contrast = 1.08f,
-        saturation = 1.00f,
-        highlightRollOff = 0.58f,
-        shadowToe = 0.01f,
-        warmCoolOffset = 0.00f,
-        matrixValues = floatArrayOf(
-            0.99f, -0.02f, 0.02f, 0f, 2f,
-            -0.08f, 1.24f, -0.08f, 0f, 3f,
-            -0.02f, -0.02f, 1.04f, 0f, 3f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    // 10. Clean Log (Mastering)
-    NONE(
-        id = "clean_log",
-        label = "Clean Log",
-        description = "Unmodified sensor curve for pure uncompressed Log mastering or natural video",
+    // 1. OFF - Unprocessed sensor pass-through
+    OFF(
+        id = "off",
+        label = "Off",
+        description = "Neutral sensor pass-through with no LUT grading applied",
         category = "Master",
-        accentColor = Color(0xFFCFD8DC),
+        accentColor = Color(0xFF9E9E9E),
         contrast = 1.0f,
         saturation = 1.0f,
-        highlightRollOff = 0.5f,
+        vibrance = 0.0f,
+        blacksToe = 0.0f,
         shadowToe = 0.0f,
+        midtonesGain = 1.0f,
+        highlightsGain = 1.0f,
+        whitesGain = 1.0f,
+        highlightRollOff = 0.5f,
+        shadowRollOff = 0.0f,
         warmCoolOffset = 0.0f,
         matrixValues = null
     ),
 
-    // 11. Custom Imported .cube LUT
+    // 2. STANDARD - Refined ITU-R BT.709 Broadcast Film Standard
+    STANDARD(
+        id = "standard",
+        label = "Standard",
+        description = "Reference film print: natural skin-tone fidelity, open organic shadows, anchored inky blacks, and smooth highlight roll-off",
+        category = "Standard",
+        accentColor = Color(0xFFFFD54F),
+        contrast = 1.10f,
+        saturation = 1.04f,
+        vibrance = 0.06f,
+        blacksToe = -0.015f,
+        shadowToe = 0.02f,
+        midtonesGain = 1.03f,
+        highlightsGain = 1.01f,
+        whitesGain = 0.98f,
+        highlightRollOff = 0.65f,
+        shadowRollOff = 0.03f,
+        warmCoolOffset = 0.02f,
+        matrixValues = floatArrayOf(
+            1.03f, 0.00f, -0.02f, 0f, 2f,
+            -0.01f, 1.02f, -0.01f, 0f, 1f,
+            -0.02f, -0.01f, 1.01f, 0f, 0f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    ),
+
+    // 3. BLOCKBUSTER - Hollywood 35mm Motion Picture Look
+    BLOCKBUSTER(
+        id = "blockbuster",
+        label = "Blockbuster",
+        description = "Hollywood cinema: bold punchy S-curve, deep inky blacks, teal-cyan shadows, luminous warm amber skin tones, and golden highlight roll-off",
+        category = "Hollywood",
+        accentColor = Color(0xFF00E5FF),
+        contrast = 1.25f,
+        saturation = 1.15f,
+        vibrance = 0.18f,
+        blacksToe = -0.045f,
+        shadowToe = -0.03f,
+        midtonesGain = 1.08f,
+        highlightsGain = 1.04f,
+        whitesGain = 0.95f,
+        highlightRollOff = 0.74f,
+        shadowRollOff = -0.02f,
+        warmCoolOffset = 0.06f,
+        matrixValues = floatArrayOf(
+            1.22f, -0.06f, -0.08f, 0f, 7f,
+            -0.03f, 1.08f, 0.02f, 0f, 2f,
+            -0.10f, 0.05f, 1.24f, 0f, 8f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    ),
+
+    // 4. THRILLER - Moody Neo-Noir & Suspense
+    THRILLER(
+        id = "thriller",
+        label = "Thriller",
+        description = "Neo-noir suspense: tense micro-contrast, cold slate-blue shadows, deep darks, clinical desaturation, and piercing crisp specular highlights",
+        category = "Dramatic",
+        accentColor = Color(0xFF4FC3F7),
+        contrast = 1.28f,
+        saturation = 0.80f,
+        vibrance = -0.10f,
+        blacksToe = -0.055f,
+        shadowToe = -0.04f,
+        midtonesGain = 0.95f,
+        highlightsGain = 1.05f,
+        whitesGain = 1.03f,
+        highlightRollOff = 0.46f,
+        shadowRollOff = -0.04f,
+        warmCoolOffset = -0.18f,
+        matrixValues = floatArrayOf(
+            0.90f, -0.02f, 0.02f, 0f, -4f,
+            -0.03f, 0.98f, 0.04f, 0f, 0f,
+            0.03f, 0.06f, 1.20f, 0f, 10f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    ),
+
+    // 5. WEDDING - Fine-Art Romance & Editorial
+    WEDDING(
+        id = "wedding",
+        label = "Wedding",
+        description = "Fine-art romance: luminous pastel tones, lifted velvety charcoal blacks, glowing shadow toe, creamy skin midtones, and dreamy soft highlight shoulder",
+        category = "Fine Art",
+        accentColor = Color(0xFFF48FB1),
+        contrast = 1.04f,
+        saturation = 1.06f,
+        vibrance = 0.12f,
+        blacksToe = 0.04f,
+        shadowToe = 0.07f,
+        midtonesGain = 1.10f,
+        highlightsGain = 1.02f,
+        whitesGain = 0.96f,
+        highlightRollOff = 0.86f,
+        shadowRollOff = 0.06f,
+        warmCoolOffset = 0.14f,
+        matrixValues = floatArrayOf(
+            1.12f, 0.02f, -0.04f, 0f, 6f,
+            0.01f, 1.04f, -0.02f, 0f, 3f,
+            -0.04f, 0.00f, 0.94f, 0f, -2f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    ),
+
+    // 6. CUSTOM - User-imported .cube 3D LUT
     CUSTOM(
         id = "custom_cube",
         label = "Custom (.cube)",
@@ -233,122 +172,69 @@ enum class CinematicLut(
         accentColor = Color(0xFFAB47BC),
         contrast = 1.0f,
         saturation = 1.0f,
-        highlightRollOff = 0.5f,
+        vibrance = 0.0f,
+        blacksToe = 0.0f,
         shadowToe = 0.0f,
+        midtonesGain = 1.0f,
+        highlightsGain = 1.0f,
+        whitesGain = 1.0f,
+        highlightRollOff = 0.5f,
+        shadowRollOff = 0.0f,
         warmCoolOffset = 0.0f,
-        matrixValues = null
-    ),
-
-    // Legacy aliases for backwards compatibility
-    PUNCHY_GREEN(
-        id = "punchy_green",
-        label = "Vibrant Green / Punchy Green",
-        description = "Lush, punchy saturated greens and foliage with selective skin-tone protection",
-        category = "Nature",
-        accentColor = Color(0xFF00E676),
-        contrast = 1.08f,
-        saturation = 1.00f,
-        highlightRollOff = 0.58f,
-        shadowToe = 0.01f,
-        warmCoolOffset = 0.00f,
-        matrixValues = floatArrayOf(
-            0.99f, -0.02f, 0.02f, 0f, 2f,
-            -0.08f, 1.24f, -0.08f, 0f, 3f,
-            -0.02f, -0.02f, 1.04f, 0f, 3f,
-            0f, 0f, 0f, 1f, 0f
-        )
-    ),
-
-    FILMIC_NEUTRAL(
-        id = "filmic_neutral",
-        label = "Rec.709 Standard",
-        description = "Official ITU-R BT.709 broadcast standard",
-        category = "Standard",
-        accentColor = Color(0xFFFFD54F),
-        contrast = 1.08f,
-        saturation = 1.00f,
-        highlightRollOff = 0.55f,
-        shadowToe = 0.00f,
-        warmCoolOffset = 0.00f,
-        matrixValues = null
-    ),
-
-    WARM_CINEMA(
-        id = "warm_cinema",
-        label = "Golden Hour",
-        description = "Golden hour warm glow",
-        category = "Warmth",
-        accentColor = Color(0xFFFF7043),
-        contrast = 1.14f,
-        saturation = 1.12f,
-        highlightRollOff = 0.68f,
-        shadowToe = 0.04f,
-        warmCoolOffset = 0.22f,
-        matrixValues = null
-    ),
-
-    COOL_DRAMATIC(
-        id = "cool_dramatic",
-        label = "Neo Thriller",
-        description = "Moody neo-noir thriller",
-        category = "Dramatic",
-        accentColor = Color(0xFF4FC3F7),
-        contrast = 1.24f,
-        saturation = 0.95f,
-        highlightRollOff = 0.50f,
-        shadowToe = -0.03f,
-        warmCoolOffset = -0.16f,
-        matrixValues = null
-    ),
-
-    HIGH_CONTRAST_CINEMA(
-        id = "high_contrast_cinema",
-        label = "Bleach Bypass",
-        description = "Gritty silver retention process",
-        category = "Dramatic",
-        accentColor = Color(0xFFE0E0E0),
-        contrast = 1.32f,
-        saturation = 0.72f,
-        highlightRollOff = 0.40f,
-        shadowToe = -0.08f,
-        warmCoolOffset = -0.05f,
-        matrixValues = null
-    ),
-
-    SOFT_FILM(
-        id = "soft_film",
-        label = "Fuji ETERNA",
-        description = "Soft gentle film emulation",
-        category = "Film Print",
-        accentColor = Color(0xFF81C784),
-        contrast = 1.04f,
-        saturation = 0.92f,
-        highlightRollOff = 0.85f,
-        shadowToe = 0.06f,
-        warmCoolOffset = -0.02f,
         matrixValues = null
     );
 
-    val isVibrantGreenLut: Boolean
-        get() = this == VIBRANT_GREEN || this == PUNCHY_GREEN
+    val isOff: Boolean get() = this == OFF
+    val isCustom: Boolean get() = this == CUSTOM
+    val isVibrantGreenLut: Boolean get() = false
 
-    /**
-     * Primary user-facing presets (excluding internal aliases).
-     */
+    val blacks: Float get() = blacksToe
+    val shadows: Float get() = shadowToe
+    val midtones: Float get() = midtonesGain
+    val highlights: Float get() = highlightsGain
+    val whites: Float get() = whitesGain
+    val shadowRolloff: Float get() = shadowRollOff
+
     companion object {
+        // Backwards compatibility mappings
+        val NONE: CinematicLut get() = OFF
+        val REC_709: CinematicLut get() = STANDARD
+        val TEAL_ORANGE: CinematicLut get() = BLOCKBUSTER
+        val COOL_THRILLER: CinematicLut get() = THRILLER
+        val WARM_SUNSET: CinematicLut get() = WEDDING
+        val KODAK_2383: CinematicLut get() = BLOCKBUSTER
+        val FUJI_ETERNA: CinematicLut get() = WEDDING
+        val BLEACH_BYPASS: CinematicLut get() = THRILLER
+        val MUTED_FILM: CinematicLut get() = THRILLER
+        val VIBRANT_GREEN: CinematicLut get() = STANDARD
+        val PUNCHY_GREEN: CinematicLut get() = STANDARD
+        val FILMIC_NEUTRAL: CinematicLut get() = STANDARD
+        val WARM_CINEMA: CinematicLut get() = WEDDING
+        val COOL_DRAMATIC: CinematicLut get() = THRILLER
+        val HIGH_CONTRAST_CINEMA: CinematicLut get() = THRILLER
+        val SOFT_FILM: CinematicLut get() = WEDDING
+
         val displayPresets: List<CinematicLut> = listOf(
-            REC_709,
-            KODAK_2383,
-            FUJI_ETERNA,
-            TEAL_ORANGE,
-            BLEACH_BYPASS,
-            WARM_SUNSET,
-            COOL_THRILLER,
-            MUTED_FILM,
-            VIBRANT_GREEN,
-            NONE,
+            OFF,
+            STANDARD,
+            BLOCKBUSTER,
+            THRILLER,
+            WEDDING,
             CUSTOM
         )
+
+        fun fromIdOrName(identifier: String?): CinematicLut {
+            if (identifier.isNullOrBlank()) return OFF
+            return when (identifier.uppercase().trim()) {
+                "OFF", "NONE", "CLEAN_LOG" -> OFF
+                "STANDARD", "REC_709", "REC709", "FILMIC_NEUTRAL", "VIBRANT_GREEN", "PUNCHY_GREEN" -> STANDARD
+                "BLOCKBUSTER", "TEAL_ORANGE", "KODAK_2383" -> BLOCKBUSTER
+                "THRILLER", "COOL_THRILLER", "COOL_DRAMATIC", "BLEACH_BYPASS", "HIGH_CONTRAST_CINEMA", "MUTED_FILM" -> THRILLER
+                "WEDDING", "WARM_SUNSET", "WARM_CINEMA", "FUJI_ETERNA", "SOFT_FILM" -> WEDDING
+                "CUSTOM", "CUSTOM_CUBE" -> CUSTOM
+                else -> values().find { it.name.equals(identifier, ignoreCase = true) || it.id.equals(identifier, ignoreCase = true) } ?: OFF
+            }
+        }
     }
 
     /**

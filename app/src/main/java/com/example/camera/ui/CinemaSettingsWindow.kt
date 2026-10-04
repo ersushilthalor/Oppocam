@@ -232,7 +232,7 @@ fun CinemaSettingsWindow(
                                 if (isSelected) {
                                     onConfigChange(
                                         config.copy(
-                                            selectedLut = CinematicLut.REC_709,
+                                            selectedLut = CinematicLut.OFF,
                                             customLutPath = null,
                                             customLutName = null
                                         )
@@ -272,7 +272,7 @@ fun CinemaSettingsWindow(
                 }
 
                 // LUT Intensity Slider (0% - 100%) and Bake LUT to Output Toggle
-                if (config.selectedLut != CinematicLut.NONE) {
+                if (!config.selectedLut.isOff) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Column(
                         modifier = Modifier

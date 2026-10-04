@@ -725,7 +725,7 @@ fun TopControlBar(
         }
 
         val lutButton = @Composable {
-            val isLutActive = cinemaConfig.selectedLut != CinematicLut.NONE && cinemaConfig.selectedLut != CinematicLut.REC_709
+            val isLutActive = !cinemaConfig.selectedLut.isOff
             Box(
                 modifier = Modifier
                     .height(34.dp)

@@ -508,21 +508,9 @@ class CameraPreferences(context: Context) {
 
     var cinemaSelectedLut: com.example.camera.model.CinematicLut
         get() {
-            val name = prefs.getString("pref_cinema_selected_lut", com.example.camera.model.CinematicLut.REC_709.name)
-                ?: com.example.camera.model.CinematicLut.REC_709.name
-            return try {
-                when (name) {
-                    "FILMIC_NEUTRAL" -> com.example.camera.model.CinematicLut.REC_709
-                    "WARM_CINEMA" -> com.example.camera.model.CinematicLut.WARM_SUNSET
-                    "COOL_DRAMATIC" -> com.example.camera.model.CinematicLut.COOL_THRILLER
-                    "HIGH_CONTRAST_CINEMA" -> com.example.camera.model.CinematicLut.BLEACH_BYPASS
-                    "SOFT_FILM" -> com.example.camera.model.CinematicLut.FUJI_ETERNA
-                    "PUNCHY_GREEN" -> com.example.camera.model.CinematicLut.VIBRANT_GREEN
-                    else -> com.example.camera.model.CinematicLut.valueOf(name)
-                }
-            } catch (e: Exception) {
-                com.example.camera.model.CinematicLut.REC_709
-            }
+            val name = prefs.getString("pref_cinema_selected_lut", com.example.camera.model.CinematicLut.OFF.name)
+                ?: com.example.camera.model.CinematicLut.OFF.name
+            return com.example.camera.model.CinematicLut.fromIdOrName(name)
         }
         set(value) = prefs.edit().putString("pref_cinema_selected_lut", value.name).apply()
 

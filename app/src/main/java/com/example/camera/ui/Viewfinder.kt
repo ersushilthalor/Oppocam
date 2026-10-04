@@ -705,7 +705,7 @@ fun Viewfinder(
                     ) || it.isLogMode
                 } ?: false
                 val badgeLut = activeLut ?: cinemaConfig?.selectedLut
-                if (cameraMode == CameraMode.CINEMA && badgeLut != null && badgeLut != CinematicLut.NONE && !isLogProfile) {
+                if (cameraMode == CameraMode.CINEMA && badgeLut != null && !badgeLut.isOff && !isLogProfile) {
                     val displayLabel = if (badgeLut == CinematicLut.CUSTOM) {
                         cinemaConfig?.customLutName ?: badgeLut.label
                     } else {

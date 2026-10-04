@@ -459,18 +459,6 @@ object CubeLutParser {
         val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
         val pixels = IntArray(width * height)
 
-        val mat = lut.matrixValues ?: floatArrayOf(
-            1f, 0f, 0f, 0f, 0f,
-            0f, 1f, 0f, 0f, 0f,
-            0f, 0f, 1f, 0f, 0f,
-            0f, 0f, 0f, 1f, 0f
-        )
-        val contrast = lut.contrast
-        val sat = lut.saturation
-        val rollOff = lut.highlightRollOff
-        val toe = lut.shadowToe
-        val warmCool = lut.warmCoolOffset
-
         for (b in 0 until n) {
             val inB = b.toFloat() / (n - 1)
             for (g in 0 until n) {
@@ -478,53 +466,10 @@ object CubeLutParser {
                 for (r in 0 until n) {
                     val inR = r.toFloat() / (n - 1)
 
-                    var rOut = (mat[0] * inR + mat[1] * inG + mat[2] * inB + mat[4] / 255f)
-                    var gOut = (mat[5] * inR + mat[6] * inG + mat[7] * inB + mat[9] / 255f)
-                    var bOut = (mat[10] * inR + mat[11] * inG + mat[12] * inB + mat[14] / 255f)
-
-                    if (warmCool != 0f) {
-                        rOut *= (1f + warmCool * 0.15f)
-                        bOut *= (1f - warmCool * 0.15f)
-                    }
-
-                    if (contrast != 1f) {
-                        rOut = 0.18f + (rOut - 0.18f) * contrast
-                        gOut = 0.18f + (gOut - 0.18f) * contrast
-                        bOut = 0.18f + (bOut - 0.18f) * contrast
-                    }
-
-                    if (toe != 0f) {
-                        val w = (1f - rOut.coerceIn(0f, 1f)).let { it * it }
-                        rOut += toe * 0.1f * w
-                        gOut += toe * 0.1f * w
-                        bOut += toe * 0.1f * w
-                    }
-                    if (rollOff > 0.5f) {
-                        val factor = (rollOff - 0.5f) * 2f
-                        if (rOut > 0.6f) {
-                            val rw = ((rOut - 0.6f) / 0.4f).let { it * it }
-                            rOut -= factor * 0.05f * rw
-                        }
-                        if (gOut > 0.6f) {
-                            val rw = ((gOut - 0.6f) / 0.4f).let { it * it }
-                            gOut -= factor * 0.05f * rw
-                        }
-                        if (bOut > 0.6f) {
-                            val rw = ((bOut - 0.6f) / 0.4f).let { it * it }
-                            bOut -= factor * 0.05f * rw
-                        }
-                    }
-
-                    if (sat != 1f) {
-                        val lum = 0.2126f * rOut + 0.7152f * gOut + 0.0722f * bOut
-                        rOut = lum + (rOut - lum) * sat
-                        gOut = lum + (gOut - lum) * sat
-                        bOut = lum + (bOut - lum) * sat
-                    }
-
-                    val red = (rOut.coerceIn(0f, 1f) * 255f).toInt()
-                    val green = (gOut.coerceIn(0f, 1f) * 255f).toInt()
-                    val blue = (bOut.coerceIn(0f, 1f) * 255f).toInt()
+                    val sampled = samplePreset(lut, inR, inG, inB)
+                    val red = (sampled[0] * 255f).toInt().coerceIn(0, 255)
+                    val green = (sampled[1] * 255f).toInt().coerceIn(0, 255)
+                    val blue = (sampled[2] * 255f).toInt().coerceIn(0, 255)
 
                     val pixelIdx = g * width + (b * n + r)
                     pixels[pixelIdx] = (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
@@ -537,9 +482,15 @@ object CubeLutParser {
     }
 
     /**
-     * Evaluates a preset cinematic LUT for an RGB pixel with exact tonal curves and color separation.
+     * Evaluates a preset cinematic LUT for an RGB pixel with exact tonal curves,
+     * contrast, blacks, shadows, midtones, highlights, whites, roll-off, saturation/vibrance,
+     * and chromatic split.
      */
     fun samplePreset(lut: com.example.camera.model.CinematicLut, inR: Float, inG: Float, inB: Float): FloatArray {
+        if (lut.isOff) {
+            return floatArrayOf(inR.coerceIn(0f, 1f), inG.coerceIn(0f, 1f), inB.coerceIn(0f, 1f))
+        }
+
         val mat = lut.matrixValues ?: floatArrayOf(
             1f, 0f, 0f, 0f, 0f,
             0f, 1f, 0f, 0f, 0f,
@@ -548,52 +499,123 @@ object CubeLutParser {
         )
         val contrast = lut.contrast
         val sat = lut.saturation
+        val vib = lut.vibrance
         val rollOff = lut.highlightRollOff
-        val toe = lut.shadowToe
+        val shadowRollOff = lut.shadowRollOff
+        val blacksToe = lut.blacksToe
+        val shadowToe = lut.shadowToe
+        val midtonesGain = lut.midtonesGain
+        val highlightsGain = lut.highlightsGain
+        val whitesGain = lut.whitesGain
         val warmCool = lut.warmCoolOffset
 
+        // 1. Color channel cross-talk & chromatic split
         var rOut = (mat[0] * inR + mat[1] * inG + mat[2] * inB + mat[4] / 255f)
         var gOut = (mat[5] * inR + mat[6] * inG + mat[7] * inB + mat[9] / 255f)
         var bOut = (mat[10] * inR + mat[11] * inG + mat[12] * inB + mat[14] / 255f)
 
+        // 2. White point / color temperature offset
         if (warmCool != 0f) {
-            rOut *= (1f + warmCool * 0.15f)
-            bOut *= (1f - warmCool * 0.15f)
+            rOut *= (1f + warmCool * 0.16f)
+            bOut *= (1f - warmCool * 0.16f)
         }
 
+        // 3. Contrast (S-Curve centered around 18% middle-grey)
         if (contrast != 1f) {
             rOut = 0.18f + (rOut - 0.18f) * contrast
             gOut = 0.18f + (gOut - 0.18f) * contrast
             bOut = 0.18f + (bOut - 0.18f) * contrast
         }
 
-        if (toe != 0f) {
-            val w = (1f - rOut.coerceIn(0f, 1f)).let { it * it }
-            rOut += toe * 0.1f * w
-            gOut += toe * 0.1f * w
-            bOut += toe * 0.1f * w
+        val luma = (0.2126f * rOut + 0.7152f * gOut + 0.0722f * bOut).coerceIn(0f, 1f)
+
+        // 4. Blacks toe shaping (< 0.22)
+        if (blacksToe != 0f) {
+            val bWeight = (1.0f - luma / 0.22f).coerceAtLeast(0f).let { it * it }
+            val bDelta = blacksToe * 0.14f * bWeight
+            rOut += bDelta
+            gOut += bDelta
+            bOut += bDelta
         }
+
+        // 5. Shadows tone shaping (< 0.45)
+        if (shadowToe != 0f) {
+            val sWeight = (1.0f - luma / 0.45f).coerceAtLeast(0f).let { it * it }
+            val sDelta = shadowToe * 0.16f * sWeight
+            rOut += sDelta
+            gOut += sDelta
+            bOut += sDelta
+        }
+
+        // 6. Midtones gain (bell curve centered at 0.18 - 0.50)
+        if (midtonesGain != 1f) {
+            val mWeight = (4.0f * luma * (1.0f - luma)).coerceIn(0f, 1f)
+            val mDelta = (midtonesGain - 1.0f) * 0.20f * mWeight
+            rOut += mDelta
+            gOut += mDelta
+            bOut += mDelta
+        }
+
+        // 7. Highlights gain (> 0.50)
+        if (highlightsGain != 1f) {
+            val hWeight = ((luma - 0.50f) / 0.50f).coerceAtLeast(0f).let { it * it }
+            val hDelta = (highlightsGain - 1.0f) * 0.18f * hWeight
+            rOut += hDelta
+            gOut += hDelta
+            bOut += hDelta
+        }
+
+        // 8. Whites gain (> 0.75)
+        if (whitesGain != 1f) {
+            val wWeight = ((luma - 0.75f) / 0.25f).coerceAtLeast(0f).let { it * it }
+            val wDelta = (whitesGain - 1.0f) * 0.16f * wWeight
+            rOut += wDelta
+            gOut += wDelta
+            bOut += wDelta
+        }
+
+        // 9. Highlight roll-off (soft-knee shoulder compression)
         if (rollOff > 0.5f) {
             val factor = (rollOff - 0.5f) * 2f
-            if (rOut > 0.6f) {
-                val rw = ((rOut - 0.6f) / 0.4f).let { it * it }
-                rOut -= factor * 0.05f * rw
+            if (rOut > 0.60f) {
+                val rw = ((rOut - 0.60f) / 0.40f).let { it * it }
+                rOut -= factor * 0.08f * rw
             }
-            if (gOut > 0.6f) {
-                val rw = ((gOut - 0.6f) / 0.4f).let { it * it }
-                gOut -= factor * 0.05f * rw
+            if (gOut > 0.60f) {
+                val gw = ((gOut - 0.60f) / 0.40f).let { it * it }
+                gOut -= factor * 0.08f * gw
             }
-            if (bOut > 0.6f) {
-                val rw = ((bOut - 0.6f) / 0.4f).let { it * it }
-                bOut -= factor * 0.05f * rw
+            if (bOut > 0.60f) {
+                val bw = ((bOut - 0.60f) / 0.40f).let { it * it }
+                bOut -= factor * 0.08f * bw
             }
         }
 
+        // 10. Shadow roll-off (smooth near-black toe transition)
+        if (shadowRollOff != 0f) {
+            val toeWeight = (1.0f - luma / 0.35f).coerceAtLeast(0f) * (luma / 0.18f).coerceIn(0f, 1f)
+            val toeDelta = shadowRollOff * 0.12f * toeWeight
+            rOut += toeDelta
+            gOut += toeDelta
+            bOut += toeDelta
+        }
+
+        // 11. Saturation & Vibrance
+        val curLuma = 0.2126f * rOut + 0.7152f * gOut + 0.0722f * bOut
         if (sat != 1f) {
-            val lum = 0.2126f * rOut + 0.7152f * gOut + 0.0722f * bOut
-            rOut = lum + (rOut - lum) * sat
-            gOut = lum + (gOut - lum) * sat
-            bOut = lum + (bOut - lum) * sat
+            rOut = curLuma + (rOut - curLuma) * sat
+            gOut = curLuma + (gOut - curLuma) * sat
+            bOut = curLuma + (bOut - curLuma) * sat
+        }
+        if (vib != 0f) {
+            val maxC = maxOf(rOut, gOut, bOut)
+            val minC = minOf(rOut, gOut, bOut)
+            val chroma = maxC - minC
+            val satWeight = (1.0f - chroma * 0.8f).coerceIn(0.2f, 1.0f)
+            val vibScale = 1.0f + vib * 0.5f * satWeight
+            rOut = curLuma + (rOut - curLuma) * vibScale
+            gOut = curLuma + (gOut - curLuma) * vibScale
+            bOut = curLuma + (bOut - curLuma) * vibScale
         }
 
         return floatArrayOf(rOut.coerceIn(0f, 1f), gOut.coerceIn(0f, 1f), bOut.coerceIn(0f, 1f))

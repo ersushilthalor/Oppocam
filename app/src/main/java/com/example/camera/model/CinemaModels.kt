@@ -104,7 +104,7 @@ enum class CinemaNoiseReduction(val label: String, val mode: Int) {
 data class CinemaConfig(
     val logBitDepth: LogBitDepth = LogBitDepth.BIT_8,
     val codec: CinemaCodec = CinemaCodec.H265,
-    val selectedLut: CinematicLut = CinematicLut.REC_709, // Default Rec.709 as requested
+    val selectedLut: CinematicLut = CinematicLut.OFF, // Default OFF
     val customLutPath: String? = null,
     val customLutName: String? = null,
     val colorProfile: CinemaColorProfile = CinemaColorProfile.NATIVE,
@@ -177,7 +177,7 @@ data class CinemaConfig(
     val effectiveCodec: CinemaCodec get() = codec
     val isLogMode: Boolean get() = colorProfile != CinemaColorProfile.NATIVE || logBitDepth != LogBitDepth.OFF
     val activeLut: CinematicLut get() = selectedLut
-    val shouldBakeLut: Boolean get() = selectedLut != CinematicLut.NONE && isBakeLutToOutput
+    val shouldBakeLut: Boolean get() = !selectedLut.isOff && isBakeLutToOutput
     val isLutPreviewOnly: Boolean get() = false
 }
 

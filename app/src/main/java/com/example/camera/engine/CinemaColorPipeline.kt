@@ -72,14 +72,14 @@ object CinemaColorPipeline {
         if (config == null) return null
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
-        if (lut == CinematicLut.NONE || intensity <= 0.001f) return null
+        if (lut.isOff || intensity <= 0.001f) return null
 
         if (lut == CinematicLut.CUSTOM && !config.customLutPath.isNullOrBlank()) {
             val parsed = CubeLutParser.getOrLoad(config.customLutPath)
             if (parsed != null) {
                 return Pair(parsed.to2DStripBitmap(), parsed.size)
             }
-        } else if (lut != CinematicLut.CUSTOM && lut != CinematicLut.NONE) {
+        } else if (lut != CinematicLut.CUSTOM && !lut.isOff) {
             val bmp = CubeLutParser.generate3DStripBitmapForPreset(lut)
             return Pair(bmp, 33)
         }
@@ -116,7 +116,7 @@ object CinemaColorPipeline {
         if (config.colorProfile != CinemaColorProfile.NATIVE) return true
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
-        if (includeCreativeLut && lut != CinematicLut.NONE && intensity > 0.001f) {
+        if (includeCreativeLut && !lut.isOff && intensity > 0.001f) {
             return true
         }
         return false
@@ -161,8 +161,7 @@ object CinemaColorPipeline {
                 !config.customLutPath.isNullOrBlank() &&
                 config.lutIntensity > 0.001f
         val creative3DLutActive = includeCreativeLut &&
-                config.selectedLut != CinematicLut.NONE &&
-                config.selectedLut != CinematicLut.REC_709 &&
+                !config.selectedLut.isOff &&
                 config.lutIntensity > 0.001f
         return vibrantGreenActive || selectiveControlsActive || custom3DLutActive || creative3DLutActive
     }
@@ -582,14 +581,7 @@ object CinemaColorPipeline {
     ): ColorMatrix? {
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
-        if (lut == CinematicLut.NONE || intensity <= 0.001f || ((config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG) && lut == CinematicLut.REC_709)) return null
-
-        // When rendering on GPU shader (AGSL Viewfinder or OpenGL Video Processor),
-        // VIBRANT_GREEN / PUNCHY_GREEN is executed via true per-pixel selective color masks
-        // in the shader so skin tones are 100% isolated from the foliage boost.
-        if (forGpuShader && lut.isVibrantGreenLut) {
-            return null
-        }
+        if (lut.isOff || intensity <= 0.001f) return null
 
         // Obtain the base creative transform matrix
         val rawLutMat = if (lut == CinematicLut.CUSTOM && !config.customLutPath.isNullOrBlank()) {
@@ -615,7 +607,7 @@ object CinemaColorPipeline {
     /**
      * Builds the complete creative grading matrix for a film preset:
      * Combines contrast, color channel separation, warm/cool color temperature,
-     * shadow toe, and highlight shoulder into a unified transform.
+     * blacks toe, shadow toe, midtones, highlights, whites, and saturation/vibrance.
      */
     private fun buildPresetCreativeMatrix(lut: CinematicLut): ColorMatrix {
         val master = ColorMatrix()
@@ -656,22 +648,37 @@ object CinemaColorPipeline {
             master.postConcat(tempMat)
         }
 
-        // 4. Shadow Toe & Highlight Roll-off Tuning
-        if (lut.shadowToe != 0.0f) {
-            val toeShift = lut.shadowToe * 12f
+        // 4. Blacks Toe & Shadow Toe Tuning
+        val totalBlackShadow = (lut.blacksToe * 12f) + (lut.shadowToe * 10f)
+        if (totalBlackShadow != 0.0f) {
             val toeMat = ColorMatrix(floatArrayOf(
-                1f, 0f, 0f, 0f, toeShift,
-                0f, 1f, 0f, 0f, toeShift,
-                0f, 0f, 1f, 0f, toeShift,
+                1f, 0f, 0f, 0f, totalBlackShadow,
+                0f, 1f, 0f, 0f, totalBlackShadow,
+                0f, 0f, 1f, 0f, totalBlackShadow,
                 0f, 0f, 0f, 1f, 0f
             ))
             master.postConcat(toeMat)
         }
 
-        // 5. Preset Film Saturation
-        if (lut.saturation != 1.0f) {
+        // 5. Midtones & Highlights Gain
+        val midGain = lut.midtonesGain
+        val hlGain = lut.highlightsGain
+        val netGain = midGain * hlGain
+        if (netGain != 1.0f) {
+            val gainMat = ColorMatrix(floatArrayOf(
+                netGain, 0f, 0f, 0f, 0f,
+                0f, netGain, 0f, 0f, 0f,
+                0f, 0f, netGain, 0f, 0f,
+                0f, 0f, 0f, 1f, 0f
+            ))
+            master.postConcat(gainMat)
+        }
+
+        // 6. Preset Film Saturation & Vibrance
+        val effectiveSat = lut.saturation * (1.0f + lut.vibrance * 0.15f)
+        if (effectiveSat != 1.0f) {
             val satMat = ColorMatrix()
-            satMat.setSaturation(lut.saturation)
+            satMat.setSaturation(effectiveSat)
             master.postConcat(satMat)
         }
 
@@ -763,12 +770,10 @@ object CinemaColorPipeline {
         // =========================================================================
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
-        if (includeCreativeLut && lut != CinematicLut.NONE && intensity > 0.001f &&
-            !((config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG) && lut == CinematicLut.REC_709)
-        ) {
+        if (includeCreativeLut && !lut.isOff && intensity > 0.001f) {
             val sampled = if (lut == CinematicLut.CUSTOM && !config.customLutPath.isNullOrBlank()) {
                 CubeLutParser.getOrLoad(config.customLutPath)?.sample3D(r, g, b)
-            } else if (!lut.isVibrantGreenLut && lut != CinematicLut.CUSTOM) {
+            } else if (!lut.isOff && lut != CinematicLut.CUSTOM) {
                 samplePresetLut(lut, r, g, b)
             } else {
                 null
@@ -1013,7 +1018,7 @@ object CinemaColorPipeline {
             b = (b * (1f - tmStr) + aces(b) * tmStr).coerceIn(0f, 1f)
         }
 
-        val isGraded = (config.selectedLut != CinematicLut.NONE || config.colorProfile != CinemaColorProfile.NATIVE)
+        val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
         val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
         if (isGraded && !isHdrProfile) {
             val highlightCompression = 0.975f
@@ -1108,7 +1113,7 @@ object CinemaColorPipeline {
                 shader.setFloatUniform("uSaturation", config.saturation)
                 shader.setFloatUniform("uWashedOut", config.washedOut)
 
-                val isGraded = (config.selectedLut != CinematicLut.NONE || config.colorProfile != CinemaColorProfile.NATIVE)
+                val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
                 val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
                 val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
                 shader.setFloatUniform("uFilmicOutput", filmicOutput)
