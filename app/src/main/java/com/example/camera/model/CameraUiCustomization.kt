@@ -141,7 +141,7 @@ enum class TopControlItem(val id: String, val label: String) {
     PRO_EXP("pro_exp", "Pro Manual Mode"),
     LOG("log", "Log Profiles (Pro Video)"),
     LUT("lut", "Cinematic LUTs (Pro Video)"),
-    PRO_VIDEO_SETTINGS("pro_video_settings", "Tuning Controls"),
+    PRO_VIDEO_SETTINGS("pro_video_settings", "Fine Tuning Controls"),
     EV("ev", "Exposure Compensation (EV)"),
     HORIZON_LOCK("horizon_lock", "Horizontal Lock"),
     DOLLY_ZOOM("dolly_zoom", "Dolly Zoom"),

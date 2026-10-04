@@ -95,7 +95,10 @@ fun CameraSettingsHost(
     val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
     val customVideoPipelineConfig by viewModel.customVideoPipelineConfig.collectAsStateWithLifecycle()
 
-    SettingsDrawer(
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
+    ) {
+        SettingsDrawer(
         isOpen = true,
         cameraMode = cameraMode,
         capabilities = capabilities,
@@ -239,4 +242,5 @@ fun CameraSettingsHost(
         onViewfinderCornerRadiusChange = { viewModel.setViewfinderCornerRadius(it) },
         onDismiss = onDismiss
     )
+}
 }

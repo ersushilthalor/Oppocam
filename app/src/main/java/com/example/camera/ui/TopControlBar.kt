@@ -772,7 +772,7 @@ fun TopControlBar(
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Tune,
-                    contentDescription = "Tuning Controls",
+                    contentDescription = "Fine Tuning Controls",
                     tint = Color.White.copy(alpha = 0.9f),
                     modifier = Modifier.size(iconSize)
                 )

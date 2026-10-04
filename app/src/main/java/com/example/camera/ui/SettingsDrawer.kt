@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.camera.model.*
+import com.example.camera.ui.components.FrostedGlassBox
 import com.example.camera.viewmodel.CameraViewModel
 import kotlin.math.roundToInt
 
@@ -2164,6 +2165,71 @@ private fun UiLayoutSettingsPage(
                             inactiveTrackColor = Color.White.copy(alpha = 0.18f)
                         )
                     )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Real-time Live Floating Window Preview Box
+                    Text(
+                        text = "LIVE WINDOW PREVIEW",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(105.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFFE91E63),
+                                        Color(0xFF3F51B5),
+                                        Color(0xFF009688),
+                                        Color(0xFFFF9800)
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        FrostedGlassBox(
+                            modifier = Modifier
+                                .fillMaxWidth(0.92f)
+                                .padding(vertical = 6.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            elevation = 10.dp
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "${floatingWindowAppearance.glassStyle.displayName} • ${floatingWindowAppearance.transparencyPercent}% Translucent",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Backdrop Blur: ${floatingWindowAppearance.blurStrengthDp} dp",
+                                    color = Color(0xFFFFD54F),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Real-time physical frosted glass preview",
+                                    color = Color.White.copy(alpha = 0.75f),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
