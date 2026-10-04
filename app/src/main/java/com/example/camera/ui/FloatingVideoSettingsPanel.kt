@@ -61,18 +61,19 @@ fun FloatingVideoSettingsPanel(
     ) {
         FrostedGlassBox(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 6.dp)
+                .wrapContentWidth()
+                .widthIn(min = 270.dp, max = 330.dp)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
                 .testTag("floating_video_settings_panel"),
-            shape = RoundedCornerShape(26.dp),
-            elevation = 20.dp,
+            shape = RoundedCornerShape(20.dp),
+            elevation = 14.dp,
             baseAlpha = 0.82f,
             baseTint = Color(0xFF0F121C)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 14.dp)
+                    .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
                 // Header: Mode title, accent dot & circular dismiss button
                 Row(
@@ -83,31 +84,31 @@ fun FloatingVideoSettingsPanel(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(7.dp)
+                                .size(5.dp)
                                 .clip(CircleShape)
                                 .background(accentColor)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "VIDEO",
                             color = Color.White,
-                            fontSize = 15.sp,
+                            fontSize = 12.5.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 2.sp
+                            letterSpacing = 1.2.sp
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "FORMAT",
                             color = accentColor,
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
+                            letterSpacing = 0.8.sp
                         )
                     }
 
                     Box(
                         modifier = Modifier
-                            .size(32.dp)
+                            .size(24.dp)
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.08f))
                             .clickable { onDismiss() }
@@ -118,7 +119,7 @@ fun FloatingVideoSettingsPanel(
                             imageVector = Icons.Outlined.Close,
                             contentDescription = "Close Video Settings",
                             tint = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }
@@ -126,7 +127,7 @@ fun FloatingVideoSettingsPanel(
                 val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
 
                 if (appearance.showVideoResolution) {
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(7.dp))
 
                     // Section 1: Resolution Selector
                     VideoPanelSectionHeader(
@@ -140,7 +141,7 @@ fun FloatingVideoSettingsPanel(
                         }
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(5.dp))
 
                     val resolutionOptions = listOf(
                         "720p" to CameraResolution(1280, 720),
@@ -153,7 +154,7 @@ fun FloatingVideoSettingsPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         resolutionOptions.forEach { (label, res) ->
@@ -174,7 +175,7 @@ fun FloatingVideoSettingsPanel(
                 }
 
                 if (appearance.showVideoFps) {
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(7.dp))
 
                     // Section 2: Frame Rate Selector
                     VideoPanelSectionHeader(
@@ -182,7 +183,7 @@ fun FloatingVideoSettingsPanel(
                         badge = "${currentFps} fps"
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(5.dp))
 
                     val fpsOptions = listOf(
                         "24fps" to 24,
@@ -195,7 +196,7 @@ fun FloatingVideoSettingsPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         fpsOptions.forEach { (label, fps) ->
@@ -213,7 +214,7 @@ fun FloatingVideoSettingsPanel(
                 }
 
                 if (appearance.showVideoStabilization) {
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(7.dp))
 
                     // Section 3: Ultra Steady Gyro Stabilization
                     VideoPanelSectionHeader(
@@ -221,12 +222,12 @@ fun FloatingVideoSettingsPanel(
                         badge = if (isUltraStabilizationEnabled) "ULTRA GYRO" else "STANDARD"
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(5.dp))
 
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(12.dp))
                             .background(
                                 if (isUltraStabilizationEnabled) {
                                     Brush.verticalGradient(
@@ -247,10 +248,10 @@ fun FloatingVideoSettingsPanel(
                             .border(
                                 width = 1.dp,
                                 color = if (isUltraStabilizationEnabled) accentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
-                                shape = RoundedCornerShape(14.dp)
+                                shape = RoundedCornerShape(12.dp)
                             )
                             .clickable { onUltraStabilizationToggle() }
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
                             .testTag("ultra_stab_toggle")
                     ) {
                         Row(
@@ -262,13 +263,13 @@ fun FloatingVideoSettingsPanel(
                                 Text(
                                     text = "Ultra Steady Gimbal Mode",
                                     color = if (isUltraStabilizationEnabled) accentColor else Color.White,
-                                    fontSize = 13.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = if (isUltraStabilizationEnabled) "Hardware OIS + Gyroscopic EIS anti-shake active" else "Standard optical image stabilization",
+                                    text = if (isUltraStabilizationEnabled) "OIS + EIS anti-shake active" else "Standard stabilization",
                                     color = Color.White.copy(alpha = 0.60f),
-                                    fontSize = 11.sp
+                                    fontSize = 9.5.sp
                                 )
                             }
 
@@ -303,18 +304,18 @@ private fun VideoPanelSectionHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .width(3.dp)
-                    .height(11.dp)
-                    .clip(RoundedCornerShape(1.5.dp))
+                    .width(2.5.dp)
+                    .height(9.dp)
+                    .clip(RoundedCornerShape(1.dp))
                     .background(Color(0xFFFFD54F))
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(5.dp))
             Text(
                 text = title,
                 color = Color.White.copy(alpha = 0.85f),
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 1.sp
+                letterSpacing = 0.8.sp
             )
         }
 
@@ -322,7 +323,7 @@ private fun VideoPanelSectionHeader(
             Text(
                 text = badge,
                 color = Color(0xFFFFD54F),
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold
             )
         }
@@ -339,7 +340,7 @@ private fun VideoGlassChip(
 ) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(
                 if (isSelected) {
                     Brush.verticalGradient(
@@ -358,19 +359,19 @@ private fun VideoGlassChip(
                 }
             )
             .border(
-                width = if (isSelected) 1.5.dp else 1.dp,
+                width = if (isSelected) 1.2.dp else 0.8.dp,
                 color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(10.dp)
             )
             .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 9.dp)
+            .padding(horizontal = 11.dp, vertical = 6.dp)
             .testTag(testTag),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
             color = if (isSelected) accentColor else Color.White.copy(alpha = 0.85f),
-            fontSize = 12.5.sp,
+            fontSize = 11.5.sp,
             fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
             letterSpacing = 0.3.sp
         )

@@ -37,18 +37,19 @@ fun PortraitStyleSelectorBar(
 
     FrostedGlassBox(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .wrapContentWidth()
+            .widthIn(min = 270.dp, max = 340.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("portrait_style_selector_bar"),
-        shape = RoundedCornerShape(26.dp),
-        elevation = 20.dp,
+        shape = RoundedCornerShape(20.dp),
+        elevation = 14.dp,
         baseAlpha = 0.82f,
         baseTint = Color(0xFF0F121C)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 14.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             // Header
             Row(
@@ -59,50 +60,50 @@ fun PortraitStyleSelectorBar(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(5.dp)
                             .clip(CircleShape)
                             .background(portraitAccent)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "PORTRAIT",
                         color = Color.White,
-                        fontSize = 15.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 2.sp
+                        letterSpacing = 1.2.sp
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
                         text = "STYLES",
                         color = portraitAccent,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+                        letterSpacing = 0.8.sp
                     )
                 }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(portraitAccent.copy(alpha = 0.15f))
-                            .border(1.dp, portraitAccent.copy(alpha = 0.40f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                            .border(0.8.dp, portraitAccent.copy(alpha = 0.40f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
                             text = selectedStyle.displayName,
                             color = portraitAccent,
-                            fontSize = 11.5.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
 
                     Box(
                         modifier = Modifier
-                            .size(32.dp)
+                            .size(24.dp)
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.08f))
                             .clickable { onClose() }
@@ -113,20 +114,20 @@ fun PortraitStyleSelectorBar(
                             imageVector = Icons.Outlined.Close,
                             contentDescription = "Close style bar",
                             tint = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(7.dp))
 
             // Style Pills Horizontal Scroll
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 PortraitStyle.entries.forEach { style ->
@@ -134,7 +135,7 @@ fun PortraitStyleSelectorBar(
 
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(
                                 if (isSelected) {
                                     Brush.verticalGradient(
@@ -153,19 +154,19 @@ fun PortraitStyleSelectorBar(
                                 }
                             )
                             .border(
-                                width = if (isSelected) 1.5.dp else 1.dp,
+                                width = if (isSelected) 1.2.dp else 0.8.dp,
                                 color = if (isSelected) portraitAccent else Color.White.copy(alpha = 0.12f),
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(10.dp)
                             )
                             .clickable { onStyleSelected(style) }
-                            .padding(horizontal = 14.dp, vertical = 9.dp)
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
                             .testTag("style_option_${style.name.lowercase()}"),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = style.displayName,
                             color = if (isSelected) portraitAccent else Color.White.copy(alpha = 0.85f),
-                            fontSize = 12.5.sp,
+                            fontSize = 11.5.sp,
                             fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                             letterSpacing = 0.3.sp
                         )

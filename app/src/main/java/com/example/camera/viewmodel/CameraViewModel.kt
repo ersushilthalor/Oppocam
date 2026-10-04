@@ -182,8 +182,41 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         com.example.camera.ui.components.BackdropBlurManager.onBlurStrengthChanged(config.blurStrength)
     }
 
+    fun setFloatingWindowGlassStyle(style: com.example.camera.model.FloatingWindowGlassStyle) {
+        val preset = when (style) {
+            com.example.camera.model.FloatingWindowGlassStyle.LIQUID_GLASS -> com.example.camera.model.FloatingWindowAppearanceConfig.LIQUID_GLASS
+            com.example.camera.model.FloatingWindowGlassStyle.FROSTED_GLASS -> com.example.camera.model.FloatingWindowAppearanceConfig.FROSTED_GLASS
+            com.example.camera.model.FloatingWindowGlassStyle.TRANSPARENT_GLASS -> com.example.camera.model.FloatingWindowAppearanceConfig.TRANSPARENT_GLASS
+            com.example.camera.model.FloatingWindowGlassStyle.SUBTLE_FROST -> com.example.camera.model.FloatingWindowAppearanceConfig.SUBTLE_FROST
+            com.example.camera.model.FloatingWindowGlassStyle.DEEP_FROST -> com.example.camera.model.FloatingWindowAppearanceConfig.DEEP_FROST
+            com.example.camera.model.FloatingWindowGlassStyle.SOLID_DARK -> com.example.camera.model.FloatingWindowAppearanceConfig.SOLID_DARK
+        }
+        val current = _floatingWindowAppearance.value
+        val merged = preset.copy(
+            showVideoResolution = current.showVideoResolution,
+            showVideoFps = current.showVideoFps,
+            showVideoStabilization = current.showVideoStabilization,
+            showPortraitApertureBlur = current.showPortraitApertureBlur,
+            showPortraitBokehStyle = current.showPortraitBokehStyle,
+            showPortraitBeautySkin = current.showPortraitBeautySkin,
+            showPortraitOpticalDepth = current.showPortraitOpticalDepth,
+            showCinemaColorProfile = current.showCinemaColorProfile,
+            showCinemaLutControls = current.showCinemaLutControls,
+            showCinemaResolutionFps = current.showCinemaResolutionFps,
+            showCinemaStabilization = current.showCinemaStabilization,
+            showCinemaAssistTools = current.showCinemaAssistTools,
+            showProExposureControls = current.showProExposureControls,
+            showProToneAdjustments = current.showProToneAdjustments,
+            showVideoAdjustmentsColorTone = current.showVideoAdjustmentsColorTone,
+            showVideoAdjustmentsEffects = current.showVideoAdjustmentsEffects,
+            showPipelineMasterToggle = current.showPipelineMasterToggle,
+            showPipelinePresetList = current.showPipelinePresetList
+        )
+        setFloatingWindowAppearance(merged)
+    }
+
     fun resetFloatingWindowAppearance() {
-        val default = FloatingWindowAppearanceConfig.GLASSMORPHISM
+        val default = com.example.camera.model.FloatingWindowAppearanceConfig.LIQUID_GLASS
         setFloatingWindowAppearance(default)
     }
 

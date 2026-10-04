@@ -1,7 +1,5 @@
 package com.example.camera.ui.components
 
-import android.graphics.Bitmap
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -15,35 +13,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.layout.findRootCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.example.camera.model.FloatingWindowGlassStyle
 
 /**
- * Authentic Frosted Glass Container with Real Physical Properties & Live Backdrop Blur:
- * - Real live camera background blur rendered strictly within window boundaries
- * - Transparency control defining how much blurred background shows through
- * - Natural depth drop shadow
- * - Translucent tinted glass substrate
- * - Specular directional light sheen gradient
- * - Refractive translucent glass border
- * - Top-edge specular highlight rim
+ * Authentic Glass Container with Physical Glass Styling:
+ * Controlled by Settings:
+ * - Liquid Glass: dynamic organic light sheen, chromatic specular reflection, smooth liquid gloss
+ * - Frosted Glass: soft diffuse frosted overlay, ambient diffusion, elegant translucent depth
+ * - Transparent Glass: ultra-clear high-transparency glass, minimal tint, crisp fine hairline border
+ * - Subtle Frost / Deep Frost / Solid Dark: tailored opacity and diffusion layers
+ *
+ * Glass effect is applied STRICTLY to the floating window UI overlay itself;
+ * the underlying viewfinder remains single-source, 100% sharp, and free of latency.
  */
 @Composable
 fun FrostedGlassBox(
     modifier: Modifier = Modifier,
-    shape: Shape = RoundedCornerShape(26.dp),
-    elevation: Dp = 20.dp,
+    shape: Shape = RoundedCornerShape(22.dp),
+    elevation: Dp = 16.dp,
     baseAlpha: Float? = null,
     baseTint: Color = Color(0xFF0F121C),
     borderWidth: Dp = 1.dp,
@@ -63,27 +56,89 @@ fun FrostedGlassBox(
         )
     }
 
-    // Transparency: 0.0 (solid/opaque) -> 1.0 (crystal clear / maximum background visibility)
-    val effectiveTransparency = baseAlpha ?: appearance.transparency
-    val tintAlpha = (1.0f - effectiveTransparency).coerceIn(0.08f, 0.95f)
+    val style = appearance.glassStyle
+    val userTransparency = baseAlpha ?: appearance.transparency
 
-    var windowBoundsInRoot by remember { mutableStateOf<Rect?>(null) }
-    var rootSize by remember { mutableStateOf<IntSize?>(null) }
-
-    val borderBrush = if (borderColor != null) {
-        SolidColor(borderColor)
-    } else {
-        Brush.verticalGradient(
-            colors = listOf(
-                Color.White.copy(alpha = 0.45f),
-                Color.White.copy(alpha = 0.16f),
-                Color.White.copy(alpha = 0.04f)
-            )
-        )
+    // Style-specific substrate tint opacity & specular gradients
+    val (tintAlpha, sheenAlpha, borderBrush) = remember(style, userTransparency, borderColor) {
+        when (style) {
+            FloatingWindowGlassStyle.TRANSPARENT_GLASS -> {
+                val tAlpha = ((1.0f - userTransparency) * 0.35f).coerceIn(0.08f, 0.32f)
+                val sAlpha = 0.12f
+                val brush = if (borderColor != null) SolidColor(borderColor) else Brush.verticalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.40f),
+                        Color.White.copy(alpha = 0.12f),
+                        Color.Transparent
+                    )
+                )
+                Triple(tAlpha, sAlpha, brush)
+            }
+            FloatingWindowGlassStyle.LIQUID_GLASS -> {
+                val tAlpha = (1.0f - userTransparency).coerceIn(0.20f, 0.70f)
+                val sAlpha = 0.22f
+                val brush = if (borderColor != null) SolidColor(borderColor) else Brush.linearGradient(
+                    colors = listOf(
+                        Color(0x99FFD54F),
+                        Color(0x66FFFFFF),
+                        Color(0x18FFFFFF)
+                    )
+                )
+                Triple(tAlpha, sAlpha, brush)
+            }
+            FloatingWindowGlassStyle.FROSTED_GLASS -> {
+                val tAlpha = (1.0f - userTransparency).coerceIn(0.35f, 0.85f)
+                val sAlpha = 0.16f
+                val brush = if (borderColor != null) SolidColor(borderColor) else Brush.verticalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.48f),
+                        Color.White.copy(alpha = 0.18f),
+                        Color.White.copy(alpha = 0.05f)
+                    )
+                )
+                Triple(tAlpha, sAlpha, brush)
+            }
+            FloatingWindowGlassStyle.SUBTLE_FROST -> {
+                val tAlpha = (1.0f - userTransparency).coerceIn(0.25f, 0.65f)
+                val sAlpha = 0.14f
+                val brush = if (borderColor != null) SolidColor(borderColor) else Brush.verticalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.38f),
+                        Color.White.copy(alpha = 0.14f),
+                        Color.Transparent
+                    )
+                )
+                Triple(tAlpha, sAlpha, brush)
+            }
+            FloatingWindowGlassStyle.DEEP_FROST -> {
+                val tAlpha = (1.0f - userTransparency).coerceIn(0.50f, 0.90f)
+                val sAlpha = 0.18f
+                val brush = if (borderColor != null) SolidColor(borderColor) else Brush.verticalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.55f),
+                        Color.White.copy(alpha = 0.22f),
+                        Color.White.copy(alpha = 0.08f)
+                    )
+                )
+                Triple(tAlpha, sAlpha, brush)
+            }
+            FloatingWindowGlassStyle.SOLID_DARK -> {
+                val tAlpha = (1.0f - userTransparency).coerceIn(0.70f, 0.96f)
+                val sAlpha = 0.10f
+                val brush = if (borderColor != null) SolidColor(borderColor) else Brush.verticalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.25f),
+                        Color.White.copy(alpha = 0.08f),
+                        Color.Transparent
+                    )
+                )
+                Triple(tAlpha, sAlpha, brush)
+            }
+        }
     }
 
     val compactHorizontalInset = if (applyWindowScale && effectiveScale < 1.0f) {
-        ((1.0f - effectiveScale) * 96f).dp
+        ((1.0f - effectiveScale) * 64f).dp
     } else {
         0.dp
     }
@@ -100,64 +155,21 @@ fun FrostedGlassBox(
                         Modifier
                     }
                 )
-                .onGloballyPositioned { coordinates ->
-                    val pos = coordinates.positionInRoot()
-                    val size = coordinates.size
-                    windowBoundsInRoot = Rect(pos.x, pos.y, pos.x + size.width, pos.y + size.height)
-                    rootSize = coordinates.findRootCoordinates().size
-                }
                 .shadow(
                     elevation = elevation,
                     shape = shape,
                     clip = false,
-                    ambientColor = Color.Black.copy(alpha = 0.45f),
-                    spotColor = Color.Black.copy(alpha = 0.75f)
+                    ambientColor = Color.Black.copy(alpha = 0.35f),
+                    spotColor = Color.Black.copy(alpha = 0.65f)
                 )
                 .clip(shape)
-                // Physical glass refractive border
                 .border(
                     width = borderWidth,
                     brush = borderBrush,
                     shape = shape
                 )
         ) {
-            // 1. Live Backdrop Blur Layer:
-            // Uses exact float matrix transformation (zero integer Rect rounding zoom-in or pixel stepping).
-            val backdropBitmap = BackdropBlurManager.blurredBackdropState.value
-            if (backdropBitmap != null && !backdropBitmap.isRecycled && windowBoundsInRoot != null && rootSize != null) {
-                Canvas(modifier = Modifier.matchParentSize()) {
-                    val bounds = windowBoundsInRoot ?: return@Canvas
-                    val rSize = rootSize ?: return@Canvas
-                    if (rSize.width > 0 && rSize.height > 0 && bounds.width > 0f && bounds.height > 0f && size.width > 0f && size.height > 0f) {
-                        val bmpW = backdropBitmap.width.toFloat()
-                        val bmpH = backdropBitmap.height.toFloat()
-                        val rootW = rSize.width.toFloat()
-                        val rootH = rSize.height.toFloat()
-
-                        val srcLeftF = (bounds.left / rootW) * bmpW
-                        val srcTopF = (bounds.top / rootH) * bmpH
-                        val srcWidthF = ((bounds.width / rootW) * bmpW).coerceAtLeast(1f)
-                        val srcHeightF = ((bounds.height / rootH) * bmpH).coerceAtLeast(1f)
-
-                        val drawMatrix = android.graphics.Matrix().apply {
-                            setTranslate(-srcLeftF, -srcTopF)
-                            postScale(size.width / srcWidthF, size.height / srcHeightF)
-                        }
-
-                        drawIntoCanvas { canvas ->
-                            val paint = android.graphics.Paint(
-                                android.graphics.Paint.FILTER_BITMAP_FLAG or
-                                        android.graphics.Paint.ANTI_ALIAS_FLAG or
-                                        android.graphics.Paint.DITHER_FLAG
-                            )
-                            canvas.nativeCanvas.drawBitmap(backdropBitmap, drawMatrix, paint)
-                        }
-                    }
-                }
-            }
-
-            // 2. Tinted Liquid Glass Substrate:
-            // Alpha is inversely proportional to transparency so user slider directly governs show-through.
+            // 1. Translucent Tinted Glass Substrate:
             Box(
                 modifier = Modifier
                     .matchParentSize()
@@ -165,32 +177,45 @@ fun FrostedGlassBox(
                         Brush.verticalGradient(
                             colors = listOf(
                                 baseTint.copy(alpha = tintAlpha),
-                                Color(0xFF07090F).copy(alpha = (tintAlpha + 0.10f).coerceAtMost(0.96f))
+                                Color(0xFF07090F).copy(alpha = (tintAlpha + 0.10f).coerceAtMost(0.98f))
                             )
                         )
                     )
             )
 
-            // 3. Physical specular light sheen refraction across surface
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.14f * (effectiveTransparency + 0.4f).coerceAtMost(1f)),
-                                Color.White.copy(alpha = 0.03f),
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.22f)
-                            )
+            // 2. Specular light sheen refraction layer:
+            if (sheenAlpha > 0f) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            if (style == FloatingWindowGlassStyle.LIQUID_GLASS) {
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0x33FFD54F),
+                                        Color.White.copy(alpha = sheenAlpha),
+                                        Color.Transparent,
+                                        Color.Black.copy(alpha = 0.18f)
+                                    )
+                                )
+                            } else {
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        Color.White.copy(alpha = sheenAlpha),
+                                        Color.White.copy(alpha = sheenAlpha * 0.25f),
+                                        Color.Transparent,
+                                        Color.Black.copy(alpha = 0.18f)
+                                    )
+                                )
+                            }
                         )
-                    )
-            )
+                )
+            }
 
-            // 4. Window Content
+            // 3. Floating Window Content
             content()
 
-            // 5. Top specular highlight rim (hairline light reflection on cut glass edge)
+            // 4. Top specular highlight rim (cut glass edge)
             if (showTopHighlightRim) {
                 Box(
                     modifier = Modifier
@@ -201,8 +226,8 @@ fun FrostedGlassBox(
                             Brush.horizontalGradient(
                                 colors = listOf(
                                     Color.Transparent,
-                                    Color.White.copy(alpha = 0.50f),
-                                    Color.White.copy(alpha = 0.18f),
+                                    Color.White.copy(alpha = 0.45f),
+                                    Color.White.copy(alpha = 0.15f),
                                     Color.Transparent
                                 )
                             )
@@ -217,8 +242,8 @@ fun FrostedGlassBox(
  * Extension modifier to apply frosted glass styling directly to any component.
  */
 fun Modifier.frostedGlass(
-    shape: Shape = RoundedCornerShape(24.dp),
-    elevation: Dp = 16.dp,
+    shape: Shape = RoundedCornerShape(20.dp),
+    elevation: Dp = 12.dp,
     baseAlpha: Float = 0.72f,
     baseTint: Color = Color(0xFF141724),
     borderWidth: Dp = 1.dp,
@@ -228,15 +253,15 @@ fun Modifier.frostedGlass(
         elevation = elevation,
         shape = shape,
         clip = false,
-        ambientColor = Color.Black.copy(alpha = 0.40f),
-        spotColor = Color.Black.copy(alpha = 0.70f)
+        ambientColor = Color.Black.copy(alpha = 0.35f),
+        spotColor = Color.Black.copy(alpha = 0.65f)
     )
     .clip(shape)
     .background(
         Brush.verticalGradient(
             colors = listOf(
                 baseTint.copy(alpha = baseAlpha),
-                Color(0xFF0A0C13).copy(alpha = (baseAlpha + 0.14f).coerceAtMost(0.96f))
+                Color(0xFF0A0C13).copy(alpha = (baseAlpha + 0.12f).coerceAtMost(0.96f))
             )
         )
     )
@@ -246,7 +271,7 @@ fun Modifier.frostedGlass(
                 Color.White.copy(alpha = 0.16f),
                 Color.White.copy(alpha = 0.03f),
                 Color.Transparent,
-                Color.Black.copy(alpha = 0.22f)
+                Color.Black.copy(alpha = 0.20f)
             )
         )
     )
@@ -257,9 +282,9 @@ fun Modifier.frostedGlass(
         } else {
             Brush.verticalGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.42f),
+                    Color.White.copy(alpha = 0.40f),
                     Color.White.copy(alpha = 0.14f),
-                    Color.White.copy(alpha = 0.05f)
+                    Color.White.copy(alpha = 0.04f)
                 )
             )
         },

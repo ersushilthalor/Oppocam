@@ -46,18 +46,19 @@ fun PipelinePresetFloatingWindow(
 
     FrostedGlassBox(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .wrapContentWidth()
+            .widthIn(min = 270.dp, max = 340.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("pipeline_preset_floating_window"),
-        shape = RoundedCornerShape(24.dp),
-        elevation = 20.dp,
+        shape = RoundedCornerShape(20.dp),
+        elevation = 14.dp,
         baseAlpha = 0.84f,
         baseTint = Color(0xFF0F121C)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             // Header Bar
             Row(
@@ -68,25 +69,25 @@ fun PipelinePresetFloatingWindow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(5.dp)
                             .clip(CircleShape)
                             .background(accentGold)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "PIPELINE",
                         color = Color.White,
-                        fontSize = 14.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 2.sp
+                        letterSpacing = 1.2.sp
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
                         text = "PRESETS",
                         color = accentGold,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+                        letterSpacing = 0.8.sp
                     )
                 }
 
@@ -94,36 +95,36 @@ fun PipelinePresetFloatingWindow(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     // Dedicated ON/OFF Master Toggle
                     if (appearance.showPipelineMasterToggle) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(10.dp))
                                 .background(if (isPipelineEnabled) accentGold.copy(alpha = 0.20f) else Color(0x22FFFFFF))
                                 .border(
                                     1.dp,
                                     if (isPipelineEnabled) accentGold.copy(alpha = 0.6f) else Color.White.copy(alpha = 0.2f),
-                                    RoundedCornerShape(12.dp)
+                                    RoundedCornerShape(10.dp)
                                 )
                                 .clickable { onToggleEnabled(!isPipelineEnabled) }
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
                                 .testTag("pipeline_master_toggle")
                         ) {
                             Text(
                                 text = if (isPipelineEnabled) "ON" else "OFF",
                                 color = if (isPipelineEnabled) accentGold else Color.White.copy(alpha = 0.65f),
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.ExtraBold
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(3.dp))
                             Switch(
                                 checked = isPipelineEnabled,
                                 onCheckedChange = onToggleEnabled,
                                 modifier = Modifier
-                                    .size(width = 36.dp, height = 22.dp)
+                                    .size(width = 30.dp, height = 18.dp)
                                     .testTag("pipeline_enable_switch"),
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = accentGold,
@@ -138,17 +139,17 @@ fun PipelinePresetFloatingWindow(
                     // Active preset badge
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(accentGold.copy(alpha = 0.15f))
-                            .border(1.dp, accentGold.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                            .border(0.8.dp, accentGold.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
                             text = activePreset.name.uppercase(),
                             color = accentGold,
-                            fontSize = 10.sp,
+                            fontSize = 9.5.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
+                            letterSpacing = 0.3.sp
                         )
                     }
 
@@ -156,7 +157,7 @@ fun PipelinePresetFloatingWindow(
                     IconButton(
                         onClick = onDismiss,
                         modifier = Modifier
-                            .size(30.dp)
+                            .size(24.dp)
                             .clip(CircleShape)
                             .background(Color(0x33FFFFFF))
                             .testTag("pipeline_preset_close_button")
@@ -165,7 +166,7 @@ fun PipelinePresetFloatingWindow(
                             imageVector = Icons.Outlined.Close,
                             contentDescription = "Close Pipeline Presets",
                             tint = Color.White,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }
@@ -173,14 +174,14 @@ fun PipelinePresetFloatingWindow(
 
             val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
             if (appearance.showPipelinePresetList) {
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(7.dp))
 
                 // Presets Horizontal Scroller
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     allPresets.forEach { preset ->
@@ -197,20 +198,20 @@ fun PipelinePresetFloatingWindow(
 
                         Box(
                             modifier = Modifier
-                                .width(135.dp)
-                                .clip(RoundedCornerShape(16.dp))
+                                .width(112.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(
                                     if (isSelected) Color(0x33FFD54F) else Color(0x22FFFFFF)
                                 )
                                 .border(
-                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    width = if (isSelected) 1.2.dp else 0.8.dp,
                                     color = if (isSelected) accentGold else Color.White.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(16.dp)
+                                    shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable {
                                     onPresetSelected(preset)
                                 }
-                                .padding(10.dp)
+                                .padding(7.dp)
                                 .testTag("pipeline_preset_${preset.id}"),
                             contentAlignment = Alignment.TopStart
                         ) {
@@ -222,7 +223,7 @@ fun PipelinePresetFloatingWindow(
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(10.dp)
+                                            .size(8.dp)
                                             .clip(CircleShape)
                                             .background(presetColor)
                                     )
@@ -232,29 +233,29 @@ fun PipelinePresetFloatingWindow(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = "Selected",
                                             tint = accentGold,
-                                            modifier = Modifier.size(14.dp)
+                                            modifier = Modifier.size(12.dp)
                                         )
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(6.dp))
+                                Spacer(modifier = Modifier.height(4.dp))
 
                                 Text(
                                     text = preset.name,
                                     color = if (isSelected) accentGold else Color.White,
-                                    fontSize = 12.5.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1
                                 )
 
-                                Spacer(modifier = Modifier.height(2.dp))
+                                Spacer(modifier = Modifier.height(1.dp))
 
                                 Text(
                                     text = preset.subtitle,
                                     color = if (isSelected) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.5f),
-                                    fontSize = 10.sp,
+                                    fontSize = 9.sp,
                                     fontWeight = FontWeight.Normal,
-                                    lineHeight = 12.sp,
+                                    lineHeight = 11.sp,
                                     maxLines = 2
                                 )
                             }

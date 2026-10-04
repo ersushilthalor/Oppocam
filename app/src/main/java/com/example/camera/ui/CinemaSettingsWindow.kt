@@ -99,19 +99,20 @@ fun CinemaSettingsWindow(
 
     FrostedGlassBox(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .wrapContentWidth()
+            .widthIn(min = 270.dp, max = 340.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("cinema_settings_window"),
-        shape = RoundedCornerShape(26.dp),
-        elevation = 20.dp,
+        shape = RoundedCornerShape(20.dp),
+        elevation = 14.dp,
         baseAlpha = 0.82f,
         baseTint = Color(0xFF0F121C)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp)
-                .heightIn(max = 520.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .heightIn(max = 330.dp)
                 .verticalScroll(rememberScrollState())
         ) {
             // Header: Title, accent dot & dismiss button
@@ -123,31 +124,31 @@ fun CinemaSettingsWindow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(5.dp)
                             .clip(CircleShape)
                             .background(Color(0xFFFFD54F))
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "CINEMA",
                         color = Color.White,
-                        fontSize = 15.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 2.sp
+                        letterSpacing = 1.2.sp
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "PRO",
                         color = Color(0xFFFFD54F),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+                        letterSpacing = 0.8.sp
                     )
                 }
 
                 Box(
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(24.dp)
                         .clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.08f))
                         .clickable { onDismissRequest() }
@@ -158,7 +159,7 @@ fun CinemaSettingsWindow(
                         imageVector = Icons.Outlined.Close,
                         contentDescription = "Close Cinema Settings",
                         tint = Color.White.copy(alpha = 0.85f),
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                 }
             }
@@ -983,15 +984,15 @@ private fun CinemaSectionHeader(title: String, badge: String?) {
         Text(
             text = title,
             color = Color(0xFFFFD54F),
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp
+            letterSpacing = 0.8.sp
         )
         if (badge != null) {
             Text(
                 text = badge,
                 color = Color.White.copy(alpha = 0.65f),
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Medium
             )
         }
@@ -1007,31 +1008,31 @@ private fun CinemaLutChip(
 ) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(
                 if (isSelected) accentColor.copy(alpha = 0.22f)
                 else Color.White.copy(alpha = 0.06f)
             )
             .border(
-                width = if (isSelected) 1.5.dp else 0.5.dp,
+                width = if (isSelected) 1.2.dp else 0.5.dp,
                 color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(10.dp)
             )
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .size(8.dp)
+                    .size(6.dp)
                     .clip(CircleShape)
                     .background(accentColor)
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(5.dp))
             Text(
                 text = label,
                 color = if (isSelected) Color.White else Color.White.copy(alpha = 0.8f),
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
             )
         }

@@ -1,14 +1,12 @@
 package com.example.camera.ui
 
 import android.graphics.SurfaceTexture
-import android.view.TextureView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -17,30 +15,27 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.example.camera.model.BackgroundCameraStatus
+import com.example.camera.ui.components.FrostedGlassBox
 
 /**
- * Picture-in-Picture Little Preview Overlay for Motorola Instant Camera Switching.
+ * Compact Picture-in-Picture Floating Window Overlay.
  *
- * Displays live hardware streams of background-prepared cameras:
- * - Ultra-Wide Little Preview: Live 0.5× stream while shooting on 1×.
- * - Front Camera Little Preview: Live selfie stream while shooting on rear.
- *
- * Tapping any preview triggers an instantaneous switch to that camera.
+ * Designed as a pure UI overlay directly above the main viewfinder:
+ * - Single camera preview source: Zero separate SurfaceTextures, camera sessions, or frame copies
+ * - Zero additional latency: Shares main viewfinder timing directly
+ * - Glass styling controlled via Settings (Liquid Glass, Frosted Glass, Transparent Glass, etc.)
+ * - Compact, content-based sizing that preserves maximum viewfinder visibility
  */
 @Composable
 fun LittlePreviewOverlay(
@@ -48,8 +43,8 @@ fun LittlePreviewOverlay(
     showFrontPreview: Boolean,
     ultraWideStatus: BackgroundCameraStatus,
     frontStatus: BackgroundCameraStatus,
-    onUltraWideSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
-    onFrontSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
+    onUltraWideSurfaceTextureAvailable: ((SurfaceTexture?) -> Unit)? = null,
+    onFrontSurfaceTextureAvailable: ((SurfaceTexture?) -> Unit)? = null,
     onUltraWideClick: () -> Unit,
     onFrontClick: () -> Unit,
     onCloseUltraWidePreview: () -> Unit,
@@ -59,42 +54,38 @@ fun LittlePreviewOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(top = 96.dp, end = 16.dp, start = 16.dp),
+            .padding(top = 80.dp, end = 12.dp, start = 12.dp),
         contentAlignment = Alignment.TopEnd
     ) {
         Column(
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.End
         ) {
-            // 1. Ultra-Wide Little Preview Card
+            // 1. Ultra-Wide Floating Switch Capsule
             AnimatedVisibility(
                 visible = showUltraWidePreview,
-                enter = fadeIn() + scaleIn(initialScale = 0.85f),
-                exit = fadeOut() + scaleOut(targetScale = 0.85f)
+                enter = fadeIn() + scaleIn(initialScale = 0.90f),
+                exit = fadeOut() + scaleOut(targetScale = 0.90f)
             ) {
                 LittlePreviewCard(
-                    title = "0.5× ULTRA-WIDE",
-                    subtitle = "Tap to switch",
+                    title = "0.5× UW",
+                    subtitle = "Tap switch",
                     tag = "ultrawide_little_preview",
-                    status = ultraWideStatus,
-                    onSurfaceTextureAvailable = onUltraWideSurfaceTextureAvailable,
                     onClick = onUltraWideClick,
                     onClose = onCloseUltraWidePreview
                 )
             }
 
-            // 2. Front Camera Little Preview Card
+            // 2. Front Camera Floating Switch Capsule
             AnimatedVisibility(
                 visible = showFrontPreview,
-                enter = fadeIn() + scaleIn(initialScale = 0.85f),
-                exit = fadeOut() + scaleOut(targetScale = 0.85f)
+                enter = fadeIn() + scaleIn(initialScale = 0.90f),
+                exit = fadeOut() + scaleOut(targetScale = 0.90f)
             ) {
                 LittlePreviewCard(
-                    title = "FRONT SELFIE",
-                    subtitle = "Tap to switch",
+                    title = "FRONT",
+                    subtitle = "Tap switch",
                     tag = "front_little_preview",
-                    status = frontStatus,
-                    onSurfaceTextureAvailable = onFrontSurfaceTextureAvailable,
                     onClick = onFrontClick,
                     onClose = onCloseFrontPreview
                 )
@@ -108,149 +99,76 @@ private fun LittlePreviewCard(
     title: String,
     subtitle: String,
     tag: String,
-    status: BackgroundCameraStatus,
-    onSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
     onClick: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
+    FrostedGlassBox(
         modifier = modifier
-            .width(112.dp)
-            .height(148.dp)
-            .shadow(12.dp, RoundedCornerShape(16.dp))
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF141414))
-            .border(
-                1.5.dp,
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFF00E676),
-                        Color(0x66FFFFFF),
-                        Color(0x22FFFFFF)
-                    )
-                ),
-                RoundedCornerShape(16.dp)
-            )
-            .clickable { onClick() }
-            .testTag(tag)
+            .wrapContentSize()
+            .testTag(tag),
+        shape = RoundedCornerShape(16.dp),
+        elevation = 8.dp
     ) {
-        // Native TextureView rendering the background live stream directly
-        AndroidView(
-            factory = { context ->
-                TextureView(context).apply {
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                            onSurfaceTextureAvailable(st)
-                        }
-
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-
-                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                            onSurfaceTextureAvailable(null)
-                            return true
-                        }
-
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-
-        // Top Gradient Scrim for readable badges
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color(0xCC000000), Color.Transparent)
-                    )
-                )
-        )
-
-        // Header with Live Indicator & Dismiss Button
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .clickable { onClick() }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            // Glowing emerald / gold quick-switch indicator
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x33FFD54F)),
+                contentAlignment = Alignment.Center
             ) {
-                // Glowing Emerald Live Dot
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .background(Color(0xFF00E676), CircleShape)
-                )
-                Text(
-                    text = "LIVE",
-                    color = Color.White,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
+                Icon(
+                    imageVector = Icons.Default.ElectricBolt,
+                    contentDescription = null,
+                    tint = Color(0xFFFFD54F),
+                    modifier = Modifier.size(11.dp)
                 )
             }
 
-            // Close button to dismiss preview
+            Column(
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                    maxLines = 1
+                )
+                Text(
+                    text = subtitle,
+                    color = Color.White.copy(alpha = 0.70f),
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+
+            Spacer(modifier = Modifier.width(2.dp))
+
+            // Compact dismiss button
             Box(
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(20.dp)
                     .clip(CircleShape)
-                    .background(Color(0x88000000))
+                    .background(Color.White.copy(alpha = 0.10f))
                     .clickable { onClose() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Close preview",
-                    tint = Color.White,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-        }
-
-        // Bottom Gradient Scrim for title & instant switch hint
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color(0xDD000000))
-                    )
-                )
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-        ) {
-            Column {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ElectricBolt,
-                        contentDescription = null,
-                        tint = Color(0xFFFFD54F),
-                        modifier = Modifier.size(10.dp)
-                    )
-                    Text(
-                        text = title,
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
-                Text(
-                    text = subtitle,
-                    color = Color(0xFFB0BEC5),
-                    fontSize = 8.sp,
-                    maxLines = 1
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size(11.dp)
                 )
             }
         }

@@ -1760,9 +1760,11 @@ private fun UiLayoutSettingsPage(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     val stylePresets = listOf(
-                        FloatingWindowAppearanceConfig.GLASSMORPHISM to "Glass",
-                        FloatingWindowAppearanceConfig.SUBTLE_FROST to "Subtle",
-                        FloatingWindowAppearanceConfig.DEEP_FROST to "Deep Blur",
+                        FloatingWindowAppearanceConfig.LIQUID_GLASS to "Liquid Glass",
+                        FloatingWindowAppearanceConfig.FROSTED_GLASS to "Frosted Glass",
+                        FloatingWindowAppearanceConfig.TRANSPARENT_GLASS to "Transparent Glass",
+                        FloatingWindowAppearanceConfig.SUBTLE_FROST to "Subtle Frost",
+                        FloatingWindowAppearanceConfig.DEEP_FROST to "Deep Frost",
                         FloatingWindowAppearanceConfig.SOLID_DARK to "Solid Dark"
                     )
                     Row(
@@ -1772,16 +1774,16 @@ private fun UiLayoutSettingsPage(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         stylePresets.forEach { (preset, label) ->
-                            val isSelected =
-                                kotlin.math.abs(floatingWindowAppearance.transparency - preset.transparency) < 0.04f &&
-                                    kotlin.math.abs(floatingWindowAppearance.blurStrength - preset.blurStrength) < 1.5f
+                            val isSelected = floatingWindowAppearance.glassStyle == preset.glassStyle
                             FilterChip(
                                 selected = isSelected,
                                 onClick = {
                                     onFloatingWindowAppearanceChange(
                                         floatingWindowAppearance.copy(
+                                            glassStyle = preset.glassStyle,
                                             transparency = preset.transparency,
-                                            blurStrength = preset.blurStrength
+                                            blurStrength = preset.blurStrength,
+                                            windowScale = preset.windowScale
                                         )
                                     )
                                 },

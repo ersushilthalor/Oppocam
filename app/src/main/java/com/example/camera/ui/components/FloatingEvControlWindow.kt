@@ -100,35 +100,20 @@ fun FloatingEvControlWindow(
         label = "evValueColor"
     )
 
-    // Transparent floating glass container so the live camera preview remains clearly visible underneath
-    Box(
+    // Floating glass container controlled by Settings glass style
+    FrostedGlassBox(
         modifier = modifier
-            .widthIn(min = 280.dp, max = 340.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0x9910131A),
-                        Color(0x800A0C10)
-                    )
-                )
-            )
-            .border(
-                width = 1.dp,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        if (isModified) accentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.28f),
-                        Color.White.copy(alpha = 0.10f)
-                    )
-                ),
-                shape = RoundedCornerShape(22.dp)
-            )
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .testTag("floating_ev_control_window")
+            .widthIn(min = 230.dp, max = 290.dp)
+            .testTag("floating_ev_control_window"),
+        shape = RoundedCornerShape(18.dp),
+        elevation = 12.dp,
+        baseAlpha = 0.80f
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             // Top Row: Title + AE Active Indicator + Current EV Readout + Reset/Close
             Row(
@@ -138,46 +123,46 @@ fun FloatingEvControlWindow(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Exposure,
                         contentDescription = "Exposure Compensation",
                         tint = accentColor,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(14.dp)
                     )
                     Text(
                         text = "EXPOSURE",
                         color = Color.White.copy(alpha = 0.92f),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.8.sp
                     )
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(RoundedCornerShape(5.dp))
                             .background(Color(0x334CAF50))
-                            .border(0.8.dp, Color(0xFF81C784).copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 5.dp, vertical = 1.5.dp)
+                            .border(0.8.dp, Color(0xFF81C784).copy(alpha = 0.7f), RoundedCornerShape(5.dp))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = "AE AUTO",
+                            text = "AE",
                             color = Color(0xFF81C784),
-                            fontSize = 8.5.sp,
+                            fontSize = 8.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 0.4.sp
+                            letterSpacing = 0.3.sp
                         )
                     }
                 }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     // Quick Decrement button
                     Box(
                         modifier = Modifier
-                            .size(22.dp)
+                            .size(20.dp)
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.12f))
                             .clickable {
@@ -194,14 +179,14 @@ fun FloatingEvControlWindow(
                             imageVector = Icons.Filled.Remove,
                             contentDescription = "Decrease EV",
                             tint = Color.White.copy(alpha = 0.9f),
-                            modifier = Modifier.size(12.dp)
+                            modifier = Modifier.size(11.dp)
                         )
                     }
 
                     Text(
                         text = formattedEv,
                         color = valueHighlightColor,
-                        fontSize = 14.5.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.ExtraBold,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.testTag("floating_ev_value_text")
@@ -210,7 +195,7 @@ fun FloatingEvControlWindow(
                     // Quick Increment button
                     Box(
                         modifier = Modifier
-                            .size(22.dp)
+                            .size(20.dp)
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.12f))
                             .clickable {
@@ -227,14 +212,14 @@ fun FloatingEvControlWindow(
                             imageVector = Icons.Filled.Add,
                             contentDescription = "Increase EV",
                             tint = Color.White.copy(alpha = 0.9f),
-                            modifier = Modifier.size(12.dp)
+                            modifier = Modifier.size(11.dp)
                         )
                     }
 
                     if (isModified) {
                         Box(
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(22.dp)
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.14f))
                                 .clickable {
@@ -249,14 +234,14 @@ fun FloatingEvControlWindow(
                                 imageVector = Icons.Filled.Refresh,
                                 contentDescription = "Reset EV to 0",
                                 tint = accentColor,
-                                modifier = Modifier.size(13.dp)
+                                modifier = Modifier.size(12.dp)
                             )
                         }
                     }
 
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
+                            .size(22.dp)
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.12f))
                             .clickable { onDismiss() }
@@ -267,7 +252,7 @@ fun FloatingEvControlWindow(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Close EV Control",
                             tint = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(13.dp)
+                            modifier = Modifier.size(12.dp)
                         )
                     }
                 }
@@ -292,7 +277,7 @@ fun FloatingEvControlWindow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(34.dp)
                     .onSizeChanged { size ->
                         sliderWidthPx = size.width.toFloat().coerceAtLeast(1f)
                     }

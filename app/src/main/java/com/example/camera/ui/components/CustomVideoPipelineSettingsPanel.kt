@@ -59,125 +59,137 @@ fun CustomVideoPipelineSettingsPanel(
 ) {
     var activeTab by remember { mutableStateOf(CustomPipelineTab.EXPOSURE_TONE) }
 
-    Column(
+    FrostedGlassBox(
         modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(CustomDarkBg)
-            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(24.dp))
-            .padding(16.dp)
-            .testTag("custom_pipeline_settings_panel")
+            .wrapContentWidth()
+            .widthIn(min = 270.dp, max = 340.dp)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .testTag("custom_pipeline_settings_panel"),
+        shape = RoundedCornerShape(20.dp),
+        elevation = 14.dp,
+        baseAlpha = 0.84f,
+        baseTint = Color(0xFF0F121C)
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 7.dp)
+                .heightIn(max = 330.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(CustomGold)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = "CUSTOM PIPELINE",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.sp
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(CustomGold)
                     )
-                    Text(
-                        text = "Cinema Mode Rec.2020 Natural Log • 38 ISP Controls",
-                        color = CustomGold,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Column {
+                        Text(
+                            text = "CUSTOM PIPELINE",
+                            color = Color.White,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.8.sp
+                        )
+                        Text(
+                            text = "Rec.2020 Natural Log • 38 ISP Controls",
+                            color = CustomGold,
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Reset Button
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.08f))
+                            .clickable { onResetDefaults() }
+                            .testTag("cvp_reset_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.RestartAlt,
+                            contentDescription = "Reset Custom Pipeline Defaults",
+                            tint = CustomGold,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+
+                    if (onDismiss != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .clickable { onDismiss() }
+                                .testTag("cvp_close_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = "Close",
+                                tint = Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Reset Button
-                IconButton(
-                    onClick = onResetDefaults,
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.08f))
-                        .testTag("cvp_reset_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.RestartAlt,
-                        contentDescription = "Reset Custom Pipeline Defaults",
-                        tint = CustomGold,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+            Spacer(modifier = Modifier.height(7.dp))
 
-                if (onDismiss != null) {
-                    IconButton(
-                        onClick = onDismiss,
+            // Navigation Tabs
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                CustomPipelineTab.entries.forEach { tab ->
+                    val isSelected = activeTab == tab
+                    Box(
                         modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.08f))
-                            .testTag("cvp_close_button")
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isSelected) CustomGold else CustomPillUnselected)
+                            .clickable { activeTab = tab }
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                            .testTag("cvp_tab_${tab.name}"),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = "Close",
-                            tint = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(18.dp)
+                        Text(
+                            text = tab.title,
+                            color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.8f),
+                            fontSize = 10.5.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                         )
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-        // Navigation Tabs
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            CustomPipelineTab.entries.forEach { tab ->
-                val isSelected = activeTab == tab
-                Box(
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) CustomGold else CustomPillUnselected)
-                        .clickable { activeTab = tab }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
-                        .testTag("cvp_tab_${tab.name}"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = tab.title,
-                        color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.75f),
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Active Tab Controls Scrollable Area
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f, fill = false)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
+            // Active Tab Controls Scrollable Area
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
             when (activeTab) {
                 CustomPipelineTab.EXPOSURE_TONE -> {
                     PipelineSliderControl(
@@ -542,6 +554,7 @@ fun CustomVideoPipelineSettingsPanel(
         }
     }
 }
+}
 
 @Composable
 private fun PipelineSliderControl(
@@ -555,9 +568,9 @@ private fun PipelineSliderControl(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(CustomCardBg)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -567,13 +580,13 @@ private fun PipelineSliderControl(
             Text(
                 text = label,
                 color = Color.White.copy(alpha = 0.9f),
-                fontSize = 12.sp,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.Medium
             )
             Text(
                 text = valueDisplay,
                 color = CustomGold,
-                fontSize = 12.sp,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -584,6 +597,7 @@ private fun PipelineSliderControl(
             valueRange = range,
             modifier = Modifier
                 .fillMaxWidth()
+                .height(30.dp)
                 .testTag(testTag),
             colors = SliderDefaults.colors(
                 thumbColor = CustomGold,
@@ -605,41 +619,40 @@ private fun PipelineSegmentedSelector(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(CustomCardBg)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
     ) {
         Text(
             text = label,
             color = Color.White.copy(alpha = 0.9f),
-            fontSize = 12.sp,
+            fontSize = 10.5.sp,
             fontWeight = FontWeight.Medium
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(5.dp))
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             options.forEachIndexed { index, title ->
                 val isSelected = selectedIndex == index
                 Box(
                     modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(if (isSelected) CustomGold else CustomPillUnselected)
                         .clickable { onSelect(index) }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
                         .testTag("${testTagPrefix}_$index"),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = title,
-                        color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.7f),
-                        fontSize = 11.sp,
+                        color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.75f),
+                        fontSize = 10.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                     )
                 }

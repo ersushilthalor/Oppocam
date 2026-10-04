@@ -557,18 +557,38 @@ data class MotorolaInstantSwitchState(
 )
 
 /**
+ * Styles for floating windows selectable from Settings:
+ * Liquid Glass, Frosted Glass, Transparent Glass, Subtle Frost, Deep Frost, Solid Dark
+ */
+enum class FloatingWindowGlassStyle(val id: String, val displayName: String) {
+    LIQUID_GLASS("liquid_glass", "Liquid Glass"),
+    FROSTED_GLASS("frosted_glass", "Frosted Glass"),
+    TRANSPARENT_GLASS("transparent_glass", "Transparent Glass"),
+    SUBTLE_FROST("subtle_frost", "Subtle Frost"),
+    DEEP_FROST("deep_frost", "Deep Frost"),
+    SOLID_DARK("solid_dark", "Solid Dark");
+
+    companion object {
+        fun fromId(id: String?): FloatingWindowGlassStyle =
+            entries.find { it.id.equals(id, ignoreCase = true) } ?: LIQUID_GLASS
+    }
+}
+
+/**
  * Floating Window Appearance & Content Configuration:
- * Controls the live backdrop blur strength, transparency, window scale (size),
+ * Controls the floating window glass style, transparency, blur strength, window scale (size),
  * and which settings/controls are displayed inside floating windows across the app.
  *
+ * @param glassStyle Liquid Glass, Frosted Glass, Transparent Glass, etc.
  * @param transparency 0.0f (opaque/solid glass) to 1.0f (crystal clear / maximum backdrop visibility)
  * @param blurStrength 0.0f (sharp/no blur) to 50.0f (deep creamy optical frosted diffusion)
  * @param windowScale 0.75f (75% compact) to 1.25f (125% large) size multiplier for all floating windows
  */
 data class FloatingWindowAppearanceConfig(
-    val transparency: Float = 0.50f, // Default 50% transparency
-    val blurStrength: Float = 24.0f,  // Default 24 dp blur
-    val windowScale: Float = 1.0f,    // Default 100% size scale (0.75f .. 1.25f)
+    val glassStyle: FloatingWindowGlassStyle = FloatingWindowGlassStyle.LIQUID_GLASS,
+    val transparency: Float = 0.55f, // Default 55% transparency
+    val blurStrength: Float = 22.0f,  // Default 22 dp blur
+    val windowScale: Float = 0.88f,   // Content-based compact scale (default 88%)
     // Configurable settings inside Floating Windows:
     // 1. Video Settings Floating Window
     val showVideoResolution: Boolean = true,
@@ -598,10 +618,45 @@ data class FloatingWindowAppearanceConfig(
     val windowScalePercent: Int get() = kotlin.math.round((windowScale * 100f)).toInt().coerceIn(75, 125)
 
     companion object {
-        val GLASSMORPHISM = FloatingWindowAppearanceConfig(transparency = 0.50f, blurStrength = 24.0f)
-        val SUBTLE_FROST = FloatingWindowAppearanceConfig(transparency = 0.35f, blurStrength = 14.0f)
-        val DEEP_FROST = FloatingWindowAppearanceConfig(transparency = 0.70f, blurStrength = 38.0f)
-        val SOLID_DARK = FloatingWindowAppearanceConfig(transparency = 0.15f, blurStrength = 8.0f)
+        val LIQUID_GLASS = FloatingWindowAppearanceConfig(
+            glassStyle = FloatingWindowGlassStyle.LIQUID_GLASS,
+            transparency = 0.55f,
+            blurStrength = 22.0f,
+            windowScale = 0.88f
+        )
+        val FROSTED_GLASS = FloatingWindowAppearanceConfig(
+            glassStyle = FloatingWindowGlassStyle.FROSTED_GLASS,
+            transparency = 0.40f,
+            blurStrength = 32.0f,
+            windowScale = 0.88f
+        )
+        val TRANSPARENT_GLASS = FloatingWindowAppearanceConfig(
+            glassStyle = FloatingWindowGlassStyle.TRANSPARENT_GLASS,
+            transparency = 0.82f,
+            blurStrength = 8.0f,
+            windowScale = 0.88f
+        )
+        val SUBTLE_FROST = FloatingWindowAppearanceConfig(
+            glassStyle = FloatingWindowGlassStyle.SUBTLE_FROST,
+            transparency = 0.45f,
+            blurStrength = 16.0f,
+            windowScale = 0.88f
+        )
+        val DEEP_FROST = FloatingWindowAppearanceConfig(
+            glassStyle = FloatingWindowGlassStyle.DEEP_FROST,
+            transparency = 0.65f,
+            blurStrength = 40.0f,
+            windowScale = 0.88f
+        )
+        val SOLID_DARK = FloatingWindowAppearanceConfig(
+            glassStyle = FloatingWindowGlassStyle.SOLID_DARK,
+            transparency = 0.15f,
+            blurStrength = 4.0f,
+            windowScale = 0.88f
+        )
+
+        // Backward compatibility alias
+        val GLASSMORPHISM = LIQUID_GLASS
     }
 }
 

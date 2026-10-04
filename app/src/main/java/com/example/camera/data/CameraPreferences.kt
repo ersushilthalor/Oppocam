@@ -48,6 +48,7 @@ class CameraPreferences(context: Context) {
         private const val KEY_SHOW_FRONT_PREVIEW = "pref_show_front_preview"
         private const val KEY_FLOATING_WINDOW_TRANSPARENCY = "pref_floating_window_transparency"
         private const val KEY_FLOATING_WINDOW_BLUR_STRENGTH = "pref_floating_window_blur_strength"
+        private const val KEY_FLOATING_WINDOW_GLASS_STYLE = "pref_floating_window_glass_style"
         private const val KEY_PREFERRED_GALLERY_PACKAGE = "pref_preferred_gallery_package"
         private const val KEY_HAS_PROMPTED_GALLERY = "pref_has_prompted_gallery"
         private const val KEY_ZOOM_PRESETS_MODE = "pref_zoom_presets_mode"
@@ -105,20 +106,27 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_HAS_PROMPTED_GALLERY, false)
         set(value) = prefs.edit().putBoolean(KEY_HAS_PROMPTED_GALLERY, value).apply()
 
+    var floatingWindowGlassStyle: com.example.camera.model.FloatingWindowGlassStyle
+        get() = com.example.camera.model.FloatingWindowGlassStyle.fromId(
+            prefs.getString(KEY_FLOATING_WINDOW_GLASS_STYLE, "liquid_glass")
+        )
+        set(value) = prefs.edit().putString(KEY_FLOATING_WINDOW_GLASS_STYLE, value.id).apply()
+
     var floatingWindowTransparency: Float
-        get() = prefs.getFloat(KEY_FLOATING_WINDOW_TRANSPARENCY, 0.50f)
+        get() = prefs.getFloat(KEY_FLOATING_WINDOW_TRANSPARENCY, 0.55f)
         set(value) = prefs.edit().putFloat(KEY_FLOATING_WINDOW_TRANSPARENCY, value).apply()
 
     var floatingWindowBlurStrength: Float
-        get() = prefs.getFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, 24.0f)
+        get() = prefs.getFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, 22.0f)
         set(value) = prefs.edit().putFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, value).apply()
 
     var floatingWindowScale: Float
-        get() = prefs.getFloat("floating_window_scale", 1.0f).coerceIn(0.75f, 1.25f)
+        get() = prefs.getFloat("floating_window_scale", 0.88f).coerceIn(0.75f, 1.25f)
         set(value) = prefs.edit().putFloat("floating_window_scale", value.coerceIn(0.75f, 1.25f)).apply()
 
     fun getFloatingWindowAppearance(): com.example.camera.model.FloatingWindowAppearanceConfig {
         return com.example.camera.model.FloatingWindowAppearanceConfig(
+            glassStyle = floatingWindowGlassStyle,
             transparency = floatingWindowTransparency,
             blurStrength = floatingWindowBlurStrength,
             windowScale = floatingWindowScale,
@@ -145,6 +153,7 @@ class CameraPreferences(context: Context) {
 
     fun saveFloatingWindowAppearance(config: com.example.camera.model.FloatingWindowAppearanceConfig) {
         prefs.edit()
+            .putString(KEY_FLOATING_WINDOW_GLASS_STYLE, config.glassStyle.id)
             .putFloat(KEY_FLOATING_WINDOW_TRANSPARENCY, config.transparency)
             .putFloat(KEY_FLOATING_WINDOW_BLUR_STRENGTH, config.blurStrength)
             .putFloat("floating_window_scale", config.windowScale.coerceIn(0.75f, 1.25f))

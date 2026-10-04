@@ -473,10 +473,6 @@ fun Viewfinder(
                                         )
                                     }
 
-                                    // Real-time backdrop blur sampling for all floating windows & popups across the app
-                                    if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive) {
-                                        com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(this@apply, floatingWindowBlurStrength)
-                                    }
 
                                     // Real-time Motion Photo frame buffering (30 FPS)
                                     if (isMotionPhotoEnabled && cameraMode == CameraMode.PHOTO && onMotionPhotoPreviewFrame != null) {

@@ -746,7 +746,7 @@ fun CameraScreen(
                 onConfigChange = { viewModel.updateCustomVideoPipelineConfig(it) },
                 onResetDefaults = { viewModel.resetCustomVideoPipelineConfig() },
                 onDismiss = { viewModel.setCustomVideoPipelineSettingsOpen(false) },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.wrapContentSize()
             )
         }
 
