@@ -15,10 +15,12 @@ import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.os.Build
 import android.util.Log
 import android.view.Surface
+import com.example.camera.model.CinemaColorProfile
 import com.example.camera.model.CinemaConfig
 import com.example.camera.model.CinematicLut
 import java.io.File
@@ -133,6 +135,7 @@ object CinemaVideoProcessor {
         var eglSurface = EGL14.EGL_NO_SURFACE
         var programId = 0
         var textureId = 0
+        var lutTextureId = 0
 
         try {
             extractor = MediaExtractor().apply {
@@ -350,6 +353,34 @@ object CinemaVideoProcessor {
             val aPositionHandle = GLES20.glGetAttribLocation(programId, "aPosition")
             val aTextureCoordHandle = GLES20.glGetAttribLocation(programId, "aTextureCoord")
 
+            val sTextureHandle = GLES20.glGetUniformLocation(programId, "sTexture")
+            val sLutTextureHandle = GLES20.glGetUniformLocation(programId, "sLutTexture")
+            val uUse3DLutHandle = GLES20.glGetUniformLocation(programId, "uUse3DLut")
+            val uLutSizeHandle = GLES20.glGetUniformLocation(programId, "uLutSize")
+            val uLutIntensityHandle = GLES20.glGetUniformLocation(programId, "uLutIntensity")
+            val uExposureHandle = GLES20.glGetUniformLocation(programId, "uExposure")
+            val uContrastHandle = GLES20.glGetUniformLocation(programId, "uContrast")
+            val uSaturationHandle = GLES20.glGetUniformLocation(programId, "uSaturation")
+            val uWashedOutHandle = GLES20.glGetUniformLocation(programId, "uWashedOut")
+            val uFilmicOutputHandle = GLES20.glGetUniformLocation(programId, "uFilmicOutput")
+
+            val lutPair = if (config.isBakeLutToOutput) CinemaColorPipeline.getLutStripBitmap(config) else null
+            val lutBitmap = lutPair?.first ?: CinemaColorPipeline.identityStripBitmap
+            val lutSize = (lutPair?.second ?: 17).toFloat()
+            val use3DLut = if (lutPair != null && config.lutIntensity > 0.001f) 1.0f else 0.0f
+            val lutIntensity = if (lutPair != null) config.lutIntensity.coerceIn(0f, 1f) else 0.0f
+
+            val lutTextures = IntArray(1)
+            GLES20.glGenTextures(1, lutTextures, 0)
+            lutTextureId = lutTextures[0]
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTextureId)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, lutBitmap, 0)
+
             val textures = IntArray(1)
             GLES20.glGenTextures(1, textures, 0)
             textureId = textures[0]
@@ -496,6 +527,25 @@ object CinemaVideoProcessor {
                                 GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
                                 GLES20.glUniformMatrix4fv(uColorMatrixHandle, 1, false, glColorMat, 0)
                                 GLES20.glUniform4fv(uColorOffsetHandle, 1, glColorOffset, 0)
+
+                                GLES20.glUniform1i(sTextureHandle, 0)
+                                GLES20.glUniform1i(sLutTextureHandle, 1)
+
+                                val exposure = if (config.colorProfile != CinemaColorProfile.FLAT_LOG) config.exposure else 0f
+                                GLES20.glUniform1f(uExposureHandle, exposure)
+                                GLES20.glUniform1f(uContrastHandle, config.contrast)
+                                GLES20.glUniform1f(uSaturationHandle, config.saturation)
+                                GLES20.glUniform1f(uWashedOutHandle, config.washedOut)
+
+                                val isGraded = (config.selectedLut != CinematicLut.NONE || config.colorProfile != CinemaColorProfile.NATIVE)
+                                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
+                                val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
+                                GLES20.glUniform1f(uFilmicOutputHandle, filmicOutput)
+
+                                GLES20.glUniform1f(uUse3DLutHandle, use3DLut)
+                                GLES20.glUniform1f(uLutSizeHandle, lutSize)
+                                GLES20.glUniform1f(uLutIntensityHandle, lutIntensity)
+
                                 GLES20.glUniform1f(uShadowsHandle, config.shadows.coerceIn(-1f, 1f))
                                 GLES20.glUniform1f(uHighlightsHandle, config.highlights.coerceIn(-1f, 1f))
                                 GLES20.glUniform1f(uVibranceHandle, config.vibrance.coerceIn(-1f, 1f))
@@ -535,6 +585,9 @@ object CinemaVideoProcessor {
 
                                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
                                 GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+
+                                GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+                                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTextureId)
 
                                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
@@ -648,6 +701,13 @@ object CinemaVideoProcessor {
                 muxer = null
             }
 
+            if (textureId != 0) {
+                GLES20.glDeleteTextures(1, intArrayOf(textureId), 0)
+            }
+            if (lutTextureId != 0) {
+                GLES20.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
+            }
+
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface)
@@ -684,8 +744,17 @@ object CinemaVideoProcessor {
             precision highp float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
+            uniform sampler2D sLutTexture;
             uniform mat4 uColorMatrix;
             uniform vec4 uColorOffset;
+            uniform float uUse3DLut;
+            uniform float uLutSize;
+            uniform float uLutIntensity;
+            uniform float uExposure;
+            uniform float uContrast;
+            uniform float uSaturation;
+            uniform float uWashedOut;
+            uniform float uFilmicOutput;
             uniform float uShadows;
             uniform float uHighlights;
             uniform float uVibrance;
@@ -710,20 +779,60 @@ object CinemaVideoProcessor {
             uniform float uMicroContrast;
             uniform float uOutputGamma;
 
+            vec3 sample3DLut(vec3 color, float lutSize) {
+                float n = lutSize;
+                float b = clamp(color.b, 0.0, 1.0) * (n - 1.0);
+                float slice0 = floor(b);
+                float slice1 = min(slice0 + 1.0, n - 1.0);
+                float bWeight = b - slice0;
+
+                float rCoord = clamp(color.r, 0.0, 1.0) * (n - 1.0);
+                float texHeight = n;
+                float v = (0.5 + clamp(color.g, 0.0, 1.0) * (n - 1.0)) / texHeight;
+
+                float texWidth = n * n;
+                float u0 = (slice0 * n + 0.5 + rCoord) / texWidth;
+                float u1 = (slice1 * n + 0.5 + rCoord) / texWidth;
+
+                vec4 s0 = texture2D(sLutTexture, vec2(u0, v));
+                vec4 s1 = texture2D(sLutTexture, vec2(u1, v));
+
+                return mix(s0.rgb, s1.rgb, bWeight);
+            }
+
             void main() {
                 vec4 src = texture2D(sTexture, vTextureCoord);
+                vec3 inColor = src.rgb;
                 vec3 cUp = texture2D(sTexture, vTextureCoord + vec2(0.0, -uTexelSize.y)).rgb;
                 vec3 cDown = texture2D(sTexture, vTextureCoord + vec2(0.0, uTexelSize.y)).rgb;
                 vec3 cLeft = texture2D(sTexture, vTextureCoord + vec2(-uTexelSize.x, 0.0)).rgb;
                 vec3 cRight = texture2D(sTexture, vTextureCoord + vec2(uTexelSize.x, 0.0)).rgb;
 
-                // Base 4x5 Cinema ColorMatrix
-                vec4 graded = uColorMatrix * vec4(src.rgb, 1.0) + uColorOffset;
+                // =========================================================================
+                // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
+                // =========================================================================
+                vec4 graded = uColorMatrix * vec4(inColor, 1.0) + uColorOffset;
                 vec3 c = clamp(graded.rgb, 0.0, 1.0);
 
                 // =========================================================================
-                // STAGE 1: EXPOSURE & WHITE BALANCE (Temperature, Tint)
+                // STAGE 2: 3D LUT SAMPLING & INTENSITY BLENDING
                 // =========================================================================
+                if (uUse3DLut > 0.5 && uLutIntensity > 0.001) {
+                    vec3 lutSample = sample3DLut(c, uLutSize);
+                    c = clamp(mix(c, lutSample, uLutIntensity), 0.0, 1.0);
+                }
+
+                // =========================================================================
+                // STAGE 3: TONAL & COLOR GRADING CONTROLS
+                // =========================================================================
+
+                // 1. Exposure
+                if (abs(uExposure) > 0.001) {
+                    float expMultiplier = pow(2.0, uExposure * 0.75);
+                    c = clamp(c * expMultiplier, 0.0, 1.0);
+                }
+
+                // 2. White Balance (Temperature & Tint)
                 if (abs(uTemperature) > 0.001 || abs(uTint) > 0.001) {
                     float tempShift = uTemperature * 0.28;
                     float tintShift = uTint * 0.22;
@@ -733,13 +842,25 @@ object CinemaVideoProcessor {
                     c = clamp(c, 0.0, 1.0);
                 }
 
-                // =========================================================================
-                // STAGE 2: TONAL ADJUSTMENTS
-                // =========================================================================
+                // 3. Black Level Pedestal
                 if (abs(uBlackLevel) > 0.001) {
                     c = clamp(c + vec3(uBlackLevel * 0.15), 0.0, 1.0);
                 }
 
+                // 4. Washed-Out Black Reduction
+                if (uWashedOut > 0.001) {
+                    float pedestalReduction = -0.10 * uWashedOut;
+                    float contrastBoost = 1.0 + (uWashedOut * 0.28);
+                    c = clamp(0.5 + (c - 0.5) * contrastBoost + pedestalReduction, 0.0, 1.0);
+                }
+
+                // 5. Contrast (S-Curve pivoting around middle-grey)
+                if (abs(uContrast) > 0.001) {
+                    float contrastFactor = 1.0 + uContrast * 0.38;
+                    c = clamp(0.5 + (c - 0.5) * contrastFactor, 0.0, 1.0);
+                }
+
+                // 6. Tonal Zone Sculpting
                 float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
 
                 float wBlacks = 1.0 - smoothstep(0.0, 0.25, luma);
@@ -780,9 +901,7 @@ object CinemaVideoProcessor {
 
                 c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
 
-                // =========================================================================
-                // STAGE 3: COLOR TRANSFORM (Matrix cross-talk, Chroma Strength, Vibrance, Green LUT)
-                // =========================================================================
+                // 7. Color Transform / Matrix Cross-Talk
                 if (abs(uColorTransform) > 0.001) {
                     vec3 filmColor;
                     if (uColorTransform > 0.0) {
@@ -797,12 +916,19 @@ object CinemaVideoProcessor {
                     c = clamp(mix(c, filmColor, abs(uColorTransform)), 0.0, 1.0);
                 }
 
+                // 8. Saturation
+                if (abs(uSaturation - 1.0) > 0.001) {
+                    float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    c = clamp(vec3(curLuma) + (c - vec3(curLuma)) * uSaturation, 0.0, 1.0);
+                }
+
+                // 9. Chroma Strength
                 if (abs(uChromaStrength - 1.0) > 0.001) {
                     float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
                     c = clamp(vec3(curLuma) + (c - vec3(curLuma)) * uChromaStrength, 0.0, 1.0);
                 }
 
-                // Skin-tone protection mask (R > G > B with natural warm human skin ratios)
+                // 10. Skin-Tone Protected Vibrance
                 float lumaPre = dot(c, vec3(0.2126, 0.7152, 0.0722));
                 float rgDiff = c.r - c.g;
                 float gbDiff = c.g - c.b;
@@ -815,7 +941,6 @@ object CinemaVideoProcessor {
                                      (1.0 - smoothstep(0.90, 0.99, lumaPre));
                 float skinWeight = clamp(skinHueMask * skinLumaMask, 0.0, 1.0);
 
-                // Independent Vibrance with Skin-Tone Protection
                 if (abs(uVibrance) > 0.001) {
                     float maxC = max(c.r, max(c.g, c.b));
                     float minC = min(c.r, min(c.g, c.b));
@@ -827,7 +952,7 @@ object CinemaVideoProcessor {
                     c = clamp(vec3(lumaVib) + (c - vec3(lumaVib)) * vibScale, 0.0, 1.0);
                 }
 
-                // Selective Vibrant Green / Punchy Green LUT
+                // 11. Selective Vibrant Green / Foliage LUT
                 if (uVibrantGreenIntensity > 0.001) {
                     float lumaGreen = dot(c, vec3(0.2126, 0.7152, 0.0722));
                     float greenDomR = smoothstep(-0.035, 0.075, c.g - c.r);
@@ -860,17 +985,7 @@ object CinemaVideoProcessor {
                     }
                 }
 
-                // =========================================================================
-                // STAGE 4: TONE MAPPING (ACES Filmic Tone Mapping)
-                // =========================================================================
-                if (uToneMappingStrength > 0.001) {
-                    vec3 aces = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
-                    c = mix(c, aces, uToneMappingStrength);
-                }
-
-                // =========================================================================
-                // STAGE 5: NOISE REDUCTION
-                // =========================================================================
+                // 12. Spatial detail / sharpening & noise reduction
                 if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
                     float lCenter = dot(c, vec3(0.2126, 0.7152, 0.0722));
                     float lUp = dot(cUp, vec3(0.2126, 0.7152, 0.0722));
@@ -906,9 +1021,6 @@ object CinemaVideoProcessor {
                     }
                 }
 
-                // =========================================================================
-                // STAGE 6: DETAIL & SHARPENING
-                // =========================================================================
                 if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
                     vec3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
                     vec3 highPass = c - neighborAvg;
@@ -931,8 +1043,19 @@ object CinemaVideoProcessor {
                 }
 
                 // =========================================================================
-                // STAGE 7: OUTPUT GAMMA
+                // STAGE 4: OUTPUT TRANSFORM / TONE MAPPING / OUTPUT GAMMA
                 // =========================================================================
+                if (uToneMappingStrength > 0.001) {
+                    vec3 aces = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
+                    c = mix(c, aces, uToneMappingStrength);
+                }
+
+                if (uFilmicOutput > 0.5) {
+                    float highlightCompression = 0.975;
+                    float inkyBlackAnchor = -0.0137; // -3.5 / 255.0
+                    c = clamp(c * highlightCompression + inkyBlackAnchor, 0.0, 1.0);
+                }
+
                 if (abs(uOutputGamma - 1.0) > 0.001) {
                     c = pow(clamp(c, 0.0, 1.0), vec3(uOutputGamma));
                 }

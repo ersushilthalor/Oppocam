@@ -293,7 +293,7 @@ object CubeLutParser {
         val matrix4x5 = floatArrayOf(
             rR, gR, bR, 0f, blackCorner[0] * 255f,
             rG, gG, bG, 0f, blackCorner[1] * 255f,
-            rB, bG, bB, 0f, blackCorner[2] * 255f,
+            rB, gB, bB, 0f, blackCorner[2] * 255f,
             0f, 0f, 0f, 1f, 0f
         )
 

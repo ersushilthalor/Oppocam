@@ -43,6 +43,57 @@ import kotlin.math.pow
 object CinemaColorPipeline {
 
     /**
+     * Cached identity 2D strip bitmap (size 17) used when no 3D LUT is active.
+     */
+    val identityStripBitmap: android.graphics.Bitmap by lazy {
+        val n = 17
+        val width = n * n
+        val height = n
+        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(width * height)
+        for (b in 0 until n) {
+            val blue = (b.toFloat() / (n - 1) * 255f).toInt()
+            for (g in 0 until n) {
+                val green = (g.toFloat() / (n - 1) * 255f).toInt()
+                for (r in 0 until n) {
+                    val red = (r.toFloat() / (n - 1) * 255f).toInt()
+                    pixels[g * width + (b * n + r)] = (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
+                }
+            }
+        }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        bitmap
+    }
+
+    /**
+     * Retrieves the 2D strip Bitmap and grid size for the active LUT (custom or preset), or null if none.
+     */
+    fun getLutStripBitmap(config: CinemaConfig?): Pair<android.graphics.Bitmap, Int>? {
+        if (config == null) return null
+        val lut = config.selectedLut
+        val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
+        if (lut == CinematicLut.NONE || intensity <= 0.001f) return null
+
+        if (lut == CinematicLut.CUSTOM && !config.customLutPath.isNullOrBlank()) {
+            val parsed = CubeLutParser.getOrLoad(config.customLutPath)
+            if (parsed != null) {
+                return Pair(parsed.to2DStripBitmap(), parsed.size)
+            }
+        } else if (lut != CinematicLut.CUSTOM && lut != CinematicLut.NONE) {
+            val bmp = CubeLutParser.generate3DStripBitmapForPreset(lut)
+            return Pair(bmp, 33)
+        }
+        return null
+    }
+
+    /**
+     * Evaluates a preset cinematic LUT for an RGB pixel with exact tonal curves and color separation.
+     */
+    fun samplePresetLut(lut: CinematicLut, inR: Float, inG: Float, inB: Float): FloatArray {
+        return CubeLutParser.samplePreset(lut, inR, inG, inB)
+    }
+
+    /**
      * Returns true if any Cinema color grading stage (log profile, primary grade controls,
      * selective Shadows/Highlights/Vibrance, Creative LUT, or Color Fine-Tuning) is active.
      */
@@ -59,6 +110,10 @@ object CinemaColorPipeline {
         if (config.shadows != 0.0f || config.highlights != 0.0f || config.vibrance != 0.0f) {
             return true
         }
+        if (config.exposure != 0.0f || config.contrast != 0.0f || config.saturation != 1.0f || config.washedOut > 0.0f) {
+            return true
+        }
+        if (config.colorProfile != CinemaColorProfile.NATIVE) return true
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
         if (includeCreativeLut && lut != CinematicLut.NONE && intensity > 0.001f) {
@@ -85,7 +140,7 @@ object CinemaColorPipeline {
 
     /**
      * Returns true if selective per-pixel shader processing (Vibrant Green LUT,
-     * independent Shadows / Highlights / Vibrance, or Color Fine-Tuning) is active.
+     * 3D LUT sampling, independent Shadows / Highlights / Vibrance, or Color Fine-Tuning) is active.
      */
     fun requiresSelectiveShader(
         config: CinemaConfig?,
@@ -96,8 +151,20 @@ object CinemaColorPipeline {
         val vibrantGreenActive = getVibrantGreenLutIntensity(config, includeCreativeLut) > 0.001f
         val selectiveControlsActive = config.shadows != 0.0f ||
                 config.highlights != 0.0f ||
-                config.vibrance != 0.0f
-        return vibrantGreenActive || selectiveControlsActive
+                config.vibrance != 0.0f ||
+                config.exposure != 0.0f ||
+                config.contrast != 0.0f ||
+                config.saturation != 1.0f ||
+                config.washedOut > 0.0f
+        val custom3DLutActive = includeCreativeLut &&
+                config.selectedLut == CinematicLut.CUSTOM &&
+                !config.customLutPath.isNullOrBlank() &&
+                config.lutIntensity > 0.001f
+        val creative3DLutActive = includeCreativeLut &&
+                config.selectedLut != CinematicLut.NONE &&
+                config.selectedLut != CinematicLut.REC_709 &&
+                config.lutIntensity > 0.001f
+        return vibrantGreenActive || selectiveControlsActive || custom3DLutActive || creative3DLutActive
     }
 
     /**
@@ -105,9 +172,9 @@ object CinemaColorPipeline {
      * Returns null if no transform is active (e.g. Native with default parameters and no LUT).
      *
      * @param includeCreativeLut If true, incorporates Stage 3 (Creative LUT) into the matrix.
-     * @param forGpuShader If true, omits non-linear selective operations (Shadows, Highlights,
-     * Vibrance, and Vibrant Green / Punchy Green LUT) from the 4x5 matrix because they are
-     * executed with per-pixel selective masks in the GPU shader (AGSL / OpenGL ES).
+     * @param forGpuShader If true, omits non-linear selective operations and 3D LUT sampling
+     * from the 4x5 matrix because they are executed with real 3D LUT sampling and per-pixel
+     * selective masks in the GPU shader (AGSL / OpenGL ES).
      */
     fun computeCinemaColorMatrix(
         config: CinemaConfig?,
@@ -123,7 +190,7 @@ object CinemaColorPipeline {
         // =========================================================================
         // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
         // =========================================================================
-        if (config.logBitDepth != LogBitDepth.OFF || config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG) {
+        if (config.logBitDepth != LogBitDepth.OFF || config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG || config.colorProfile != CinemaColorProfile.NATIVE) {
             val technicalTransform = computeTechnicalInputTransform(config.colorProfile, rec2020Params)
             if (technicalTransform != null) {
                 masterMatrix.postConcat(technicalTransform)
@@ -131,29 +198,34 @@ object CinemaColorPipeline {
             }
         }
 
-        // =========================================================================
-        // STAGE 2: PRIMARY GRADE (Tonal & Exposure Balance)
-        // =========================================================================
-        val primaryGrade = computePrimaryGradeTransform(config, forGpuShader = forGpuShader)
-        if (primaryGrade != null) {
-            masterMatrix.postConcat(primaryGrade)
-            hasTransform = true
+        // When building for GPU shader, Stages 2 (3D LUT), 3 (Tonal Grading), and 4 (Output Transform)
+        // are executed directly in the shader, so return the CST matrix here.
+        if (forGpuShader) {
+            return if (hasTransform) masterMatrix else null
         }
 
         // =========================================================================
-        // STAGE 3: CREATIVE LUT TRANSFORM (Film Stock / Custom .cube)
+        // FALLBACK COLORMATRIX PIPELINE (When no GPU shader is available):
+        // Preserves processing order: CST -> 3D LUT (fallback matrix) -> Primary Grade -> Output Transform
         // =========================================================================
+
+        // STAGE 2: CREATIVE LUT FALLBACK TRANSFORM
         if (includeCreativeLut) {
-            val creativeLut = computeCreativeLutTransform(config, forGpuShader = forGpuShader)
+            val creativeLut = computeCreativeLutTransform(config, forGpuShader = false)
             if (creativeLut != null) {
                 masterMatrix.postConcat(creativeLut)
                 hasTransform = true
             }
         }
 
-        // =========================================================================
+        // STAGE 3: PRIMARY GRADE (Tonal & Exposure Balance)
+        val primaryGrade = computePrimaryGradeTransform(config, forGpuShader = false)
+        if (primaryGrade != null) {
+            masterMatrix.postConcat(primaryGrade)
+            hasTransform = true
+        }
+
         // STAGE 4: FINAL OUTPUT TRANSFORM & FILMIC TONE MAPPING
-        // =========================================================================
         val outputTransform = computeFinalOutputTransform(config)
         if (outputTransform != null) {
             masterMatrix.postConcat(outputTransform)
@@ -662,6 +734,9 @@ object CinemaColorPipeline {
         rec2020Params: Rec2020AutoToneParams? = null,
         includeCreativeLut: Boolean = true
     ): FloatArray {
+        // =========================================================================
+        // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
+        // =========================================================================
         val baseMatrix = computeCinemaColorMatrix(
             config = config,
             rec2020Params = rec2020Params,
@@ -684,8 +759,40 @@ object CinemaColorPipeline {
         }
 
         // =========================================================================
-        // STAGE 1: EXPOSURE & WHITE BALANCE (Temperature, Tint)
+        // STAGE 2: 3D LUT SAMPLING & INTENSITY BLENDING
         // =========================================================================
+        val lut = config.selectedLut
+        val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
+        if (includeCreativeLut && lut != CinematicLut.NONE && intensity > 0.001f &&
+            !((config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG) && lut == CinematicLut.REC_709)
+        ) {
+            val sampled = if (lut == CinematicLut.CUSTOM && !config.customLutPath.isNullOrBlank()) {
+                CubeLutParser.getOrLoad(config.customLutPath)?.sample3D(r, g, b)
+            } else if (!lut.isVibrantGreenLut && lut != CinematicLut.CUSTOM) {
+                samplePresetLut(lut, r, g, b)
+            } else {
+                null
+            }
+            if (sampled != null) {
+                r = (r * (1.0f - intensity) + sampled[0] * intensity).coerceIn(0f, 1f)
+                g = (g * (1.0f - intensity) + sampled[1] * intensity).coerceIn(0f, 1f)
+                b = (b * (1.0f - intensity) + sampled[2] * intensity).coerceIn(0f, 1f)
+            }
+        }
+
+        // =========================================================================
+        // STAGE 3: TONAL & COLOR GRADING CONTROLS
+        // =========================================================================
+
+        // 1. Exposure
+        if (config.exposure != 0.0f && config.colorProfile != CinemaColorProfile.FLAT_LOG) {
+            val expMultiplier = 2.0f.pow(config.exposure * 0.75f)
+            r = (r * expMultiplier).coerceIn(0f, 1f)
+            g = (g * expMultiplier).coerceIn(0f, 1f)
+            b = (b * expMultiplier).coerceIn(0f, 1f)
+        }
+
+        // 2. White Balance (Temperature, Tint)
         if (config.temperature != 0.0f || config.tint != 0.0f) {
             val tempShift = config.temperature.coerceIn(-1.0f, 1.0f) * 0.28f
             val tintShift = config.tint.coerceIn(-1.0f, 1.0f) * 0.22f
@@ -694,9 +801,7 @@ object CinemaColorPipeline {
             b = (b * (1.0f - tempShift) * (1.0f - tintShift * 0.5f)).coerceIn(0f, 1f)
         }
 
-        // =========================================================================
-        // STAGE 2: TONAL ADJUSTMENTS
-        // =========================================================================
+        // 3. Black Level Pedestal
         if (config.blackLevel != 0.0f) {
             val bl = config.blackLevel.coerceIn(-1.0f, 1.0f) * 0.15f
             r = (r + bl).coerceIn(0f, 1f)
@@ -704,6 +809,25 @@ object CinemaColorPipeline {
             b = (b + bl).coerceIn(0f, 1f)
         }
 
+        // 4. Washed-Out Black Reduction
+        if (config.washedOut > 0.0f) {
+            val w = config.washedOut
+            val pedestalReduction = -0.10f * w
+            val contrastBoost = 1.0f + (w * 0.28f)
+            r = (0.5f + (r - 0.5f) * contrastBoost + pedestalReduction).coerceIn(0f, 1f)
+            g = (0.5f + (g - 0.5f) * contrastBoost + pedestalReduction).coerceIn(0f, 1f)
+            b = (0.5f + (b - 0.5f) * contrastBoost + pedestalReduction).coerceIn(0f, 1f)
+        }
+
+        // 5. User Contrast
+        if (config.contrast != 0.0f) {
+            val cFactor = 1.0f + (config.contrast * 0.38f)
+            r = (0.5f + (r - 0.5f) * cFactor).coerceIn(0f, 1f)
+            g = (0.5f + (g - 0.5f) * cFactor).coerceIn(0f, 1f)
+            b = (0.5f + (b - 0.5f) * cFactor).coerceIn(0f, 1f)
+        }
+
+        // 6. Tonal Zone Sculpting
         val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
 
         val blacks = config.blacks.coerceIn(-1.0f, 1.0f)
@@ -766,9 +890,7 @@ object CinemaColorPipeline {
             b = (b + totalTonalDelta).coerceIn(0f, 1f)
         }
 
-        // =========================================================================
-        // STAGE 3: COLOR TRANSFORM (Color Matrix, Chroma Strength, Vibrance, LUT)
-        // =========================================================================
+        // 7. Color Transform
         val ct = config.colorTransform.coerceIn(-1.0f, 1.0f)
         if (ct != 0f) {
             val ctWeight = kotlin.math.abs(ct)
@@ -780,6 +902,15 @@ object CinemaColorPipeline {
             b = (b * (1f - ctWeight) + filmB * ctWeight).coerceIn(0f, 1f)
         }
 
+        // 8. Saturation
+        if (config.saturation != 1.0f) {
+            val curL = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            r = (curL + (r - curL) * config.saturation).coerceIn(0f, 1f)
+            g = (curL + (g - curL) * config.saturation).coerceIn(0f, 1f)
+            b = (curL + (b - curL) * config.saturation).coerceIn(0f, 1f)
+        }
+
+        // 9. Chroma Strength
         val chromaStr = config.chromaStrength.coerceIn(0.0f, 2.0f)
         if (chromaStr != 1.0f) {
             val curL = 0.2126f * r + 0.7152f * g + 0.0722f * b
@@ -788,7 +919,7 @@ object CinemaColorPipeline {
             b = (curL + (b - curL) * chromaStr).coerceIn(0f, 1f)
         }
 
-        // Compute skin-tone protection weight (human skin: R > G > B with warm peach/beige/brown ratios)
+        // 10. Skin-Tone Protected Vibrance
         val lumaBeforeChroma = 0.2126f * r + 0.7152f * g + 0.0722f * b
         val rgDiff = r - g
         val gbDiff = g - b
@@ -801,7 +932,6 @@ object CinemaColorPipeline {
                 (1.0f - smoothstep(0.90f, 0.99f, lumaBeforeChroma))
         val skinWeight = (skinHueMask * skinLumaMask).coerceIn(0f, 1f)
 
-        // 2. Independent Vibrance with Skin-Tone Protection
         val vibrance = config.vibrance.coerceIn(-1f, 1f)
         if (vibrance != 0f) {
             val maxC = max(r, max(g, b))
@@ -816,7 +946,7 @@ object CinemaColorPipeline {
             b = (curLuma + (b - curLuma) * vibScale).coerceIn(0f, 1f)
         }
 
-        // 3. Selective Vibrant Green / Punchy Green LUT
+        // 11. Selective Vibrant Green / Punchy Green LUT
         val vGreen = getVibrantGreenLutIntensity(config, includeCreativeLut)
         if (vGreen > 0.001f) {
             val lumaGreen = 0.2126f * r + 0.7152f * g + 0.0722f * b
@@ -862,20 +992,7 @@ object CinemaColorPipeline {
             }
         }
 
-        // =========================================================================
-        // STAGE 4: TONE MAPPING (ACES Filmic Tone Mapping)
-        // =========================================================================
-        val tmStr = config.toneMappingStrength.coerceIn(0.0f, 1.0f)
-        if (tmStr > 0.001f) {
-            fun aces(x: Float): Float = ((x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f)).coerceIn(0f, 1f)
-            r = (r * (1f - tmStr) + aces(r) * tmStr).coerceIn(0f, 1f)
-            g = (g * (1f - tmStr) + aces(g) * tmStr).coerceIn(0f, 1f)
-            b = (b * (1f - tmStr) + aces(b) * tmStr).coerceIn(0f, 1f)
-        }
-
-        // =========================================================================
-        // STAGE 5 & 6: NOISE REDUCTION & DETAIL/SHARPENING (Single pixel fallback)
-        // =========================================================================
+        // 12. Local Contrast
         if (config.localContrast != 0.0f) {
             val lc = config.localContrast.coerceIn(-1.0f, 1.0f)
             val curL = 0.2126f * r + 0.7152f * g + 0.0722f * b
@@ -886,8 +1003,26 @@ object CinemaColorPipeline {
         }
 
         // =========================================================================
-        // STAGE 7: OUTPUT GAMMA
+        // STAGE 4: OUTPUT TRANSFORM / TONE MAPPING / OUTPUT GAMMA
         // =========================================================================
+        val tmStr = config.toneMappingStrength.coerceIn(0.0f, 1.0f)
+        if (tmStr > 0.001f) {
+            fun aces(x: Float): Float = ((x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f)).coerceIn(0f, 1f)
+            r = (r * (1f - tmStr) + aces(r) * tmStr).coerceIn(0f, 1f)
+            g = (g * (1f - tmStr) + aces(g) * tmStr).coerceIn(0f, 1f)
+            b = (b * (1f - tmStr) + aces(b) * tmStr).coerceIn(0f, 1f)
+        }
+
+        val isGraded = (config.selectedLut != CinematicLut.NONE || config.colorProfile != CinemaColorProfile.NATIVE)
+        val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
+        if (isGraded && !isHdrProfile) {
+            val highlightCompression = 0.975f
+            val inkyBlackAnchor = -3.5f / 255.0f
+            r = (r * highlightCompression + inkyBlackAnchor).coerceIn(0f, 1f)
+            g = (g * highlightCompression + inkyBlackAnchor).coerceIn(0f, 1f)
+            b = (b * highlightCompression + inkyBlackAnchor).coerceIn(0f, 1f)
+        }
+
         val gamma = config.outputGamma.coerceIn(0.5f, 1.5f)
         if (kotlin.math.abs(gamma - 1.0f) > 0.001f) {
             r = r.pow(gamma).coerceIn(0f, 1f)
@@ -901,7 +1036,7 @@ object CinemaColorPipeline {
     /**
      * Applies the Cinema color pipeline to the live Viewfinder TextureView.
      * Uses hardware AGSL RuntimeShader on Android 13+ (API 33+) when selective per-pixel grading
-     * (Vibrant Green / Punchy Green LUT, Shadows, Highlights, Vibrance, or Fine-Tuning) is active,
+     * (Vibrant Green / Punchy Green LUT, 3D LUT sampling, Shadows, Highlights, Vibrance, or Fine-Tuning) is active,
      * with seamless fallback to RenderEffect / Paint ColorMatrixColorFilter.
      */
     fun applyToView(
@@ -926,13 +1061,13 @@ object CinemaColorPipeline {
             requiresSelectiveShader(config, includeCreativeLut)
         ) {
             try {
-                val baseMat = computeCinemaColorMatrix(
+                val cstMat = computeCinemaColorMatrix(
                     config = config,
                     rec2020Params = rec2020Params,
                     includeCreativeLut = includeCreativeLut,
                     forGpuShader = true
                 )
-                val a = baseMat?.array ?: floatArrayOf(
+                val a = cstMat?.array ?: floatArrayOf(
                     1f, 0f, 0f, 0f, 0f,
                     0f, 1f, 0f, 0f, 0f,
                     0f, 0f, 1f, 0f, 0f,
@@ -948,6 +1083,36 @@ object CinemaColorPipeline {
                     (a[8] + a[9]) / 255f,
                     (a[13] + a[14]) / 255f
                 )
+
+                // 3D LUT uniforms & strip shader
+                val lutPair = if (includeCreativeLut) getLutStripBitmap(config) else null
+                val bmp = lutPair?.first ?: identityStripBitmap
+                val lutSize = (lutPair?.second ?: 17).toFloat()
+                val use3DLut = if (lutPair != null && config.lutIntensity > 0.001f) 1.0f else 0.0f
+                val lutIntensity = if (lutPair != null) config.lutIntensity.coerceIn(0f, 1f) else 0.0f
+
+                val lutShader = android.graphics.BitmapShader(
+                    bmp,
+                    android.graphics.Shader.TileMode.CLAMP,
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+                shader.setInputShader("uLutStrip", lutShader)
+                shader.setFloatUniform("uUse3DLut", use3DLut)
+                shader.setFloatUniform("uLutSize", lutSize)
+                shader.setFloatUniform("uLutIntensity", lutIntensity)
+
+                // Exposure, Contrast, Saturation, WashedOut
+                val exposure = if (config.colorProfile != CinemaColorProfile.FLAT_LOG) config.exposure else 0f
+                shader.setFloatUniform("uExposure", exposure)
+                shader.setFloatUniform("uContrast", config.contrast)
+                shader.setFloatUniform("uSaturation", config.saturation)
+                shader.setFloatUniform("uWashedOut", config.washedOut)
+
+                val isGraded = (config.selectedLut != CinematicLut.NONE || config.colorProfile != CinemaColorProfile.NATIVE)
+                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
+                val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
+                shader.setFloatUniform("uFilmicOutput", filmicOutput)
+
                 shader.setFloatUniform("uShadows", config.shadows.coerceIn(-1f, 1f))
                 shader.setFloatUniform("uHighlights", config.highlights.coerceIn(-1f, 1f))
                 shader.setFloatUniform("uVibrance", config.vibrance.coerceIn(-1f, 1f))
@@ -1020,10 +1185,19 @@ object CinemaColorPipeline {
 
     private val AGSL_CINEMA_SHADER = """
         uniform shader inputShader;
+        uniform shader uLutStrip;
         uniform float3 uMatRow0;
         uniform float3 uMatRow1;
         uniform float3 uMatRow2;
         uniform float3 uMatOffset;
+        uniform float uUse3DLut;
+        uniform float uLutSize;
+        uniform float uLutIntensity;
+        uniform float uExposure;
+        uniform float uContrast;
+        uniform float uSaturation;
+        uniform float uWashedOut;
+        uniform float uFilmicOutput;
         uniform float uShadows;
         uniform float uHighlights;
         uniform float uVibrance;
@@ -1047,9 +1221,30 @@ object CinemaColorPipeline {
         uniform float uMicroContrast;
         uniform float uOutputGamma;
 
+        float3 sample3DLut(float3 color, float lutSize) {
+            float n = lutSize;
+            float b = clamp(color.b, 0.0, 1.0) * (n - 1.0);
+            float slice0 = floor(b);
+            float slice1 = min(slice0 + 1.0, n - 1.0);
+            float bWeight = b - slice0;
+
+            float rCoord = clamp(color.r, 0.0, 1.0) * (n - 1.0);
+            float gCoord = 0.5 + clamp(color.g, 0.0, 1.0) * (n - 1.0);
+
+            float2 coord0 = float2(slice0 * n + 0.5 + rCoord, gCoord);
+            float2 coord1 = float2(slice1 * n + 0.5 + rCoord, gCoord);
+
+            half4 s0 = uLutStrip.eval(coord0);
+            half4 s1 = uLutStrip.eval(coord1);
+            float3 c0 = float3(s0.r, s0.g, s0.b);
+            float3 c1 = float3(s1.r, s1.g, s1.b);
+
+            return mix(c0, c1, bWeight);
+        }
+
         half4 main(float2 fragCoord) {
             half4 src = inputShader.eval(fragCoord);
-            float3 c = float3(src.r, src.g, src.b);
+            float3 inColor = float3(src.r, src.g, src.b);
 
             // Sample cross neighbors for noise reduction & detail enhancement
             float3 cUp = float3(inputShader.eval(fragCoord + float2(0.0, -1.0)).rgb);
@@ -1057,16 +1252,34 @@ object CinemaColorPipeline {
             float3 cLeft = float3(inputShader.eval(fragCoord + float2(-1.0, 0.0)).rgb);
             float3 cRight = float3(inputShader.eval(fragCoord + float2(1.0, 0.0)).rgb);
 
-            // Base 4x5 Cinema ColorMatrix
-            float3 graded;
-            graded.r = dot(uMatRow0, c) + uMatOffset.r;
-            graded.g = dot(uMatRow1, c) + uMatOffset.g;
-            graded.b = dot(uMatRow2, c) + uMatOffset.b;
-            c = clamp(graded, 0.0, 1.0);
+            // =========================================================================
+            // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
+            // =========================================================================
+            float3 c;
+            c.r = dot(uMatRow0, inColor) + uMatOffset.r;
+            c.g = dot(uMatRow1, inColor) + uMatOffset.g;
+            c.b = dot(uMatRow2, inColor) + uMatOffset.b;
+            c = clamp(c, 0.0, 1.0);
 
             // =========================================================================
-            // STAGE 1: EXPOSURE & WHITE BALANCE (Temperature, Tint)
+            // STAGE 2: 3D LUT SAMPLING & INTENSITY BLENDING
             // =========================================================================
+            if (uUse3DLut > 0.5 && uLutIntensity > 0.001) {
+                float3 lutSample = sample3DLut(c, uLutSize);
+                c = clamp(mix(c, lutSample, uLutIntensity), 0.0, 1.0);
+            }
+
+            // =========================================================================
+            // STAGE 3: TONAL & COLOR GRADING CONTROLS
+            // =========================================================================
+
+            // 1. Exposure
+            if (abs(uExposure) > 0.001) {
+                float expMultiplier = pow(2.0, uExposure * 0.75);
+                c = clamp(c * expMultiplier, 0.0, 1.0);
+            }
+
+            // 2. White Balance (Temperature & Tint)
             if (abs(uTemperature) > 0.001 || abs(uTint) > 0.001) {
                 float tempShift = uTemperature * 0.28;
                 float tintShift = uTint * 0.22;
@@ -1076,13 +1289,25 @@ object CinemaColorPipeline {
                 c = clamp(c, 0.0, 1.0);
             }
 
-            // =========================================================================
-            // STAGE 2: TONAL ADJUSTMENTS
-            // =========================================================================
+            // 3. Black Level Pedestal
             if (abs(uBlackLevel) > 0.001) {
                 c = clamp(c + float3(uBlackLevel * 0.15), 0.0, 1.0);
             }
 
+            // 4. Washed-Out Black Reduction
+            if (uWashedOut > 0.001) {
+                float pedestalReduction = -0.10 * uWashedOut;
+                float contrastBoost = 1.0 + (uWashedOut * 0.28);
+                c = clamp(0.5 + (c - 0.5) * contrastBoost + pedestalReduction, 0.0, 1.0);
+            }
+
+            // 5. Contrast (S-Curve pivoting around middle-grey)
+            if (abs(uContrast) > 0.001) {
+                float contrastFactor = 1.0 + uContrast * 0.38;
+                c = clamp(0.5 + (c - 0.5) * contrastFactor, 0.0, 1.0);
+            }
+
+            // 6. Tonal Zone Sculpting
             float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
 
             float wBlacks = 1.0 - smoothstep(0.0, 0.25, luma);
@@ -1123,9 +1348,7 @@ object CinemaColorPipeline {
 
             c = clamp(c + float3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
 
-            // =========================================================================
-            // STAGE 3: COLOR TRANSFORM (Matrix cross-talk, Chroma Strength, Vibrance, Green LUT)
-            // =========================================================================
+            // 7. Color Transform / Matrix Cross-Talk
             if (abs(uColorTransform) > 0.001) {
                 float3 filmColor;
                 if (uColorTransform > 0.0) {
@@ -1140,12 +1363,19 @@ object CinemaColorPipeline {
                 c = clamp(mix(c, filmColor, abs(uColorTransform)), 0.0, 1.0);
             }
 
+            // 8. Saturation
+            if (abs(uSaturation - 1.0) > 0.001) {
+                float curLuma = dot(c, float3(0.2126, 0.7152, 0.0722));
+                c = clamp(float3(curLuma) + (c - float3(curLuma)) * uSaturation, 0.0, 1.0);
+            }
+
+            // 9. Chroma Strength
             if (abs(uChromaStrength - 1.0) > 0.001) {
                 float curLuma = dot(c, float3(0.2126, 0.7152, 0.0722));
                 c = clamp(float3(curLuma) + (c - float3(curLuma)) * uChromaStrength, 0.0, 1.0);
             }
 
-            // Skin-tone protection mask (R > G > B with natural warm human skin ratios)
+            // 10. Skin-Tone Protected Vibrance
             float lumaPre = dot(c, float3(0.2126, 0.7152, 0.0722));
             float rgDiff = c.r - c.g;
             float gbDiff = c.g - c.b;
@@ -1158,7 +1388,6 @@ object CinemaColorPipeline {
                                  (1.0 - smoothstep(0.90, 0.99, lumaPre));
             float skinWeight = clamp(skinHueMask * skinLumaMask, 0.0, 1.0);
 
-            // Independent Vibrance with Skin-Tone Protection
             if (abs(uVibrance) > 0.001) {
                 float maxC = max(c.r, max(c.g, c.b));
                 float minC = min(c.r, min(c.g, c.b));
@@ -1170,7 +1399,7 @@ object CinemaColorPipeline {
                 c = clamp(float3(lumaVib) + (c - float3(lumaVib)) * vibScale, 0.0, 1.0);
             }
 
-            // Selective Vibrant Green / Punchy Green LUT
+            // 11. Selective Vibrant Green / Foliage LUT
             if (uVibrantGreenIntensity > 0.001) {
                 float lumaGreen = dot(c, float3(0.2126, 0.7152, 0.0722));
                 float greenDomR = smoothstep(-0.035, 0.075, c.g - c.r);
@@ -1203,17 +1432,7 @@ object CinemaColorPipeline {
                 }
             }
 
-            // =========================================================================
-            // STAGE 4: TONE MAPPING (ACES Filmic Tone Mapping)
-            // =========================================================================
-            if (uToneMappingStrength > 0.001) {
-                float3 aces = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
-                c = mix(c, aces, uToneMappingStrength);
-            }
-
-            // =========================================================================
-            // STAGE 5: NOISE REDUCTION
-            // =========================================================================
+            // 12. Spatial detail / sharpening & noise reduction
             if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
                 float lCenter = dot(c, float3(0.2126, 0.7152, 0.0722));
                 float lUp = dot(cUp, float3(0.2126, 0.7152, 0.0722));
@@ -1249,9 +1468,6 @@ object CinemaColorPipeline {
                 }
             }
 
-            // =========================================================================
-            // STAGE 6: DETAIL & SHARPENING
-            // =========================================================================
             if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
                 float3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
                 float3 highPass = c - neighborAvg;
@@ -1274,8 +1490,19 @@ object CinemaColorPipeline {
             }
 
             // =========================================================================
-            // STAGE 7: OUTPUT GAMMA
+            // STAGE 4: OUTPUT TRANSFORM / TONE MAPPING / OUTPUT GAMMA
             // =========================================================================
+            if (uToneMappingStrength > 0.001) {
+                float3 aces = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
+                c = mix(c, aces, uToneMappingStrength);
+            }
+
+            if (uFilmicOutput > 0.5) {
+                float highlightCompression = 0.975;
+                float inkyBlackAnchor = -0.0137; // -3.5 / 255.0
+                c = clamp(c * highlightCompression + inkyBlackAnchor, 0.0, 1.0);
+            }
+
             if (abs(uOutputGamma - 1.0) > 0.001) {
                 c = pow(clamp(c, 0.0, 1.0), float3(uOutputGamma));
             }

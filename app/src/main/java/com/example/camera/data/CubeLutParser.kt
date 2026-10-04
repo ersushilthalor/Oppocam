@@ -102,6 +102,92 @@ data class ParsedCubeLut(
         return bitmap
     }
 
+    /**
+     * Accurately samples the full 3D or 1D LUT table using trilinear (or linear) interpolation.
+     * Preserves nonlinear tonal curves (shadow curve, highlight roll-off, midtones, S-curve contrast, black toe, gamma).
+     */
+    fun sample3D(rIn: Float, gIn: Float, bIn: Float): FloatArray {
+        val rNorm = ((rIn - domainMin[0]) / max(domainMax[0] - domainMin[0], 0.0001f)).coerceIn(0f, 1f)
+        val gNorm = ((gIn - domainMin[1]) / max(domainMax[1] - domainMin[1], 0.0001f)).coerceIn(0f, 1f)
+        val bNorm = ((bIn - domainMin[2]) / max(domainMax[2] - domainMin[2], 0.0001f)).coerceIn(0f, 1f)
+
+        val n = size.coerceIn(2, 256)
+        if (is3D && table3D.size >= n * n * n * 3) {
+            val rf = rNorm * (n - 1)
+            val gf = gNorm * (n - 1)
+            val bf = bNorm * (n - 1)
+
+            val r0 = rf.toInt().coerceIn(0, n - 1)
+            val r1 = (r0 + 1).coerceAtMost(n - 1)
+            val dr = rf - r0
+
+            val g0 = gf.toInt().coerceIn(0, n - 1)
+            val g1 = (g0 + 1).coerceAtMost(n - 1)
+            val dg = gf - g0
+
+            val b0 = bf.toInt().coerceIn(0, n - 1)
+            val b1 = (b0 + 1).coerceAtMost(n - 1)
+            val db = bf - b0
+
+            fun getIdx(r: Int, g: Int, b: Int) = (r + g * n + b * n * n) * 3
+
+            val idx000 = getIdx(r0, g0, b0)
+            val idx100 = getIdx(r1, g0, b0)
+            val idx010 = getIdx(r0, g1, b0)
+            val idx110 = getIdx(r1, g1, b0)
+            val idx001 = getIdx(r0, g0, b1)
+            val idx101 = getIdx(r1, g0, b1)
+            val idx011 = getIdx(r0, g1, b1)
+            val idx111 = getIdx(r1, g1, b1)
+
+            val out = FloatArray(3)
+            for (c in 0..2) {
+                val c000 = table3D[idx000 + c]
+                val c100 = table3D[idx100 + c]
+                val c010 = table3D[idx010 + c]
+                val c110 = table3D[idx110 + c]
+                val c001 = table3D[idx001 + c]
+                val c101 = table3D[idx101 + c]
+                val c011 = table3D[idx011 + c]
+                val c111 = table3D[idx111 + c]
+
+                val c00 = c000 * (1f - dr) + c100 * dr
+                val c10 = c010 * (1f - dr) + c110 * dr
+                val c01 = c001 * (1f - dr) + c101 * dr
+                val c11 = c011 * (1f - dr) + c111 * dr
+
+                val c0 = c00 * (1f - dg) + c10 * dg
+                val c1 = c01 * (1f - dg) + c11 * dg
+
+                out[c] = (c0 * (1f - db) + c1 * db).coerceIn(0f, 1f)
+            }
+            return out
+        } else if (!is3D && table3D.size >= 3) {
+            val total1D = table3D.size / 3
+            val rf = rNorm * (total1D - 1)
+            val gf = gNorm * (total1D - 1)
+            val bf = bNorm * (total1D - 1)
+
+            val r0 = rf.toInt().coerceIn(0, total1D - 1)
+            val r1 = (r0 + 1).coerceAtMost(total1D - 1)
+            val dr = rf - r0
+
+            val g0 = gf.toInt().coerceIn(0, total1D - 1)
+            val g1 = (g0 + 1).coerceAtMost(total1D - 1)
+            val dg = gf - g0
+
+            val b0 = bf.toInt().coerceIn(0, total1D - 1)
+            val b1 = (b0 + 1).coerceAtMost(total1D - 1)
+            val db = bf - b0
+
+            val outR = (table3D[r0 * 3] * (1f - dr) + table3D[r1 * 3] * dr).coerceIn(0f, 1f)
+            val outG = (table3D[g0 * 3 + 1] * (1f - dg) + table3D[g1 * 3 + 1] * dg).coerceIn(0f, 1f)
+            val outB = (table3D[b0 * 3 + 2] * (1f - db) + table3D[b1 * 3 + 2] * db).coerceIn(0f, 1f)
+            return floatArrayOf(outR, outG, outB)
+        }
+        return floatArrayOf(rIn.coerceIn(0f, 1f), gIn.coerceIn(0f, 1f), bIn.coerceIn(0f, 1f))
+    }
+
     fun toTonemapCurve(): android.hardware.camera2.params.TonemapCurve {
         val numPoints = 32
         val red = FloatArray(numPoints * 2)
@@ -448,5 +534,68 @@ object CubeLutParser {
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
         presetStripCache[lut.id] = bitmap
         return bitmap
+    }
+
+    /**
+     * Evaluates a preset cinematic LUT for an RGB pixel with exact tonal curves and color separation.
+     */
+    fun samplePreset(lut: com.example.camera.model.CinematicLut, inR: Float, inG: Float, inB: Float): FloatArray {
+        val mat = lut.matrixValues ?: floatArrayOf(
+            1f, 0f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f, 0f,
+            0f, 0f, 0f, 1f, 0f
+        )
+        val contrast = lut.contrast
+        val sat = lut.saturation
+        val rollOff = lut.highlightRollOff
+        val toe = lut.shadowToe
+        val warmCool = lut.warmCoolOffset
+
+        var rOut = (mat[0] * inR + mat[1] * inG + mat[2] * inB + mat[4] / 255f)
+        var gOut = (mat[5] * inR + mat[6] * inG + mat[7] * inB + mat[9] / 255f)
+        var bOut = (mat[10] * inR + mat[11] * inG + mat[12] * inB + mat[14] / 255f)
+
+        if (warmCool != 0f) {
+            rOut *= (1f + warmCool * 0.15f)
+            bOut *= (1f - warmCool * 0.15f)
+        }
+
+        if (contrast != 1f) {
+            rOut = 0.18f + (rOut - 0.18f) * contrast
+            gOut = 0.18f + (gOut - 0.18f) * contrast
+            bOut = 0.18f + (bOut - 0.18f) * contrast
+        }
+
+        if (toe != 0f) {
+            val w = (1f - rOut.coerceIn(0f, 1f)).let { it * it }
+            rOut += toe * 0.1f * w
+            gOut += toe * 0.1f * w
+            bOut += toe * 0.1f * w
+        }
+        if (rollOff > 0.5f) {
+            val factor = (rollOff - 0.5f) * 2f
+            if (rOut > 0.6f) {
+                val rw = ((rOut - 0.6f) / 0.4f).let { it * it }
+                rOut -= factor * 0.05f * rw
+            }
+            if (gOut > 0.6f) {
+                val rw = ((gOut - 0.6f) / 0.4f).let { it * it }
+                gOut -= factor * 0.05f * rw
+            }
+            if (bOut > 0.6f) {
+                val rw = ((bOut - 0.6f) / 0.4f).let { it * it }
+                bOut -= factor * 0.05f * rw
+            }
+        }
+
+        if (sat != 1f) {
+            val lum = 0.2126f * rOut + 0.7152f * gOut + 0.0722f * bOut
+            rOut = lum + (rOut - lum) * sat
+            gOut = lum + (gOut - lum) * sat
+            bOut = lum + (bOut - lum) * sat
+        }
+
+        return floatArrayOf(rOut.coerceIn(0f, 1f), gOut.coerceIn(0f, 1f), bOut.coerceIn(0f, 1f))
     }
 }

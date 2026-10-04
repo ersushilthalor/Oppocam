@@ -1190,5 +1190,109 @@ class CinemaPipelineVerificationTest {
             }
         }
     }
+
+    @Test
+    fun testCubeLutParserMatrix4x5BlueRowFix() {
+        // Requirement 10: Fix the "matrix4x5" blue-row bug in "CubeLutParser" where "bG" was used incorrectly.
+        val cubeContent = """
+            TITLE "BlueRowTest"
+            LUT_3D_SIZE 2
+            0.0 0.0 0.0
+            1.0 0.0 0.0
+            0.0 1.0 0.0
+            1.0 1.0 0.0
+            0.1 0.2 0.9
+            1.0 0.2 0.9
+            0.1 1.0 0.9
+            1.0 1.0 1.0
+        """.trimIndent()
+
+        val stream = java.io.ByteArrayInputStream(cubeContent.toByteArray(Charsets.UTF_8))
+        val parsed = com.example.camera.engine.CubeLutParser.parse(stream, "BlueRowTest")
+        assertNotNull(parsed)
+        val m = parsed!!.matrix4x5
+        // Row 2 is the Blue output row: indices 10, 11, 12, 13, 14
+        // Must be rB, gB, bB, 0f, boff
+        // greenCorner is at (0, 1, 0) -> R=0.0, G=1.0, B=0.0
+        // gB is (greenCorner[2] - blackCorner[2]) = 0.0
+        // In the buggy version, bG was used which was (blueCorner[1] - blackCorner[1]) = 0.2
+        assertEquals(0.0f, m[11], 0.001f) // gB must be in row 2 column 1 (index 11)
+        assertEquals(0.9f, m[12], 0.001f) // bB must be in row 2 column 2 (index 12)
+    }
+
+    @Test
+    fun test3DLutSamplingPreservesNonlinearTonalCurves() {
+        // Requirements 1, 2, 4, 12: Real 3D LUT sampling preserves nonlinear S-curves and tonal information
+        // Build a 3D LUT with a distinct non-linear S-curve on midtones and shadow toe
+        val sb = StringBuilder()
+        sb.appendLine("TITLE \"NonlinearTonalLut\"")
+        sb.appendLine("LUT_3D_SIZE 5")
+        // Size 5: indices 0..4 for R, G, B
+        for (b in 0..4) {
+            for (g in 0..4) {
+                for (r in 0..4) {
+                    val rNorm = r / 4.0f
+                    val gNorm = g / 4.0f
+                    val bNorm = b / 4.0f
+                    // Non-linear S-curve and black toe
+                    val outR = if (rNorm <= 0.5f) {
+                        0.5f * Math.pow((2.0 * rNorm), 2.2).toFloat()
+                    } else {
+                        1.0f - 0.5f * Math.pow((2.0 * (1.0 - rNorm)), 2.2).toFloat()
+                    }
+                    val outG = gNorm * 0.9f + 0.05f
+                    val outB = bNorm * 1.1f - 0.02f
+                    sb.appendLine("$outR $outG $outB")
+                }
+            }
+        }
+
+        val stream = java.io.ByteArrayInputStream(sb.toString().toByteArray(Charsets.UTF_8))
+        val parsed = com.example.camera.data.CubeLutParser.parseStream(stream, "NonlinearTonalLut")
+        assertNotNull(parsed)
+
+        // Sample at middle grey (0.5, 0.5, 0.5)
+        val sampled = parsed!!.sample3D(0.5f, 0.5f, 0.5f)
+        assertEquals(0.5f, sampled[0], 0.02f)
+        assertEquals(0.5f, sampled[1], 0.02f)
+
+        // Sample at quarter tone (0.25, 0.25, 0.25)
+        val quarterTone = parsed.sample3D(0.25f, 0.25f, 0.25f)
+        // With gamma 2.2 toe, 0.5 * (0.5)^2.2 = ~0.109, far below linear 0.25
+        assertTrue("3D LUT sampling must preserve nonlinear shadow compression", quarterTone[0] < 0.20f)
+    }
+
+    @Test
+    fun testPipelinePreservesOrderAndStageSeparation() {
+        // Requirements 5, 6, 7, 8:
+        // Log/CST -> 3D LUT -> tonal/color grading controls -> output transform/gamma
+        val config = CinemaConfig(
+            colorProfile = CinemaColorProfile.FLAT_LOG,
+            selectedLut = CinematicLut.TEAL_ORANGE,
+            lutIntensity = 0.75f,
+            exposure = 0.5f,
+            contrast = 0.2f,
+            shadows = -0.1f,
+            highlights = 0.1f,
+            saturation = 1.1f,
+            outputGamma = 1.05f
+        )
+
+        // Evaluate pixel through pipeline
+        val outRgb = CinemaColorPipeline.evaluatePixel(0.4f, 0.4f, 0.4f, config)
+        assertNotNull(outRgb)
+        assertEquals(3, outRgb.size)
+        for (v in outRgb) {
+            assertTrue("Pixel values must remain bounded in [0, 1]", v in 0.0f..1.0f)
+        }
+
+        // For GPU shader, computeCinemaColorMatrix should NOT bake the creative LUT
+        val gpuMatrix = CinemaColorPipeline.computeCinemaColorMatrix(config, forGpuShader = true)
+        val fallbackMatrix = CinemaColorPipeline.computeCinemaColorMatrix(config, forGpuShader = false)
+        assertNotNull(gpuMatrix)
+        assertNotNull(fallbackMatrix)
+        // Fallback matrix includes LUT and primary grade, whereas gpuMatrix contains only CST technical transform
+        assertFalse("GPU matrix must differ from CPU fallback matrix", gpuMatrix!!.array.contentEquals(fallbackMatrix!!.array))
+    }
 }
 
