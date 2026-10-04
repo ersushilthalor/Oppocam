@@ -5649,17 +5649,21 @@ class Camera2Engine(private val context: Context) {
                     has10BitDynamicRange
 
             val baseBitrate = if (isCinema) {
-                when {
-                    cinemaCodec == CinemaCodec.PRORES -> {
-                        when {
-                            videoRes.width >= 3840 -> 150_000_000
-                            videoRes.width >= 1920 -> 90_000_000
-                            else -> 50_000_000
+                if (cinemaConfig.value.videoBitrate != VideoBitrateOption.AUTO && cinemaConfig.value.videoBitrate.bps > 0) {
+                    cinemaConfig.value.videoBitrate.bps
+                } else {
+                    when {
+                        cinemaCodec == CinemaCodec.PRORES -> {
+                            when {
+                                videoRes.width >= 3840 -> 150_000_000
+                                videoRes.width >= 1920 -> 90_000_000
+                                else -> 50_000_000
+                            }
                         }
+                        videoRes.width >= 3840 -> 100_000_000
+                        videoRes.width >= 1920 -> 60_000_000
+                        else -> 30_000_000
                     }
-                    videoRes.width >= 3840 -> 100_000_000
-                    videoRes.width >= 1920 -> 60_000_000
-                    else -> 30_000_000
                 }
             } else if (is10BitRequested) {
                 when {

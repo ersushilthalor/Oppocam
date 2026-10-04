@@ -400,6 +400,14 @@ class CameraPreferences(context: Context) {
         get() = prefs.getInt("pref_cinema_height", 2160)
         set(value) = prefs.edit().putInt("pref_cinema_height", value).apply()
 
+    var cinemaBitrate: com.example.camera.model.VideoBitrateOption
+        get() {
+            val name = prefs.getString("pref_cinema_bitrate", com.example.camera.model.VideoBitrateOption.AUTO.name)
+                ?: com.example.camera.model.VideoBitrateOption.AUTO.name
+            return try { com.example.camera.model.VideoBitrateOption.valueOf(name) } catch (e: Exception) { com.example.camera.model.VideoBitrateOption.AUTO }
+        }
+        set(value) = prefs.edit().putString("pref_cinema_bitrate", value.name).apply()
+
     var cinemaLogBitDepth: com.example.camera.model.LogBitDepth
         get() {
             val name = prefs.getString("pref_cinema_bit_depth", com.example.camera.model.LogBitDepth.BIT_10.name)
@@ -623,6 +631,7 @@ class CameraPreferences(context: Context) {
         return com.example.camera.model.CinemaConfig(
             videoFps = cinemaFps,
             selectedResolution = com.example.camera.model.CameraResolution(cinemaWidth, cinemaHeight),
+            videoBitrate = cinemaBitrate,
             logBitDepth = cinemaLogBitDepth,
             codec = cinemaCodec,
             selectedLut = cinemaSelectedLut,
@@ -676,6 +685,7 @@ class CameraPreferences(context: Context) {
             cinemaWidth = it.width
             cinemaHeight = it.height
         }
+        cinemaBitrate = config.videoBitrate
         cinemaLogBitDepth = config.logBitDepth
         cinemaCodec = config.codec
         cinemaSelectedLut = config.selectedLut

@@ -115,6 +115,7 @@ data class CinemaConfig(
     val zebraThreshold: ZebraThreshold = ZebraThreshold.OFF,
     val videoFps: Int = 24, // 24 fps cinematic standard
     val selectedResolution: CameraResolution? = null,
+    val videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     // Real Cinema Advanced ISP Parameters
     val shadows: Float = 0.0f, // -1.0f (deep/crushed) to +1.0f (lifted shadow toe)
     val highlights: Float = 0.0f, // -1.0f (compressed/protected) to +1.0f (boosted highlight shoulder)

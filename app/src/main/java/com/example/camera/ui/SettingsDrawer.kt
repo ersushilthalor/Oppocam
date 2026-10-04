@@ -28,10 +28,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.camera.data.CustomLutItem
+import com.example.camera.data.CustomLutRepository
 import com.example.camera.model.*
 import com.example.camera.ui.components.FrostedGlassBox
 import com.example.camera.viewmodel.CameraViewModel
@@ -418,7 +425,8 @@ fun SettingsDrawer(
                         SettingsPage.CINEMA -> CinemaSettingsPage(
                             cinemaConfig = cinemaConfig,
                             onCinemaConfigChange = onCinemaConfigChange,
-                            cinemaCapabilities = cinemaCapabilities
+                            cinemaCapabilities = cinemaCapabilities,
+                            capabilities = capabilities
                         )
                         SettingsPage.PRO_MANUAL -> ProManualSettingsPage(
                             manualIso = manualIso,
@@ -1089,48 +1097,626 @@ private fun VideoSettingsPage(
 }
 
 @Composable
+private fun CinemaSettingSliderRow(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    formatPattern: String = "%.2f",
+    unit: String = "",
+    valueMultiplier: Float = 1.0f
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 12.sp,
+            modifier = Modifier.width(130.dp)
+        )
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            colors = SliderDefaults.colors(
+                thumbColor = Color(0xFFFFD54F),
+                activeTrackColor = Color(0xFFFFD54F),
+                inactiveTrackColor = Color.White.copy(alpha = 0.15f)
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .height(28.dp)
+        )
+        Text(
+            text = String.format(formatPattern, value * valueMultiplier) + unit,
+            color = Color(0xFFFFD54F),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(48.dp),
+            textAlign = TextAlign.End
+        )
+    }
+}
+
+@Composable
 private fun CinemaSettingsPage(
     cinemaConfig: CinemaConfig,
     onCinemaConfigChange: (CinemaConfig) -> Unit,
-    cinemaCapabilities: CinemaHardwareCapabilities
+    cinemaCapabilities: CinemaHardwareCapabilities,
+    capabilities: HardwareCapabilities
 ) {
+    val context = LocalContext.current
+    val customLutRepo = remember(context) { CustomLutRepository(context) }
+    val customLuts by customLutRepo.customLuts.collectAsStateWithLifecycle()
+
+    val lutFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            var resolvedName: String? = null
+            try {
+                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                    val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIdx >= 0 && cursor.moveToFirst()) {
+                        resolvedName = cursor.getString(nameIdx)
+                    }
+                }
+            } catch (ignored: Exception) {}
+
+            val fileName = (resolvedName ?: uri.lastPathSegment?.substringAfterLast('/'))
+                ?.removeSuffix(".cube")
+                ?.takeIf { it.isNotBlank() } ?: "Custom Grade"
+
+            val imported = customLutRepo.importLut(uri, fileName)
+            if (imported != null) {
+                android.widget.Toast.makeText(context, "Imported LUT: ${imported.title}", android.widget.Toast.LENGTH_SHORT).show()
+                onCinemaConfigChange(
+                    cinemaConfig.copy(
+                        selectedLut = CinematicLut.CUSTOM,
+                        customLutPath = imported.filePath,
+                        customLutName = imported.title,
+                        isBakeLutToOutput = true,
+                        isLutPreviewEnabled = true
+                    )
+                )
+            } else {
+                android.widget.Toast.makeText(context, "Invalid or unsupported .cube file format", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        // 1. Resolution
         item {
+            val supportedResolutions = remember(cinemaCapabilities, capabilities) {
+                val fromCinema = cinemaCapabilities.supportedResolutions
+                if (fromCinema.isNotEmpty()) fromCinema
+                else if (capabilities.supportedVideoResolutions.isNotEmpty()) capabilities.supportedVideoResolutions
+                else listOf(
+                    CameraResolution(3840, 2160),
+                    CameraResolution(1920, 1080),
+                    CameraResolution(1280, 720)
+                )
+            }
+            val resOptions = supportedResolutions.distinctBy { "${it.width}x${it.height}" }.take(4).map { res ->
+                val label = when {
+                    res.width >= 7680 -> "8K (${res.width}x${res.height})"
+                    res.width >= 3840 -> "4K UHD (${res.width}x${res.height})"
+                    res.width >= 1920 -> "1080p FHD (${res.width}x${res.height})"
+                    else -> "720p HD (${res.width}x${res.height})"
+                }
+                res to label
+            }
+            val currentRes = cinemaConfig.selectedResolution ?: supportedResolutions.firstOrNull { it.width >= 3840 } ?: supportedResolutions.first()
+
             SettingsSegmentedCard(
-                title = "Pro Video Color Profile",
-                description = "Flat & Log curves preserve wide dynamic range for professional grading.",
-                options = listOf(
-                    CinemaColorProfile.NATIVE to "Native",
-                    CinemaColorProfile.FLAT_LOG to "Flat Log",
-                    CinemaColorProfile.REC_2020 to "Rec.2020",
-                    CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2"
-                ),
-                selectedOption = cinemaConfig.colorProfile,
-                onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(colorProfile = it)) }
+                title = "Pro Video Resolution",
+                description = "Mastering recording resolution. 4K UHD captures maximum sensor fidelity, 1080p FHD offers wide playback compatibility.",
+                options = resOptions,
+                selectedOption = currentRes,
+                onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(selectedResolution = it)) }
             )
         }
 
-        val supportedDepths = cinemaCapabilities.getSupportedBitDepthsForCodec(cinemaConfig.codec)
-        val bitDepthOptions = mutableListOf<Pair<LogBitDepth, String>>()
-        if (supportedDepths.contains(LogBitDepth.BIT_10)) {
-            bitDepthOptions.add(LogBitDepth.BIT_10 to "10-bit Log")
-        }
-        bitDepthOptions.add(LogBitDepth.BIT_8 to "8-bit Standard")
+        // 2. Frame Rate (FPS)
+        item {
+            val fpsList = cinemaCapabilities.supportedFpsList.ifEmpty { listOf(24, 30, 60) }
+            val fpsOptions = mutableListOf<Pair<Int, String>>()
+            if (fpsList.contains(24)) fpsOptions.add(24 to "24 fps (Cinema)")
+            if (fpsList.contains(30)) fpsOptions.add(30 to "30 fps (Standard)")
+            if (fpsList.contains(60)) fpsOptions.add(60 to "60 fps (Smooth)")
+            if (fpsList.contains(120)) fpsOptions.add(120 to "120 fps (HFR)")
+            if (fpsOptions.isEmpty()) {
+                fpsOptions.addAll(listOf(24 to "24 fps (Cinema)", 30 to "30 fps (Standard)", 60 to "60 fps (Smooth)"))
+            }
 
+            SettingsSegmentedCard(
+                title = "Cinematic Frame Rate (FPS)",
+                description = "24 fps provides authentic Hollywood film cadence. 30 fps is standard broadcast; 60 fps delivers ultra-fluid motion.",
+                options = fpsOptions,
+                selectedOption = cinemaConfig.videoFps,
+                onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(videoFps = it)) }
+            )
+        }
+
+        // 3. Video Bitrate
         item {
             SettingsSegmentedCard(
+                title = "Pro Video Bitrate",
+                description = "Encoder compression data rate. 100 Mbps eliminates macroblocking in fast-moving and high-detail scenes.",
+                options = listOf(
+                    VideoBitrateOption.AUTO to "Auto (Adaptive)",
+                    VideoBitrateOption.STANDARD to "40 Mbps (Standard)",
+                    VideoBitrateOption.HIGH to "60 Mbps (High)",
+                    VideoBitrateOption.MAX to "100 Mbps (Mastering)"
+                ),
+                selectedOption = cinemaConfig.videoBitrate,
+                onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(videoBitrate = it)) }
+            )
+        }
+
+        // 4. Video Codec
+        item {
+            SettingsSegmentedCard(
+                title = "Video Encoding Codec",
+                description = "HEVC (H.265) supports 10-bit color with superior compression. H.264 provides universal compatibility. ProRes 422 delivers genuine 10-bit intra-frame mastering.",
+                options = listOf(
+                    CinemaCodec.H265 to "H.265 (HEVC)",
+                    CinemaCodec.H264 to "H.264 (AVC)",
+                    CinemaCodec.PRORES to "Apple ProRes 422",
+                    CinemaCodec.VP9 to "VP9 (WebM)"
+                ),
+                selectedOption = cinemaConfig.codec,
+                onOptionSelected = { newCodec ->
+                    val supportedDepths = cinemaCapabilities.getSupportedBitDepthsForCodec(newCodec)
+                    val validBitDepth = if (cinemaConfig.logBitDepth == LogBitDepth.BIT_10 && !supportedDepths.contains(LogBitDepth.BIT_10)) {
+                        LogBitDepth.BIT_8
+                    } else {
+                        cinemaConfig.logBitDepth
+                    }
+                    onCinemaConfigChange(cinemaConfig.copy(codec = newCodec, logBitDepth = validBitDepth))
+                }
+            )
+        }
+
+        // 5. Log & Color Profile
+        item {
+            SettingsSegmentedCard(
+                title = "Pro Video Color Profile",
+                description = "Logarithmic & HDR curves preserve maximum dynamic range for color grading. Native provides iPhone-style natural processing.",
+                options = listOf(
+                    CinemaColorProfile.NATIVE to "Native",
+                    CinemaColorProfile.FLAT_LOG to "Flat Log",
+                    CinemaColorProfile.HDR_LOG to "HDR Log",
+                    CinemaColorProfile.REC_2020 to "Rec.2020",
+                    CinemaColorProfile.HLG10 to "HLG10 HDR",
+                    CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
+                    CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log",
+                    CinemaColorProfile.PROCESSED_JPEG to "Processed JPEG"
+                ),
+                selectedOption = cinemaConfig.colorProfile,
+                onOptionSelected = { profile ->
+                    val canDo10Bit = cinemaCapabilities.getSupportedBitDepthsForCodec(cinemaConfig.codec).contains(LogBitDepth.BIT_10)
+                    val updated = when (profile) {
+                        CinemaColorProfile.HLG10 -> {
+                            cinemaConfig.copy(
+                                colorProfile = CinemaColorProfile.HLG10,
+                                colorSpace = CinemaColorSpace.REC_2020,
+                                logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
+                                codec = if (cinemaConfig.codec == CinemaCodec.H264 && cinemaCapabilities.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else cinemaConfig.codec
+                            )
+                        }
+                        CinemaColorProfile.HDR_LOG -> {
+                            cinemaConfig.copy(
+                                colorProfile = CinemaColorProfile.HDR_LOG,
+                                colorSpace = CinemaColorSpace.REC_2020,
+                                logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8
+                            )
+                        }
+                        else -> cinemaConfig.copy(colorProfile = profile)
+                    }
+                    onCinemaConfigChange(updated)
+                }
+            )
+        }
+
+        // 6. Log Bit Depth
+        item {
+            val supportedDepths = cinemaCapabilities.getSupportedBitDepthsForCodec(cinemaConfig.codec)
+            val bitDepthOptions = mutableListOf<Pair<LogBitDepth, String>>()
+            if (supportedDepths.contains(LogBitDepth.BIT_10)) {
+                bitDepthOptions.add(LogBitDepth.BIT_10 to "10-bit Log (1,024 shades)")
+            }
+            bitDepthOptions.add(LogBitDepth.BIT_8 to "8-bit Standard (256 shades)")
+
+            SettingsSegmentedCard(
                 title = "Log Bit Depth",
-                description = "10-bit delivers 1,024 shades per color channel to eliminate banding.",
+                description = "10-bit delivers 1,024 luminance shades per RGB channel to eliminate banding in sky and skin-tone gradients.",
                 options = bitDepthOptions,
                 selectedOption = if (supportedDepths.contains(cinemaConfig.logBitDepth)) cinemaConfig.logBitDepth else LogBitDepth.BIT_8,
                 onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(logBitDepth = it)) }
             )
         }
 
+        // 7. Live Noise Reduction
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Live Noise Reduction",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Camera2 hardware noise reduction. 'Off' keeps natural sensor texture and authentic cinematic film grain.",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        listOf(
+                            CinemaNoiseReduction.OFF to "Off (Authentic Grain)",
+                            CinemaNoiseReduction.LOW to "Low (Minimal)",
+                            CinemaNoiseReduction.MEDIUM to "Medium (Fast)",
+                            CinemaNoiseReduction.HIGH to "High (Smooth)"
+                        ).forEach { (mode, label) ->
+                            val isSelected = cinemaConfig.noiseReduction == mode
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onCinemaConfigChange(cinemaConfig.copy(noiseReduction = mode)) },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color.White.copy(alpha = 0.08f),
+                                    labelColor = Color.White
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    CinemaSettingSliderRow(
+                        label = "Luma NR Filter",
+                        value = cinemaConfig.lumaNoiseReduction,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(lumaNoiseReduction = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Chroma NR Filter",
+                        value = cinemaConfig.chromaNoiseReduction,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(chromaNoiseReduction = it)) }
+                    )
+                }
+            }
+        }
+
+        // 8. Sharpness & Detail
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Hardware Sharpness & Edge Mode",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "ISP edge detail filter. 'Off' eliminates digital haloing for an organic filmic look. 'Crisp' maximizes texture separation.",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        listOf(
+                            CinemaSharpness.OFF to "Off (Organic Filmic)",
+                            CinemaSharpness.NATURAL to "Natural",
+                            CinemaSharpness.CRISP to "Crisp (High Detail)"
+                        ).forEach { (mode, label) ->
+                            val isSelected = cinemaConfig.sharpness == mode
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onCinemaConfigChange(cinemaConfig.copy(sharpness = mode)) },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color.White.copy(alpha = 0.08f),
+                                    labelColor = Color.White
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    CinemaSettingSliderRow(
+                        label = "Fine Sharpening",
+                        value = cinemaConfig.fineSharpening,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(fineSharpening = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Micro-Contrast",
+                        value = cinemaConfig.microContrast,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(microContrast = it)) }
+                    )
+                }
+            }
+        }
+
+        // 9. Cinematic 3D LUT
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Cinematic 3D LUT",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Real-time 3D color grade transforms inspired by Hollywood cinema.",
+                                color = Color.White.copy(alpha = 0.6f),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0x26FFD54F),
+                            border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = if (cinemaConfig.selectedLut == CinematicLut.CUSTOM && !cinemaConfig.customLutName.isNullOrBlank()) {
+                                    cinemaConfig.customLutName ?: "Custom"
+                                } else {
+                                    cinemaConfig.selectedLut.label
+                                }.uppercase(),
+                                color = Color(0xFFFFD54F),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // LUT Selection Chips
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CinematicLut.displayPresets.filter { it != CinematicLut.CUSTOM }.forEach { lut ->
+                            val isSelected = cinemaConfig.selectedLut == lut
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    onCinemaConfigChange(
+                                        cinemaConfig.copy(
+                                            selectedLut = lut,
+                                            customLutPath = null,
+                                            customLutName = null,
+                                            isBakeLutToOutput = true,
+                                            isLutPreviewEnabled = true
+                                        )
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = lut.label,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color.White.copy(alpha = 0.08f),
+                                    labelColor = Color.White
+                                )
+                            )
+                        }
+
+                        // Custom imported LUT chips
+                        customLuts.forEach { customLut ->
+                            val isSelected = cinemaConfig.selectedLut == CinematicLut.CUSTOM && cinemaConfig.customLutPath == customLut.filePath
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    onCinemaConfigChange(
+                                        cinemaConfig.copy(
+                                            selectedLut = CinematicLut.CUSTOM,
+                                            customLutPath = customLut.filePath,
+                                            customLutName = customLut.title,
+                                            isBakeLutToOutput = true,
+                                            isLutPreviewEnabled = true
+                                        )
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = customLut.title,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color.White.copy(alpha = 0.08f),
+                                    labelColor = Color.White
+                                )
+                            )
+                        }
+                    }
+
+                    // Intensity & Bake Controls if LUT is active
+                    if (!cinemaConfig.selectedLut.isOff) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        CinemaSettingSliderRow(
+                            label = "LUT Grade Intensity",
+                            value = cinemaConfig.lutIntensity,
+                            valueRange = 0.0f..1.0f,
+                            onValueChange = { onCinemaConfigChange(cinemaConfig.copy(lutIntensity = it)) },
+                            formatPattern = "%.0f",
+                            unit = "%",
+                            valueMultiplier = 100f
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "Bake LUT into Video Recording",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Bake color grade into output video or preserve clean flat log for post-production.",
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    fontSize = 11.5.sp
+                                )
+                            }
+                            Switch(
+                                checked = cinemaConfig.isBakeLutToOutput,
+                                onCheckedChange = { onCinemaConfigChange(cinemaConfig.copy(isBakeLutToOutput = it)) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = Color(0xFFFFD54F),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.15f)
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Import Custom .cube LUT Button
+                    Button(
+                        onClick = { lutFilePickerLauncher.launch(arrayOf("*/*")) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.08f),
+                            contentColor = Color(0xFFFFD54F)
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Import Custom .cube LUT File",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // 10. Color Gamut & Space
+        item {
+            SettingsSegmentedCard(
+                title = "Color Space & Gamut",
+                description = "Recording color space transfer function. Rec.2020 delivers wide HDR color primaries; Rec.709 is standard broadcast.",
+                options = listOf(
+                    CinemaColorSpace.REC_709 to "Rec.709 (SDR)",
+                    CinemaColorSpace.REC_2020 to "Rec.2020 (HDR Wide)",
+                    CinemaColorSpace.DCI_P3 to "DCI-P3 (Cinema)"
+                ),
+                selectedOption = cinemaConfig.colorSpace,
+                onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(colorSpace = it)) }
+            )
+        }
+
+        // 11. Assist Tools
         item {
             SettingsSwitchCard(
                 title = "Live LUT Viewfinder Preview",
@@ -1162,13 +1748,262 @@ private fun CinemaSettingsPage(
         }
 
         item {
-            SettingsSwitchCard(
+            SettingsSegmentedCard(
                 title = "Zebra Highlight Stripes",
-                description = "Overlays diagonal stripes on overexposed scene highlights.",
-                isChecked = cinemaConfig.zebraThreshold != ZebraThreshold.OFF,
-                onCheckedChange = { onCinemaConfigChange(cinemaConfig.copy(zebraThreshold = if (it) ZebraThreshold.IRE_70 else ZebraThreshold.OFF)) },
-                tag = "toggle_zebra_stripes"
+                description = "Overlays diagonal stripes on overexposed scene highlights above threshold.",
+                options = listOf(
+                    ZebraThreshold.OFF to "Off",
+                    ZebraThreshold.IRE_70 to "70 IRE",
+                    ZebraThreshold.IRE_100 to "100 IRE"
+                ),
+                selectedOption = cinemaConfig.zebraThreshold,
+                onOptionSelected = { onCinemaConfigChange(cinemaConfig.copy(zebraThreshold = it)) }
             )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Clean RAW Sensor Log Pipeline",
+                description = "Bypasses OEM post-processing algorithms for clean, artifact-free raw sensor rendering.",
+                isChecked = cinemaConfig.isRawSensorLogPipeline,
+                onCheckedChange = { onCinemaConfigChange(cinemaConfig.copy(isRawSensorLogPipeline = it)) },
+                tag = "toggle_raw_sensor_log"
+            )
+        }
+
+        // 12. Fine-Tuning & Detailed Processing Controls
+        item {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF131622),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Pro Video ISP & Grading Controls",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Precision sliders for tonality, curves, color matrix & dynamic range.",
+                                color = Color.White.copy(alpha = 0.6f),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+
+                        if (cinemaConfig.hasColorFineTuning) {
+                            TextButton(
+                                onClick = {
+                                    onCinemaConfigChange(
+                                        cinemaConfig.copy(
+                                            exposure = 0.0f,
+                                            contrast = 0.0f,
+                                            lumaCurve = 0.0f,
+                                            outputGamma = 1.0f,
+                                            washedOut = 0.0f,
+                                            whites = 0.0f,
+                                            highlights = 0.0f,
+                                            highlightRolloff = 0.0f,
+                                            midtones = 0.0f,
+                                            shadows = 0.0f,
+                                            shadowRolloff = 0.0f,
+                                            blacks = 0.0f,
+                                            blackLevel = 0.0f,
+                                            temperature = 0.0f,
+                                            tint = 0.0f,
+                                            saturation = 1.0f,
+                                            vibrance = 0.0f,
+                                            chromaStrength = 1.0f,
+                                            colorTransform = 0.0f,
+                                            fineSharpening = 0.0f,
+                                            microContrast = 0.0f,
+                                            localContrast = 0.0f,
+                                            toneMappingStrength = 0.0f,
+                                            lumaNoiseReduction = 0.0f,
+                                            chromaNoiseReduction = 0.0f
+                                        )
+                                    )
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "RESET ALL",
+                                    color = Color(0xFFFFD54F),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = "1. EXPOSURE & TONE CURVE",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    CinemaSettingSliderRow(
+                        label = "Live Exposure",
+                        value = cinemaConfig.exposure,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(exposure = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Contrast S-Curve",
+                        value = cinemaConfig.contrast,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(contrast = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Luma Curve",
+                        value = cinemaConfig.lumaCurve,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(lumaCurve = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Output Gamma",
+                        value = cinemaConfig.outputGamma,
+                        valueRange = 0.5f..1.5f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(outputGamma = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Washed-Out Recovery",
+                        value = cinemaConfig.washedOut,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(washedOut = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Tone Map Strength",
+                        value = cinemaConfig.toneMappingStrength,
+                        valueRange = 0.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(toneMappingStrength = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Local Contrast",
+                        value = cinemaConfig.localContrast,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(localContrast = it)) }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "2. TONAL ZONES",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    CinemaSettingSliderRow(
+                        label = "Whites",
+                        value = cinemaConfig.whites,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(whites = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Highlights",
+                        value = cinemaConfig.highlights,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(highlights = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Highlight Roll-off",
+                        value = cinemaConfig.highlightRolloff,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(highlightRolloff = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Midtones",
+                        value = cinemaConfig.midtones,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(midtones = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Shadows",
+                        value = cinemaConfig.shadows,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(shadows = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Shadow Roll-off",
+                        value = cinemaConfig.shadowRolloff,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(shadowRolloff = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Blacks",
+                        value = cinemaConfig.blacks,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(blacks = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Black Level",
+                        value = cinemaConfig.blackLevel,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(blackLevel = it)) }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "3. COLOR & WHITE BALANCE",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    CinemaSettingSliderRow(
+                        label = "Temperature",
+                        value = cinemaConfig.temperature,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(temperature = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Tint",
+                        value = cinemaConfig.tint,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(tint = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Saturation",
+                        value = cinemaConfig.saturation,
+                        valueRange = 0.0f..2.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(saturation = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Vibrance",
+                        value = cinemaConfig.vibrance,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(vibrance = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Chroma Strength",
+                        value = cinemaConfig.chromaStrength,
+                        valueRange = 0.0f..2.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(chromaStrength = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Color Matrix",
+                        value = cinemaConfig.colorTransform,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(colorTransform = it)) }
+                    )
+                }
+            }
         }
     }
 }
