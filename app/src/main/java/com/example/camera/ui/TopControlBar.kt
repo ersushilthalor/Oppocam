@@ -137,6 +137,7 @@ fun TopControlBar(
     evStepSize: Float = 0.333f,
     onVideoQualityClick: () -> Unit = {},
     onVideoSettingsClick: () -> Unit = {},
+    onCinemaResolutionClick: () -> Unit = {},
     onToggleMegapixelMode: () -> Unit = {},
     isVideoAdjustmentsOpen: Boolean = false,
     hasActiveVideoAdjustments: Boolean = false,
@@ -361,8 +362,10 @@ fun TopControlBar(
                 }
                 CameraMode.CINEMA -> {
                     val resLabel = when {
+                        cinemaConfig.selectedResolution?.width == 7680 || cinemaConfig.selectedResolution?.height == 7680 -> "8K"
                         cinemaConfig.selectedResolution?.width == 3840 || cinemaConfig.selectedResolution?.height == 3840 -> "4K"
-                        cinemaConfig.selectedResolution?.width == 1920 || cinemaConfig.selectedResolution?.height == 1920 -> "1080"
+                        cinemaConfig.selectedResolution?.width == 1920 || cinemaConfig.selectedResolution?.height == 1920 -> "1080p"
+                        cinemaConfig.selectedResolution?.width == 1280 || cinemaConfig.selectedResolution?.height == 1280 -> "720p"
                         else -> "4K"
                     }
                     Box(
@@ -371,7 +374,9 @@ fun TopControlBar(
                             .clip(RoundedCornerShape(17.dp))
                             .background(Color(0xB21A1A1E))
                             .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                            .padding(horizontal = 12.dp),
+                            .clickable { onCinemaResolutionClick() }
+                            .padding(horizontal = 10.dp)
+                            .testTag("pro_video_resolution_button"),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -762,13 +767,13 @@ fun TopControlBar(
                 onClick = onCinemaSettingsClick,
                 modifier = Modifier
                     .size(buttonSize)
-                    .topControlStyle(layoutConfig, activeColor = accentColor)
-                    .testTag("cinema_settings_quick_button")
+                    .topControlStyle(layoutConfig)
+                    .testTag("pro_video_tuning_controls_button")
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Movie,
-                    contentDescription = "Pro Video Settings",
-                    tint = accentColor,
+                    imageVector = Icons.Outlined.Tune,
+                    contentDescription = "Tuning Controls",
+                    tint = Color.White.copy(alpha = 0.9f),
                     modifier = Modifier.size(iconSize)
                 )
             }

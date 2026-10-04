@@ -141,7 +141,7 @@ enum class TopControlItem(val id: String, val label: String) {
     PRO_EXP("pro_exp", "Pro Manual Mode"),
     LOG("log", "Log Profiles (Pro Video)"),
     LUT("lut", "Cinematic LUTs (Pro Video)"),
-    PRO_VIDEO_SETTINGS("pro_video_settings", "Pro Video Settings"),
+    PRO_VIDEO_SETTINGS("pro_video_settings", "Tuning Controls"),
     EV("ev", "Exposure Compensation (EV)"),
     HORIZON_LOCK("horizon_lock", "Horizontal Lock"),
     DOLLY_ZOOM("dolly_zoom", "Dolly Zoom"),
@@ -539,21 +539,17 @@ object CameraUiTemplates {
             CameraMode.CINEMA -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
-                    TopControlItem.TIMER,
                     TopControlItem.LOG,
                     TopControlItem.LUT,
-                    TopControlItem.EV,
-                    TopControlItem.GRID,
-                    TopControlItem.SETTINGS
+                    TopControlItem.RESOLUTION,
+                    TopControlItem.PRO_VIDEO_SETTINGS
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
-                    TopControlItem.TIMER to TopIconPosition.LEFT,
                     TopControlItem.LOG to TopIconPosition.CENTER,
                     TopControlItem.LUT to TopIconPosition.CENTER,
-                    TopControlItem.EV to TopIconPosition.CENTER,
-                    TopControlItem.GRID to TopIconPosition.RIGHT,
-                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                    TopControlItem.RESOLUTION to TopIconPosition.CENTER,
+                    TopControlItem.PRO_VIDEO_SETTINGS to TopIconPosition.RIGHT
                 ),
                 hiddenTopControls = emptySet()
             )

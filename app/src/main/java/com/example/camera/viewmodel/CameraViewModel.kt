@@ -621,6 +621,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.saveCinemaConfig(config)
     }
 
+    fun cycleCinemaResolution() {
+        val supported = cinemaCapabilities.value.supportedResolutions.takeIf { it.isNotEmpty() }
+            ?: listOf(
+                CameraResolution(3840, 2160),
+                CameraResolution(1920, 1080),
+                CameraResolution(1280, 720)
+            )
+        val current = cinemaConfig.value.selectedResolution ?: supported.firstOrNull { it.width >= 3840 } ?: supported.first()
+        val curIndex = supported.indexOfFirst { it.width == current.width && it.height == current.height }
+        val nextIndex = if (curIndex >= 0 && curIndex + 1 < supported.size) curIndex + 1 else 0
+        val next = supported[nextIndex]
+        updateCinemaConfig(cinemaConfig.value.copy(selectedResolution = next))
+        val label = when {
+            next.width >= 7680 -> "8K"
+            next.width >= 3840 -> "4K"
+            next.width >= 1920 -> "1080p"
+            else -> "720p"
+        }
+        showToast("Pro Video Resolution: $label")
+    }
+
     // --- Custom Image Processing Pipeline (RAW/YUV Uncompressed Processing) ---
     private val _isCustomPipelineEnabled = MutableStateFlow(preferences.isCustomPipelineEnabled)
     val isCustomPipelineEnabled: StateFlow<Boolean> = _isCustomPipelineEnabled.asStateFlow()
