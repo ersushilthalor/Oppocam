@@ -21,11 +21,11 @@ if (!debugKeystoreFile.exists() && base64KeystoreFile.exists()) {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.camerapro"
   compileSdk = 35
 
   defaultConfig {
-    applicationId = "com.aistudio.camerapro.g96opt"
+    applicationId = "com.camerapro"
     minSdk = 24
     targetSdk = 35
     versionCode = 1
