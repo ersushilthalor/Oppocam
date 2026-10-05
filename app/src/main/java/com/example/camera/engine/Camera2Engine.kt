@@ -2150,6 +2150,9 @@ class Camera2Engine(private val context: Context) {
         if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && oldProfile != CinemaColorProfile.HLG10) {
             cinemaEngine.hlg10AutoExposureEngine.reset()
         }
+        if (isSoftwareCinemaRecording) {
+            cinemaSoftwareRecorder.updateLiveCinemaConfig(sanitizedConfig, rec2020AutoToneParams.value)
+        }
         if (currentMode == CameraMode.CINEMA) {
             updatePreviewAspectRatio()
             updatePreviewSettings()
@@ -5857,7 +5860,9 @@ class Camera2Engine(private val context: Context) {
                         orientationHint = cinemaOrientationHint,
                         colorProfile = cinemaConfig.value.colorProfile,
                         colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace,
-                        isSource10Bit = isCameraSource10Bit
+                        isSource10Bit = isCameraSource10Bit,
+                        cinemaConfig = cinemaConfig.value,
+                        rec2020Params = rec2020AutoToneParams.value
                     )
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed starting software cinema recording: ${t.message}", t)
@@ -6535,28 +6540,9 @@ class Camera2Engine(private val context: Context) {
 
         try {
             if (isCinema) {
-                if (snapCinemaConfig.codec == CinemaCodec.PRORES) {
-                    // ProRes 422 software recording outputs directly in QuickTime MOV format
-                    fileToSave = rawRecordedFile
-                } else {
-                    try {
-                        val procExt = if (snapCinemaConfig.codec == CinemaCodec.VP9) "webm" else "mp4"
-                        val procDest = File(rawRecordedFile.parentFile, "cinema_graded_${System.currentTimeMillis()}.$procExt")
-                        val processed = CinemaVideoProcessor.processCinemaVideo(
-                            inputFile = rawRecordedFile,
-                            outputFile = procDest,
-                            config = snapCinemaConfig,
-                            orientationDegrees = lockedOrientationHint,
-                            rec2020Params = snapRec2020Params
-                        )
-                        if (processed.exists() && processed.length() > 0L && processed != rawRecordedFile) {
-                            fileToSave = processed
-                            gradedFile = processed
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error applying Cinema LUT to final video", e)
-                    }
-                }
+                // Real-time GPU pipeline has already applied Log, LUT, and color grading during recording!
+                // Zero post-processing delay; no re-decoding, re-processing or re-encoding needed!
+                fileToSave = rawRecordedFile
             }
 
             if (wasHorizonLockActive) {

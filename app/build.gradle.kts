@@ -21,11 +21,11 @@ if (!debugKeystoreFile.exists() && base64KeystoreFile.exists()) {
 }
 
 android {
-  namespace = "com.camerapro"
+  namespace = "com.example"
   compileSdk = 35
 
   defaultConfig {
-    applicationId = "com.camerapro"
+    applicationId = "com.aistudio.oppocam.prolog"
     minSdk = 24
     targetSdk = 35
     versionCode = 1

@@ -5,6 +5,7 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
+import android.opengl.GLES20
 import android.os.Build
 import android.view.View
 import com.example.camera.data.CubeLutParser
@@ -1515,4 +1516,372 @@ object CinemaColorPipeline {
             return half4(half(c.r), half(c.g), half(c.b), src.a);
         }
     """.trimIndent()
+
+    val CINEMA_VERTEX_SHADER = """
+        uniform mat4 uMVPMatrix;
+        uniform mat4 uSTMatrix;
+        attribute vec4 aPosition;
+        attribute vec4 aTextureCoord;
+        varying vec2 vTextureCoord;
+        void main() {
+            gl_Position = uMVPMatrix * aPosition;
+            vTextureCoord = (uSTMatrix * aTextureCoord).xy;
+        }
+    """.trimIndent()
+
+    val CINEMA_FRAGMENT_SHADER = """
+        #extension GL_OES_EGL_image_external : require
+        precision highp float;
+        varying vec2 vTextureCoord;
+        uniform samplerExternalOES sTexture;
+        uniform sampler2D sLutTexture;
+        uniform mat4 uColorMatrix;
+        uniform vec4 uColorOffset;
+        uniform float uUse3DLut;
+        uniform float uLutSize;
+        uniform float uLutIntensity;
+        uniform float uExposure;
+        uniform float uContrast;
+        uniform float uSaturation;
+        uniform float uWashedOut;
+        uniform float uFilmicOutput;
+        uniform float uShadows;
+        uniform float uHighlights;
+        uniform float uVibrance;
+        uniform float uVibrantGreenIntensity;
+        uniform vec2 uTexelSize;
+        uniform float uTemperature;
+        uniform float uTint;
+        uniform float uWhites;
+        uniform float uBlacks;
+        uniform float uMidtones;
+        uniform float uBlackLevel;
+        uniform float uHighlightRolloff;
+        uniform float uShadowRolloff;
+        uniform float uLocalContrast;
+        uniform float uLumaCurve;
+        uniform float uColorTransform;
+        uniform float uChromaStrength;
+        uniform float uToneMappingStrength;
+        uniform float uLumaNoiseReduction;
+        uniform float uChromaNoiseReduction;
+        uniform float uSharpening;
+        uniform float uMicroContrast;
+        uniform float uOutputGamma;
+
+        vec3 sample3DLut(vec3 color, float lutSize) {
+            float n = lutSize;
+            float b = clamp(color.b, 0.0, 1.0) * (n - 1.0);
+            float slice0 = floor(b);
+            float slice1 = min(slice0 + 1.0, n - 1.0);
+            float bWeight = b - slice0;
+
+            float rCoord = clamp(color.r, 0.0, 1.0) * (n - 1.0);
+            float texHeight = n;
+            float v = (0.5 + clamp(color.g, 0.0, 1.0) * (n - 1.0)) / texHeight;
+
+            float texWidth = n * n;
+            float u0 = (slice0 * n + 0.5 + rCoord) / texWidth;
+            float u1 = (slice1 * n + 0.5 + rCoord) / texWidth;
+
+            vec4 s0 = texture2D(sLutTexture, vec2(u0, v));
+            vec4 s1 = texture2D(sLutTexture, vec2(u1, v));
+
+            return mix(s0.rgb, s1.rgb, bWeight);
+        }
+
+        void main() {
+            vec4 src = texture2D(sTexture, vTextureCoord);
+            vec3 inColor = src.rgb;
+            vec3 cUp = texture2D(sTexture, vTextureCoord + vec2(0.0, -uTexelSize.y)).rgb;
+            vec3 cDown = texture2D(sTexture, vTextureCoord + vec2(0.0, uTexelSize.y)).rgb;
+            vec3 cLeft = texture2D(sTexture, vTextureCoord + vec2(-uTexelSize.x, 0.0)).rgb;
+            vec3 cRight = texture2D(sTexture, vTextureCoord + vec2(uTexelSize.x, 0.0)).rgb;
+
+            // =========================================================================
+            // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
+            // =========================================================================
+            vec4 graded = uColorMatrix * vec4(inColor, 1.0) + uColorOffset;
+            vec3 c = clamp(graded.rgb, 0.0, 1.0);
+
+            // =========================================================================
+            // STAGE 2: 3D LUT SAMPLING & INTENSITY BLENDING
+            // =========================================================================
+            if (uUse3DLut > 0.5 && uLutIntensity > 0.001) {
+                vec3 lutSample = sample3DLut(c, uLutSize);
+                c = clamp(mix(c, lutSample, uLutIntensity), 0.0, 1.0);
+            }
+
+            // =========================================================================
+            // STAGE 3: TONAL & COLOR GRADING CONTROLS
+            // =========================================================================
+
+            // 1. Exposure
+            if (abs(uExposure) > 0.001) {
+                float expMultiplier = pow(2.0, uExposure * 0.75);
+                c = clamp(c * expMultiplier, 0.0, 1.0);
+            }
+
+            // 2. White Balance (Temperature & Tint)
+            if (abs(uTemperature) > 0.001 || abs(uTint) > 0.001) {
+                float tempShift = uTemperature * 0.28;
+                float tintShift = uTint * 0.22;
+                c.r = c.r * (1.0 + tempShift) * (1.0 - tintShift * 0.5);
+                c.g = c.g * (1.0 + tintShift);
+                c.b = c.b * (1.0 - tempShift) * (1.0 - tintShift * 0.5);
+                c = clamp(c, 0.0, 1.0);
+            }
+
+            // 3. Black Level Pedestal
+            if (abs(uBlackLevel) > 0.001) {
+                c = clamp(c + vec3(uBlackLevel * 0.15), 0.0, 1.0);
+            }
+
+            // 4. Washed-Out Black Reduction
+            if (uWashedOut > 0.001) {
+                float pedestalReduction = -0.10 * uWashedOut;
+                float contrastBoost = 1.0 + (uWashedOut * 0.28);
+                c = clamp(0.5 + (c - 0.5) * contrastBoost + pedestalReduction, 0.0, 1.0);
+            }
+
+            // 5. Contrast (S-Curve pivoting around middle-grey)
+            if (abs(uContrast) > 0.001) {
+                float contrastFactor = 1.0 + uContrast * 0.38;
+                c = clamp(0.5 + (c - 0.5) * contrastFactor, 0.0, 1.0);
+            }
+
+            // 6. Tonal Zone Sculpting
+            float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+
+            float wBlacks = 1.0 - smoothstep(0.0, 0.25, luma);
+            float deltaBlacks = uBlacks * 0.22 * wBlacks * (1.0 - luma);
+
+            float shadowMask = 1.0 - smoothstep(0.0, 0.65, luma);
+            float deltaShadows = uShadows * 0.22 * shadowMask * (1.0 - luma);
+
+            float wMidtones = 4.0 * luma * (1.0 - luma);
+            float deltaMidtones = uMidtones * 0.25 * wMidtones;
+
+            float highlightMask = smoothstep(0.35, 1.0, luma);
+            float deltaHighlights = uHighlights * 0.22 * highlightMask * luma;
+
+            float wWhites = smoothstep(0.70, 1.0, luma);
+            float deltaWhites = uWhites * 0.25 * wWhites * luma;
+
+            float deltaShadowRolloff = 0.0;
+            if (abs(uShadowRolloff) > 0.001) {
+                float toeWeight = (1.0 - smoothstep(0.0, 0.38, luma)) * smoothstep(0.0, 0.18, luma);
+                deltaShadowRolloff = uShadowRolloff * 0.18 * toeWeight;
+            }
+
+            float deltaHighlightRolloff = 0.0;
+            if (abs(uHighlightRolloff) > 0.001) {
+                float kneeWeight = smoothstep(0.62, 1.0, luma);
+                deltaHighlightRolloff = -uHighlightRolloff * 0.20 * kneeWeight * (luma - 0.62);
+            }
+
+            float deltaLumaCurve = 0.0;
+            if (abs(uLumaCurve) > 0.001) {
+                float curveFactor = 1.0 + uLumaCurve * 0.65;
+                float shapedLuma = (luma < 0.5) ? 
+                    0.5 * pow(2.0 * luma, curveFactor) : 
+                    1.0 - 0.5 * pow(2.0 * (1.0 - luma), curveFactor);
+                deltaLumaCurve = shapedLuma - luma;
+            }
+
+            c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
+
+            // 7. Color Transform / Matrix Cross-Talk
+            if (abs(uColorTransform) > 0.001) {
+                vec3 filmColor;
+                if (uColorTransform > 0.0) {
+                    filmColor.r = 1.08 * c.r - 0.05 * c.g - 0.03 * c.b;
+                    filmColor.g = -0.02 * c.r + 1.06 * c.g - 0.04 * c.b;
+                    filmColor.b = -0.04 * c.r - 0.03 * c.g + 1.07 * c.b;
+                } else {
+                    filmColor.r = 1.05 * c.r - 0.02 * c.g - 0.03 * c.b;
+                    filmColor.g = -0.05 * c.r + 1.08 * c.g - 0.03 * c.b;
+                    filmColor.b = 0.01 * c.r - 0.03 * c.g + 1.06 * c.b;
+                }
+                c = clamp(mix(c, filmColor, abs(uColorTransform)), 0.0, 1.0);
+            }
+
+            // 8. Saturation
+            if (abs(uSaturation - 1.0) > 0.001) {
+                float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                c = clamp(vec3(curLuma) + (c - vec3(curLuma)) * uSaturation, 0.0, 1.0);
+            }
+
+            // 9. Chroma Strength
+            if (abs(uChromaStrength - 1.0) > 0.001) {
+                float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                c = clamp(vec3(curLuma) + (c - vec3(curLuma)) * uChromaStrength, 0.0, 1.0);
+            }
+
+            // 10. Skin-Tone Protected Vibrance
+            float lumaPre = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            float rgDiff = c.r - c.g;
+            float gbDiff = c.g - c.b;
+            float rbDiff = c.r - c.b;
+            float skinHueMask = smoothstep(0.015, 0.085, rgDiff) *
+                                smoothstep(-0.01, 0.045, gbDiff) *
+                                smoothstep(0.035, 0.13, rbDiff) *
+                                (1.0 - smoothstep(0.40, 0.65, rgDiff));
+            float skinLumaMask = smoothstep(0.06, 0.18, lumaPre) *
+                                 (1.0 - smoothstep(0.90, 0.99, lumaPre));
+            float skinWeight = clamp(skinHueMask * skinLumaMask, 0.0, 1.0);
+
+            if (abs(uVibrance) > 0.001) {
+                float maxC = max(c.r, max(c.g, c.b));
+                float minC = min(c.r, min(c.g, c.b));
+                float sat = maxC - minC;
+                float lumaVib = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                float skinAtten = (uVibrance > 0.0) ? (1.0 - 0.85 * skinWeight) : 1.0;
+                float satWeight = (uVibrance > 0.0) ? clamp(1.0 - sat * 0.75, 0.15, 1.0) : 1.0;
+                float vibScale = 1.0 + uVibrance * 0.65 * satWeight * skinAtten;
+                c = clamp(vec3(lumaVib) + (c - vec3(lumaVib)) * vibScale, 0.0, 1.0);
+            }
+
+            // 11. Selective Vibrant Green / Foliage LUT
+            if (uVibrantGreenIntensity > 0.001) {
+                float lumaGreen = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                float greenDomR = smoothstep(-0.035, 0.075, c.g - c.r);
+                float greenDomB = smoothstep(0.015, 0.12, c.g - c.b);
+                float greenWeight = clamp(greenDomR * greenDomB * (1.0 - skinWeight), 0.0, 1.0);
+
+                if (greenWeight > 0.001) {
+                    float gw = greenWeight * uVibrantGreenIntensity;
+                    float chromaScale = 1.0 + 0.72 * gw;
+                    vec3 gc = vec3(lumaGreen) + (c - vec3(lumaGreen)) * chromaScale;
+                    float greenExcess = max(0.0, c.g - (c.r + c.b) * 0.5);
+                    gc.g += greenExcess * 0.38 * gw + 0.025 * gw;
+                    gc.r -= greenExcess * 0.18 * gw;
+                    gc.b -= greenExcess * 0.12 * gw;
+                    float foliageContrast = 1.0 + 0.10 * gw;
+                    c = clamp((gc - 0.5) * foliageContrast + 0.5, 0.0, 1.0);
+                }
+
+                if (skinWeight > 0.001) {
+                    float sw = skinWeight * uVibrantGreenIntensity;
+                    float skinLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float cleanChromaScale = 1.0 - 0.05 * sw;
+                    vec3 sc = vec3(skinLuma) + (c - vec3(skinLuma)) * cleanChromaScale;
+                    float fairLift = 0.052 * sw * (1.0 - skinLuma * 0.25);
+                    float excessOrange = max(0.0, sc.r - sc.g - 0.12);
+                    sc.r = sc.r - excessOrange * 0.12 * sw + fairLift * 0.92;
+                    sc.g = sc.g + fairLift * 1.04;
+                    sc.b = sc.b + fairLift * 1.08;
+                    c = clamp(sc, 0.0, 1.0);
+                }
+            }
+
+            // 12. Spatial detail / sharpening & noise reduction
+            if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
+                float lCenter = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                float lUp = dot(cUp, vec3(0.2126, 0.7152, 0.0722));
+                float lDown = dot(cDown, vec3(0.2126, 0.7152, 0.0722));
+                float lLeft = dot(cLeft, vec3(0.2126, 0.7152, 0.0722));
+                float lRight = dot(cRight, vec3(0.2126, 0.7152, 0.0722));
+
+                if (uLumaNoiseReduction > 0.001) {
+                    float wU = exp(-pow((lUp - lCenter) * 12.0, 2.0));
+                    float wD = exp(-pow((lDown - lCenter) * 12.0, 2.0));
+                    float wL = exp(-pow((lLeft - lCenter) * 12.0, 2.0));
+                    float wR = exp(-pow((lRight - lCenter) * 12.0, 2.0));
+                    float wSum = 1.0 + wU + wD + wL + wR;
+                    float smoothLuma = (lCenter + lUp * wU + lDown * wD + lLeft * wL + lRight * wR) / wSum;
+                    float lumaDelta = (smoothLuma - lCenter) * uLumaNoiseReduction;
+                    c = clamp(c + vec3(lumaDelta), 0.0, 1.0);
+                }
+
+                if (uChromaNoiseReduction > 0.001) {
+                    vec3 chrCenter = c - vec3(dot(c, vec3(0.2126, 0.7152, 0.0722)));
+                    vec3 chrUp = cUp - vec3(lUp);
+                    vec3 chrDown = cDown - vec3(lDown);
+                    vec3 chrLeft = cLeft - vec3(lLeft);
+                    vec3 chrRight = cRight - vec3(lRight);
+                    float wU = exp(-pow((lUp - lCenter) * 8.0, 2.0));
+                    float wD = exp(-pow((lDown - lCenter) * 8.0, 2.0));
+                    float wL = exp(-pow((lLeft - lCenter) * 8.0, 2.0));
+                    float wR = exp(-pow((lRight - lCenter) * 8.0, 2.0));
+                    float wSum = 1.0 + wU + wD + wL + wR;
+                    vec3 smoothChroma = (chrCenter + chrUp * wU + chrDown * wD + chrLeft * wL + chrRight * wR) / wSum;
+                    float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    c = clamp(vec3(curLuma) + mix(chrCenter, smoothChroma, uChromaNoiseReduction), 0.0, 1.0);
+                }
+            }
+
+            if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
+                vec3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
+                vec3 highPass = c - neighborAvg;
+
+                if (uSharpening > 0.001) {
+                    c = clamp(c + highPass * (uSharpening * 2.2), 0.0, 1.0);
+                }
+
+                if (abs(uMicroContrast) > 0.001) {
+                    vec3 microDetail = sign(highPass) * pow(abs(highPass), vec3(0.80));
+                    c = clamp(c + microDetail * (uMicroContrast * 0.9), 0.0, 1.0);
+                }
+
+                if (abs(uLocalContrast) > 0.001) {
+                    float lCur = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float lAvg = dot(neighborAvg, vec3(0.2126, 0.7152, 0.0722));
+                    float localDelta = (lCur - lAvg) * uLocalContrast * 0.85;
+                    c = clamp(c + vec3(localDelta), 0.0, 1.0);
+                }
+            }
+
+            // =========================================================================
+            // STAGE 4: OUTPUT TRANSFORM / TONE MAPPING / OUTPUT GAMMA
+            // =========================================================================
+            if (uToneMappingStrength > 0.001) {
+                vec3 aces = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
+                c = mix(c, aces, uToneMappingStrength);
+            }
+
+            if (uFilmicOutput > 0.5) {
+                float highlightCompression = 0.975;
+                float inkyBlackAnchor = -0.0137; // -3.5 / 255.0
+                c = clamp(c * highlightCompression + inkyBlackAnchor, 0.0, 1.0);
+            }
+
+            if (abs(uOutputGamma - 1.0) > 0.001) {
+                c = pow(clamp(c, 0.0, 1.0), vec3(uOutputGamma));
+            }
+
+            gl_FragColor = vec4(c, src.a);
+        }
+    """.trimIndent()
+
+    fun compileGlProgram(): Int {
+        val vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, CINEMA_VERTEX_SHADER)
+        val fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, CINEMA_FRAGMENT_SHADER)
+        val program = GLES20.glCreateProgram()
+        GLES20.glAttachShader(program, vertexShader)
+        GLES20.glAttachShader(program, fragmentShader)
+        GLES20.glLinkProgram(program)
+        val linkStatus = IntArray(1)
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0)
+        if (linkStatus[0] != GLES20.GL_TRUE) {
+            val error = GLES20.glGetProgramInfoLog(program)
+            GLES20.glDeleteProgram(program)
+            throw RuntimeException("Could not link Cinema GL program: $error")
+        }
+        return program
+    }
+
+    fun loadShader(type: Int, shaderCode: String): Int {
+        val shader = GLES20.glCreateShader(type)
+        GLES20.glShaderSource(shader, shaderCode)
+        GLES20.glCompileShader(shader)
+        val compiled = IntArray(1)
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0)
+        if (compiled[0] == 0) {
+            val error = GLES20.glGetShaderInfoLog(shader)
+            GLES20.glDeleteShader(shader)
+            throw RuntimeException("Could not compile Cinema shader $type: $error")
+        }
+        return shader
+    }
 }

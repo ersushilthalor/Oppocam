@@ -1,15 +1,36 @@
 package com.example.camera.engine
 
 import android.content.Context
+import android.graphics.ColorMatrix
+import android.graphics.SurfaceTexture
 import android.media.*
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
+import android.opengl.EGLExt
+import android.opengl.EGLSurface
+import android.opengl.GLES11Ext
+import android.opengl.GLES20
+import android.opengl.GLUtils
+import android.opengl.Matrix
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.Surface
 import com.example.camera.model.CinemaCodec
+import com.example.camera.model.CinemaColorProfile
+import com.example.camera.model.CinemaConfig
+import com.example.camera.model.CinematicLut
 import com.example.camera.model.LogBitDepth
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -36,6 +57,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     companion object {
         private const val TAG = "CinemaSoftwareRecorder"
         private const val DRAIN_TIMEOUT_US = 10_000L
+        private const val EGL_RECORDABLE_ANDROID = 0x3142
     }
 
     private var activeCodec: CinemaCodec? = null
@@ -70,6 +92,78 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var videoInputSurface: Surface? = null
     private var videoDrainThread: Thread? = null
 
+    // Real-Time Cinema GPU Pipeline
+    private var glThread: HandlerThread? = null
+    private var glHandler: Handler? = null
+    private var eglDisplay: EGLDisplay? = null
+    private var eglContext: EGLContext? = null
+    private var eglSurface: EGLSurface? = null
+    private var programId: Int = 0
+    private var oesTextureId: Int = 0
+    private var lutTextureId: Int = 0
+    private var cameraSurfaceTexture: SurfaceTexture? = null
+    private var cameraInputSurface: Surface? = null
+    private var encoderInputSurface: Surface? = null
+
+    private var uMVPMatrixHandle: Int = -1
+    private var uSTMatrixHandle: Int = -1
+    private var uColorMatrixHandle: Int = -1
+    private var uColorOffsetHandle: Int = -1
+    private var uShadowsHandle: Int = -1
+    private var uHighlightsHandle: Int = -1
+    private var uVibranceHandle: Int = -1
+    private var uVibrantGreenIntensityHandle: Int = -1
+    private var uTexelSizeHandle: Int = -1
+    private var uTemperatureHandle: Int = -1
+    private var uTintHandle: Int = -1
+    private var uWhitesHandle: Int = -1
+    private var uBlacksHandle: Int = -1
+    private var uMidtonesHandle: Int = -1
+    private var uBlackLevelHandle: Int = -1
+    private var uHighlightRolloffHandle: Int = -1
+    private var uShadowRolloffHandle: Int = -1
+    private var uLocalContrastHandle: Int = -1
+    private var uLumaCurveHandle: Int = -1
+    private var uColorTransformHandle: Int = -1
+    private var uChromaStrengthHandle: Int = -1
+    private var uToneMappingStrengthHandle: Int = -1
+    private var uLumaNoiseReductionHandle: Int = -1
+    private var uChromaNoiseReductionHandle: Int = -1
+    private var uSharpeningHandle: Int = -1
+    private var uMicroContrastHandle: Int = -1
+    private var uOutputGammaHandle: Int = -1
+    private var aPositionHandle: Int = -1
+    private var aTextureCoordHandle: Int = -1
+    private var sTextureHandle: Int = -1
+    private var sLutTextureHandle: Int = -1
+    private var uUse3DLutHandle: Int = -1
+    private var uLutSizeHandle: Int = -1
+    private var uLutIntensityHandle: Int = -1
+    private var uExposureHandle: Int = -1
+    private var uContrastHandle: Int = -1
+    private var uSaturationHandle: Int = -1
+    private var uWashedOutHandle: Int = -1
+    private var uFilmicOutputHandle: Int = -1
+
+    private val mvpMatrix = FloatArray(16)
+    private val stMatrix = FloatArray(16)
+    private val glColorMat = FloatArray(16)
+    private val glColorOffset = FloatArray(4)
+
+    private var vertexBuffer: FloatBuffer? = null
+    private var texCoordBuffer: FloatBuffer? = null
+
+    @Volatile
+    private var currentCinemaConfig: CinemaConfig? = null
+    @Volatile
+    private var currentRec2020Params: Rec2020AutoToneParams? = null
+    @Volatile
+    private var currentLutSize: Float = 17f
+    @Volatile
+    private var currentUse3DLut: Float = 0f
+    @Volatile
+    private var currentLutIntensity: Float = 0f
+
     // Audio Pipeline
     private var audioRecord: AudioRecord? = null
     private var audioCodec: MediaCodec? = null
@@ -101,7 +195,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         orientationHint: Int = 0,
         colorProfile: com.example.camera.model.CinemaColorProfile = com.example.camera.model.CinemaColorProfile.NATIVE,
         colorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709,
-        isSource10Bit: Boolean = false
+        isSource10Bit: Boolean = false,
+        cinemaConfig: CinemaConfig? = null,
+        rec2020Params: Rec2020AutoToneParams? = null
     ): Surface {
         val isHlg10 = colorProfile == com.example.camera.model.CinemaColorProfile.HLG10
         val effectiveCodec = if (isHlg10 && codec == CinemaCodec.H264) CinemaCodec.H265 else codec
@@ -132,6 +228,12 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (effectiveCodec == CinemaCodec.PRORES)
         val normWidth = maxOf(width, height)
         val normHeight = minOf(width, height)
+
+        currentNormWidth = normWidth
+        currentNormHeight = normHeight
+        currentCinemaConfig = cinemaConfig
+        currentRec2020Params = rec2020Params
+        firstFramePtsNs = -1L
 
         // Real Apple ProRes 422 software recording pipeline with genuine QuickTime MOV container
         if (effectiveCodec == CinemaCodec.PRORES) {
@@ -239,6 +341,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             }
             throw IllegalStateException("Video encoder initialization failed: $detail", e)
         }
+        encoderInputSurface = inputSurface
 
         // 4. Setup Audio Pipeline if enabled
         if (isAudioEnabled) {
@@ -250,7 +353,26 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             }
         }
 
-        return inputSurface
+        // 5. Connect Real-Time GPU Shader Pipeline between Camera2 and Video Encoder
+        val isRobolectric = Build.FINGERPRINT.contains("robolectric") || Build.HARDWARE.contains("robolectric") || Build.DEVICE.contains("robolectric")
+        if (isRobolectric) {
+            return inputSurface
+        }
+
+        val cameraSurface = try {
+            setupRealtimeGlPipeline(
+                encoderSurface = inputSurface,
+                normWidth = normWidth,
+                normHeight = normHeight,
+                config = cinemaConfig,
+                rec2020Params = rec2020Params
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed initializing real-time GPU cinema pipeline, falling back to direct encoder surface: ${t.message}", t)
+            inputSurface
+        }
+
+        return cameraSurface
     }
 
     /**
@@ -270,6 +392,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         }
         if (!isRecording.getAndSet(false)) return outputFile
         isStopping.set(true)
+
+        // 0. Release Real-Time GL Pipeline before draining video codec
+        releaseGlPipeline()
 
         // 1. Signal EOS on video input
         try {
@@ -1092,5 +1217,763 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // REAL-TIME GPU CINEMA LOG + LUT PIPELINE
+    // =========================================================================
+
+    private var currentNormWidth: Int = 1920
+    private var currentNormHeight: Int = 1080
+    private var firstFramePtsNs: Long = -1L
+
+    fun updateLiveCinemaConfig(newConfig: CinemaConfig, newRec2020Params: Rec2020AutoToneParams?) {
+        currentCinemaConfig = newConfig
+        currentRec2020Params = newRec2020Params
+        glHandler?.post {
+            try {
+                updateColorMatrixAndLut(newConfig, newRec2020Params)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error updating live color matrix and LUT in shader", t)
+            }
+        }
+    }
+
+    private fun setupRealtimeGlPipeline(
+        encoderSurface: Surface,
+        normWidth: Int,
+        normHeight: Int,
+        config: CinemaConfig?,
+        rec2020Params: Rec2020AutoToneParams?
+    ): Surface {
+        val thread = HandlerThread("CinemaGLThread").apply { start() }
+        glThread = thread
+        val handler = Handler(thread.looper)
+        glHandler = handler
+
+        val latch = CountDownLatch(1)
+        var initError: Throwable? = null
+
+        handler.post {
+            try {
+                val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+                if (display == null || display == EGL14.EGL_NO_DISPLAY) throw RuntimeException("eglGetDisplay failed")
+                eglDisplay = display
+                val eglVersion = IntArray(2)
+                if (!EGL14.eglInitialize(display, eglVersion, 0, eglVersion, 1)) {
+                    throw RuntimeException("eglInitialize failed")
+                }
+
+                val attribList = intArrayOf(
+                    EGL14.EGL_RED_SIZE, 8,
+                    EGL14.EGL_GREEN_SIZE, 8,
+                    EGL14.EGL_BLUE_SIZE, 8,
+                    EGL14.EGL_ALPHA_SIZE, 8,
+                    EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                    EGL_RECORDABLE_ANDROID, 1,
+                    EGL14.EGL_NONE
+                )
+                val configs = arrayOfNulls<EGLConfig>(1)
+                val numConfigs = IntArray(1)
+                if (!EGL14.eglChooseConfig(display, attribList, 0, configs, 0, configs.size, numConfigs, 0) || numConfigs[0] == 0) {
+                    val fallbackAttribs = intArrayOf(
+                        EGL14.EGL_RED_SIZE, 8,
+                        EGL14.EGL_GREEN_SIZE, 8,
+                        EGL14.EGL_BLUE_SIZE, 8,
+                        EGL14.EGL_ALPHA_SIZE, 8,
+                        EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                        EGL14.EGL_NONE
+                    )
+                    EGL14.eglChooseConfig(display, fallbackAttribs, 0, configs, 0, configs.size, numConfigs, 0)
+                }
+                val chosenConfig = configs[0] ?: throw RuntimeException("Unable to find EGL config")
+
+                val contextAttribs = intArrayOf(
+                    EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
+                    EGL14.EGL_NONE
+                )
+                val context = EGL14.eglCreateContext(display, chosenConfig, EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
+                if (context == null || context == EGL14.EGL_NO_CONTEXT) throw RuntimeException("eglCreateContext failed")
+                eglContext = context
+
+                val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
+                val surface = EGL14.eglCreateWindowSurface(display, chosenConfig, encoderSurface, surfaceAttribs, 0)
+                if (surface == null || surface == EGL14.EGL_NO_SURFACE) throw RuntimeException("eglCreateWindowSurface failed")
+                eglSurface = surface
+                if (!EGL14.eglMakeCurrent(display, surface, surface, context)) {
+                    throw RuntimeException("eglMakeCurrent failed")
+                }
+
+                programId = createGlProgram()
+                uMVPMatrixHandle = GLES20.glGetUniformLocation(programId, "uMVPMatrix")
+                uSTMatrixHandle = GLES20.glGetUniformLocation(programId, "uSTMatrix")
+                uColorMatrixHandle = GLES20.glGetUniformLocation(programId, "uColorMatrix")
+                uColorOffsetHandle = GLES20.glGetUniformLocation(programId, "uColorOffset")
+                uShadowsHandle = GLES20.glGetUniformLocation(programId, "uShadows")
+                uHighlightsHandle = GLES20.glGetUniformLocation(programId, "uHighlights")
+                uVibranceHandle = GLES20.glGetUniformLocation(programId, "uVibrance")
+                uVibrantGreenIntensityHandle = GLES20.glGetUniformLocation(programId, "uVibrantGreenIntensity")
+                uTexelSizeHandle = GLES20.glGetUniformLocation(programId, "uTexelSize")
+                uTemperatureHandle = GLES20.glGetUniformLocation(programId, "uTemperature")
+                uTintHandle = GLES20.glGetUniformLocation(programId, "uTint")
+                uWhitesHandle = GLES20.glGetUniformLocation(programId, "uWhites")
+                uBlacksHandle = GLES20.glGetUniformLocation(programId, "uBlacks")
+                uMidtonesHandle = GLES20.glGetUniformLocation(programId, "uMidtones")
+                uBlackLevelHandle = GLES20.glGetUniformLocation(programId, "uBlackLevel")
+                uHighlightRolloffHandle = GLES20.glGetUniformLocation(programId, "uHighlightRolloff")
+                uShadowRolloffHandle = GLES20.glGetUniformLocation(programId, "uShadowRolloff")
+                uLocalContrastHandle = GLES20.glGetUniformLocation(programId, "uLocalContrast")
+                uLumaCurveHandle = GLES20.glGetUniformLocation(programId, "uLumaCurve")
+                uColorTransformHandle = GLES20.glGetUniformLocation(programId, "uColorTransform")
+                uChromaStrengthHandle = GLES20.glGetUniformLocation(programId, "uChromaStrength")
+                uToneMappingStrengthHandle = GLES20.glGetUniformLocation(programId, "uToneMappingStrength")
+                uLumaNoiseReductionHandle = GLES20.glGetUniformLocation(programId, "uLumaNoiseReduction")
+                uChromaNoiseReductionHandle = GLES20.glGetUniformLocation(programId, "uChromaNoiseReduction")
+                uSharpeningHandle = GLES20.glGetUniformLocation(programId, "uSharpening")
+                uMicroContrastHandle = GLES20.glGetUniformLocation(programId, "uMicroContrast")
+                uOutputGammaHandle = GLES20.glGetUniformLocation(programId, "uOutputGamma")
+                aPositionHandle = GLES20.glGetAttribLocation(programId, "aPosition")
+                aTextureCoordHandle = GLES20.glGetAttribLocation(programId, "aTextureCoord")
+
+                sTextureHandle = GLES20.glGetUniformLocation(programId, "sTexture")
+                sLutTextureHandle = GLES20.glGetUniformLocation(programId, "sLutTexture")
+                uUse3DLutHandle = GLES20.glGetUniformLocation(programId, "uUse3DLut")
+                uLutSizeHandle = GLES20.glGetUniformLocation(programId, "uLutSize")
+                uLutIntensityHandle = GLES20.glGetUniformLocation(programId, "uLutIntensity")
+                uExposureHandle = GLES20.glGetUniformLocation(programId, "uExposure")
+                uContrastHandle = GLES20.glGetUniformLocation(programId, "uContrast")
+                uSaturationHandle = GLES20.glGetUniformLocation(programId, "uSaturation")
+                uWashedOutHandle = GLES20.glGetUniformLocation(programId, "uWashedOut")
+                uFilmicOutputHandle = GLES20.glGetUniformLocation(programId, "uFilmicOutput")
+
+                vertexBuffer = ByteBuffer.allocateDirect(4 * 3 * 4)
+                    .order(ByteOrder.nativeOrder())
+                    .asFloatBuffer()
+                    .apply {
+                        put(
+                            floatArrayOf(
+                                -1.0f, -1.0f, 0.0f,
+                                 1.0f, -1.0f, 0.0f,
+                                -1.0f,  1.0f, 0.0f,
+                                 1.0f,  1.0f, 0.0f
+                            )
+                        )
+                        position(0)
+                    }
+
+                texCoordBuffer = ByteBuffer.allocateDirect(4 * 2 * 4)
+                    .order(ByteOrder.nativeOrder())
+                    .asFloatBuffer()
+                    .apply {
+                        put(
+                            floatArrayOf(
+                                0.0f, 0.0f,
+                                1.0f, 0.0f,
+                                0.0f, 1.0f,
+                                1.0f, 1.0f
+                            )
+                        )
+                        position(0)
+                    }
+
+                updateColorMatrixAndLut(config, rec2020Params)
+
+                val textures = IntArray(1)
+                GLES20.glGenTextures(1, textures, 0)
+                oesTextureId = textures[0]
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTextureId)
+                GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR.toFloat())
+                GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR.toFloat())
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+                Matrix.setIdentityM(mvpMatrix, 0)
+
+                val st = SurfaceTexture(oesTextureId).apply {
+                    setDefaultBufferSize(normWidth, normHeight)
+                    setOnFrameAvailableListener({
+                        onCameraFrameAvailable()
+                    }, glHandler)
+                }
+                cameraSurfaceTexture = st
+                cameraInputSurface = Surface(st)
+            } catch (t: Throwable) {
+                initError = t
+                Log.e(TAG, "setupRealtimeGlPipeline failed: ${t.message}", t)
+            } finally {
+                latch.countDown()
+            }
+        }
+
+        latch.await(3, TimeUnit.SECONDS)
+        initError?.let { throw it }
+        return cameraInputSurface ?: throw IllegalStateException("Camera input surface was null after setup")
+    }
+
+    private fun updateColorMatrixAndLut(config: CinemaConfig?, rec2020Params: Rec2020AutoToneParams?) {
+        val includeLut = config?.isBakeLutToOutput ?: true
+        val colorMatrix = CinemaColorPipeline.computeCinemaColorMatrix(
+            config = config,
+            rec2020Params = rec2020Params,
+            includeCreativeLut = includeLut,
+            forGpuShader = true
+        )
+        if (colorMatrix != null) {
+            val a = colorMatrix.array
+            glColorMat[0] = a[0];  glColorMat[1] = a[5];  glColorMat[2] = a[10]; glColorMat[3] = 0f
+            glColorMat[4] = a[1];  glColorMat[5] = a[6];  glColorMat[6] = a[11]; glColorMat[7] = 0f
+            glColorMat[8] = a[2];  glColorMat[9] = a[7];  glColorMat[10] = a[12]; glColorMat[11] = 0f
+            glColorMat[12] = 0f;   glColorMat[13] = 0f;   glColorMat[14] = 0f;    glColorMat[15] = 1f
+
+            glColorOffset[0] = (a[3] + a[4]) / 255.0f
+            glColorOffset[1] = (a[8] + a[9]) / 255.0f
+            glColorOffset[2] = (a[13] + a[14]) / 255.0f
+            glColorOffset[3] = 0.0f
+        } else {
+            Matrix.setIdentityM(glColorMat, 0)
+            glColorOffset.fill(0f)
+        }
+
+        val lutPair = if (includeLut) CinemaColorPipeline.getLutStripBitmap(config) else null
+        val lutBitmap = lutPair?.first ?: CinemaColorPipeline.identityStripBitmap
+        currentLutSize = (lutPair?.second ?: 17).toFloat()
+        currentUse3DLut = if (lutPair != null && (config?.lutIntensity ?: 0f) > 0.001f) 1.0f else 0.0f
+        currentLutIntensity = if (lutPair != null) (config?.lutIntensity ?: 0f).coerceIn(0f, 1f) else 0.0f
+
+        if (lutTextureId == 0) {
+            val lutTextures = IntArray(1)
+            GLES20.glGenTextures(1, lutTextures, 0)
+            lutTextureId = lutTextures[0]
+        }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTextureId)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, lutBitmap, 0)
+    }
+
+    private fun onCameraFrameAvailable() {
+        val st = cameraSurfaceTexture ?: return
+        try {
+            st.updateTexImage()
+        } catch (_: Throwable) {
+            return
+        }
+        if (!isRecording.get() || isStopping.get()) return
+
+        try {
+            st.getTransformMatrix(stMatrix)
+            val rawTimestampNs = st.timestamp.takeIf { it > 0L } ?: System.nanoTime()
+            if (firstFramePtsNs < 0L) {
+                firstFramePtsNs = rawTimestampNs
+            }
+            val adjustedPtsNs = (rawTimestampNs - firstFramePtsNs).coerceAtLeast(0L)
+
+            GLES20.glViewport(0, 0, currentNormWidth, currentNormHeight)
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+            GLES20.glUseProgram(programId)
+
+            GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
+            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
+            GLES20.glUniformMatrix4fv(uColorMatrixHandle, 1, false, glColorMat, 0)
+            GLES20.glUniform4fv(uColorOffsetHandle, 1, glColorOffset, 0)
+
+            GLES20.glUniform1i(sTextureHandle, 0)
+            GLES20.glUniform1i(sLutTextureHandle, 1)
+
+            val cfg = currentCinemaConfig ?: CinemaConfig()
+            val exposure = if (cfg.colorProfile != CinemaColorProfile.FLAT_LOG) cfg.exposure else 0f
+            GLES20.glUniform1f(uExposureHandle, exposure)
+            GLES20.glUniform1f(uContrastHandle, cfg.contrast)
+            GLES20.glUniform1f(uSaturationHandle, cfg.saturation)
+            GLES20.glUniform1f(uWashedOutHandle, cfg.washedOut)
+
+            val isGraded = (!cfg.selectedLut.isOff || cfg.colorProfile != CinemaColorProfile.NATIVE)
+            val isHdrProfile = (cfg.colorProfile == CinemaColorProfile.HLG10 || cfg.colorProfile == CinemaColorProfile.HDR_LOG)
+            val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
+            GLES20.glUniform1f(uFilmicOutputHandle, filmicOutput)
+
+            GLES20.glUniform1f(uUse3DLutHandle, currentUse3DLut)
+            GLES20.glUniform1f(uLutSizeHandle, currentLutSize)
+            GLES20.glUniform1f(uLutIntensityHandle, currentLutIntensity)
+
+            GLES20.glUniform1f(uShadowsHandle, cfg.shadows.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uHighlightsHandle, cfg.highlights.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uVibranceHandle, cfg.vibrance.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(
+                uVibrantGreenIntensityHandle,
+                CinemaColorPipeline.getVibrantGreenLutIntensity(cfg, cfg.isBakeLutToOutput)
+            )
+
+            // 18 Cinema Color Fine-Tuning Uniforms
+            GLES20.glUniform2f(uTexelSizeHandle, 1.0f / currentNormWidth.toFloat(), 1.0f / currentNormHeight.toFloat())
+            GLES20.glUniform1f(uTemperatureHandle, cfg.temperature.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uTintHandle, cfg.tint.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uWhitesHandle, cfg.whites.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uBlacksHandle, cfg.blacks.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uMidtonesHandle, cfg.midtones.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uBlackLevelHandle, cfg.blackLevel.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uHighlightRolloffHandle, cfg.highlightRolloff.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uShadowRolloffHandle, cfg.shadowRolloff.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uLocalContrastHandle, cfg.localContrast.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uLumaCurveHandle, cfg.lumaCurve.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uColorTransformHandle, cfg.colorTransform.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uChromaStrengthHandle, cfg.chromaStrength.coerceIn(0f, 2f))
+            GLES20.glUniform1f(uToneMappingStrengthHandle, cfg.toneMappingStrength.coerceIn(0f, 1f))
+            GLES20.glUniform1f(uLumaNoiseReductionHandle, cfg.lumaNoiseReduction.coerceIn(0f, 1f))
+            GLES20.glUniform1f(uChromaNoiseReductionHandle, cfg.chromaNoiseReduction.coerceIn(0f, 1f))
+            GLES20.glUniform1f(uSharpeningHandle, cfg.fineSharpening.coerceIn(0f, 1f))
+            GLES20.glUniform1f(uMicroContrastHandle, cfg.microContrast.coerceIn(-1f, 1f))
+            GLES20.glUniform1f(uOutputGammaHandle, cfg.outputGamma.coerceIn(0.5f, 1.5f))
+
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTextureId)
+
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTextureId)
+
+            val vb = vertexBuffer
+            val tb = texCoordBuffer
+            if (vb != null && tb != null && aPositionHandle >= 0 && aTextureCoordHandle >= 0) {
+                vb.position(0)
+                GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vb)
+                GLES20.glEnableVertexAttribArray(aPositionHandle)
+
+                tb.position(0)
+                GLES20.glVertexAttribPointer(aTextureCoordHandle, 2, GLES20.GL_FLOAT, false, 0, tb)
+                GLES20.glEnableVertexAttribArray(aTextureCoordHandle)
+
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+                GLES20.glDisableVertexAttribArray(aPositionHandle)
+                GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
+            }
+
+            val display = eglDisplay
+            val surface = eglSurface
+            if (display != null && surface != null) {
+                EGLExt.eglPresentationTimeANDROID(display, surface, adjustedPtsNs)
+                EGL14.eglSwapBuffers(display, surface)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error rendering real-time cinema frame on GPU", t)
+        }
+    }
+
+    private fun releaseGlPipeline() {
+        val handler = glHandler
+        val latch = CountDownLatch(1)
+        if (handler != null) {
+            handler.post {
+                try {
+                    if (programId != 0) {
+                        GLES20.glDeleteProgram(programId)
+                        programId = 0
+                    }
+                    if (oesTextureId != 0) {
+                        GLES20.glDeleteTextures(1, intArrayOf(oesTextureId), 0)
+                        oesTextureId = 0
+                    }
+                    if (lutTextureId != 0) {
+                        GLES20.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
+                        lutTextureId = 0
+                    }
+                    val display = eglDisplay
+                    if (display != null && display != EGL14.EGL_NO_DISPLAY) {
+                        try {
+                            EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+                        } catch (_: Throwable) {}
+                        val surface = eglSurface
+                        if (surface != null && surface != EGL14.EGL_NO_SURFACE) {
+                            try { EGL14.eglDestroySurface(display, surface) } catch (_: Throwable) {}
+                            eglSurface = null
+                        }
+                        val context = eglContext
+                        if (context != null && context != EGL14.EGL_NO_CONTEXT) {
+                            try { EGL14.eglDestroyContext(display, context) } catch (_: Throwable) {}
+                            eglContext = null
+                        }
+                        try { EGL14.eglTerminate(display) } catch (_: Throwable) {}
+                        eglDisplay = null
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Error releasing GL resources", t)
+                } finally {
+                    latch.countDown()
+                }
+            }
+            try { latch.await(1000, TimeUnit.MILLISECONDS) } catch (_: Exception) {}
+        }
+        try { glThread?.quitSafely() } catch (_: Exception) {}
+        glThread = null
+        glHandler = null
+
+        cameraSurfaceTexture?.release()
+        cameraSurfaceTexture = null
+        cameraInputSurface?.release()
+        cameraInputSurface = null
+    }
+
+    private fun createGlProgram(): Int {
+        val vertexShaderCode = """
+            uniform mat4 uMVPMatrix;
+            uniform mat4 uSTMatrix;
+            attribute vec4 aPosition;
+            attribute vec4 aTextureCoord;
+            varying vec2 vTextureCoord;
+            void main() {
+                gl_Position = uMVPMatrix * aPosition;
+                vTextureCoord = (uSTMatrix * aTextureCoord).xy;
+            }
+        """.trimIndent()
+
+        val fragmentShaderCode = """
+            #extension GL_OES_EGL_image_external : require
+            precision highp float;
+            varying vec2 vTextureCoord;
+            uniform samplerExternalOES sTexture;
+            uniform sampler2D sLutTexture;
+            uniform mat4 uColorMatrix;
+            uniform vec4 uColorOffset;
+            uniform float uUse3DLut;
+            uniform float uLutSize;
+            uniform float uLutIntensity;
+            uniform float uExposure;
+            uniform float uContrast;
+            uniform float uSaturation;
+            uniform float uWashedOut;
+            uniform float uFilmicOutput;
+            uniform float uShadows;
+            uniform float uHighlights;
+            uniform float uVibrance;
+            uniform float uVibrantGreenIntensity;
+            uniform vec2 uTexelSize;
+            uniform float uTemperature;
+            uniform float uTint;
+            uniform float uWhites;
+            uniform float uBlacks;
+            uniform float uMidtones;
+            uniform float uBlackLevel;
+            uniform float uHighlightRolloff;
+            uniform float uShadowRolloff;
+            uniform float uLocalContrast;
+            uniform float uLumaCurve;
+            uniform float uColorTransform;
+            uniform float uChromaStrength;
+            uniform float uToneMappingStrength;
+            uniform float uLumaNoiseReduction;
+            uniform float uChromaNoiseReduction;
+            uniform float uSharpening;
+            uniform float uMicroContrast;
+            uniform float uOutputGamma;
+
+            vec3 sample3DLut(vec3 color, float lutSize) {
+                float n = lutSize;
+                float b = clamp(color.b, 0.0, 1.0) * (n - 1.0);
+                float slice0 = floor(b);
+                float slice1 = min(slice0 + 1.0, n - 1.0);
+                float bWeight = b - slice0;
+
+                float rCoord = clamp(color.r, 0.0, 1.0) * (n - 1.0);
+                float texHeight = n;
+                float v = (0.5 + clamp(color.g, 0.0, 1.0) * (n - 1.0)) / texHeight;
+
+                float texWidth = n * n;
+                float u0 = (slice0 * n + 0.5 + rCoord) / texWidth;
+                float u1 = (slice1 * n + 0.5 + rCoord) / texWidth;
+
+                vec4 s0 = texture2D(sLutTexture, vec2(u0, v));
+                vec4 s1 = texture2D(sLutTexture, vec2(u1, v));
+
+                return mix(s0.rgb, s1.rgb, bWeight);
+            }
+
+            void main() {
+                vec4 src = texture2D(sTexture, vTextureCoord);
+                vec3 inColor = src.rgb;
+                vec3 cUp = texture2D(sTexture, vTextureCoord + vec2(0.0, -uTexelSize.y)).rgb;
+                vec3 cDown = texture2D(sTexture, vTextureCoord + vec2(0.0, uTexelSize.y)).rgb;
+                vec3 cLeft = texture2D(sTexture, vTextureCoord + vec2(-uTexelSize.x, 0.0)).rgb;
+                vec3 cRight = texture2D(sTexture, vTextureCoord + vec2(uTexelSize.x, 0.0)).rgb;
+
+                // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
+                vec4 graded = uColorMatrix * vec4(inColor, 1.0) + uColorOffset;
+                vec3 c = clamp(graded.rgb, 0.0, 1.0);
+
+                // STAGE 2: 3D LUT SAMPLING & INTENSITY BLENDING
+                if (uUse3DLut > 0.5 && uLutIntensity > 0.001) {
+                    vec3 lutSample = sample3DLut(c, uLutSize);
+                    c = clamp(mix(c, lutSample, uLutIntensity), 0.0, 1.0);
+                }
+
+                // STAGE 3: TONAL & COLOR GRADING CONTROLS
+                // 1. Exposure
+                if (abs(uExposure) > 0.001) {
+                    float expMultiplier = pow(2.0, uExposure * 0.75);
+                    c = clamp(c * expMultiplier, 0.0, 1.0);
+                }
+
+                // 2. White Balance (Temperature & Tint)
+                if (abs(uTemperature) > 0.001 || abs(uTint) > 0.001) {
+                    float tempShift = uTemperature * 0.28;
+                    float tintShift = uTint * 0.22;
+                    c.r = c.r * (1.0 + tempShift) * (1.0 - tintShift * 0.5);
+                    c.g = c.g * (1.0 + tintShift);
+                    c.b = c.b * (1.0 - tempShift) * (1.0 - tintShift * 0.5);
+                    c = clamp(c, 0.0, 1.0);
+                }
+
+                // 3. Black Level Pedestal
+                if (abs(uBlackLevel) > 0.001) {
+                    c = clamp(c + vec3(uBlackLevel * 0.15), 0.0, 1.0);
+                }
+
+                // 4. Washed-Out Black Reduction
+                if (uWashedOut > 0.001) {
+                    float pedestalReduction = -0.10 * uWashedOut;
+                    float contrastBoost = 1.0 + (uWashedOut * 0.28);
+                    c = clamp(0.5 + (c - 0.5) * contrastBoost + pedestalReduction, 0.0, 1.0);
+                }
+
+                // 5. Contrast (S-Curve pivoting around middle-grey)
+                if (abs(uContrast) > 0.001) {
+                    float contrastFactor = 1.0 + uContrast * 0.38;
+                    c = clamp(0.5 + (c - 0.5) * contrastFactor, 0.0, 1.0);
+                }
+
+                // 6. Tonal Zone Sculpting
+                float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+
+                float wBlacks = 1.0 - smoothstep(0.0, 0.25, luma);
+                float deltaBlacks = uBlacks * 0.22 * wBlacks * (1.0 - luma);
+
+                float shadowMask = 1.0 - smoothstep(0.0, 0.65, luma);
+                float deltaShadows = uShadows * 0.22 * shadowMask * (1.0 - luma);
+
+                float wMidtones = 4.0 * luma * (1.0 - luma);
+                float deltaMidtones = uMidtones * 0.25 * wMidtones;
+
+                float highlightMask = smoothstep(0.35, 1.0, luma);
+                float deltaHighlights = uHighlights * 0.22 * highlightMask * luma;
+
+                float wWhites = smoothstep(0.70, 1.0, luma);
+                float deltaWhites = uWhites * 0.25 * wWhites * luma;
+
+                float deltaShadowRolloff = 0.0;
+                if (abs(uShadowRolloff) > 0.001) {
+                    float toeWeight = (1.0 - smoothstep(0.0, 0.38, luma)) * smoothstep(0.0, 0.18, luma);
+                    deltaShadowRolloff = uShadowRolloff * 0.18 * toeWeight;
+                }
+
+                float deltaHighlightRolloff = 0.0;
+                if (abs(uHighlightRolloff) > 0.001) {
+                    float kneeWeight = smoothstep(0.62, 1.0, luma);
+                    deltaHighlightRolloff = -uHighlightRolloff * 0.20 * kneeWeight * (luma - 0.62);
+                }
+
+                float deltaLumaCurve = 0.0;
+                if (abs(uLumaCurve) > 0.001) {
+                    float curveFactor = 1.0 + uLumaCurve * 0.65;
+                    float shapedLuma = (luma < 0.5) ? 
+                        0.5 * pow(2.0 * luma, curveFactor) : 
+                        1.0 - 0.5 * pow(2.0 * (1.0 - luma), curveFactor);
+                    deltaLumaCurve = shapedLuma - luma;
+                }
+
+                c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
+
+                // 7. Color Transform / Matrix Cross-Talk
+                if (abs(uColorTransform) > 0.001) {
+                    vec3 filmColor;
+                    if (uColorTransform > 0.0) {
+                        filmColor.r = 1.08 * c.r - 0.05 * c.g - 0.03 * c.b;
+                        filmColor.g = -0.02 * c.r + 1.06 * c.g - 0.04 * c.b;
+                        filmColor.b = -0.04 * c.r - 0.03 * c.g + 1.07 * c.b;
+                    } else {
+                        filmColor.r = 1.05 * c.r - 0.02 * c.g - 0.03 * c.b;
+                        filmColor.g = -0.05 * c.r + 1.08 * c.g - 0.03 * c.b;
+                        filmColor.b = 0.01 * c.r - 0.03 * c.g + 1.06 * c.b;
+                    }
+                    c = clamp(mix(c, filmColor, abs(uColorTransform)), 0.0, 1.0);
+                }
+
+                // 8. Saturation
+                if (abs(uSaturation - 1.0) > 0.001) {
+                    float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    c = clamp(vec3(curLuma) + (c - vec3(curLuma)) * uSaturation, 0.0, 1.0);
+                }
+
+                // 9. Chroma Strength
+                if (abs(uChromaStrength - 1.0) > 0.001) {
+                    float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    c = clamp(vec3(curLuma) + (c - vec3(curLuma)) * uChromaStrength, 0.0, 1.0);
+                }
+
+                // 10. Skin-Tone Protected Vibrance
+                float lumaPre = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                float rgDiff = c.r - c.g;
+                float gbDiff = c.g - c.b;
+                float rbDiff = c.r - c.b;
+                float skinHueMask = smoothstep(0.015, 0.085, rgDiff) *
+                                    smoothstep(-0.01, 0.045, gbDiff) *
+                                    smoothstep(0.035, 0.13, rbDiff) *
+                                    (1.0 - smoothstep(0.40, 0.65, rgDiff));
+                float skinLumaMask = smoothstep(0.06, 0.18, lumaPre) *
+                                     (1.0 - smoothstep(0.90, 0.99, lumaPre));
+                float skinWeight = clamp(skinHueMask * skinLumaMask, 0.0, 1.0);
+
+                if (abs(uVibrance) > 0.001) {
+                    float maxC = max(c.r, max(c.g, c.b));
+                    float minC = min(c.r, min(c.g, c.b));
+                    float sat = maxC - minC;
+                    float lumaVib = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float skinAtten = (uVibrance > 0.0) ? (1.0 - 0.85 * skinWeight) : 1.0;
+                    float satWeight = (uVibrance > 0.0) ? clamp(1.0 - sat * 0.75, 0.15, 1.0) : 1.0;
+                    float vibScale = 1.0 + uVibrance * 0.65 * satWeight * skinAtten;
+                    c = clamp(vec3(lumaVib) + (c - vec3(lumaVib)) * vibScale, 0.0, 1.0);
+                }
+
+                // 11. Selective Vibrant Green / Foliage LUT
+                if (uVibrantGreenIntensity > 0.001) {
+                    float lumaGreen = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float greenDomR = smoothstep(-0.035, 0.075, c.g - c.r);
+                    float greenDomB = smoothstep(0.015, 0.12, c.g - c.b);
+                    float greenWeight = clamp(greenDomR * greenDomB * (1.0 - skinWeight), 0.0, 1.0);
+
+                    if (greenWeight > 0.001) {
+                        float gw = greenWeight * uVibrantGreenIntensity;
+                        float chromaScale = 1.0 + 0.72 * gw;
+                        vec3 gc = vec3(lumaGreen) + (c - vec3(lumaGreen)) * chromaScale;
+                        float greenExcess = max(0.0, c.g - (c.r + c.b) * 0.5);
+                        gc.g += greenExcess * 0.38 * gw + 0.025 * gw;
+                        gc.r -= greenExcess * 0.18 * gw;
+                        gc.b -= greenExcess * 0.12 * gw;
+                        float foliageContrast = 1.0 + 0.10 * gw;
+                        c = clamp((gc - 0.5) * foliageContrast + 0.5, 0.0, 1.0);
+                    }
+
+                    if (skinWeight > 0.001) {
+                        float sw = skinWeight * uVibrantGreenIntensity;
+                        float skinLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                        float cleanChromaScale = 1.0 - 0.05 * sw;
+                        vec3 sc = vec3(skinLuma) + (c - vec3(skinLuma)) * cleanChromaScale;
+                        float fairLift = 0.052 * sw * (1.0 - skinLuma * 0.25);
+                        float excessOrange = max(0.0, sc.r - sc.g - 0.12);
+                        sc.r = sc.r - excessOrange * 0.12 * sw + fairLift * 0.92;
+                        sc.g = sc.g + fairLift * 1.04;
+                        sc.b = sc.b + fairLift * 1.08;
+                        c = clamp(sc, 0.0, 1.0);
+                    }
+                }
+
+                // 12. Spatial detail / sharpening & noise reduction
+                if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
+                    float lCenter = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float lUp = dot(cUp, vec3(0.2126, 0.7152, 0.0722));
+                    float lDown = dot(cDown, vec3(0.2126, 0.7152, 0.0722));
+                    float lLeft = dot(cLeft, vec3(0.2126, 0.7152, 0.0722));
+                    float lRight = dot(cRight, vec3(0.2126, 0.7152, 0.0722));
+
+                    if (uLumaNoiseReduction > 0.001) {
+                        float wU = exp(-pow((lUp - lCenter) * 12.0, 2.0));
+                        float wD = exp(-pow((lDown - lCenter) * 12.0, 2.0));
+                        float wL = exp(-pow((lLeft - lCenter) * 12.0, 2.0));
+                        float wR = exp(-pow((lRight - lCenter) * 12.0, 2.0));
+                        float wSum = 1.0 + wU + wD + wL + wR;
+                        float smoothLuma = (lCenter + lUp * wU + lDown * wD + lLeft * wL + lRight * wR) / wSum;
+                        float lumaDelta = (smoothLuma - lCenter) * uLumaNoiseReduction;
+                        c = clamp(c + vec3(lumaDelta), 0.0, 1.0);
+                    }
+
+                    if (uChromaNoiseReduction > 0.001) {
+                        vec3 chrCenter = c - vec3(dot(c, vec3(0.2126, 0.7152, 0.0722)));
+                        vec3 chrUp = cUp - vec3(lUp);
+                        vec3 chrDown = cDown - vec3(lDown);
+                        vec3 chrLeft = cLeft - vec3(lLeft);
+                        vec3 chrRight = cRight - vec3(lRight);
+                        float wU = exp(-pow((lUp - lCenter) * 8.0, 2.0));
+                        float wD = exp(-pow((lDown - lCenter) * 8.0, 2.0));
+                        float wL = exp(-pow((lLeft - lCenter) * 8.0, 2.0));
+                        float wR = exp(-pow((lRight - lCenter) * 8.0, 2.0));
+                        float wSum = 1.0 + wU + wD + wL + wR;
+                        vec3 smoothChroma = (chrCenter + chrUp * wU + chrDown * wD + chrLeft * wL + chrRight * wR) / wSum;
+                        float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                        c = clamp(vec3(curLuma) + mix(chrCenter, smoothChroma, uChromaNoiseReduction), 0.0, 1.0);
+                    }
+                }
+
+                if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
+                    vec3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
+                    vec3 highPass = c - neighborAvg;
+
+                    if (uSharpening > 0.001) {
+                        c = clamp(c + highPass * (uSharpening * 2.2), 0.0, 1.0);
+                    }
+
+                    if (abs(uMicroContrast) > 0.001) {
+                        vec3 microDetail = sign(highPass) * pow(abs(highPass), vec3(0.80));
+                        c = clamp(c + microDetail * (uMicroContrast * 0.9), 0.0, 1.0);
+                    }
+
+                    if (abs(uLocalContrast) > 0.001) {
+                        float lCur = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                        float lAvg = dot(neighborAvg, vec3(0.2126, 0.7152, 0.0722));
+                        float localDelta = (lCur - lAvg) * uLocalContrast * 0.85;
+                        c = clamp(c + vec3(localDelta), 0.0, 1.0);
+                    }
+                }
+
+                // STAGE 4: OUTPUT TRANSFORM / TONE MAPPING / OUTPUT GAMMA
+                if (uToneMappingStrength > 0.001) {
+                    vec3 aces = clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
+                    c = mix(c, aces, uToneMappingStrength);
+                }
+
+                if (uFilmicOutput > 0.5) {
+                    float highlightCompression = 0.975;
+                    float inkyBlackAnchor = -0.0137;
+                    c = clamp(c * highlightCompression + inkyBlackAnchor, 0.0, 1.0);
+                }
+
+                if (abs(uOutputGamma - 1.0) > 0.001) {
+                    c = pow(clamp(c, 0.0, 1.0), vec3(uOutputGamma));
+                }
+
+                gl_FragColor = vec4(c, src.a);
+            }
+        """.trimIndent()
+
+        val vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vertexShaderCode)
+        val fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentShaderCode)
+        val program = GLES20.glCreateProgram()
+        GLES20.glAttachShader(program, vertexShader)
+        GLES20.glAttachShader(program, fragmentShader)
+        GLES20.glLinkProgram(program)
+        val linkStatus = IntArray(1)
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0)
+        if (linkStatus[0] != GLES20.GL_TRUE) {
+            val error = GLES20.glGetProgramInfoLog(program)
+            GLES20.glDeleteProgram(program)
+            throw RuntimeException("Could not link program: $error")
+        }
+        return program
+    }
+
+    private fun loadShader(type: Int, shaderCode: String): Int {
+        val shader = GLES20.glCreateShader(type)
+        GLES20.glShaderSource(shader, shaderCode)
+        GLES20.glCompileShader(shader)
+        val compiled = IntArray(1)
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0)
+        if (compiled[0] == 0) {
+            val error = GLES20.glGetShaderInfoLog(shader)
+            GLES20.glDeleteShader(shader)
+            throw RuntimeException("Could not compile shader $type: $error")
+        }
+        return shader
     }
 }
