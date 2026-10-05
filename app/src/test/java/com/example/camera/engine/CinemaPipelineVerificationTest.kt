@@ -609,6 +609,76 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
+    fun testCinemaTexMatrixPortraitUprightAndNonStretched() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        // Standard Android Camera2 unrotated SurfaceTexture transform (1:1 with OpenGL Y-flip):
+        // col 0 = (1, 0, 0, 0), col 1 = (0, -1, 0, 0), col 2 = (0, 0, 1, 0), col 3 = (0, 1, 0, 1)
+        val stMatrixStandard = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 0, // Portrait
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix
+        )
+
+        // For back camera in portrait, the 2x2 affine submatrix must have determinant = +1.0 (pure rotation without reflection)
+        // m00 = outMatrix[0], m10 = outMatrix[1], m01 = outMatrix[4], m11 = outMatrix[5]
+        val det = outMatrix[0] * outMatrix[5] - outMatrix[4] * outMatrix[1]
+        assertEquals("Transform must be a pure rotation with determinant +1.0, got $det", 1.0f, det, 0.001f)
+
+        // Top edge of screen (u=0.5, v=1.0) must sample from top of scene (s=1.0)
+        // OutMatrix transforms (u, v, 0, 1) into (texX, texY)
+        val topTexX = outMatrix[0] * 0.5f + outMatrix[4] * 1.0f + outMatrix[12]
+        assertEquals("Top of viewport must map to top of camera sensor (texX = 1.0)", 1.0f, topTexX, 0.001f)
+
+        // Bottom edge of screen (u=0.5, v=0.0) must sample from bottom of scene (s=0.0)
+        val bottomTexX = outMatrix[0] * 0.5f + outMatrix[4] * 0.0f + outMatrix[12]
+        assertEquals("Bottom of viewport must map to bottom of camera sensor (texX = 0.0)", 0.0f, bottomTexX, 0.001f)
+    }
+
+    @Test
+    fun testCinemaTexMatrixAlreadyRotatedMatchesStMatrix() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        // Simulated stMatrix that already contains ROT_90:
+        val stMatrixRotated = floatArrayOf(
+            0f, -1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixRotated,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 0,
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix
+        )
+
+        // When stMatrix already has ROT_90, localTexMatrix is Identity, so outMatrix == stMatrix
+        for (i in 0 until 16) {
+            assertEquals("Index $i should match stMatrix", stMatrixRotated[i], outMatrix[i], 0.001f)
+        }
+    }
+
+    @Test
     fun testHlg10ProfileTonemapAndRec2020Gamut() {
         val config = CinemaConfig(
             colorProfile = CinemaColorProfile.HLG10,

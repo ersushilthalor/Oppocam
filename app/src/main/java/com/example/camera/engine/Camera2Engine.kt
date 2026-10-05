@@ -5842,7 +5842,13 @@ class Camera2Engine(private val context: Context) {
                     }
                 }
                 isSoftwareCinemaRecording = true
-                val cinemaOrientationHint = getVideoOrientationHint()
+                val isFront = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
+                val sensorOrientation = try {
+                    chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isFront) 270 else 90)
+                } catch (_: Exception) {
+                    if (isFront) 270 else 90
+                }
+                val cinemaOrientationHint = 0
                 val cinemaTargetBitDepth = when (cinemaCodec) {
                     CinemaCodec.PRORES -> LogBitDepth.BIT_10
                     else -> cinemaConfig.value.logBitDepth
@@ -5862,7 +5868,10 @@ class Camera2Engine(private val context: Context) {
                         colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace,
                         isSource10Bit = isCameraSource10Bit,
                         cinemaConfig = cinemaConfig.value,
-                        rec2020Params = rec2020AutoToneParams.value
+                        rec2020Params = rec2020AutoToneParams.value,
+                        isFront = isFront,
+                        sensorOrientation = sensorOrientation,
+                        deviceRotation = currentRot
                     )
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed starting software cinema recording: ${t.message}", t)

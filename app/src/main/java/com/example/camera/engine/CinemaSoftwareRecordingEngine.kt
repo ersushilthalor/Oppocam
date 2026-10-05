@@ -197,7 +197,10 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         colorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709,
         isSource10Bit: Boolean = false,
         cinemaConfig: CinemaConfig? = null,
-        rec2020Params: Rec2020AutoToneParams? = null
+        rec2020Params: Rec2020AutoToneParams? = null,
+        isFront: Boolean = false,
+        sensorOrientation: Int = 90,
+        deviceRotation: Int = 0
     ): Surface {
         val isHlg10 = colorProfile == com.example.camera.model.CinemaColorProfile.HLG10
         val effectiveCodec = if (isHlg10 && codec == CinemaCodec.H264) CinemaCodec.H265 else codec
@@ -225,12 +228,17 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             pendingAudioSamples.clear()
         }
 
-        val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (effectiveCodec == CinemaCodec.PRORES)
-        val normWidth = maxOf(width, height)
-        val normHeight = minOf(width, height)
+        isFrontFacing = isFront
+        cameraSensorOrientation = sensorOrientation
+        activeDeviceRotation = deviceRotation
 
-        currentNormWidth = normWidth
-        currentNormHeight = normHeight
+        val is10Bit = (bitDepth == LogBitDepth.BIT_10) || (effectiveCodec == CinemaCodec.PRORES)
+        // Ensure dimensions are even numbers for compliant hardware encoders, preserving portrait/landscape aspect ratio
+        val safeWidth = (width and 1.inv()).coerceAtLeast(320)
+        val safeHeight = (height and 1.inv()).coerceAtLeast(240)
+
+        currentNormWidth = safeWidth
+        currentNormHeight = safeHeight
         currentCinemaConfig = cinemaConfig
         currentRec2020Params = rec2020Params
         firstFramePtsNs = -1L
@@ -240,8 +248,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             val session = com.example.camera.engine.prores.ProResSoftwareRecordingSession(
                 context = context,
                 destFile = destFile,
-                width = normWidth,
-                height = normHeight,
+                width = maxOf(safeWidth, safeHeight),
+                height = minOf(safeWidth, safeHeight),
                 fps = fps,
                 isAudioEnabled = isAudioEnabled,
                 colorProfile = colorProfile,
@@ -255,14 +263,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         // Validate VP9 availability (must support Surface input for Camera2 frames, resolution, and fps)
         if (effectiveCodec == CinemaCodec.VP9) {
             val supported = DeviceCompatibilityManager.isVp9EncodingSupported(
-                width = normWidth,
-                height = normHeight,
+                width = maxOf(safeWidth, safeHeight),
+                height = minOf(safeWidth, safeHeight),
                 fps = fps,
                 requireSurface = true
             )
             if (!supported) {
                 isRecording.set(false)
-                throw IllegalStateException("Google VP9 recording is not supported for ${normWidth}x${normHeight} @ ${fps}fps with Surface input on this device")
+                throw IllegalStateException("Google VP9 recording is not supported for ${safeWidth}x${safeHeight} @ ${fps}fps with Surface input on this device")
             }
             if (bitDepth == LogBitDepth.BIT_10) {
                 val supported10Bit = DeviceCompatibilityManager.isVp9Profile2Supported()
@@ -326,7 +334,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         // 3. Setup Video MediaCodec
         val inputSurface = try {
-            setupVideoPipeline(normWidth, normHeight, fps, bitrate, effectiveCodec, is10Bit, isWebm)
+            setupVideoPipeline(safeWidth, safeHeight, fps, bitrate, effectiveCodec, is10Bit, isWebm)
         } catch (e: Exception) {
             Log.e(TAG, "Video pipeline setup failed", e)
             synchronized(muxerLock) {
@@ -362,8 +370,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val cameraSurface = try {
             setupRealtimeGlPipeline(
                 encoderSurface = inputSurface,
-                normWidth = normWidth,
-                normHeight = normHeight,
+                normWidth = safeWidth,
+                normHeight = safeHeight,
                 config = cinemaConfig,
                 rec2020Params = rec2020Params
             )
@@ -1227,6 +1235,16 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var currentNormHeight: Int = 1080
     private var firstFramePtsNs: Long = -1L
 
+    private var isFrontFacing: Boolean = false
+    private var cameraSensorOrientation: Int = 90
+    private var activeDeviceRotation: Int = 0
+    private var cameraBufferWidth: Int = 1920
+    private var cameraBufferHeight: Int = 1080
+
+    private val localTexMatrix = FloatArray(16)
+    private val matrixValues = FloatArray(9)
+    private val finalTexMatrix = FloatArray(16)
+
     fun updateLiveCinemaConfig(newConfig: CinemaConfig, newRec2020Params: Rec2020AutoToneParams?) {
         currentCinemaConfig = newConfig
         currentRec2020Params = newRec2020Params
@@ -1389,8 +1407,13 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
                 Matrix.setIdentityM(mvpMatrix, 0)
 
+                val camBufW = maxOf(normWidth, normHeight)
+                val camBufH = minOf(normWidth, normHeight)
+                cameraBufferWidth = camBufW
+                cameraBufferHeight = camBufH
+
                 val st = SurfaceTexture(oesTextureId).apply {
-                    setDefaultBufferSize(normWidth, normHeight)
+                    setDefaultBufferSize(camBufW, camBufH)
                     setOnFrameAvailableListener({
                         onCameraFrameAvailable()
                     }, glHandler)
@@ -1454,6 +1477,118 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, lutBitmap, 0)
     }
 
+    internal fun computeCameraTexMatrix(
+        stMatrix: FloatArray,
+        isFront: Boolean,
+        sensorOrientation: Int,
+        deviceRotation: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        camBufferWidth: Int,
+        camBufferHeight: Int,
+        outMatrix: FloatArray
+    ) {
+        val m0 = stMatrix[0]
+        val m1 = stMatrix[1]
+        val m4 = stMatrix[4]
+        val m5 = stMatrix[5]
+
+        val offDiag = kotlin.math.abs(m1) + kotlin.math.abs(m4)
+        val diag = kotlin.math.abs(m0) + kotlin.math.abs(m5)
+        // When Camera2 streams to a SurfaceTexture, Camera3OutputStream sets the ANativeWindow
+        // buffer transform (ROT_90 / ROT_270), making off-diagonal terms (m1, m4) dominant.
+        val isStRotated90 = offDiag > diag
+
+        val isIdentitySt = kotlin.math.abs(m0 - 1f) < 1e-4f &&
+            kotlin.math.abs(m5 - 1f) < 1e-4f &&
+            offDiag < 1e-4f &&
+            kotlin.math.abs(stMatrix[13]) < 1e-4f
+        val det = m0 * m5 - m1 * m4
+        val isStMirrored = !isIdentitySt && (offDiag + diag > 0.1f) && (det > 0f)
+
+        val normRot = ((deviceRotation % 360) + 360) % 360
+        // Natural camera sensor rotation relative to upright device
+        val sensorRot = if (isFront) {
+            (sensorOrientation + normRot) % 360
+        } else {
+            (sensorOrientation - normRot + 360) % 360
+        }
+
+        // If stMatrix already contains ROT_90 baked in from camera HAL, subtract 90°
+        val effRot = if (isStRotated90) {
+            (sensorRot - 90 + 360) % 360
+        } else {
+            sensorRot
+        }
+
+        val isUprightPortrait = (sensorRot == 90 || sensorRot == 270)
+        val camLong = maxOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val camShort = minOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val uprightCamW = if (isUprightPortrait) camShort else camLong
+        val uprightCamH = if (isUprightPortrait) camLong else camShort
+        val camAspect = uprightCamW / uprightCamH
+
+        val targetAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
+        val scaleX: Float
+        val scaleY: Float
+        if (targetAspect > camAspect) {
+            // Viewport is wider than upright camera frame -> fit width, crop height uniformly
+            scaleX = 1.0f
+            scaleY = camAspect / targetAspect
+        } else {
+            // Viewport is taller/narrower than upright camera frame -> fit height, crop width uniformly
+            scaleX = targetAspect / camAspect
+            scaleY = 1.0f
+        }
+
+        val flipH = (isFront != isStMirrored)
+        val sx = if (flipH) -scaleX else scaleX
+        val sy = scaleY
+
+        localTexMatrix.fill(0f)
+        localTexMatrix[10] = 1f
+        localTexMatrix[15] = 1f
+
+        when (effRot) {
+            0 -> {
+                // Landscape upright: s = u, t = v
+                localTexMatrix[0] = sx
+                localTexMatrix[5] = sy
+                localTexMatrix[12] = 0.5f - 0.5f * sx
+                localTexMatrix[13] = 0.5f - 0.5f * sy
+            }
+            90 -> {
+                // Portrait upright: s = v, t = u
+                localTexMatrix[1] = sx
+                localTexMatrix[4] = sy
+                localTexMatrix[12] = 0.5f - 0.5f * sy
+                localTexMatrix[13] = 0.5f - 0.5f * sx
+            }
+            180 -> {
+                // Landscape inverted: s = 1 - u, t = 1 - v
+                localTexMatrix[0] = -sx
+                localTexMatrix[5] = -sy
+                localTexMatrix[12] = 0.5f + 0.5f * sx
+                localTexMatrix[13] = 0.5f + 0.5f * sy
+            }
+            270 -> {
+                // Portrait inverted: s = 1 - v, t = 1 - u
+                localTexMatrix[1] = -sx
+                localTexMatrix[4] = -sy
+                localTexMatrix[12] = 0.5f + 0.5f * sy
+                localTexMatrix[13] = 0.5f + 0.5f * sx
+            }
+            else -> {
+                localTexMatrix[0] = sx
+                localTexMatrix[5] = sy
+                localTexMatrix[12] = 0.5f - 0.5f * sx
+                localTexMatrix[13] = 0.5f - 0.5f * sy
+            }
+        }
+
+        Matrix.multiplyMM(outMatrix, 0, stMatrix, 0, localTexMatrix, 0)
+    }
+
     private fun onCameraFrameAvailable() {
         val st = cameraSurfaceTexture ?: return
         try {
@@ -1477,8 +1612,20 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
             GLES20.glUseProgram(programId)
 
+            computeCameraTexMatrix(
+                stMatrix = stMatrix,
+                isFront = isFrontFacing,
+                sensorOrientation = cameraSensorOrientation,
+                deviceRotation = activeDeviceRotation,
+                viewportWidth = currentNormWidth,
+                viewportHeight = currentNormHeight,
+                camBufferWidth = cameraBufferWidth,
+                camBufferHeight = cameraBufferHeight,
+                outMatrix = finalTexMatrix
+            )
+
             GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
-            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
+            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
             GLES20.glUniformMatrix4fv(uColorMatrixHandle, 1, false, glColorMat, 0)
             GLES20.glUniform4fv(uColorOffsetHandle, 1, glColorOffset, 0)
 
