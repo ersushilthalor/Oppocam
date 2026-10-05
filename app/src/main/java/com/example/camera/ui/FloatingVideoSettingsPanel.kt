@@ -1,40 +1,34 @@
 package com.example.camera.ui
 
 import androidx.compose.animation.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Videocam
-import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material.icons.outlined.Camera
-import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.*
+import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.camera.model.CameraResolution
-import com.example.camera.ui.components.FrostedGlassBox
+import com.example.camera.ui.components.FloatingSelectorDefaults
+import com.example.camera.ui.components.HorizontalFloatingSelectorCard
 
 /**
- * Liquid Glass Floating Video Settings Panel
- * Consistent with Cinema Mode Liquid Glass styling:
- * - Translucent glass background with specular sheen
- * - Rounded corners (26.dp) and natural depth elevation
- * - Modern, clean resolution, framerate, and stabilization selectors
+ * Video Mode Resolution & FPS Floating Window
+ * Recreates the exact compact horizontal floating-card design shown in Screenshot_20261005-105022_YouTube~2.jpg:
+ * - Rounded frosted glass card floating over the preview
+ * - Row 1: Size → 8K → UHD → FHD → HD
+ * - Row 2: FPS → 60 → 30 (aligned right underneath 8K and UHD)
+ * - Row 3: Bottom centered descriptive text ("Ultra HD resolution", etc.)
+ * - Active selections highlighted in yellow/gold
  */
 @Composable
 fun FloatingVideoSettingsPanel(
@@ -51,329 +45,177 @@ fun FloatingVideoSettingsPanel(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val accentColor = Color(0xFFFFD54F) // Master camera gold accent
+    val is8K = currentResolution?.let { (it.width == 7680 || it.height == 7680) } == true
+    val isFhd = currentResolution?.let { (it.width == 1920 || it.height == 1920) } == true
+    val isHd = currentResolution?.let { (it.width == 1280 || it.height == 1280) } == true
+    val isUhd = (currentResolution?.let { (it.width == 3840 || it.height == 3840) } == true) || (!is8K && !isFhd && !isHd)
+
+    val descriptionText = when {
+        is8K -> "8K UHD resolution"
+        isFhd -> "Full HD resolution"
+        isHd -> "HD resolution"
+        else -> "Ultra HD resolution"
+    }
 
     AnimatedVisibility(
         visible = isOpen,
-        enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
-        exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+        enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(150)) +
+                slideInVertically(initialOffsetY = { -it / 2 }),
+        exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(120)) +
+                slideOutVertically(targetOffsetY = { -it / 2 }),
         modifier = modifier
     ) {
-        FrostedGlassBox(
-            modifier = Modifier
-                .wrapContentWidth()
-                .widthIn(min = 270.dp, max = 330.dp)
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .testTag("floating_video_settings_panel"),
-            shape = RoundedCornerShape(20.dp),
-            elevation = 14.dp,
-            baseAlpha = 0.82f,
-            baseTint = Color(0xFF0F121C)
+        HorizontalFloatingSelectorCard(
+            modifier = Modifier.testTag("floating_video_settings_panel")
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
+                    .padding(horizontal = 18.dp, vertical = 14.dp)
             ) {
-                // Header: Mode title, accent dot & circular dismiss button
+                // Row 1: Size -> 8K -> UHD -> FHD -> HD
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(5.dp)
-                                .clip(CircleShape)
-                                .background(accentColor)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "VIDEO",
-                            color = Color.White,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 1.2.sp
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "FORMAT",
-                            color = accentColor,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.8.sp
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.08f))
-                            .clickable { onDismiss() }
-                            .testTag("video_settings_close"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = "Close Video Settings",
-                            tint = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
-                }
-
-                val appearance = com.example.camera.ui.components.LocalFloatingWindowAppearance.current
-
-                if (appearance.showVideoResolution) {
-                    Spacer(modifier = Modifier.height(7.dp))
-
-                    // Section 1: Resolution Selector
-                    VideoPanelSectionHeader(
-                        title = "RESOLUTION",
-                        badge = when {
-                            currentResolution?.width == 3840 || currentResolution?.height == 3840 -> "4K UHD"
-                            currentResolution?.width == 7680 || currentResolution?.height == 7680 -> "8K MAX"
-                            currentResolution?.width == 1920 || currentResolution?.height == 1920 -> "1080p FHD"
-                            currentResolution?.width == 1280 || currentResolution?.height == 1280 -> "720p HD"
-                            else -> "4K UHD"
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(5.dp))
-
-                    val resolutionOptions = listOf(
-                        "720p" to CameraResolution(1280, 720),
-                        "1080p" to CameraResolution(1920, 1080),
-                        "4K" to CameraResolution(3840, 2160),
-                        "8K" to CameraResolution(7680, 4320)
+                    Text(
+                        text = "Size",
+                        color = FloatingSelectorDefaults.LabelColor,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.width(46.dp)
                     )
 
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        resolutionOptions.forEach { (label, res) ->
-                            val isSelected = currentResolution?.let {
-                                (it.width == res.width && it.height == res.height) ||
-                                (it.width == res.height && it.height == res.width)
-                            } ?: (label == "4K")
+                        val sizeOptions = listOf(
+                            Triple("8K", CameraResolution(7680, 4320), is8K),
+                            Triple("UHD", CameraResolution(3840, 2160), isUhd),
+                            Triple("FHD", CameraResolution(1920, 1080), isFhd),
+                            Triple("HD", CameraResolution(1280, 720), isHd)
+                        )
 
-                            VideoGlassChip(
-                                label = label,
-                                isSelected = isSelected,
-                                accentColor = accentColor,
-                                onClick = { onResolutionSelected(res) },
-                                testTag = "res_option_$label"
-                            )
-                        }
-                    }
-                }
-
-                if (appearance.showVideoFps) {
-                    Spacer(modifier = Modifier.height(7.dp))
-
-                    // Section 2: Frame Rate Selector
-                    VideoPanelSectionHeader(
-                        title = "FRAME RATE",
-                        badge = "${currentFps} fps"
-                    )
-
-                    Spacer(modifier = Modifier.height(5.dp))
-
-                    val fpsOptions = listOf(
-                        "24fps" to 24,
-                        "30fps" to 30,
-                        "60fps" to 60,
-                        "120fps" to 120
-                    )
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        fpsOptions.forEach { (label, fps) ->
-                            val isSelected = currentFps == fps
-
-                            VideoGlassChip(
-                                label = label,
-                                isSelected = isSelected,
-                                accentColor = accentColor,
-                                onClick = { onFpsSelected(fps) },
-                                testTag = "fps_option_$label"
-                            )
-                        }
-                    }
-                }
-
-                if (appearance.showVideoStabilization) {
-                    Spacer(modifier = Modifier.height(7.dp))
-
-                    // Section 3: Ultra Steady Gyro Stabilization
-                    VideoPanelSectionHeader(
-                        title = "STABILIZATION",
-                        badge = if (isUltraStabilizationEnabled) "ULTRA GYRO" else "STANDARD"
-                    )
-
-                    Spacer(modifier = Modifier.height(5.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (isUltraStabilizationEnabled) {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            accentColor.copy(alpha = 0.16f),
-                                            accentColor.copy(alpha = 0.06f)
-                                        )
-                                    )
-                                } else {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.White.copy(alpha = 0.05f),
-                                            Color.White.copy(alpha = 0.02f)
-                                        )
-                                    )
-                                }
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = if (isUltraStabilizationEnabled) accentColor.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.10f),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable { onUltraStabilizationToggle() }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("ultra_stab_toggle")
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                        sizeOptions.forEach { (label, res, isSelected) ->
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Text(
-                                    text = "Ultra Steady Gimbal Mode",
-                                    color = if (isUltraStabilizationEnabled) accentColor else Color.White,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = if (isUltraStabilizationEnabled) "OIS + EIS anti-shake active" else "Standard stabilization",
-                                    color = Color.White.copy(alpha = 0.60f),
-                                    fontSize = 9.5.sp
+                                    text = label,
+                                    color = if (isSelected) FloatingSelectorDefaults.GoldAccent else FloatingSelectorDefaults.TextColor,
+                                    fontSize = 14.5.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    letterSpacing = 0.2.sp,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = ripple(bounded = false, radius = 22.dp)
+                                        ) {
+                                            onResolutionSelected(res)
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 5.dp)
+                                        .testTag("res_option_$label")
                                 )
                             }
-
-                            Switch(
-                                checked = isUltraStabilizationEnabled,
-                                onCheckedChange = { onUltraStabilizationToggle() },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = accentColor,
-                                    checkedTrackColor = accentColor.copy(alpha = 0.35f),
-                                    uncheckedThumbColor = Color.White.copy(alpha = 0.65f),
-                                    uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
-                                )
-                            )
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Row 2: FPS -> 60 -> 30 (strictly aligned in columns under 8K and UHD)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "FPS",
+                        color = FloatingSelectorDefaults.LabelColor,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.width(46.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Slot 1 (under 8K): 60 FPS
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val is60 = currentFps == 60
+                            Text(
+                                text = "60",
+                                color = if (is60) FloatingSelectorDefaults.GoldAccent else FloatingSelectorDefaults.TextColor,
+                                fontSize = 14.5.sp,
+                                fontWeight = if (is60) FontWeight.Bold else FontWeight.SemiBold,
+                                letterSpacing = 0.2.sp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = ripple(bounded = false, radius = 22.dp)
+                                    ) {
+                                        onFpsSelected(60)
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                    .testTag("fps_option_60")
+                            )
+                        }
+
+                        // Slot 2 (under UHD): 30 FPS
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val is30 = currentFps != 60 // defaults to 30 as shown in reference
+                            Text(
+                                text = "30",
+                                color = if (is30) FloatingSelectorDefaults.GoldAccent else FloatingSelectorDefaults.TextColor,
+                                fontSize = 14.5.sp,
+                                fontWeight = if (is30) FontWeight.Bold else FontWeight.SemiBold,
+                                letterSpacing = 0.2.sp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = ripple(bounded = false, radius = 22.dp)
+                                    ) {
+                                        onFpsSelected(30)
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                    .testTag("fps_option_30")
+                            )
+                        }
+
+                        // Slot 3 (under FHD): Spacer for alignment
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        // Slot 4 (under HD): Spacer for alignment
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Row 3: Descriptive text exactly matching reference screenshot
+                Text(
+                    text = descriptionText,
+                    color = FloatingSelectorDefaults.DescColor,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Normal,
+                    letterSpacing = 0.2.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("video_resolution_description")
+                )
             }
         }
-    }
-}
-
-@Composable
-private fun VideoPanelSectionHeader(
-    title: String,
-    badge: String? = null
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .width(2.5.dp)
-                    .height(9.dp)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(Color(0xFFFFD54F))
-            )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-                text = title,
-                color = Color.White.copy(alpha = 0.85f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 0.8.sp
-            )
-        }
-
-        if (badge != null) {
-            Text(
-                text = badge,
-                color = Color(0xFFFFD54F),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
-}
-
-@Composable
-private fun VideoGlassChip(
-    label: String,
-    isSelected: Boolean,
-    accentColor: Color,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                if (isSelected) {
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            accentColor.copy(alpha = 0.25f),
-                            accentColor.copy(alpha = 0.10f)
-                        )
-                    )
-                } else {
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.06f),
-                            Color.White.copy(alpha = 0.02f)
-                        )
-                    )
-                }
-            )
-            .border(
-                width = if (isSelected) 1.2.dp else 0.8.dp,
-                color = if (isSelected) accentColor else Color.White.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 11.dp, vertical = 6.dp)
-            .testTag(testTag),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = if (isSelected) accentColor else Color.White.copy(alpha = 0.85f),
-            fontSize = 11.5.sp,
-            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-            letterSpacing = 0.3.sp
-        )
     }
 }

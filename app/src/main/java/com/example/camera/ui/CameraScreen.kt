@@ -14,6 +14,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -199,6 +200,12 @@ fun CameraScreen(
     if (isEvControlOpen) {
         BackHandler {
             viewModel.setEvControlOpen(false)
+        }
+    }
+
+    if (isVideoSettingsPanelOpen) {
+        BackHandler {
+            viewModel.setVideoSettingsPanelOpen(false)
         }
     }
 
@@ -663,6 +670,7 @@ fun CameraScreen(
             evStepSize = capabilities.exposureCompensationStep,
             onVideoQualityClick = { viewModel.cycleVideoQuality() },
             onVideoSettingsClick = { viewModel.toggleVideoSettingsPanel() },
+            onCinemaResolutionClick = { viewModel.toggleVideoSettingsPanel() },
             onToggleMegapixelMode = { viewModel.togglePhotoMegapixelMode() },
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
@@ -723,16 +731,40 @@ fun CameraScreen(
             )
         }
 
+        // Dismiss barrier behind floating windows to close them when tapping on the camera preview
+        val isAnyFloatingOverlayOpen = (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
+                (isLogProfileWindowOpen && cameraMode == CameraMode.CINEMA) ||
+                (isLutWindowOpen && cameraMode == CameraMode.CINEMA) ||
+                isEvControlOpen
+        if (isAnyFloatingOverlayOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        viewModel.setVideoSettingsPanelOpen(false)
+                        viewModel.setLogProfileWindowOpen(false)
+                        viewModel.setLutWindowOpen(false)
+                        viewModel.setEvControlOpen(false)
+                    }
+            )
+        }
+
         // 2b. Floating Frosted Video Settings Panel (Resolution & Frame Rate)
-        if (cameraMode == CameraMode.VIDEO) {
+        if (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) {
             FloatingVideoSettingsPanel(
                 isOpen = isVideoSettingsPanelOpen,
-                currentResolution = selectedVideoResolution,
+                currentResolution = if (cameraMode == CameraMode.CINEMA) cinemaConfig.selectedResolution ?: selectedVideoResolution else selectedVideoResolution,
                 currentFps = videoFps,
                 isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
                 selectedVideoPipeline = selectedVideoPipeline,
                 onResolutionSelected = { res ->
                     viewModel.selectVideoResolution(res)
+                    if (cameraMode == CameraMode.CINEMA) {
+                        viewModel.updateCinemaConfig(cinemaConfig.copy(selectedResolution = res))
+                    }
                 },
                 onFpsSelected = { fps ->
                     viewModel.setVideoFps(fps)
