@@ -125,6 +125,9 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
 
     // Trajectory recording for video capture
     private val isRecordingTrajectory = AtomicBoolean(false)
+    private val isTrajectoryPaused = AtomicBoolean(false)
+    private var pausedDurationNanos = 0L
+    private var pauseStartNanos = 0L
     private var recordingStartNanos = 0L
     private val recordedTrajectory = ConcurrentLinkedDeque<TrajectoryPoint>()
 
@@ -182,6 +185,9 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
      */
     fun startRecordingTrajectory() {
         recordedTrajectory.clear()
+        isTrajectoryPaused.set(false)
+        pausedDurationNanos = 0L
+        pauseStartNanos = 0L
         recordingStartNanos = SystemClock.elapsedRealtimeNanos()
         isRecordingTrajectory.set(true)
         // Record initial anchor point at 0 us
@@ -189,13 +195,31 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
         Log.i(TAG, "Started recording horizon lock trajectory for video")
     }
 
+    fun pauseRecordingTrajectory() {
+        if (isRecordingTrajectory.get() && isTrajectoryPaused.compareAndSet(false, true)) {
+            pauseStartNanos = SystemClock.elapsedRealtimeNanos()
+            Log.d(TAG, "Horizon lock trajectory recording paused")
+        }
+    }
+
+    fun resumeRecordingTrajectory() {
+        if (isRecordingTrajectory.get() && isTrajectoryPaused.compareAndSet(true, false)) {
+            val delta = SystemClock.elapsedRealtimeNanos() - pauseStartNanos
+            if (delta > 0L) {
+                pausedDurationNanos += delta
+            }
+            Log.d(TAG, "Horizon lock trajectory recording resumed")
+        }
+    }
+
     /**
      * Stops trajectory recording and returns an immutable list of timestamped roll and translation values.
      */
     fun stopRecordingTrajectory(): List<TrajectoryPoint> {
         isRecordingTrajectory.set(false)
+        isTrajectoryPaused.set(false)
         val nowNs = SystemClock.elapsedRealtimeNanos()
-        val relTimeUs = if (recordingStartNanos > 0L) ((nowNs - recordingStartNanos) / 1000L).coerceAtLeast(0L) else 0L
+        val relTimeUs = if (recordingStartNanos > 0L) ((nowNs - recordingStartNanos - pausedDurationNanos) / 1000L).coerceAtLeast(0L) else 0L
         recordedTrajectory.add(TrajectoryPoint(relTimeUs, smoothedRoll, smoothedNormX, smoothedNormY))
         val list = recordedTrajectory.toList()
         Log.i(TAG, "Stopped recording horizon lock trajectory. Samples collected: ${list.size}")
@@ -297,9 +321,9 @@ class StableActionHorizonEngine(private val context: Context) : SensorEventListe
     }
 
     private fun recordCurrentTrajectorySample(timestampNanos: Long) {
-        if (isRecordingTrajectory.get()) {
+        if (isRecordingTrajectory.get() && !isTrajectoryPaused.get()) {
             val nowNs = SystemClock.elapsedRealtimeNanos()
-            val relTimeUs = ((nowNs - recordingStartNanos) / 1000L).coerceAtLeast(0L)
+            val relTimeUs = ((nowNs - recordingStartNanos - pausedDurationNanos) / 1000L).coerceAtLeast(0L)
             recordedTrajectory.add(TrajectoryPoint(relTimeUs, smoothedRoll, smoothedNormX, smoothedNormY))
         }
     }

@@ -152,6 +152,7 @@ fun CameraScreen(
     val sensorOrientation by viewModel.engine.sensorOrientation.collectAsStateWithLifecycle()
     val storageStats by viewModel.engine.storageStats.collectAsStateWithLifecycle()
     val isRecordingVideo by viewModel.engine.isRecordingVideo.collectAsStateWithLifecycle()
+    val isRecordingPaused by viewModel.engine.isRecordingPaused.collectAsStateWithLifecycle()
     val isSavingVideo by viewModel.isSavingVideo.collectAsStateWithLifecycle()
     val videoDurationSeconds by viewModel.engine.videoDurationSeconds.collectAsStateWithLifecycle()
     val isCapturing by viewModel.engine.isCapturing.collectAsStateWithLifecycle()
@@ -1188,6 +1189,8 @@ fun CameraScreen(
             onZoomChange = { zoom -> viewModel.setZoom(zoom, isPresetTap = false) },
             onZoomPresetTap = { preset -> viewModel.setZoom(preset, isPresetTap = true) },
             isRecordingVideo = isRecordingVideo,
+            isRecordingPaused = isRecordingPaused,
+            onPauseResumeRecordingClick = { viewModel.toggleVideoRecordingPause() },
             videoDurationSeconds = videoDurationSeconds,
             isCapturing = isCapturing,
             nightCaptureProgress = nightProgress,

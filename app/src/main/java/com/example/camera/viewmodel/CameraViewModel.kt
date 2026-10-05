@@ -65,6 +65,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val tapFocusConfig: StateFlow<TapFocusConfig> = _tapFocusConfig.asStateFlow()
 
     val isRecordingVideo: StateFlow<Boolean> = engine.isRecordingVideo
+    val isRecordingPaused: StateFlow<Boolean> = engine.isRecordingPaused
     val isSavingVideo: StateFlow<Boolean> = engine.isSavingVideo
     val videoDurationSeconds: StateFlow<Int> = engine.videoDurationSeconds
     val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = engine.selectedVideoPipeline
@@ -2228,6 +2229,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             engine.startVideoRecording { error ->
                 showToast("Recording error: $error")
             }
+        }
+    }
+
+    fun pauseVideoRecording() {
+        if (engine.isRecordingVideo.value && !engine.isRecordingPaused.value) {
+            engine.pauseVideoRecording()
+            showToast("Recording paused")
+        }
+    }
+
+    fun resumeVideoRecording() {
+        if (engine.isRecordingVideo.value && engine.isRecordingPaused.value) {
+            engine.resumeVideoRecording()
+            showToast("Recording resumed")
+        }
+    }
+
+    fun toggleVideoRecordingPause() {
+        if (!engine.isRecordingVideo.value) return
+        if (engine.isRecordingPaused.value) {
+            resumeVideoRecording()
+        } else {
+            pauseVideoRecording()
         }
     }
 

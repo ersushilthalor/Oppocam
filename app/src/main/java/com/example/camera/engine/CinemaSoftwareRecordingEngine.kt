@@ -242,6 +242,10 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         currentCinemaConfig = cinemaConfig
         currentRec2020Params = rec2020Params
         firstFramePtsNs = -1L
+        isPaused.set(false)
+        totalPausedDurationNs = 0L
+        pauseStartNs = 0L
+        lastRenderedPtsNs = -1L
 
         // Real Apple ProRes 422 software recording pipeline with genuine QuickTime MOV container
         if (effectiveCodec == CinemaCodec.PRORES) {
@@ -388,6 +392,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
      * finalizes the container, and returns the recorded file.
      */
     fun stopRecording(): File? {
+        isPaused.set(false)
         val proRes = activeProResSession
         if (proRes != null) {
             activeProResSession = null
@@ -1030,6 +1035,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             val pcmBuf = ByteArray(frameChunkSize)
             while (isRecording.get()) {
                 val readBytes = record.read(pcmBuf, 0, pcmBuf.size)
+                if (isPaused.get()) {
+                    // Discard audio samples while paused to prevent audio progression and buffer buildup
+                    try { Thread.sleep(15) } catch (_: Throwable) {}
+                    continue
+                }
                 if (readBytes > 0) {
                     var offset = 0
                     while (offset < readBytes && isRecording.get()) {
@@ -1234,6 +1244,31 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var currentNormWidth: Int = 1920
     private var currentNormHeight: Int = 1080
     private var firstFramePtsNs: Long = -1L
+    private val isPaused = AtomicBoolean(false)
+    private var totalPausedDurationNs: Long = 0L
+    private var pauseStartNs: Long = 0L
+    private var lastRenderedPtsNs: Long = -1L
+
+    fun pause() {
+        activeProResSession?.pause()
+        if (isRecording.get() && !isStopping.get() && isPaused.compareAndSet(false, true)) {
+            pauseStartNs = System.nanoTime()
+            Log.i(TAG, "Cinema software recording paused")
+        }
+    }
+
+    fun resume() {
+        activeProResSession?.resume()
+        if (isRecording.get() && !isStopping.get() && isPaused.compareAndSet(true, false)) {
+            val pausedDelta = System.nanoTime() - pauseStartNs
+            if (pausedDelta > 0L) {
+                totalPausedDurationNs += pausedDelta
+            }
+            Log.i(TAG, "Cinema software recording resumed (paused for ${pausedDelta / 1_000_000L}ms, total paused: ${totalPausedDurationNs / 1_000_000L}ms)")
+        }
+    }
+
+    fun isPaused(): Boolean = isPaused.get()
 
     private var isFrontFacing: Boolean = false
     private var cameraSensorOrientation: Int = 90
@@ -1596,7 +1631,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         } catch (_: Throwable) {
             return
         }
-        if (!isRecording.get() || isStopping.get()) return
+        if (!isRecording.get() || isStopping.get() || isPaused.get()) return
 
         try {
             st.getTransformMatrix(stMatrix)
@@ -1604,7 +1639,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             if (firstFramePtsNs < 0L) {
                 firstFramePtsNs = rawTimestampNs
             }
-            val adjustedPtsNs = (rawTimestampNs - firstFramePtsNs).coerceAtLeast(0L)
+            var adjustedPtsNs = (rawTimestampNs - firstFramePtsNs - totalPausedDurationNs).coerceAtLeast(0L)
+            if (lastRenderedPtsNs >= 0L && adjustedPtsNs <= lastRenderedPtsNs) {
+                adjustedPtsNs = lastRenderedPtsNs + 1_000_000L
+            }
+            lastRenderedPtsNs = adjustedPtsNs
 
             GLES20.glViewport(0, 0, currentNormWidth, currentNormHeight)
             GLES20.glClearColor(0f, 0f, 0f, 1f)

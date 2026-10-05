@@ -52,6 +52,9 @@ class DollyZoomEngine {
 
     // Video recording trajectory
     private val isRecordingTrajectory = AtomicBoolean(false)
+    private val isTrajectoryPaused = AtomicBoolean(false)
+    private var pausedDurationUs: Long = 0L
+    private var pauseStartUs: Long = 0L
     private val recordedTrajectory = CopyOnWriteArrayList<DollyTrajectoryPoint>()
 
     fun isRunning(): Boolean = isEngineRunning
@@ -294,8 +297,8 @@ class DollyZoomEngine {
         _cropStateFlow.value = state
 
         // Record trajectory point if video recording is active
-        if (isRecordingTrajectory.get()) {
-            val nowUs = System.nanoTime() / 1000L
+        if (isRecordingTrajectory.get() && !isTrajectoryPaused.get()) {
+            val nowUs = (System.nanoTime() / 1000L) - pausedDurationUs
             recordedTrajectory.add(
                 DollyTrajectoryPoint(
                     timestampUs = nowUs,
@@ -313,12 +316,33 @@ class DollyZoomEngine {
 
     fun startRecordingTrajectory() {
         recordedTrajectory.clear()
+        isTrajectoryPaused.set(false)
+        pausedDurationUs = 0L
+        pauseStartUs = 0L
         isRecordingTrajectory.set(true)
         Log.i(TAG, "Started recording Dolly Zoom trajectory for video")
     }
 
+    fun pauseRecordingTrajectory() {
+        if (isRecordingTrajectory.get() && isTrajectoryPaused.compareAndSet(false, true)) {
+            pauseStartUs = System.nanoTime() / 1000L
+            Log.d(TAG, "Dolly Zoom trajectory recording paused")
+        }
+    }
+
+    fun resumeRecordingTrajectory() {
+        if (isRecordingTrajectory.get() && isTrajectoryPaused.compareAndSet(true, false)) {
+            val deltaUs = (System.nanoTime() / 1000L) - pauseStartUs
+            if (deltaUs > 0L) {
+                pausedDurationUs += deltaUs
+            }
+            Log.d(TAG, "Dolly Zoom trajectory recording resumed")
+        }
+    }
+
     fun stopRecordingTrajectory(): List<DollyTrajectoryPoint> {
         isRecordingTrajectory.set(false)
+        isTrajectoryPaused.set(false)
         val list = ArrayList(recordedTrajectory)
         Log.i(TAG, "Stopped recording Dolly Zoom trajectory. Samples collected: ${list.size}")
         return list

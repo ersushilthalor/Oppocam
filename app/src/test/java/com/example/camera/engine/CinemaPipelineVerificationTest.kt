@@ -679,6 +679,38 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
+    fun testCinemaSoftwareRecordingEnginePauseResumeState() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        val tempDest = File(context.cacheDir, "cinema_pause_test_${System.currentTimeMillis()}.mp4")
+        try {
+            val surface = recorder.startRecording(
+                destFile = tempDest,
+                width = 1080,
+                height = 1920,
+                fps = 30,
+                bitrate = 10_000_000,
+                codec = CinemaCodec.H264,
+                bitDepth = LogBitDepth.BIT_8,
+                isAudioEnabled = false,
+                orientationHint = 0
+            )
+            assertNotNull(surface)
+            assertFalse("Recording should not be paused initially", recorder.isPaused())
+
+            recorder.pause()
+            assertTrue("Recording should be paused after pause()", recorder.isPaused())
+
+            recorder.resume()
+            assertFalse("Recording should not be paused after resume()", recorder.isPaused())
+
+            val outFile = recorder.stopRecording()
+            assertNotNull(outFile)
+        } finally {
+            try { tempDest.delete() } catch (_: Exception) {}
+        }
+    }
+
+    @Test
     fun testHlg10ProfileTonemapAndRec2020Gamut() {
         val config = CinemaConfig(
             colorProfile = CinemaColorProfile.HLG10,

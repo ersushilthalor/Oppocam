@@ -48,10 +48,23 @@ class ProResSoftwareRecordingSession(
     }
 
     private val isRecording = AtomicBoolean(false)
+    private val isPaused = AtomicBoolean(false)
     private val encodedFramesCount = AtomicInteger(0)
     private val consecutiveErrors = AtomicInteger(0)
     @Volatile
     private var fatalError: Throwable? = null
+
+    fun pause() {
+        if (isRecording.get() && isPaused.compareAndSet(false, true)) {
+            Log.i(TAG, "ProRes software recording session paused")
+        }
+    }
+
+    fun resume() {
+        if (isRecording.get() && isPaused.compareAndSet(true, false)) {
+            Log.i(TAG, "ProRes software recording session resumed")
+        }
+    }
 
     var actualIsSource10Bit: Boolean = isSource10Bit
         private set
@@ -142,6 +155,11 @@ class ProResSoftwareRecordingSession(
             } catch (e: Exception) {
                 null
             } ?: return@setOnImageAvailableListener
+
+            if (isPaused.get()) {
+                try { img.close() } catch (ignored: Exception) {}
+                return@setOnImageAvailableListener
+            }
 
             try {
                 processImageFrame(img)
@@ -263,6 +281,13 @@ class ProResSoftwareRecordingSession(
                 val t = Thread({
                     val pcmBuffer = ByteArray(4096)
                     while (isRecording.get() && fatalError == null) {
+                        if (isPaused.get()) {
+                            try {
+                                record.read(pcmBuffer, 0, pcmBuffer.size)
+                                Thread.sleep(15)
+                            } catch (_: Throwable) {}
+                            continue
+                        }
                         val read = record.read(pcmBuffer, 0, pcmBuffer.size)
                         if (read > 0) {
                             proresMuxer?.writeAudioChunk(pcmBuffer, read)

@@ -522,7 +522,10 @@ class CustomVideoPipelineRecorder(
 
         while (isRecording.get()) {
             if (isPaused.get()) {
-                try { Thread.sleep(15) } catch (_: InterruptedException) { break }
+                try {
+                    record.read(pcmBuffer, pcmBuffer.capacity())
+                    Thread.sleep(15)
+                } catch (_: InterruptedException) { break } catch (_: Throwable) {}
                 continue
             }
 

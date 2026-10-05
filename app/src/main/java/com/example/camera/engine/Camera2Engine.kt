@@ -462,6 +462,9 @@ class Camera2Engine(private val context: Context) {
     private val _isRecordingVideo = MutableStateFlow(false)
     val isRecordingVideo: StateFlow<Boolean> = _isRecordingVideo.asStateFlow()
 
+    private val _isRecordingPaused = MutableStateFlow(false)
+    val isRecordingPaused: StateFlow<Boolean> = _isRecordingPaused.asStateFlow()
+
     private val _isSavingVideo = MutableStateFlow(false)
     val isSavingVideo: StateFlow<Boolean> = _isSavingVideo.asStateFlow()
     private val savingVideoJobsCount = java.util.concurrent.atomic.AtomicInteger(0)
@@ -5506,6 +5509,7 @@ class Camera2Engine(private val context: Context) {
         isStartingRecording.set(false)
         isStoppingRecording.set(false)
         _isRecordingVideo.value = false
+        _isRecordingPaused.value = false
         isSoftwareCinemaRecording = false
         isCustomPipelineRecording = false
         videoTimerJob?.cancel()
@@ -5559,6 +5563,7 @@ class Camera2Engine(private val context: Context) {
             return
         }
         if (!isStartingRecording.compareAndSet(false, true)) return
+        _isRecordingPaused.value = false
 
         val camera = cameraDevice ?: run {
             isStartingRecording.set(false)
@@ -6324,7 +6329,9 @@ class Camera2Engine(private val context: Context) {
         videoTimerJob = engineScope.launch {
             while (_isRecordingVideo.value) {
                 delay(1000)
-                _videoDurationSeconds.value += 1
+                if (!_isRecordingPaused.value && _isRecordingVideo.value) {
+                    _videoDurationSeconds.value += 1
+                }
             }
         }
     }
@@ -6356,6 +6363,67 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
+     * Pause ongoing video recording (both standard Video Mode and Cinema Mode).
+     * Preserves current video and audio pipeline states without terminating the session.
+     */
+    fun pauseVideoRecording() {
+        if (!_isRecordingVideo.value || _isRecordingPaused.value) return
+        _isRecordingPaused.value = true
+        Log.i(TAG, "pauseVideoRecording called")
+
+        if (isSoftwareCinemaRecording) {
+            cinemaSoftwareRecorder.pause()
+        } else if (isCustomPipelineRecording && customPipelineRecorder != null) {
+            customPipelineRecorder?.pause()
+        } else if (mediaRecorder != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    mediaRecorder?.pause()
+                } catch (e: Exception) {
+                    Log.w(TAG, "mediaRecorder.pause() failed: ${e.message}", e)
+                }
+            }
+        }
+
+        if (_isHorizonLockEnabled.value) {
+            stableActionHorizonEngine.pauseRecordingTrajectory()
+        }
+        if (_isDollyZoomActive.value) {
+            dollyZoomEngine.pauseRecordingTrajectory()
+        }
+    }
+
+    /**
+     * Resume paused video recording into the same active session file.
+     */
+    fun resumeVideoRecording() {
+        if (!_isRecordingVideo.value || !_isRecordingPaused.value) return
+        _isRecordingPaused.value = false
+        Log.i(TAG, "resumeVideoRecording called")
+
+        if (isSoftwareCinemaRecording) {
+            cinemaSoftwareRecorder.resume()
+        } else if (isCustomPipelineRecording && customPipelineRecorder != null) {
+            customPipelineRecorder?.resume()
+        } else if (mediaRecorder != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    mediaRecorder?.resume()
+                } catch (e: Exception) {
+                    Log.w(TAG, "mediaRecorder.resume() failed: ${e.message}", e)
+                }
+            }
+        }
+
+        if (_isHorizonLockEnabled.value) {
+            stableActionHorizonEngine.resumeRecordingTrajectory()
+        }
+        if (_isDollyZoomActive.value) {
+            dollyZoomEngine.resumeRecordingTrajectory()
+        }
+    }
+
+    /**
      * Stop Video Recording
      *
      * Recording stops instantly with zero viewfinder freezing or UI blocking.
@@ -6375,6 +6443,7 @@ class Camera2Engine(private val context: Context) {
         sessionRestoredForStop.set(false)
         activeRecordingSurface = null
         _isRecordingVideo.value = false
+        _isRecordingPaused.value = false
         videoTimerJob?.cancel()
 
         val isCinema = (currentMode == CameraMode.CINEMA)

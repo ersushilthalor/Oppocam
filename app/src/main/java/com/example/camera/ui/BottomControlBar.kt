@@ -16,6 +16,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Exposure
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -64,6 +66,7 @@ fun BottomControlBar(
     capabilities: HardwareCapabilities = HardwareCapabilities(),
     onShowToast: (String) -> Unit = {},
     isRecordingVideo: Boolean,
+    isRecordingPaused: Boolean = false,
     videoDurationSeconds: Int,
     isCapturing: Boolean,
     nightCaptureProgress: NightCaptureProgress = NightCaptureProgress(),
@@ -78,6 +81,7 @@ fun BottomControlBar(
     onFastShutterHoldStart: () -> Unit = {},
     onFastShutterHoldEnd: () -> Unit = {},
     onFlipCameraClick: () -> Unit,
+    onPauseResumeRecordingClick: () -> Unit = {},
     onToggleProClick: () -> Unit = {},
     onSetManualProOpen: (Boolean) -> Unit = {},
     onGalleryClick: () -> Unit,
@@ -267,12 +271,17 @@ fun BottomControlBar(
                         label = "dotAlpha"
                     )
 
+                    val badgeBg = if (isRecordingPaused) Color(0xFFFFB300).copy(alpha = 0.25f) else Color.Red.copy(alpha = 0.25f)
+                    val badgeBorder = if (isRecordingPaused) Color(0xFFFFB300) else Color.Red
+                    val badgeDotColor = if (isRecordingPaused) Color(0xFFFFB300) else Color.Red.copy(alpha = dotAlpha)
+                    val labelText = if (isRecordingPaused) "PAUSED $timeFormatted" else "REC $timeFormatted"
+
                     Row(
                         modifier = Modifier
                             .padding(bottom = 12.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .background(Color.Red.copy(alpha = 0.25f))
-                            .border(1.dp, Color.Red, RoundedCornerShape(16.dp))
+                            .background(badgeBg)
+                            .border(1.dp, badgeBorder, RoundedCornerShape(16.dp))
                             .padding(horizontal = 14.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -280,11 +289,11 @@ fun BottomControlBar(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(Color.Red.copy(alpha = dotAlpha))
+                                .background(badgeDotColor)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "REC $timeFormatted",
+                            text = labelText,
                             color = Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
@@ -515,8 +524,26 @@ fun BottomControlBar(
                             }
                         }
 
-                        // Right: Camera Switcher / Flip Button
-                        if (layoutConfig.showFlipButton) {
+                        // Right: Camera Switcher / Flip Button OR Pause/Resume Button during active recording
+                        if (isRecordingVideo) {
+                            Box(
+                                modifier = Modifier
+                                    .size(layoutConfig.flipButtonSizeDp.dp.coerceAtLeast(50.dp))
+                                    .clip(CircleShape)
+                                    .background(if (isRecordingPaused) Color(0xFFFFB300) else Color(0xB21E1E24))
+                                    .border(1.5.dp, if (isRecordingPaused) Color.White else Color.White.copy(alpha = 0.35f), CircleShape)
+                                    .clickable { onPauseResumeRecordingClick() }
+                                    .testTag("pause_resume_video_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isRecordingPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                                    contentDescription = if (isRecordingPaused) "Resume Recording" else "Pause Recording",
+                                    tint = if (isRecordingPaused) Color.Black else Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        } else if (layoutConfig.showFlipButton) {
                             Box(
                                 modifier = Modifier
                                     .size(layoutConfig.flipButtonSizeDp.dp)
