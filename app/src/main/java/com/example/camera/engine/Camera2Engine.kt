@@ -522,6 +522,18 @@ class Camera2Engine(private val context: Context) {
     var isAfLocked: Boolean = false
     var isRawCaptureEnabled: Boolean = false
     var isVideoStabilizationEnabled: Boolean = true
+        set(value) {
+            field = value
+            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
+            val hybridConfig = _hybridStabilizationConfig.value
+            val isStabActive = value && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || hybridConfig.isEisPreferred || hybridConfig.isEisOnly)
+            if (isVideoMode && isStabActive) {
+                gyroStabilizationEngine.start()
+            } else {
+                gyroStabilizationEngine.stop()
+                lastStabilizedCrop = null
+            }
+        }
     var videoBitrateOption: VideoBitrateOption = VideoBitrateOption.AUTO
     var videoFps: Int = 30
     var colorProfile: ColorProfile = ColorProfile.STANDARD
@@ -667,7 +679,8 @@ class Camera2Engine(private val context: Context) {
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        if (config.isUltraStabilizationEnabled && isVideoMode) {
+        val isStabActive = isVideoStabilizationEnabled && (config.isUltraStabilizationEnabled || config.isHybridEnabled || config.isEisPreferred || config.isEisOnly)
+        if (isVideoMode && isStabActive) {
             gyroStabilizationEngine.start()
         } else {
             gyroStabilizationEngine.stop()
@@ -2015,10 +2028,12 @@ class Camera2Engine(private val context: Context) {
         }
 
         val isVideoMode = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA)
-        if (!isVideoMode || !_hybridStabilizationConfig.value.isUltraStabilizationEnabled) {
+        val hybridConfig = _hybridStabilizationConfig.value
+        val isStabActive = isVideoStabilizationEnabled && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || hybridConfig.isEisPreferred || hybridConfig.isEisOnly)
+        if (!isVideoMode || !isStabActive) {
             gyroStabilizationEngine.stop()
             lastStabilizedCrop = null
-        } else if (isVideoMode && _hybridStabilizationConfig.value.isUltraStabilizationEnabled) {
+        } else if (isVideoMode && isStabActive) {
             gyroStabilizationEngine.start()
         }
 
@@ -2880,7 +2895,11 @@ class Camera2Engine(private val context: Context) {
             if (imageReaderRaw != null) activeOutputs.add("RAW")
             CameraPerformanceMonitor.setActiveOutputs(activeOutputs)
 
-            val template = CameraDevice.TEMPLATE_PREVIEW
+            val template = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) {
+                CameraDevice.TEMPLATE_RECORD
+            } else {
+                CameraDevice.TEMPLATE_PREVIEW
+            }
 
             val builder = camera.createCaptureRequest(template).apply {
                 addTarget(previewSurf)
@@ -3052,13 +3071,27 @@ class Camera2Engine(private val context: Context) {
                 dollyZoomEngine.onFrameFaces(faces, activeArray, sensorOrientation, isFront)
             }
 
-            if (_hybridStabilizationConfig.value.isUltraStabilizationEnabled &&
-                (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)) {
+            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
+            val hybridConfig = _hybridStabilizationConfig.value
+            val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
+            val isOisOnly = hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
+            val isStabActive = isVideoStabilizationEnabled && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly)
+
+            if (isVideoMode && isStabActive && !isOisOnly) {
                 // When hardware EIS is supported, the camera HAL's internal DSP/ISP handles gyro EIS.
-                // Interfering with SCALER_CROP_REGION on every 30fps repeating request disrupts the HAL's internal EIS.
-                // We only use custom gyro crop shifting if the hardware sensor lacks native EIS!
+                // Interfering with SCALER_CROP_REGION simultaneously causes double stabilization.
+                // We use gyro-based EIS ONLY when the hardware lacks native EIS on this lens/mode!
                 val caps = capabilities.value
-                if (!caps.supportsEis) {
+                val effectiveRes = if (currentMode == CameraMode.CINEMA) {
+                    cinemaConfig.value.selectedResolution ?: _selectedVideoResolution.value
+                } else {
+                    _selectedVideoResolution.value
+                }
+                val effectiveFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
+                val isHighFps4k = (effectiveRes?.width ?: 0) >= 3840 && effectiveFps >= 60
+                val isHardwareEisActive = caps.supportsEis && (hybridConfig.isUltraStabilizationEnabled || isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
+
+                if (!isHardwareEisActive) {
                     val lens = _selectedLens.value
                     if (lens != null) {
                         try {
@@ -3237,6 +3270,7 @@ class Camera2Engine(private val context: Context) {
             val builder = previewRequestBuilder ?: return
             try {
                 cinemaEngine.applyToCaptureRequest(builder)
+                applyCommonSettings(builder)
                 session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
             } catch (ignored: Exception) {}
         }
@@ -3254,6 +3288,7 @@ class Camera2Engine(private val context: Context) {
             val builder = previewRequestBuilder ?: return
             try {
                 cinemaEngine.applyToCaptureRequest(builder)
+                applyCommonSettings(builder)
                 session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
             } catch (ignored: Exception) {}
         }
@@ -3271,6 +3306,7 @@ class Camera2Engine(private val context: Context) {
             val builder = previewRequestBuilder ?: return
             try {
                 cinemaEngine.applyToCaptureRequest(builder)
+                applyCommonSettings(builder)
                 session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
             } catch (ignored: Exception) {}
         }
@@ -3288,6 +3324,7 @@ class Camera2Engine(private val context: Context) {
             val builder = previewRequestBuilder ?: return
             try {
                 cinemaEngine.applyToCaptureRequest(builder)
+                applyCommonSettings(builder)
                 session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
             } catch (ignored: Exception) {}
         }
@@ -3298,20 +3335,24 @@ class Camera2Engine(private val context: Context) {
         if (now - lastStabilizedCropTime < 33) return // 30fps throttle
         val last = lastStabilizedCrop
         if (last != null &&
-            kotlin.math.abs(crop.left - last.left) < 2 &&
-            kotlin.math.abs(crop.top - last.top) < 2
+            kotlin.math.abs(crop.left - last.left) < 3 &&
+            kotlin.math.abs(crop.top - last.top) < 3 &&
+            kotlin.math.abs(crop.right - last.right) < 3 &&
+            kotlin.math.abs(crop.bottom - last.bottom) < 3
         ) return
 
         lastStabilizedCropTime = now
         lastStabilizedCrop = crop
 
         val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
-            builder.set(CaptureRequest.SCALER_CROP_REGION, crop)
-            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error applying stabilized crop", e)
+        synchronized(previewRequestLock) {
+            val builder = previewRequestBuilder ?: return
+            try {
+                builder.set(CaptureRequest.SCALER_CROP_REGION, crop)
+                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error applying stabilized crop", e)
+            }
         }
     }
 
@@ -3428,7 +3469,7 @@ class Camera2Engine(private val context: Context) {
 
         if (isVideoMode) {
             val isUltra = hybridConfig.isUltraStabilizationEnabled
-            val isStabActive = isVideoStabilizationEnabled || isUltra || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly
+            val isStabActive = isVideoStabilizationEnabled && (isUltra || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly)
 
             if (isStabActive) {
                 // Optical Image Stabilization (Physical voice-coil motor hardware)
@@ -3460,10 +3501,16 @@ class Camera2Engine(private val context: Context) {
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
                     )
                 } else {
-                    val isHighFps4k = (_selectedVideoResolution.value?.width ?: 0) >= 3840 && videoFps >= 60
+                    val effectiveRes = if (currentMode == CameraMode.CINEMA) {
+                        cinemaConfig.value.selectedResolution ?: _selectedVideoResolution.value
+                    } else {
+                        _selectedVideoResolution.value
+                    }
+                    val effectiveFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
+                    val isHighFps4k = (effectiveRes?.width ?: 0) >= 3840 && effectiveFps >= 60
                     val allowEis = caps.supportsEis && (isUltra || isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
 
-                    if (isUltra || allowEis) {
+                    if (allowEis) {
                         builder.set(
                             CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                             CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
@@ -3594,7 +3641,20 @@ class Camera2Engine(private val context: Context) {
         val hybridConfig = _hybridStabilizationConfig.value
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
         val caps = capabilities.value
-        if (!caps.supportsEis && hybridConfig.isUltraStabilizationEnabled && isVideoMode && lastStabilizedCrop != null) {
+        val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
+        val isOisOnly = hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
+        val isStabActive = isVideoStabilizationEnabled && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly)
+
+        val effectiveRes = if (currentMode == CameraMode.CINEMA) {
+            cinemaConfig.value.selectedResolution ?: _selectedVideoResolution.value
+        } else {
+            _selectedVideoResolution.value
+        }
+        val effectiveFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
+        val isHighFps4k = (effectiveRes?.width ?: 0) >= 3840 && effectiveFps >= 60
+        val isHardwareEisActive = caps.supportsEis && (hybridConfig.isUltraStabilizationEnabled || isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
+
+        if (!isHardwareEisActive && isStabActive && !isOisOnly && isVideoMode && lastStabilizedCrop != null) {
             builder.set(CaptureRequest.SCALER_CROP_REGION, lastStabilizedCrop)
             return
         }

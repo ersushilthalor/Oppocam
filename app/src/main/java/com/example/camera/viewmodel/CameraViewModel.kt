@@ -1711,7 +1711,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setVideoStabilization(enabled: Boolean) {
         val caps = engine.capabilities.value
-        if (!caps.supportsEis && !caps.supportsOis) {
+        if (!caps.supportsEis && !caps.supportsOis && !engine.gyroStabilizationEngine.isGyroAvailable) {
             showToast("Stabilization not supported by hardware")
             return
         }
@@ -1980,6 +1980,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val isStabOn = (mode != MainCameraStabilizationMode.OFF)
         _isVideoStabilizationEnabled.value = isStabOn
         preferences.isVideoStabilizationEnabled = isStabOn
+        preferences.setModeVideoStabilization(_cameraMode.value, isStabOn)
         engine.isVideoStabilizationEnabled = isStabOn
         setHybridStabilizationConfig(updated)
         showToast("Stabilization: ${mode.title}")
@@ -1996,6 +1997,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (nextState) {
             _isVideoStabilizationEnabled.value = true
             preferences.isVideoStabilizationEnabled = true
+            preferences.setModeVideoStabilization(_cameraMode.value, true)
             engine.isVideoStabilizationEnabled = true
         }
         setHybridStabilizationConfig(updated)

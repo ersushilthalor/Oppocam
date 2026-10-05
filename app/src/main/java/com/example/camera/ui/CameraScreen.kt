@@ -758,7 +758,7 @@ fun CameraScreen(
             FloatingVideoSettingsPanel(
                 isOpen = isVideoSettingsPanelOpen,
                 currentResolution = if (cameraMode == CameraMode.CINEMA) cinemaConfig.selectedResolution ?: selectedVideoResolution else selectedVideoResolution,
-                currentFps = videoFps,
+                currentFps = if (cameraMode == CameraMode.CINEMA) cinemaConfig.videoFps else videoFps,
                 isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
                 selectedVideoPipeline = selectedVideoPipeline,
                 onResolutionSelected = { res ->
@@ -769,6 +769,9 @@ fun CameraScreen(
                 },
                 onFpsSelected = { fps ->
                     viewModel.setVideoFps(fps)
+                    if (cameraMode == CameraMode.CINEMA) {
+                        viewModel.updateCinemaConfig(cinemaConfig.copy(videoFps = fps))
+                    }
                 },
                 onUltraStabilizationToggle = {
                     viewModel.toggleUltraStabilization()
