@@ -1349,5 +1349,116 @@ class CinemaPipelineVerificationTest {
         // Fallback matrix includes LUT and primary grade, whereas gpuMatrix contains only CST technical transform
         assertFalse("GPU matrix must differ from CPU fallback matrix", gpuMatrix!!.array.contentEquals(fallbackMatrix!!.array))
     }
+
+    @Test
+    fun testCubeLutParserStandardSizes17And33And65() {
+        // Verify standard 3D LUT sizes 17, 33, and 65 parse successfully and produce valid strip bitmaps
+        for (size in listOf(17, 33, 65)) {
+            val sb = java.lang.StringBuilder()
+            sb.appendLine("TITLE \"TestSize$size\"")
+            sb.appendLine("LUT_3D_SIZE $size")
+            sb.appendLine("DOMAIN_MIN 0.0 0.0 0.0")
+            sb.appendLine("DOMAIN_MAX 1.0 1.0 1.0")
+
+            val total = size * size * size
+            for (i in 0 until total) {
+                val norm = i.toFloat() / (total - 1).coerceAtLeast(1)
+                sb.appendLine("$norm $norm $norm")
+            }
+
+            val stream = java.io.ByteArrayInputStream(sb.toString().toByteArray(Charsets.UTF_8))
+            val parsed = com.example.camera.data.CubeLutParser.parseStream(stream, "TestSize$size")
+            assertNotNull("Size $size .cube LUT must parse successfully", parsed)
+            assertEquals("Size must match $size", size, parsed!!.size)
+            assertTrue("Must be marked as 3D", parsed.is3D)
+            assertEquals("TestSize$size", parsed.title)
+
+            // Test strip bitmap generation
+            val strip = parsed.to2DStripBitmap()
+            assertNotNull(strip)
+            assertEquals(size * size, strip.width)
+            assertEquals(size, strip.height)
+
+            // Test 3D sampling
+            val sampled = parsed.sample3D(0.5f, 0.5f, 0.5f)
+            assertNotNull(sampled)
+            assertEquals(3, sampled.size)
+        }
+    }
+
+    @Test
+    fun testCubeLutParserHandlesCommentsWhitespaceBOMAndCommas() {
+        // Standard .cube files often contain BOM, trailing comments, commas, colons, blank lines, and whitespace
+        val messyCube = "\uFEFF# Created by Color Grading Suite\n" +
+                "// Another comment line\n" +
+                "\n" +
+                "TITLE: \"Hollywood Teal & Orange #1\" # Title with inline comment\n" +
+                "LUT_3D_SIZE: 2 2 2\n" +
+                "DOMAIN_MIN: 0.0, 0.0, 0.0 # pure black\n" +
+                "DOMAIN_MAX: 1.0, 1.0, 1.0\n" +
+                "# Data follows\n" +
+                "0.0, 0.0, 0.0 # black\n" +
+                "1.0, 0.0, 0.0\n" +
+                "0.0, 1.0, 0.0\n" +
+                "1.0, 1.0, 0.0\n" +
+                "0.0, 0.0, 1.0\n" +
+                "1.0, 0.0, 1.0\n" +
+                "0.0, 1.0, 1.0\n" +
+                "1.0, 1.0, 1.0 # white\n"
+
+        val stream = java.io.ByteArrayInputStream(messyCube.toByteArray(Charsets.UTF_8))
+        val parsed = com.example.camera.data.CubeLutParser.parseStream(stream, "FallbackTitle")
+        assertNotNull("Messy standard .cube file must parse successfully", parsed)
+        assertEquals("Hollywood Teal & Orange #1", parsed!!.title)
+        assertEquals(2, parsed.size)
+        assertTrue(parsed.is3D)
+
+        val sampledWhite = parsed.sample3D(1.0f, 1.0f, 1.0f)
+        assertEquals(1.0f, sampledWhite[0], 0.01f)
+        assertEquals(1.0f, sampledWhite[1], 0.01f)
+        assertEquals(1.0f, sampledWhite[2], 0.01f)
+    }
+
+    @Test
+    fun testCubeLutParser1DFormatAndDomain() {
+        val cube1D = """
+            TITLE 1D_Neutral_Curve
+            LUT_1D_SIZE 4
+            DOMAIN_MIN 0.0
+            DOMAIN_MAX 1.0
+            0.0 0.0 0.0
+            0.33 0.33 0.33
+            0.66 0.66 0.66
+            1.0 1.0 1.0
+        """.trimIndent()
+
+        val stream = java.io.ByteArrayInputStream(cube1D.toByteArray(Charsets.UTF_8))
+        val parsed = com.example.camera.data.CubeLutParser.parseStream(stream, "1D_Neutral_Curve")
+        assertNotNull("1D .cube LUT must parse successfully", parsed)
+        assertFalse("Must be marked as 1D", parsed!!.is3D)
+        assertEquals(4, parsed.size)
+
+        val sampledMid = parsed.sample3D(0.5f, 0.5f, 0.5f)
+        assertTrue("Sampled value must be near 0.5", sampledMid[0] in 0.45f..0.55f)
+    }
+
+    @Test
+    fun testBackdropBlurManagerGpuArchitecture() {
+        // Architecture verification: Camera -> Main Preview -> GPU Blur -> Floating UI Overlay
+        val manager = com.example.camera.ui.components.BackdropBlurManager
+        manager.isWindowActive = false
+        val initialTick = manager.frameTickState.longValue
+        manager.onViewfinderFrameAvailable()
+        // When windows are inactive, frameTick should NOT increment (no unnecessary processing)
+        assertEquals(initialTick, manager.frameTickState.longValue)
+
+        manager.isWindowActive = true
+        manager.onViewfinderFrameAvailable()
+        // When windows are active, frameTick increments to trigger immediate GPU redraw
+        assertEquals(initialTick + 1, manager.frameTickState.longValue)
+
+        manager.onBlurStrengthChanged(35.0f)
+        assertEquals(initialTick + 2, manager.frameTickState.longValue)
+    }
 }
 

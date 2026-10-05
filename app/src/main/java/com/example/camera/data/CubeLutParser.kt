@@ -66,6 +66,23 @@ data class ParsedCubeLut(
                     }
                 }
             }
+        } else if (is3D && table3D.size >= 24) {
+            // When 3D LUT has higher resolution (e.g. 128) than 65 strip max, resample accurately
+            for (b in 0 until n) {
+                val inB = b.toFloat() / (n - 1)
+                for (g in 0 until n) {
+                    val inG = g.toFloat() / (n - 1)
+                    for (r in 0 until n) {
+                        val inR = r.toFloat() / (n - 1)
+                        val sampled = sample3D(inR, inG, inB)
+                        val red = (sampled[0].coerceIn(0f, 1f) * 255f).toInt()
+                        val green = (sampled[1].coerceIn(0f, 1f) * 255f).toInt()
+                        val blue = (sampled[2].coerceIn(0f, 1f) * 255f).toInt()
+                        val pixelIdx = g * width + (b * n + r)
+                        pixels[pixelIdx] = (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
+                    }
+                }
+            }
         } else if (!is3D && table3D.size >= n * 3) {
             val total1D = table3D.size / 3
             for (b in 0 until n) {
@@ -248,6 +265,27 @@ object CubeLutParser {
         }
     }
 
+    private fun stripComment(line: String): String {
+        var inQuotes = false
+        var quoteChar = ' '
+        for (i in line.indices) {
+            val c = line[i]
+            if ((c == '"' || c == '\'') && (i == 0 || line[i - 1] != '\\')) {
+                if (!inQuotes) {
+                    inQuotes = true
+                    quoteChar = c
+                } else if (c == quoteChar) {
+                    inQuotes = false
+                }
+            } else if ((c == '#' || c == ';') && !inQuotes) {
+                return line.substring(0, i)
+            } else if (c == '/' && i + 1 < line.length && line[i + 1] == '/' && !inQuotes) {
+                return line.substring(0, i)
+            }
+        }
+        return line
+    }
+
     fun parseStream(stream: InputStream, defaultTitle: String): ParsedCubeLut? {
         val reader = BufferedReader(InputStreamReader(stream))
         var title = defaultTitle
@@ -256,69 +294,113 @@ object CubeLutParser {
         var domainMin = floatArrayOf(0f, 0f, 0f)
         var domainMax = floatArrayOf(1f, 1f, 1f)
 
-        val tableData = mutableListOf<FloatArray>()
+        val tableData = ArrayList<FloatArray>()
+        var lineNumber = 0
 
-        reader.forEachLine { rawLine ->
-            val line = rawLine.trim()
-            if (line.isEmpty() || line.startsWith("#")) {
-                return@forEachLine
-            }
+        try {
+            reader.forEachLine { rawLine ->
+                lineNumber++
+                // Handle BOM if present
+                val sanitized = if (rawLine.startsWith("\uFEFF")) rawLine.substring(1) else rawLine
+                val clean = stripComment(sanitized).trim().replace('\u00A0', ' ')
+                if (clean.isEmpty()) return@forEachLine
 
-            val tokens = line.split("\\s+".toRegex())
-            if (tokens.isEmpty()) return@forEachLine
+                val tokens = clean.split("[\\s,]+".toRegex()).filter { it.isNotBlank() }
+                if (tokens.isEmpty()) return@forEachLine
 
-            when (tokens[0].uppercase()) {
-                "TITLE" -> {
-                    title = tokens.drop(1).joinToString(" ").replace("\"", "").trim()
-                }
-                "LUT_3D_SIZE" -> {
-                    is3D = true
-                    lutSize = tokens.getOrNull(1)?.toIntOrNull() ?: 33
-                }
-                "LUT_1D_SIZE" -> {
-                    is3D = false
-                    lutSize = tokens.getOrNull(1)?.toIntOrNull() ?: 1024
-                }
-                "DOMAIN_MIN" -> {
-                    if (tokens.size >= 4) {
-                        domainMin = floatArrayOf(
-                            tokens[1].toFloatOrNull() ?: 0f,
-                            tokens[2].toFloatOrNull() ?: 0f,
-                            tokens[3].toFloatOrNull() ?: 0f
-                        )
+                val head = tokens[0].uppercase().removeSuffix(":").removeSuffix("=")
+
+                when {
+                    head == "TITLE" -> {
+                        val titlePart = clean.substringAfter(tokens[0]).trim()
+                            .removePrefix(":").removePrefix("=").trim()
+                            .removeSurrounding("\"").removeSurrounding("'").trim()
+                        if (titlePart.isNotBlank()) {
+                            title = titlePart
+                        }
                     }
-                }
-                "DOMAIN_MAX" -> {
-                    if (tokens.size >= 4) {
-                        domainMax = floatArrayOf(
-                            tokens[1].toFloatOrNull() ?: 1f,
-                            tokens[2].toFloatOrNull() ?: 1f,
-                            tokens[3].toFloatOrNull() ?: 1f
-                        )
+                    head == "LUT_3D_SIZE" -> {
+                        is3D = true
+                        val intToken = tokens.drop(1).firstOrNull { it.toIntOrNull() != null }
+                        val parsed = intToken?.toIntOrNull()
+                        if (parsed != null && parsed > 0) {
+                            lutSize = parsed
+                        }
                     }
-                }
-                else -> {
-                    // Try parsing RGB triplet
-                    if (tokens.size >= 3) {
-                        val r = tokens[0].toFloatOrNull()
-                        val g = tokens[1].toFloatOrNull()
-                        val b = tokens[2].toFloatOrNull()
-                        if (r != null && g != null && b != null) {
-                            tableData.add(floatArrayOf(r, g, b))
+                    head == "LUT_1D_SIZE" -> {
+                        is3D = false
+                        val intToken = tokens.drop(1).firstOrNull { it.toIntOrNull() != null }
+                        val parsed = intToken?.toIntOrNull()
+                        if (parsed != null && parsed > 0) {
+                            lutSize = parsed
+                        }
+                    }
+                    head == "DOMAIN_MIN" -> {
+                        val floats = tokens.drop(1).mapNotNull { it.toFloatOrNull() }
+                        if (floats.size >= 3) {
+                            domainMin = floatArrayOf(floats[0], floats[1], floats[2])
+                        } else if (floats.size == 1) {
+                            domainMin = floatArrayOf(floats[0], floats[0], floats[0])
+                        }
+                    }
+                    head == "DOMAIN_MAX" -> {
+                        val floats = tokens.drop(1).mapNotNull { it.toFloatOrNull() }
+                        if (floats.size >= 3) {
+                            domainMax = floatArrayOf(floats[0], floats[1], floats[2])
+                        } else if (floats.size == 1) {
+                            domainMax = floatArrayOf(floats[0], floats[0], floats[0])
+                        }
+                    }
+                    head.startsWith("LUT_") || head.startsWith("INPUT_") || head.startsWith("OUTPUT_") ||
+                    head.startsWith("CREATOR") || head.startsWith("DATE") || head.startsWith("GAMMA") ||
+                    head.startsWith("COLOR") || head.startsWith("SOFTWARE") || head.startsWith("DESCRIPTION") -> {
+                        // Standard metadata header tag; skip
+                    }
+                    else -> {
+                        val floats = tokens.mapNotNull { it.toFloatOrNull() }
+                        if (floats.size >= 3) {
+                            tableData.add(floatArrayOf(floats[0], floats[1], floats[2]))
+                        } else if (floats.isNotEmpty() && !is3D) {
+                            val v = floats[0]
+                            tableData.add(floatArrayOf(v, v, v))
                         }
                     }
                 }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed reading .cube stream at line $lineNumber: ${e.message}", e)
+            return null
         }
 
-        if (tableData.isEmpty() || lutSize <= 0) {
-            Log.w(TAG, "Empty or invalid .cube file: size=$lutSize, rows=${tableData.size}")
+        if (tableData.isEmpty()) {
+            Log.e(TAG, "Empty or invalid .cube file: no table data rows parsed from $lineNumber lines")
             return null
+        }
+
+        // Deduce lutSize if missing from file header
+        if (lutSize <= 0) {
+            val count = tableData.size
+            val cbrt = Math.round(Math.cbrt(count.toDouble())).toInt()
+            if (cbrt >= 2 && cbrt * cbrt * cbrt == count) {
+                is3D = true
+                lutSize = cbrt
+                Log.i(TAG, "Inferred 3D LUT size $lutSize from table row count ($count)")
+            } else {
+                is3D = false
+                lutSize = count
+                Log.i(TAG, "Inferred 1D LUT size $lutSize from table row count ($count)")
+            }
         }
 
         val totalExpected = if (is3D) lutSize * lutSize * lutSize else lutSize
         if (tableData.size < totalExpected) {
-            Log.w(TAG, "Truncated .cube file: expected $totalExpected rows, found ${tableData.size}")
+            Log.w(TAG, "Truncated .cube file: expected $totalExpected rows, found ${tableData.size}. Padding with last row.")
+            val lastEntry = tableData.last()
+            while (tableData.size < totalExpected) {
+                tableData.add(floatArrayOf(lastEntry[0], lastEntry[1], lastEntry[2]))
+            }
+        } else if (tableData.size > totalExpected) {
+            Log.w(TAG, "Excess rows in .cube file: expected $totalExpected rows, found ${tableData.size}. Truncating.")
         }
 
         // 1. Sample 64-point Luminance / Tonemap Curve along neutral diagonal (R=G=B)

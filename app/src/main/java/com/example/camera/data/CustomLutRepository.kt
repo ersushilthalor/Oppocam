@@ -111,15 +111,19 @@ class CustomLutRepository(private val context: Context) {
         }
 
         if (!targetFile.exists() || targetFile.length() == 0L) {
+            Log.e(TAG, "Import failed: copied file from $uri is missing or 0 bytes")
             targetFile.delete()
             return null
         }
 
         val parsed = CubeLutParser.parseFile(targetFile, fallbackTitle)
         if (parsed == null) {
+            Log.e(TAG, "Import failed: CubeLutParser could not parse file ${targetFile.absolutePath} (size: ${targetFile.length()} bytes)")
             targetFile.delete()
             return null
         }
+
+        Log.i(TAG, "Successfully parsed .cube LUT: title='${parsed.title}', 3D=${parsed.is3D}, size=${parsed.size}")
 
         val item = CustomLutItem(
             id = parsed.id,
@@ -133,7 +137,7 @@ class CustomLutRepository(private val context: Context) {
             colorMatrix = parsed.colorMatrix
         )
 
-        val updated = _customLuts.value + item
+        val updated = _customLuts.value.filterNot { it.filePath == item.filePath || it.id == item.id } + item
         _customLuts.value = updated
         persistLuts(updated)
         return item

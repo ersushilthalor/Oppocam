@@ -1,22 +1,19 @@
 package com.example.camera.ui.components
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
+import android.graphics.RenderEffect
+import android.graphics.RenderNode
+import android.graphics.Shader
+import android.os.Build
+import android.util.Log
 import android.view.TextureView
 import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import com.example.camera.model.FloatingWindowAppearanceConfig
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
+import java.lang.ref.WeakReference
+
+private const val TAG = "BackdropBlurManager"
 
 /**
  * CompositionLocal providing the current FloatingWindowAppearanceConfig across all UI components.
@@ -24,35 +21,47 @@ import kotlin.math.roundToInt
 val LocalFloatingWindowAppearance = compositionLocalOf { FloatingWindowAppearanceConfig() }
 
 /**
- * High-performance, zero-jank Backdrop Blur Manager.
+ * High-performance, zero-latency GPU Backdrop Blur Manager.
  *
- * Captures lightweight downsampled snapshots of the live camera viewfinder/scene,
- * executes high-speed integer StackBlur on a background coroutine dispatcher (taking < 1.5ms),
- * and provides the real-time blurred backdrop to all floating windows and popups across the app.
+ * Architecture:
+ * Camera → Main Preview (TextureView) → GPU Blur (RenderNode + RenderEffect) → Floating UI Overlay (FrostedGlassBox)
  *
  * Key Properties:
- * 1. True Frosted Glass: The background content directly underneath the floating window is blurred.
- * 2. Scope Isolation: The blur is ONLY drawn inside the floating window; the rest of the viewfinder remains 100% sharp.
- * 3. Live Responsiveness: Changes to Transparency and Blur Strength sliders update live in real-time.
- * 4. Battery & CPU Efficient: Automatically pauses sampling when no floating windows are open.
+ * 1. Zero Bitmap Allocation: No TextureView.getBitmap(), zero CPU StackBlur, zero 66ms delay.
+ * 2. True Hardware Synchronization: Uses the exact live preview frame/source as the main viewfinder.
+ * 3. 100% GPU Execution: Renders via hardware-accelerated Skia GPU pipeline on RenderThread.
+ * 4. Zero Latency & Ghosting: Updates in the exact same render pass as the camera viewfinder.
+ * 5. Controls Preserved: Dynamically updates with blur strength, transparency, Liquid Glass, and Frosted Glass controls.
  */
 object BackdropBlurManager {
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private var processingJob: Job? = null
-
-    // High-definition sampling resolution for silky-smooth, zero-pixelation optical frosted glass
     const val SAMPLE_WIDTH = 360
     const val SAMPLE_HEIGHT = 640
 
-    // Live blurred backdrop consumed by FrostedGlassBox (aligned 1:1 with root window coordinates)
+    // Frame synchronization counter to notify Composables of new camera preview frames
+    val frameTickState = mutableLongStateOf(0L)
+
+    // Backward-compatible empty state
     val blurredBackdropState = mutableStateOf<Bitmap?>(null)
 
-    // Exact bounds of the TextureView in root coordinates so backdrop blur is never zoomed-in or shifted
+    // Exact bounds of the TextureView in root coordinates
     @Volatile
     var viewfinderBoundsInRoot: androidx.compose.ui.geometry.Rect? = null
     @Volatile
     var rootWindowSize: androidx.compose.ui.unit.IntSize? = null
+
+    // Weak reference to the main viewfinder TextureView
+    private var previewViewRef: WeakReference<TextureView>? = null
+
+    // Hardware RenderNode for GPU blur
+    private var renderNode: RenderNode? = null
+    private var currentBlurStrength = 24.0f
+
+    /**
+     * Flag indicating whether any floating window, popup, or settings panel is open.
+     * When false, viewfinder sampling and redraw ticks are completely bypassed.
+     */
+    var isWindowActive: Boolean = false
 
     fun updateViewfinderGeometry(
         boundsInRoot: androidx.compose.ui.geometry.Rect,
@@ -62,400 +71,112 @@ object BackdropBlurManager {
         rootWindowSize = rootSize
     }
 
-    // Cached raw root-aligned frame for instant re-blurring when user moves the Blur Strength slider in Settings
-    private var lastRawSampleBitmap: Bitmap? = null
-    private var currentBlurStrength = 24.0f
-    private var lastSampleTime = 0L
-
-    // Sampling rate: ~15 fps (every 66ms) is butter-smooth for background blur without taxing the camera pipeline
-    private const val MIN_SAMPLE_INTERVAL_MS = 66L
-
-    // Reusable bitmaps to avoid heap churn
-    private var reusableTextureBitmap: Bitmap? = null
-    private var reusableRootAlignedBitmap: Bitmap? = null
+    /**
+     * Registers the active viewfinder TextureView.
+     */
+    fun registerViewfinder(textureView: TextureView) {
+        previewViewRef = WeakReference(textureView)
+    }
 
     /**
-     * Flag indicating whether any floating window, popup, or settings panel is open.
-     * When false, viewfinder sampling is completely bypassed.
+     * Unregisters the viewfinder TextureView when destroyed.
      */
-    var isWindowActive: Boolean = false
-
-    /**
-     * Called from Viewfinder TextureView on every frame when a floating window is open.
-     * Accurately maps the TextureView (including its crop transform matrix and exact position in root)
-     * into a root-screen-aligned bitmap so floating windows show a 1:1 un-zoomed, pixel-free blur.
-     */
-    fun onViewfinderFrame(textureView: TextureView, blurStrength: Float) {
-        if (!isWindowActive) return
-        if (!textureView.isAvailable || textureView.width <= 0 || textureView.height <= 0) return
-
-        val now = android.os.SystemClock.uptimeMillis()
-        if (lastRawSampleBitmap != null && (now - lastSampleTime < MIN_SAMPLE_INTERVAL_MS)) {
-            return
-        }
-        if (processingJob?.isActive == true) {
-            return
-        }
-
-        currentBlurStrength = blurStrength
-        lastSampleTime = now
-
-        val rootW = rootWindowSize?.width ?: textureView.width
-        val rootH = rootWindowSize?.height ?: textureView.height
-        if (rootW <= 0 || rootH <= 0) return
-
-        val sampleW = SAMPLE_WIDTH
-        val sampleH = ((SAMPLE_WIDTH.toFloat() * rootH / rootW).roundToInt()).coerceIn(360, 960)
-
-        // Ensure reusableRootAlignedBitmap has correct dimensions
-        val rootBmp = reusableRootAlignedBitmap?.takeIf {
-            !it.isRecycled && it.width == sampleW && it.height == sampleH
-        } ?: Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888).also {
-            reusableRootAlignedBitmap = it
-        }
-
-        val bounds = viewfinderBoundsInRoot
-        if (bounds != null && rootW > 0 && rootH > 0) {
-            val left = (bounds.left / rootW * sampleW).roundToInt().coerceIn(0, sampleW)
-            val top = (bounds.top / rootH * sampleH).roundToInt().coerceIn(0, sampleH)
-            val right = (bounds.right / rootW * sampleW).roundToInt().coerceIn(left, sampleW)
-            val bottom = (bounds.bottom / rootH * sampleH).roundToInt().coerceIn(top, sampleH)
-            val tvSampleW = (right - left).coerceAtLeast(1)
-            val tvSampleH = (bottom - top).coerceAtLeast(1)
-
-            val tvBmp = reusableTextureBitmap?.takeIf {
-                !it.isRecycled && it.width == tvSampleW && it.height == tvSampleH
-            } ?: Bitmap.createBitmap(tvSampleW, tvSampleH, Bitmap.Config.ARGB_8888).also {
-                reusableTextureBitmap = it
-            }
-
-            try {
-                textureView.getBitmap(tvBmp)
-                val canvas = Canvas(rootBmp)
-                canvas.drawColor(android.graphics.Color.BLACK)
-                canvas.drawBitmap(tvBmp, left.toFloat(), top.toFloat(), null)
-            } catch (e: Exception) {
-                return
-            }
-        } else {
-            try {
-                textureView.getBitmap(rootBmp)
-            } catch (e: Exception) {
-                return
-            }
-        }
-
-        // Store downsampled raw frame into lastRawSampleBitmap for instant re-blurring on slider adjustments
-        val rawSample = lastRawSampleBitmap?.takeIf {
-            !it.isRecycled && it.width == sampleW && it.height == sampleH
-        } ?: Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888).also {
-            lastRawSampleBitmap = it
-        }
-
-        val copyCanvas = Canvas(rawSample)
-        copyCanvas.drawBitmap(rootBmp, 0f, 0f, null)
-
-        // Make an isolated copy for the background blur coroutine
-        val rawCopy = try {
-            Bitmap.createBitmap(rawSample)
-        } catch (e: Exception) {
-            return
-        }
-
-        val targetStrength = currentBlurStrength
-        processingJob = scope.launch {
-            val blurred = processBlur(rawCopy, targetStrength)
-            if (rawCopy != blurred && !rawCopy.isRecycled) {
-                rawCopy.recycle()
-            }
-            withContext(Dispatchers.Main) {
-                val old = blurredBackdropState.value
-                blurredBackdropState.value = blurred
-                if (old != null && old != blurred && !old.isRecycled) {
-                    old.recycle()
-                }
-            }
+    fun unregisterViewfinder(textureView: TextureView) {
+        if (previewViewRef?.get() === textureView) {
+            previewViewRef = null
         }
     }
 
     /**
-     * Instantly re-blurs the cached background when the user adjusts the Blur Strength slider.
+     * Called whenever a new live frame is rendered onto the main viewfinder.
+     * Triggers immediate synchronization with open floating windows.
+     */
+    fun onViewfinderFrameAvailable() {
+        if (!isWindowActive) return
+        frameTickState.longValue++
+    }
+
+    /**
+     * Compatibility bridge for Viewfinder calls.
+     */
+    fun onViewfinderFrame(textureView: TextureView, blurStrength: Float) {
+        registerViewfinder(textureView)
+        currentBlurStrength = blurStrength
+        onViewfinderFrameAvailable()
+    }
+
+    /**
+     * Dynamically updates blur strength from slider adjustments.
      */
     fun onBlurStrengthChanged(newStrength: Float) {
         currentBlurStrength = newStrength.coerceIn(0f, 50f)
-        val raw = lastRawSampleBitmap ?: return
-        if (raw.isRecycled) return
-
-        val rawCopy = try {
-            Bitmap.createBitmap(raw)
-        } catch (e: Exception) {
-            return
-        }
-
-        processingJob?.cancel()
-        processingJob = scope.launch {
-            val blurred = processBlur(rawCopy, currentBlurStrength)
-            if (rawCopy != blurred && !rawCopy.isRecycled) {
-                rawCopy.recycle()
-            }
-            withContext(Dispatchers.Main) {
-                val old = blurredBackdropState.value
-                blurredBackdropState.value = blurred
-                if (old != null && old != blurred && !old.isRecycled) {
-                    old.recycle()
-                }
-            }
-        }
+        frameTickState.longValue++
     }
 
     /**
-     * Processes blur strength mapping:
-     * - 0.0: completely sharp backdrop (no blur applied)
-     * - 0.1 - 50.0: smooth progression up to clearly heavy frosted blur
+     * Real-time GPU Blur rendering onto the floating window's hardware canvas.
+     *
+     * Directly renders the live TextureView into a hardware RenderNode, applies
+     * hardware-accelerated RenderEffect.createBlurEffect on the GPU, and translates
+     * the coordinate space so the blurred region perfectly aligns with what is
+     * physically beneath the floating window.
      */
-    fun processBlur(src: Bitmap, blurStrength: Float): Bitmap {
-        if (blurStrength <= 0.2f) {
-            return Bitmap.createBitmap(src)
+    fun drawGpuBlur(
+        canvas: android.graphics.Canvas,
+        windowBoundsInRoot: androidx.compose.ui.geometry.Rect?,
+        width: Float,
+        height: Float,
+        blurStrength: Float
+    ): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return false
         }
-        val clampedStrength = blurStrength.coerceIn(0f, 50f)
-        val radius1 = (clampedStrength * 0.60f).roundToInt().coerceIn(1, 30)
-        val pass1 = applyFastStackBlur(src, radius1.toFloat())
+        val targetView = previewViewRef?.get() ?: return false
+        if (!targetView.isAvailable || targetView.width <= 0 || targetView.height <= 0) {
+            return false
+        }
 
-        if (clampedStrength > 6f) {
-            val radius2 = (clampedStrength * 0.45f).roundToInt().coerceIn(1, 24)
-            val pass2 = applyFastStackBlur(pass1, radius2.toFloat())
-            if (pass1 != pass2 && !pass1.isRecycled) {
-                pass1.recycle()
+        return try {
+            val node = renderNode ?: RenderNode("GpuViewfinderBackdropBlur").also { renderNode = it }
+            val viewW = targetView.width
+            val viewH = targetView.height
+            node.setPosition(0, 0, viewW, viewH)
+
+            val recordingCanvas = node.beginRecording(viewW, viewH)
+            try {
+                targetView.draw(recordingCanvas)
+            } finally {
+                node.endRecording()
             }
-            return pass2
-        }
-        return pass1
-    }
 
-    /**
-     * Optimized Mario Klingemann StackBlur:
-     * High-speed O(N) integer box-blur approximation with smooth Gaussian fall-off.
-     */
-    private fun applyFastStackBlur(src: Bitmap, blurStrength: Float): Bitmap {
-        val radius = blurStrength.roundToInt().coerceIn(0, 32)
-        if (radius < 1) {
-            return Bitmap.createBitmap(src)
-        }
+            // Map user blur strength (0..50) into GPU Gaussian blur radius
+            val clampedStrength = blurStrength.coerceIn(0.1f, 50.0f)
+            val blurRadius = (clampedStrength * 2.2f).coerceIn(1.0f, 160.0f)
+            val blurEffect = RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP)
+            node.setRenderEffect(blurEffect)
 
-        val w = src.width
-        val h = src.height
-        val pix = IntArray(w * h)
-        src.getPixels(pix, 0, w, 0, 0, w, h)
-
-        val wm = w - 1
-        val hm = h - 1
-        val wh = w * h
-        val div = radius + radius + 1
-
-        val r = IntArray(wh)
-        val g = IntArray(wh)
-        val b = IntArray(wh)
-        var rsum: Int
-        var gsum: Int
-        var bsum: Int
-        var x: Int
-        var y: Int
-        var i: Int
-        var p: Int
-        var yp: Int
-        var yi: Int
-        var yw: Int
-        val vmin = IntArray(max(w, h))
-
-        var divsum = (div + 1) shr 1
-        divsum *= divsum
-        val dv = IntArray(256 * divsum)
-        for (idx in 0 until 256 * divsum) {
-            dv[idx] = idx / divsum
-        }
-
-        yw = 0
-        yi = 0
-
-        val stack = Array(div) { IntArray(3) }
-        var stackpointer: Int
-        var stackstart: Int
-        var sir: IntArray
-        var rbs: Int
-        val r1 = radius + 1
-        var routsum: Int
-        var goutsum: Int
-        var boutsum: Int
-        var rinsum: Int
-        var ginsum: Int
-        var binsum: Int
-
-        for (curY in 0 until h) {
-            rinsum = 0
-            ginsum = 0
-            binsum = 0
-            routsum = 0
-            goutsum = 0
-            boutsum = 0
-            rsum = 0
-            gsum = 0
-            bsum = 0
-            for (curI in -radius..radius) {
-                p = pix[yi + min(wm, max(curI, 0))]
-                sir = stack[curI + radius]
-                sir[0] = (p and 0xff0000) shr 16
-                sir[1] = (p and 0x00ff00) shr 8
-                sir[2] = (p and 0x0000ff)
-                rbs = r1 - kotlin.math.abs(curI)
-                rsum += sir[0] * rbs
-                gsum += sir[1] * rbs
-                bsum += sir[2] * rbs
-                if (curI > 0) {
-                    rinsum += sir[0]
-                    ginsum += sir[1]
-                    binsum += sir[2]
-                } else {
-                    routsum += sir[0]
-                    goutsum += sir[1]
-                    boutsum += sir[2]
-                }
+            val vfBounds = viewfinderBoundsInRoot
+            val relX = if (windowBoundsInRoot != null && vfBounds != null) {
+                windowBoundsInRoot.left - vfBounds.left
+            } else {
+                0f
             }
-            stackpointer = radius
-
-            for (curX in 0 until w) {
-                r[yi] = dv[rsum]
-                g[yi] = dv[gsum]
-                b[yi] = dv[bsum]
-
-                rsum -= routsum
-                gsum -= goutsum
-                bsum -= boutsum
-
-                stackstart = stackpointer - radius + div
-                sir = stack[stackstart % div]
-
-                routsum -= sir[0]
-                goutsum -= sir[1]
-                boutsum -= sir[2]
-
-                if (curY == 0) {
-                    vmin[curX] = min(curX + radius + 1, wm)
-                }
-                p = pix[yw + vmin[curX]]
-
-                sir[0] = (p and 0xff0000) shr 16
-                sir[1] = (p and 0x00ff00) shr 8
-                sir[2] = (p and 0x0000ff)
-
-                rinsum += sir[0]
-                ginsum += sir[1]
-                binsum += sir[2]
-
-                rsum += rinsum
-                gsum += ginsum
-                bsum += binsum
-
-                stackpointer = (stackpointer + 1) % div
-                sir = stack[stackpointer % div]
-
-                routsum += sir[0]
-                goutsum += sir[1]
-                boutsum += sir[2]
-
-                rinsum -= sir[0]
-                ginsum -= sir[1]
-                binsum -= sir[2]
-
-                yi++
+            val relY = if (windowBoundsInRoot != null && vfBounds != null) {
+                windowBoundsInRoot.top - vfBounds.top
+            } else {
+                0f
             }
-            yw += w
+
+            canvas.save()
+            // Translate so the portion of the viewfinder directly behind this window is rendered
+            canvas.translate(-relX, -relY)
+            canvas.drawRenderNode(node)
+            canvas.restore()
+            true
+        } catch (e: Throwable) {
+            Log.d(TAG, "Hardware RenderNode blur draw skipped: ${e.message}")
+            false
         }
-
-        for (curX in 0 until w) {
-            rinsum = 0
-            ginsum = 0
-            binsum = 0
-            routsum = 0
-            goutsum = 0
-            boutsum = 0
-            rsum = 0
-            gsum = 0
-            bsum = 0
-            yp = -radius * w
-            for (curI in -radius..radius) {
-                yi = max(0, yp) + curX
-                sir = stack[curI + radius]
-                sir[0] = r[yi]
-                sir[1] = g[yi]
-                sir[2] = b[yi]
-                rbs = r1 - kotlin.math.abs(curI)
-                rsum += r[yi] * rbs
-                gsum += g[yi] * rbs
-                bsum += b[yi] * rbs
-                if (curI > 0) {
-                    rinsum += sir[0]
-                    ginsum += sir[1]
-                    binsum += sir[2]
-                } else {
-                    routsum += sir[0]
-                    goutsum += sir[1]
-                    boutsum += sir[2]
-                }
-                if (curI < hm) {
-                    yp += w
-                }
-            }
-            yi = curX
-            stackpointer = radius
-            for (curY in 0 until h) {
-                // Preserve full opacity
-                pix[yi] = (-0x1000000) or (dv[rsum] shl 16) or (dv[gsum] shl 8) or dv[bsum]
-
-                rsum -= routsum
-                gsum -= goutsum
-                bsum -= boutsum
-
-                stackstart = stackpointer - radius + div
-                sir = stack[stackstart % div]
-
-                routsum -= sir[0]
-                goutsum -= sir[1]
-                boutsum -= sir[2]
-
-                if (curX == 0) {
-                    vmin[curY] = min(curY + r1, hm) * w
-                }
-                p = curX + vmin[curY]
-
-                sir[0] = r[p]
-                sir[1] = g[p]
-                sir[2] = b[p]
-
-                rinsum += sir[0]
-                ginsum += sir[1]
-                binsum += sir[2]
-
-                rsum += rinsum
-                gsum += ginsum
-                bsum += binsum
-
-                stackpointer = (stackpointer + 1) % div
-                sir = stack[stackpointer]
-
-                routsum += sir[0]
-                goutsum += sir[1]
-                boutsum += sir[2]
-
-                rinsum -= sir[0]
-                ginsum -= sir[1]
-                binsum -= sir[2]
-
-                yi += w
-            }
-        }
-
-        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        result.setPixels(pix, 0, w, 0, 0, w, h)
-        return result
     }
 }
+

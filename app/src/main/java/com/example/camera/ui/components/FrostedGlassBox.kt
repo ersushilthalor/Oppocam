@@ -53,7 +53,7 @@ fun FrostedGlassBox(
     content: @Composable BoxScope.() -> Unit
 ) {
     val appearance = LocalFloatingWindowAppearance.current
-    val blurredBackdrop by BackdropBlurManager.blurredBackdropState
+    val frameTick = BackdropBlurManager.frameTickState.longValue
     val baseDensity = androidx.compose.ui.platform.LocalDensity.current
     val effectiveScale = if (applyWindowScale) appearance.windowScale.coerceIn(0.75f, 1.25f) else 1.0f
     val scaledDensity = remember(baseDensity, effectiveScale) {
@@ -191,8 +191,7 @@ fun FrostedGlassBox(
                     shape = shape
                 )
         ) {
-            // Layer 1: Real Optical Backdrop Blur
-            // Directly displays the camera viewfinder backdrop processed by BackdropBlurManager
+            // Layer 1: Real Optical Backdrop Blur via GPU
             var windowBoundsInRoot by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
 
             Canvas(
@@ -209,41 +208,26 @@ fun FrostedGlassBox(
                         )
                     }
             ) {
-                val bmp = blurredBackdrop
-                if (bmp != null && !bmp.isRecycled) {
-                    val rootSize = BackdropBlurManager.rootWindowSize
-                    val rw = (rootSize?.width?.toFloat() ?: size.width).coerceAtLeast(1f)
-                    val rh = (rootSize?.height?.toFloat() ?: size.height).coerceAtLeast(1f)
-                    val bw = bmp.width.toFloat()
-                    val bh = bmp.height.toFloat()
+                // Reading frameTick ensures GPU blur re-renders in lockstep with every camera preview frame
+                @Suppress("UNUSED_VARIABLE")
+                val tick = frameTick
 
-                    val scaleX = bw / rw
-                    val scaleY = bh / rh
-
-                    val bounds = windowBoundsInRoot
-                    val left = (bounds?.left ?: 0f).coerceIn(0f, rw)
-                    val top = (bounds?.top ?: 0f).coerceIn(0f, rh)
-                    val right = (bounds?.right ?: rw).coerceIn(left + 1f, rw)
-                    val bottom = (bounds?.bottom ?: rh).coerceIn(top + 1f, rh)
-
-                    val srcLeft = (left * scaleX).roundToInt().coerceIn(0, bmp.width - 1)
-                    val srcTop = (top * scaleY).roundToInt().coerceIn(0, bmp.height - 1)
-                    val srcRight = (right * scaleX).roundToInt().coerceIn(srcLeft + 1, bmp.width)
-                    val srcBottom = (bottom * scaleY).roundToInt().coerceIn(srcTop + 1, bmp.height)
-
-                    val srcRect = android.graphics.Rect(srcLeft, srcTop, srcRight, srcBottom)
-                    val dstRect = android.graphics.Rect(0, 0, size.width.roundToInt(), size.height.roundToInt())
-
+                val bounds = windowBoundsInRoot
+                var drawn = false
+                if (bounds != null && blurStrength > 0.1f) {
                     drawIntoCanvas { canvas ->
-                        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
-                            isAntiAlias = true
-                            isFilterBitmap = true
-                            isDither = true
-                        }
-                        canvas.nativeCanvas.drawBitmap(bmp, srcRect, dstRect, paint)
+                        drawn = BackdropBlurManager.drawGpuBlur(
+                            canvas = canvas.nativeCanvas,
+                            windowBoundsInRoot = bounds,
+                            width = size.width,
+                            height = size.height,
+                            blurStrength = blurStrength
+                        )
                     }
-                } else {
-                    // Graceful fallback when camera frame is not yet available
+                }
+
+                if (!drawn) {
+                    // Graceful solid glass substrate fallback when camera preview has not started or in testing
                     drawRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(

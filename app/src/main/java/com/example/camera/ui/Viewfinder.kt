@@ -418,6 +418,7 @@ fun Viewfinder(
                                     )
                                     onSurfaceTextureAvailable(st)
                                     onSurfaceTextureSizeChanged?.invoke(st, w, h)
+                                    com.example.camera.ui.components.BackdropBlurManager.registerViewfinder(this@apply)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
                                     val effectiveW = if (this@apply.width > 0) this@apply.width else w

@@ -125,6 +125,27 @@ object CubeLutParser {
         }
     }
 
+    private fun stripComment(line: String): String {
+        var inQuotes = false
+        var quoteChar = ' '
+        for (i in line.indices) {
+            val c = line[i]
+            if ((c == '"' || c == '\'') && (i == 0 || line[i - 1] != '\\')) {
+                if (!inQuotes) {
+                    inQuotes = true
+                    quoteChar = c
+                } else if (c == quoteChar) {
+                    inQuotes = false
+                }
+            } else if ((c == '#' || c == ';') && !inQuotes) {
+                return line.substring(0, i)
+            } else if (c == '/' && i + 1 < line.length && line[i + 1] == '/' && !inQuotes) {
+                return line.substring(0, i)
+            }
+        }
+        return line
+    }
+
     /**
      * Parses an input stream formatted in the Adobe .cube LUT standard.
      */
@@ -140,59 +161,82 @@ object CubeLutParser {
 
         var line: String? = reader.readLine()
         while (line != null) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+            val sanitized = if (line.startsWith("\uFEFF")) line.substring(1) else line
+            val trimmed = stripComment(sanitized).trim().replace('\u00A0', ' ')
+            if (trimmed.isEmpty()) {
                 line = reader.readLine()
                 continue
             }
 
-            val upper = trimmed.uppercase()
+            val tokens = trimmed.split("[\\s,]+".toRegex()).filter { it.isNotBlank() }
+            if (tokens.isEmpty()) {
+                line = reader.readLine()
+                continue
+            }
+
+            val head = tokens[0].uppercase().removeSuffix(":").removeSuffix("=")
             when {
-                upper.startsWith("TITLE") -> {
-                    val firstQuote = trimmed.indexOf('"')
-                    val lastQuote = trimmed.lastIndexOf('"')
-                    title = if (firstQuote in 0 until lastQuote) {
-                        trimmed.substring(firstQuote + 1, lastQuote).trim()
-                    } else {
-                        trimmed.substringAfter("TITLE").trim().removeSurrounding("\"")
+                head == "TITLE" -> {
+                    val titlePart = trimmed.substringAfter(tokens[0]).trim()
+                        .removePrefix(":").removePrefix("=").trim()
+                        .removeSurrounding("\"").removeSurrounding("'").trim()
+                    if (titlePart.isNotBlank()) {
+                        title = titlePart
                     }
                 }
-                upper.startsWith("LUT_3D_SIZE") -> {
+                head == "LUT_3D_SIZE" -> {
                     is3D = true
-                    lutSize = trimmed.substringAfter("LUT_3D_SIZE").trim().toIntOrNull() ?: 33
+                    val parsed = tokens.drop(1).firstOrNull { it.toIntOrNull() != null }?.toIntOrNull()
+                    if (parsed != null && parsed > 0) {
+                        lutSize = parsed
+                    }
                 }
-                upper.startsWith("LUT_1D_SIZE") -> {
+                head == "LUT_1D_SIZE" -> {
                     is3D = false
-                    lutSize = trimmed.substringAfter("LUT_1D_SIZE").trim().toIntOrNull() ?: 1024
-                }
-                upper.startsWith("DOMAIN_MIN") -> {
-                    val parts = trimmed.split("\\s+".toRegex())
-                    if (parts.size >= 4) {
-                        domainMinR = parts[1].toFloatOrNull() ?: 0f
-                        domainMinG = parts[2].toFloatOrNull() ?: 0f
-                        domainMinB = parts[3].toFloatOrNull() ?: 0f
+                    val parsed = tokens.drop(1).firstOrNull { it.toIntOrNull() != null }?.toIntOrNull()
+                    if (parsed != null && parsed > 0) {
+                        lutSize = parsed
                     }
                 }
-                upper.startsWith("DOMAIN_MAX") -> {
-                    val parts = trimmed.split("\\s+".toRegex())
-                    if (parts.size >= 4) {
-                        domainMaxR = parts[1].toFloatOrNull() ?: 1f
-                        domainMaxG = parts[2].toFloatOrNull() ?: 1f
-                        domainMaxB = parts[3].toFloatOrNull() ?: 1f
+                head == "DOMAIN_MIN" -> {
+                    val floats = tokens.drop(1).mapNotNull { it.toFloatOrNull() }
+                    if (floats.size >= 3) {
+                        domainMinR = floats[0]
+                        domainMinG = floats[1]
+                        domainMinB = floats[2]
+                    } else if (floats.size == 1) {
+                        domainMinR = floats[0]
+                        domainMinG = floats[0]
+                        domainMinB = floats[0]
                     }
+                }
+                head == "DOMAIN_MAX" -> {
+                    val floats = tokens.drop(1).mapNotNull { it.toFloatOrNull() }
+                    if (floats.size >= 3) {
+                        domainMaxR = floats[0]
+                        domainMaxG = floats[1]
+                        domainMaxB = floats[2]
+                    } else if (floats.size == 1) {
+                        domainMaxR = floats[0]
+                        domainMaxG = floats[0]
+                        domainMaxB = floats[0]
+                    }
+                }
+                head.startsWith("LUT_") || head.startsWith("INPUT_") || head.startsWith("OUTPUT_") ||
+                head.startsWith("CREATOR") || head.startsWith("DATE") || head.startsWith("GAMMA") ||
+                head.startsWith("COLOR") || head.startsWith("SOFTWARE") -> {
+                    // Metadata header tag; ignore
                 }
                 else -> {
-                    // Try parsing 3 RGB floats from this line
-                    val tokens = trimmed.split("\\s+".toRegex())
-                    if (tokens.size >= 3) {
-                        val r = tokens[0].toFloatOrNull()
-                        val g = tokens[1].toFloatOrNull()
-                        val b = tokens[2].toFloatOrNull()
-                        if (r != null && g != null && b != null) {
-                            dataFloats.add(r)
-                            dataFloats.add(g)
-                            dataFloats.add(b)
-                        }
+                    val floats = tokens.mapNotNull { it.toFloatOrNull() }
+                    if (floats.size >= 3) {
+                        dataFloats.add(floats[0])
+                        dataFloats.add(floats[1])
+                        dataFloats.add(floats[2])
+                    } else if (floats.isNotEmpty() && !is3D) {
+                        dataFloats.add(floats[0])
+                        dataFloats.add(floats[0])
+                        dataFloats.add(floats[0])
                     }
                 }
             }
@@ -200,7 +244,15 @@ object CubeLutParser {
         }
 
         if (lutSize <= 0) {
-            lutSize = if (is3D) 33 else 1024
+            val totalRows = dataFloats.size / 3
+            val cbrt = Math.round(Math.cbrt(totalRows.toDouble())).toInt()
+            if (cbrt >= 2 && cbrt * cbrt * cbrt == totalRows) {
+                is3D = true
+                lutSize = cbrt
+            } else {
+                is3D = false
+                lutSize = if (totalRows > 0) totalRows else 1024
+            }
         }
 
         val totalExpected = if (is3D) lutSize * lutSize * lutSize * 3 else lutSize * 3
