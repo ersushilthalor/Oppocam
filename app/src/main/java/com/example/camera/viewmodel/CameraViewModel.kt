@@ -192,6 +192,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setLutWindowOpen(!_isLutWindowOpen.value)
     }
 
+    // Video Stabilization Floating Window (OFF / EIS / EIS+)
+    private val _isStabilizationWindowOpen = MutableStateFlow(false)
+    val isStabilizationWindowOpen: StateFlow<Boolean> = _isStabilizationWindowOpen.asStateFlow()
+
+    fun setStabilizationWindowOpen(open: Boolean) {
+        _isStabilizationWindowOpen.value = open
+        if (open) {
+            _isLogProfileWindowOpen.value = false
+            _isLutWindowOpen.value = false
+            _isCinemaSettingsOpen.value = false
+        }
+    }
+
+    fun toggleStabilizationWindow() {
+        setStabilizationWindowOpen(!_isStabilizationWindowOpen.value)
+    }
+
     fun selectLogProfile(profile: CinemaColorProfile) {
         val current = cinemaConfig.value
         val canDo10Bit = cinemaCapabilities.value.getSupportedBitDepthsForCodec(current.codec).contains(LogBitDepth.BIT_10)
@@ -888,6 +905,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _isRawCaptureEnabled = MutableStateFlow(preferences.getModeRaw(preferences.cameraMode))
     val isRawCaptureEnabled: StateFlow<Boolean> = _isRawCaptureEnabled.asStateFlow()
 
+    private val _videoStabilizationMode = MutableStateFlow(preferences.getModeVideoStabilizationMode(preferences.cameraMode))
+    val videoStabilizationMode: StateFlow<VideoStabilizationMode> = _videoStabilizationMode.asStateFlow()
+    val eisPlusTelemetry: StateFlow<com.example.camera.engine.eisplus.EisPlusTelemetry?> = engine.eisPlusStabilizationEngine.telemetry
+    val eisPlusTransform: StateFlow<com.example.camera.engine.eisplus.EisPlusTransform?> = engine.eisPlusTransform
+
     private val _isVideoStabilizationEnabled = MutableStateFlow(preferences.getModeVideoStabilization(preferences.cameraMode))
     val isVideoStabilizationEnabled: StateFlow<Boolean> = _isVideoStabilizationEnabled.asStateFlow()
 
@@ -936,6 +958,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // Apply restored mode-specific preferences into engine
         engine.flashMode = preferences.getModeFlashMode(initialMode)
         engine.isRawCaptureEnabled = preferences.getModeRaw(initialMode)
+        val initialStabMode = preferences.getModeVideoStabilizationMode(initialMode)
+        _videoStabilizationMode.value = initialStabMode
+        engine.videoStabilizationMode = initialStabMode
         engine.isVideoStabilizationEnabled = preferences.getModeVideoStabilization(initialMode)
         engine.videoBitrateOption = preferences.getModeVideoBitrate(initialMode)
         engine.videoFps = preferences.getModeVideoFps(initialMode)
@@ -1187,6 +1212,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mFastFps = preferences.getModeUltraFastShutterFps(mode)
         _ultraFastShutterFps.value = mFastFps
         engine.ultraFastShutterFps = mFastFps
+
+        val mStabMode = preferences.getModeVideoStabilizationMode(mode)
+        _videoStabilizationMode.value = mStabMode
+        engine.videoStabilizationMode = mStabMode
+        _isStabilizationWindowOpen.value = false
 
         val mVideoStab = preferences.getModeVideoStabilization(mode)
         _isVideoStabilizationEnabled.value = mVideoStab
@@ -1721,6 +1751,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.isVideoStabilizationEnabled = enabled
         engine.updatePreviewSettings()
         showToast(if (enabled) "Stabilization Enabled" else "Stabilization Disabled")
+    }
+
+    fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
+        _videoStabilizationMode.value = mode
+        preferences.videoStabilizationMode = mode
+        preferences.setModeVideoStabilizationMode(_cameraMode.value, mode)
+        engine.videoStabilizationMode = mode
+
+        val isEnabled = mode != VideoStabilizationMode.OFF
+        _isVideoStabilizationEnabled.value = isEnabled
+        preferences.isVideoStabilizationEnabled = isEnabled
+        preferences.setModeVideoStabilization(_cameraMode.value, isEnabled)
+        engine.isVideoStabilizationEnabled = isEnabled
+
+        val toastMsg = when (mode) {
+            VideoStabilizationMode.OFF -> "Stabilization: OFF"
+            VideoStabilizationMode.EIS -> "Stabilization: EIS (Standard Electronic)"
+            VideoStabilizationMode.EIS_PLUS -> "Stabilization: EIS+ (Ultra Advanced Fusion)"
+        }
+        showToast(toastMsg)
     }
 
     fun setVideoBitrate(bitrate: VideoBitrateOption) {

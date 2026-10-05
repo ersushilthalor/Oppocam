@@ -602,6 +602,38 @@ class Camera2Engine(private val context: Context) {
 
     val nightFusionProcessor by lazy { NightFusionProcessor() }
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
+    val eisPlusStabilizationEngine by lazy { com.example.camera.engine.eisplus.EisPlusStabilizationEngine(context) }
+    val eisPlusTransform: StateFlow<com.example.camera.engine.eisplus.EisPlusTransform?>
+        get() = eisPlusStabilizationEngine.currentTransform
+
+    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = preferences.videoStabilizationMode
+        set(value) {
+            field = value
+            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
+            if (isVideoMode) {
+                when (value) {
+                    com.example.camera.model.VideoStabilizationMode.EIS_PLUS -> {
+                        eisPlusStabilizationEngine.start()
+                        gyroStabilizationEngine.stop()
+                    }
+                    com.example.camera.model.VideoStabilizationMode.EIS -> {
+                        eisPlusStabilizationEngine.stop()
+                        gyroStabilizationEngine.start()
+                    }
+                    com.example.camera.model.VideoStabilizationMode.OFF -> {
+                        eisPlusStabilizationEngine.stop()
+                        gyroStabilizationEngine.stop()
+                        lastStabilizedCrop = null
+                    }
+                }
+            } else {
+                eisPlusStabilizationEngine.stop()
+                gyroStabilizationEngine.stop()
+                lastStabilizedCrop = null
+            }
+            updatePreviewSettings()
+        }
+
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
     val stableActionHorizonEngine by lazy { com.example.camera.stableaction.StableActionHorizonEngine(context) }
     val dollyZoomEngine by lazy { com.example.camera.dollyzoom.DollyZoomEngine() }
@@ -679,10 +711,24 @@ class Camera2Engine(private val context: Context) {
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        val isStabActive = isVideoStabilizationEnabled && (config.isUltraStabilizationEnabled || config.isHybridEnabled || config.isEisPreferred || config.isEisOnly)
+        if (config.isUltraStabilizationEnabled) {
+            videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+        } else if (config.isEisOnly || config.isHybridEnabled || config.isEisPreferred) {
+            if (videoStabilizationMode != com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
+                videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
+            }
+        }
+        val isStabActive = isVideoStabilizationEnabled && (config.isUltraStabilizationEnabled || config.isHybridEnabled || config.isEisPreferred || config.isEisOnly || videoStabilizationMode.isEnabled)
         if (isVideoMode && isStabActive) {
-            gyroStabilizationEngine.start()
+            if (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
+                eisPlusStabilizationEngine.start()
+                gyroStabilizationEngine.stop()
+            } else {
+                eisPlusStabilizationEngine.stop()
+                gyroStabilizationEngine.start()
+            }
         } else {
+            eisPlusStabilizationEngine.stop()
             gyroStabilizationEngine.stop()
             lastStabilizedCrop = null
         }
@@ -3075,9 +3121,35 @@ class Camera2Engine(private val context: Context) {
             val hybridConfig = _hybridStabilizationConfig.value
             val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
             val isOisOnly = hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
-            val isStabActive = isVideoStabilizationEnabled && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly)
+            val isEisPlusActive = isVideoMode && (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS || hybridConfig.isUltraStabilizationEnabled)
 
-            if (isVideoMode && isStabActive && !isOisOnly) {
+            if (isEisPlusActive) {
+                val lens = _selectedLens.value
+                if (lens != null) {
+                    try {
+                        val chars = getCharacteristics(lens.cameraId)
+                        val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                        val focalLengths = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                        val focalLength = focalLengths?.firstOrNull() ?: 4.38f
+                        val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: SizeF(6.4f, 4.8f)
+
+                        if (activeArray != null) {
+                            val ptsUs = (result.get(CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()) / 1000L
+                            val transform = eisPlusStabilizationEngine.onFrameCaptured(
+                                result = result,
+                                activeArray = activeArray,
+                                baseZoom = currentZoom,
+                                focalLengthMm = focalLength,
+                                sensorPhysicalSizeMm = sensorSize,
+                                ptsUs = ptsUs
+                            )
+                            if (transform?.cropRect != null) {
+                                applyStabilizedCrop(transform.cropRect)
+                            }
+                        }
+                    } catch (ignored: Exception) {}
+                }
+            } else if (isVideoMode && isVideoStabilizationEnabled && !isOisOnly) {
                 // When hardware EIS is supported, the camera HAL's internal DSP/ISP handles gyro EIS.
                 // Interfering with SCALER_CROP_REGION simultaneously causes double stabilization.
                 // We use gyro-based EIS ONLY when the hardware lacks native EIS on this lens/mode!
@@ -3089,7 +3161,7 @@ class Camera2Engine(private val context: Context) {
                 }
                 val effectiveFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
                 val isHighFps4k = (effectiveRes?.width ?: 0) >= 3840 && effectiveFps >= 60
-                val isHardwareEisActive = caps.supportsEis && (hybridConfig.isUltraStabilizationEnabled || isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
+                val isHardwareEisActive = caps.supportsEis && (hybridConfig.isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
 
                 if (!isHardwareEisActive) {
                     val lens = _selectedLens.value
@@ -3494,8 +3566,14 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 // Electronic Image Stabilization (Digital frame margin compensation)
-                // When "OIS Only" is selected, EIS is strictly OFF.
-                if (isOisOnly) {
+                // When EIS+ is active: do NOT double-apply HAL EIS! EIS+ handles stabilization at the app/pipeline level.
+                // Camera2 HAL EIS is strictly turned OFF, while physical OIS stays ON to fuse lens movement data.
+                if (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
+                    builder.set(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                    )
+                } else if (isOisOnly) {
                     builder.set(
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
@@ -5649,6 +5727,12 @@ class Camera2Engine(private val context: Context) {
             stableActionHorizonEngine.startRecordingTrajectory()
         }
 
+        val isEisPlusActive = (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS || _hybridStabilizationConfig.value.isUltraStabilizationEnabled)
+        if (isEisPlusActive) {
+            eisPlusStabilizationEngine.start()
+            eisPlusStabilizationEngine.startRecordingTrajectory()
+        }
+
         recordingVideoPipeline = _selectedVideoPipeline.value
 
         try {
@@ -6559,6 +6643,9 @@ class Camera2Engine(private val context: Context) {
         val wasDollyZoomActive = _isDollyZoomActive.value
         val dollyTrajectory = if (wasDollyZoomActive) dollyZoomEngine.stopRecordingTrajectory() else emptyList()
 
+        val wasEisPlusActive = (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS || _hybridStabilizationConfig.value.isUltraStabilizationEnabled)
+        val eisPlusTrajectory = if (wasEisPlusActive) eisPlusStabilizationEngine.stopRecordingTrajectory() else emptyList()
+
         val lockedOrientationHint = preparedVideoGeometry?.orientationHint ?: getVideoOrientationHint()
 
         val activeCustomRecorder = customPipelineRecorder
@@ -6629,6 +6716,8 @@ class Camera2Engine(private val context: Context) {
                     horizonTrajectory = horizonTrajectory,
                     wasDollyZoomActive = wasDollyZoomActive,
                     dollyTrajectory = dollyTrajectory,
+                    wasEisPlusActive = wasEisPlusActive,
+                    eisPlusTrajectory = eisPlusTrajectory,
                     snapVideoPipeline = snapVideoPipeline,
                     needsPipelinePostPass = needsPipelinePostPass,
                     effectiveFileName = effectiveFileName,
@@ -6658,6 +6747,8 @@ class Camera2Engine(private val context: Context) {
         horizonTrajectory: List<com.example.camera.stableaction.StableActionHorizonEngine.TrajectoryPoint>,
         wasDollyZoomActive: Boolean,
         dollyTrajectory: List<com.example.camera.dollyzoom.DollyTrajectoryPoint>,
+        wasEisPlusActive: Boolean = false,
+        eisPlusTrajectory: List<com.example.camera.engine.eisplus.EisPlusTrajectoryPoint> = emptyList(),
         snapVideoPipeline: com.example.camera.videopipeline.VideoPipelineType,
         needsPipelinePostPass: Boolean,
         effectiveFileName: String,
@@ -6721,6 +6812,28 @@ class Camera2Engine(private val context: Context) {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error applying Dolly Zoom to final video", e)
+                }
+            }
+
+            if (wasEisPlusActive && eisPlusTrajectory.isNotEmpty()) {
+                try {
+                    val procDest = File(rawRecordedFile.parentFile, "eis_plus_${System.currentTimeMillis()}.${fileToSave.extension}")
+                    val processed = com.example.camera.engine.eisplus.EisPlusVideoProcessor.processEisPlusVideo(
+                        inputFile = fileToSave,
+                        outputFile = procDest,
+                        trajectory = eisPlusTrajectory,
+                        aspectRatio = getTargetAspectRatioForMode(if (isCinema) CameraMode.CINEMA else CameraMode.VIDEO),
+                        orientationDegrees = lockedOrientationHint
+                    )
+                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
+                        if (fileToSave != rawRecordedFile) {
+                            intermediateFiles.add(fileToSave)
+                        }
+                        fileToSave = processed
+                        gradedFile = processed
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error applying EIS+ video stabilization to final video", e)
                 }
             }
 

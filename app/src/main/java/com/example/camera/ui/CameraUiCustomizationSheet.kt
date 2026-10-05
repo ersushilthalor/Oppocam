@@ -647,6 +647,7 @@ fun LivePreviewCanvas(
                     TopControlItem.VIDEO_ADJUSTMENTS -> Icons.Outlined.Tune
                     TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                     TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
+                    TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                     TopControlItem.PIPELINE -> Icons.Outlined.Tune
                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
                 }
@@ -1683,6 +1684,7 @@ fun TopBarControlsEditor(
                                             TopControlItem.SETTINGS -> Icons.Outlined.Settings
                                             TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                                             TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
+                                            TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                             else -> Icons.Outlined.Tune
                                         },
                                         contentDescription = null,
@@ -1730,6 +1732,7 @@ fun TopBarControlsEditor(
                                                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
                                                     TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                                                     TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
+                                                    TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                                     else -> Icons.Outlined.Tune
                                                 },
                                                 contentDescription = null,

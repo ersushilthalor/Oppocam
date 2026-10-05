@@ -128,6 +128,8 @@ fun Viewfinder(
     dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
     onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
     onOpenCustomPipelineSettings: (() -> Unit)? = null,
+    stabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
+    eisPlusTransform: com.example.camera.engine.eisplus.EisPlusTransform? = null,
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -541,7 +543,22 @@ fun Viewfinder(
                         val viewW = textureView.width.toFloat()
                         val viewH = textureView.height.toFloat()
                         if (viewW > 0f && viewH > 0f) {
-                            updateTextureViewTransform(textureView, previewBufferSize, targetRatio, sensorOrientation, isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA), horizonRollDegrees, horizonNormX, horizonNormY, isDollyZoomActive && cameraMode == CameraMode.VIDEO, dollyCropState?.scaleFactor ?: 1.0f, dollyCropState?.focusNormX ?: 0.5f, dollyCropState?.focusNormY ?: 0.5f)
+                            updateTextureViewTransform(
+                                textureView = textureView,
+                                previewBufferSize = previewBufferSize,
+                                targetRatio = targetRatio,
+                                sensorOrientation = sensorOrientation,
+                                isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
+                                horizonRollDegrees = horizonRollDegrees,
+                                horizonNormX = horizonNormX,
+                                horizonNormY = horizonNormY,
+                                isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
+                                dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
+                                dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
+                                dollyFocusY = dollyCropState?.focusNormY ?: 0.5f,
+                                isEisPlusActive = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) && (stabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS),
+                                eisPlusTransform = eisPlusTransform
+                            )
                         }
 
                         // Outline provider for corner radius clipping on hardware accelerated TextureView
@@ -1023,6 +1040,8 @@ fun configureTransform(
     dollyScale: Float = 1.0f,
     dollyFocusX: Float = 0.5f,
     dollyFocusY: Float = 0.5f,
+    isEisPlusActive: Boolean = false,
+    eisPlusTransform: com.example.camera.engine.eisplus.EisPlusTransform? = null,
     viewWidth: Int = 0,
     viewHeight: Int = 0
 ) {
@@ -1133,6 +1152,23 @@ fun configureTransform(
         val shiftX = (viewW / 2f - focalX) * ((dollyScale - 1f) / dollyScale).coerceIn(0f, 1f)
         val shiftY = (viewH / 2f - focalY) * ((dollyScale - 1f) / dollyScale).coerceIn(0f, 1f)
         matrix.postTranslate(shiftX, shiftY)
+    } else if (isEisPlusActive && eisPlusTransform != null) {
+        val t = eisPlusTransform
+        val cx = viewW / 2f
+        val cy = viewH / 2f
+        if (kotlin.math.abs(t.rotationDeg) > 0.02f) {
+            matrix.postRotate(t.rotationDeg, cx, cy)
+        }
+        val s = t.scaleFactor.coerceIn(1.0f, 1.35f)
+        matrix.postScale(s, s, cx, cy)
+        val maxShiftX = (viewW * (s - 1f) / 2f).coerceAtLeast(0f)
+        val maxShiftY = (viewH * (s - 1f) / 2f).coerceAtLeast(0f)
+        val px = (t.dxNorm * maxShiftX * 0.88f)
+        val py = (t.dyNorm * maxShiftY * 0.88f)
+        matrix.postTranslate(px, py)
+        if (kotlin.math.abs(t.shearX) > 0.001f || kotlin.math.abs(t.shearY) > 0.001f) {
+            matrix.postSkew(-t.shearX * 0.5f, -t.shearY * 0.5f, cx, cy)
+        }
     }
 
     textureView.setTransform(matrix)
@@ -1154,6 +1190,8 @@ internal fun updateTextureViewTransform(
     dollyScale: Float = 1.0f,
     dollyFocusX: Float = 0.5f,
     dollyFocusY: Float = 0.5f,
+    isEisPlusActive: Boolean = false,
+    eisPlusTransform: com.example.camera.engine.eisplus.EisPlusTransform? = null,
     viewWidth: Int = 0,
     viewHeight: Int = 0
 ) {
@@ -1182,6 +1220,8 @@ internal fun updateTextureViewTransform(
         dollyScale = dollyScale,
         dollyFocusX = dollyFocusX,
         dollyFocusY = dollyFocusY,
+        isEisPlusActive = isEisPlusActive,
+        eisPlusTransform = eisPlusTransform,
         viewWidth = viewWidth,
         viewHeight = viewHeight
     )

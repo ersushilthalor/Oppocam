@@ -148,6 +148,7 @@ enum class TopControlItem(val id: String, val label: String) {
     VIDEO_ADJUSTMENTS("video_adjustments", "Video Adjustments"),
     MOTION_PHOTO("motion_photo", "Motion Photo"),
     PORTRAIT_STYLE("portrait_style", "Portrait Style"),
+    STABILIZATION("stabilization", "Video Stabilization (OFF/EIS/EIS+)"),
     PIPELINE("pipeline", "Custom Pipeline"),
     SETTINGS("settings", "Settings Gear")
 }
@@ -206,7 +207,7 @@ data class ModeLayoutConfig(
 ) {
     fun getIconPosition(item: TopControlItem): TopIconPosition {
         return topIconPositions[item] ?: when (item) {
-            TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK -> TopIconPosition.LEFT
+            TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
             TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
             TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PORTRAIT_STYLE, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
         }
@@ -539,6 +540,7 @@ object CameraUiTemplates {
             CameraMode.CINEMA -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
+                    TopControlItem.STABILIZATION,
                     TopControlItem.LOG,
                     TopControlItem.LUT,
                     TopControlItem.RESOLUTION,
@@ -546,6 +548,7 @@ object CameraUiTemplates {
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.STABILIZATION to TopIconPosition.LEFT,
                     TopControlItem.LOG to TopIconPosition.CENTER,
                     TopControlItem.LUT to TopIconPosition.CENTER,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
@@ -557,6 +560,7 @@ object CameraUiTemplates {
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
                     TopControlItem.TIMER,
+                    TopControlItem.STABILIZATION,
                     TopControlItem.RESOLUTION,
                     TopControlItem.EV,
                     TopControlItem.VIDEO_ADJUSTMENTS,
@@ -565,6 +569,7 @@ object CameraUiTemplates {
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
                     TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.STABILIZATION to TopIconPosition.LEFT,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
                     TopControlItem.EV to TopIconPosition.CENTER,
                     TopControlItem.VIDEO_ADJUSTMENTS to TopIconPosition.RIGHT,

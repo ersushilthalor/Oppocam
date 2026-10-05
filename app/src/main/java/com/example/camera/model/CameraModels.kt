@@ -493,6 +493,39 @@ data class NightCaptureProgress(
     val iso: Int = 0
 )
 
+enum class VideoStabilizationMode(
+    val id: String,
+    val title: String,
+    val badgeLabel: String,
+    val subtitle: String,
+    val description: String
+) {
+    OFF(
+        id = "off",
+        title = "OFF",
+        badgeLabel = "OFF",
+        subtitle = "Stabilization Disabled",
+        description = "Full uncropped sensor readout without digital dampening"
+    ),
+    EIS(
+        id = "eis",
+        title = "EIS",
+        badgeLabel = "EIS",
+        subtitle = "Standard Electronic Stabilization",
+        description = "Camera2 HAL electronic image stabilization with standard smoothing"
+    ),
+    EIS_PLUS(
+        id = "eis_plus",
+        title = "EIS+",
+        badgeLabel = "EIS+",
+        subtitle = "Ultra Advanced Stabilization",
+        description = "PhotonCamera EIS+ • Gyro + OIS fusion • Rolling shutter • 5–7 frame look-ahead • Tripod lock"
+    );
+
+    val isEnabled: Boolean get() = this != OFF
+    val isEisPlus: Boolean get() = this == EIS_PLUS
+}
+
 enum class MainCameraStabilizationMode(val title: String, val subtitle: String) {
     OFF("Off", "Stabilization disabled"),
     OIS_ONLY("OIS Only", "Physical optical voice-coil stabilization only"),

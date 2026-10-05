@@ -285,6 +285,17 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_VIDEO_STABILIZATION, true)
         set(value) = prefs.edit().putBoolean(KEY_VIDEO_STABILIZATION, value).apply()
 
+    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode
+        get() {
+            val name = prefs.getString("key_video_stabilization_mode", com.example.camera.model.VideoStabilizationMode.EIS.name)
+            return try {
+                com.example.camera.model.VideoStabilizationMode.valueOf(name ?: com.example.camera.model.VideoStabilizationMode.EIS.name)
+            } catch (e: Exception) {
+                com.example.camera.model.VideoStabilizationMode.EIS
+            }
+        }
+        set(value) = prefs.edit().putString("key_video_stabilization_mode", value.name).apply()
+
     var isAudioEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUDIO_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_AUDIO_ENABLED, value).apply()
@@ -1243,6 +1254,26 @@ class CameraPreferences(context: Context) {
         return if (prefs.contains(modeKey(mode, "video_stab"))) {
             prefs.getBoolean(modeKey(mode, "video_stab"), true)
         } else isVideoStabilizationEnabled
+    }
+
+    fun setModeVideoStabilizationMode(mode: CameraMode, stabMode: com.example.camera.model.VideoStabilizationMode) {
+        videoStabilizationMode = stabMode
+        isVideoStabilizationEnabled = stabMode.isEnabled
+        prefs.edit()
+            .putString(modeKey(mode, "video_stab_mode"), stabMode.name)
+            .putBoolean(modeKey(mode, "video_stab"), stabMode.isEnabled)
+            .apply()
+    }
+
+    fun getModeVideoStabilizationMode(mode: CameraMode): com.example.camera.model.VideoStabilizationMode {
+        val name = prefs.getString(modeKey(mode, "video_stab_mode"), null)
+        if (name != null) {
+            try {
+                return com.example.camera.model.VideoStabilizationMode.valueOf(name)
+            } catch (ignored: Exception) {}
+        }
+        val isStab = getModeVideoStabilization(mode)
+        return if (!isStab) com.example.camera.model.VideoStabilizationMode.OFF else videoStabilizationMode
     }
 
     fun setModeVideoFps(mode: CameraMode, fps: Int) {

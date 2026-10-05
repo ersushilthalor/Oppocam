@@ -177,6 +177,7 @@ fun CameraScreen(
     val isCinemaSettingsOpen by viewModel.isCinemaSettingsOpen.collectAsStateWithLifecycle()
     val isLogProfileWindowOpen by viewModel.isLogProfileWindowOpen.collectAsStateWithLifecycle()
     val isLutWindowOpen by viewModel.isLutWindowOpen.collectAsStateWithLifecycle()
+    val isStabilizationWindowOpen by viewModel.isStabilizationWindowOpen.collectAsStateWithLifecycle()
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
     val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
     val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
@@ -222,6 +223,12 @@ fun CameraScreen(
         }
     }
 
+    if (isStabilizationWindowOpen) {
+        BackHandler {
+            viewModel.setStabilizationWindowOpen(false)
+        }
+    }
+
     val exposureCompensation by viewModel.exposureCompensation.collectAsStateWithLifecycle()
     val manualIso by viewModel.manualIso.collectAsStateWithLifecycle()
     val manualShutterSpeedNs by viewModel.manualShutterSpeedNs.collectAsStateWithLifecycle()
@@ -250,6 +257,9 @@ fun CameraScreen(
     val nightConfig by viewModel.nightConfig.collectAsStateWithLifecycle()
     val nightProgress by viewModel.nightProgress.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
+    val videoStabilizationMode by viewModel.videoStabilizationMode.collectAsStateWithLifecycle()
+    val eisPlusTelemetry by viewModel.eisPlusTelemetry.collectAsStateWithLifecycle()
+    val eisPlusTransform by viewModel.eisPlusTransform.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val activeLayoutConfig = remember(uiCustomizationState, cameraMode) {
         uiCustomizationState.getConfigForMode(cameraMode)
@@ -420,6 +430,8 @@ fun CameraScreen(
                     viewModel.setCustomVideoPipelineSettingsOpen(true)
                 },
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
+                stabilizationMode = videoStabilizationMode,
+                eisPlusTransform = eisPlusTransform,
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -691,6 +703,8 @@ fun CameraScreen(
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             isProActive = isManualProOpen,
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
+            stabilizationMode = videoStabilizationMode,
+            onStabilizationClick = { viewModel.toggleStabilizationWindow() },
             layoutConfig = activeLayoutConfig,
             modifier = Modifier.align(Alignment.TopCenter)
         )
@@ -736,6 +750,7 @@ fun CameraScreen(
         val isAnyFloatingOverlayOpen = (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
                 (isLogProfileWindowOpen && cameraMode == CameraMode.CINEMA) ||
                 (isLutWindowOpen && cameraMode == CameraMode.CINEMA) ||
+                (isStabilizationWindowOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
                 isEvControlOpen
         if (isAnyFloatingOverlayOpen) {
             Box(
@@ -748,6 +763,7 @@ fun CameraScreen(
                         viewModel.setVideoSettingsPanelOpen(false)
                         viewModel.setLogProfileWindowOpen(false)
                         viewModel.setLutWindowOpen(false)
+                        viewModel.setStabilizationWindowOpen(false)
                         viewModel.setEvControlOpen(false)
                     }
             )
@@ -1037,6 +1053,26 @@ fun CameraScreen(
                     customLutRepo.deleteLut(lutId)
                 },
                 onDismissRequest = { viewModel.setLutWindowOpen(false) }
+            )
+        }
+
+        // 3d_stab. Dedicated Video Stabilization Floating Window (OFF / EIS / EIS+)
+        AnimatedVisibility(
+            visible = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) && isStabilizationWindowOpen,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 56.dp)
+        ) {
+            com.example.camera.ui.components.StabilizationFloatingWindow(
+                currentMode = videoStabilizationMode,
+                onSelectMode = { mode ->
+                    viewModel.setVideoStabilizationMode(mode)
+                },
+                onDismiss = { viewModel.setStabilizationWindowOpen(false) },
+                telemetry = eisPlusTelemetry
             )
         }
 
