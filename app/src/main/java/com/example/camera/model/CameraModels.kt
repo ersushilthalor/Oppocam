@@ -515,17 +515,9 @@ enum class VideoStabilizationMode(
         badgeLabel = "EIS",
         subtitle = "Standard Electronic Stabilization",
         description = "Camera2 HAL electronic image stabilization with standard smoothing"
-    ),
-    EIS_PLUS(
-        id = "eis_plus",
-        title = "EIS+",
-        badgeLabel = "EIS+",
-        subtitle = "Ultra Advanced Stabilization",
-        description = "PhotonCamera EIS+ • Gyro + OIS fusion • Rolling shutter • 5–7 frame look-ahead • Tripod lock"
     );
 
     val isEnabled: Boolean get() = this != OFF
-    val isEisPlus: Boolean get() = this == EIS_PLUS
 }
 
 enum class MainCameraStabilizationMode(val title: String, val subtitle: String) {

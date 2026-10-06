@@ -602,9 +602,6 @@ class Camera2Engine(private val context: Context) {
 
     val nightFusionProcessor by lazy { NightFusionProcessor() }
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
-    val eisPlusStabilizationEngine by lazy { com.example.camera.engine.eisplus.EisPlusStabilizationEngine(context) }
-    val eisPlusTransform: StateFlow<com.example.camera.engine.eisplus.EisPlusTransform?>
-        get() = eisPlusStabilizationEngine.currentTransform
 
     var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = preferences.videoStabilizationMode
         set(value) {
@@ -612,22 +609,15 @@ class Camera2Engine(private val context: Context) {
             val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
             if (isVideoMode) {
                 when (value) {
-                    com.example.camera.model.VideoStabilizationMode.EIS_PLUS -> {
-                        eisPlusStabilizationEngine.start()
-                        gyroStabilizationEngine.stop()
-                    }
                     com.example.camera.model.VideoStabilizationMode.EIS -> {
-                        eisPlusStabilizationEngine.stop()
                         gyroStabilizationEngine.start()
                     }
                     com.example.camera.model.VideoStabilizationMode.OFF -> {
-                        eisPlusStabilizationEngine.stop()
                         gyroStabilizationEngine.stop()
                         lastStabilizedCrop = null
                     }
                 }
             } else {
-                eisPlusStabilizationEngine.stop()
                 gyroStabilizationEngine.stop()
                 lastStabilizedCrop = null
             }
@@ -725,33 +715,19 @@ class Camera2Engine(private val context: Context) {
             preferences.isOisEnabled = value
             val current = _hybridStabilizationConfig.value
             _hybridStabilizationConfig.value = current.copy(isOisPreferred = value, isOisEnabled = value)
-            eisPlusStabilizationEngine.isOisEnabled = value
             updatePreviewSettings()
         }
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
-        val oisAllowed = preferences.isOisEnabled && config.isOisEnabled && config.isOisPreferred
-        eisPlusStabilizationEngine.isOisEnabled = oisAllowed
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        if (config.isUltraStabilizationEnabled) {
-            videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS_PLUS
-        } else if (config.isEisOnly || config.isHybridEnabled || config.isEisPreferred) {
-            if (videoStabilizationMode != com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
-                videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
-            }
+        if (config.isEisOnly || config.isHybridEnabled || config.isEisPreferred || config.isUltraStabilizationEnabled) {
+            videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
         }
         val isStabActive = isVideoStabilizationEnabled && (config.isUltraStabilizationEnabled || config.isHybridEnabled || config.isEisPreferred || config.isEisOnly || videoStabilizationMode.isEnabled)
         if (isVideoMode && isStabActive) {
-            if (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
-                eisPlusStabilizationEngine.start()
-                gyroStabilizationEngine.stop()
-            } else {
-                eisPlusStabilizationEngine.stop()
-                gyroStabilizationEngine.start()
-            }
+            gyroStabilizationEngine.start()
         } else {
-            eisPlusStabilizationEngine.stop()
             gyroStabilizationEngine.stop()
             lastStabilizedCrop = null
         }
@@ -3165,43 +3141,7 @@ class Camera2Engine(private val context: Context) {
             val hybridConfig = _hybridStabilizationConfig.value
             val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
             val isOisOnly = hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
-            val isEisPlusActive = isVideoMode && (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS || hybridConfig.isUltraStabilizationEnabled)
-
-            if (isEisPlusActive) {
-                val lens = _selectedLens.value
-                if (lens != null) {
-                    try {
-                        val chars = getCharacteristics(lens.cameraId)
-                        val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                        val focalLengths = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                        val focalLength = focalLengths?.firstOrNull() ?: 4.38f
-                        val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: SizeF(6.4f, 4.8f)
-                        val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-                        val isFront = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
-                        val currentRot = getEffectiveDeviceRotation()
-
-                        if (activeArray != null) {
-                            val ptsUs = (result.get(CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()) / 1000L
-                            eisPlusStabilizationEngine.onFrameCaptured(
-                                result = result,
-                                activeArray = activeArray,
-                                baseZoom = currentZoom,
-                                focalLengthMm = focalLength,
-                                sensorPhysicalSizeMm = sensorSize,
-                                ptsUs = ptsUs,
-                                deviceRotation = currentRot,
-                                sensorOrientation = sensorOrientation,
-                                isFront = isFront,
-                                actualOisHardwareActive = isOisAllowed && isActualOisHwActive
-                            )
-                            // NOTE: In EIS+, stabilization is rendered via the GPU transform matrix in
-                            // both Viewfinder TextureView and EisPlusVideoProcessor. We do NOT call
-                            // applyStabilizedCrop(transform.cropRect) to prevent Camera2 SCALER_CROP_REGION
-                            // fighting against the matrix transform, eliminating vertical jitter and frame bouncing!
-                        }
-                    } catch (ignored: Exception) {}
-                }
-            } else if (isVideoMode && isVideoStabilizationEnabled && !isOisOnly) {
+            if (isVideoMode && isVideoStabilizationEnabled && !isOisOnly) {
                 // When hardware EIS is supported, the camera HAL's internal DSP/ISP handles gyro EIS.
                 // Interfering with SCALER_CROP_REGION simultaneously causes double stabilization.
                 // We use gyro-based EIS ONLY when the hardware lacks native EIS on this lens/mode!
@@ -3647,14 +3587,7 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 // Electronic Image Stabilization (Digital frame margin compensation)
-                // When EIS+ is active: do NOT double-apply HAL EIS! EIS+ handles stabilization at the app/pipeline level.
-                // When OIS is disabled, EIS+ operates independently using only its own gyro/rolling-shutter pipeline.
-                if (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
-                    builder.set(
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-                    )
-                } else if (isOisOnly) {
+                if (isOisOnly) {
                     builder.set(
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
@@ -5813,12 +5746,6 @@ class Camera2Engine(private val context: Context) {
             stableActionHorizonEngine.startRecordingTrajectory()
         }
 
-        val isEisPlusActive = (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS || _hybridStabilizationConfig.value.isUltraStabilizationEnabled)
-        if (isEisPlusActive) {
-            eisPlusStabilizationEngine.start()
-            eisPlusStabilizationEngine.startRecordingTrajectory()
-        }
-
         recordingVideoPipeline = _selectedVideoPipeline.value
 
         try {
@@ -6782,9 +6709,6 @@ class Camera2Engine(private val context: Context) {
         val wasDollyZoomActive = _isDollyZoomActive.value
         val dollyTrajectory = if (wasDollyZoomActive) dollyZoomEngine.stopRecordingTrajectory() else emptyList()
 
-        val wasEisPlusActive = (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS || _hybridStabilizationConfig.value.isUltraStabilizationEnabled)
-        val eisPlusTrajectory = if (wasEisPlusActive) eisPlusStabilizationEngine.stopRecordingTrajectory() else emptyList()
-
         val lockedOrientationHint = preparedVideoGeometry?.orientationHint ?: getVideoOrientationHint()
 
         val activeCustomRecorder = customPipelineRecorder
@@ -6855,8 +6779,6 @@ class Camera2Engine(private val context: Context) {
                     horizonTrajectory = horizonTrajectory,
                     wasDollyZoomActive = wasDollyZoomActive,
                     dollyTrajectory = dollyTrajectory,
-                    wasEisPlusActive = wasEisPlusActive,
-                    eisPlusTrajectory = eisPlusTrajectory,
                     snapVideoPipeline = snapVideoPipeline,
                     needsPipelinePostPass = needsPipelinePostPass,
                     effectiveFileName = effectiveFileName,
@@ -6886,8 +6808,6 @@ class Camera2Engine(private val context: Context) {
         horizonTrajectory: List<com.example.camera.stableaction.StableActionHorizonEngine.TrajectoryPoint>,
         wasDollyZoomActive: Boolean,
         dollyTrajectory: List<com.example.camera.dollyzoom.DollyTrajectoryPoint>,
-        wasEisPlusActive: Boolean = false,
-        eisPlusTrajectory: List<com.example.camera.engine.eisplus.EisPlusTrajectoryPoint> = emptyList(),
         snapVideoPipeline: com.example.camera.videopipeline.VideoPipelineType,
         needsPipelinePostPass: Boolean,
         effectiveFileName: String,
@@ -6951,28 +6871,6 @@ class Camera2Engine(private val context: Context) {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error applying Dolly Zoom to final video", e)
-                }
-            }
-
-            if (wasEisPlusActive && eisPlusTrajectory.isNotEmpty()) {
-                try {
-                    val procDest = File(rawRecordedFile.parentFile, "eis_plus_${System.currentTimeMillis()}.${fileToSave.extension}")
-                    val processed = com.example.camera.engine.eisplus.EisPlusVideoProcessor.processEisPlusVideo(
-                        inputFile = fileToSave,
-                        outputFile = procDest,
-                        trajectory = eisPlusTrajectory,
-                        aspectRatio = getTargetAspectRatioForMode(if (isCinema) CameraMode.CINEMA else CameraMode.VIDEO),
-                        orientationDegrees = lockedOrientationHint
-                    )
-                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                        if (fileToSave != rawRecordedFile) {
-                            intermediateFiles.add(fileToSave)
-                        }
-                        fileToSave = processed
-                        gradedFile = processed
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error applying EIS+ video stabilization to final video", e)
                 }
             }
 

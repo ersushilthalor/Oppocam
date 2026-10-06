@@ -913,22 +913,16 @@ fun TopControlBar(
         }
 
         val stabilizationButton = @Composable {
-            val isEisPlus = stabilizationMode == VideoStabilizationMode.EIS_PLUS
-            val isOff = stabilizationMode == VideoStabilizationMode.OFF
-
-            val badgeText = stabilizationMode.badgeLabel
-            val badgeColor = when (stabilizationMode) {
-                VideoStabilizationMode.OFF -> Color.White.copy(alpha = 0.70f)
-                VideoStabilizationMode.EIS -> Color(0xFF81D4FA) // Cyan
-                VideoStabilizationMode.EIS_PLUS -> Color(0xFFFFD54F) // Gold
-            }
+            val isEisActive = stabilizationMode == VideoStabilizationMode.EIS
+            val badgeText = if (isEisActive) "EIS" else "OFF"
+            val badgeColor = if (isEisActive) Color(0xFF81D4FA) else Color.White.copy(alpha = 0.70f)
 
             Box(
                 modifier = Modifier
                     .height(34.dp)
                     .topControlStyle(
                         layoutConfig,
-                        activeColor = if (!isOff) badgeColor else null,
+                        activeColor = if (isEisActive) badgeColor else null,
                         isPill = true
                     )
                     .clickable { onStabilizationClick() }
@@ -941,7 +935,7 @@ fun TopControlBar(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Icon(
-                        imageVector = if (isEisPlus) Icons.Filled.VideoStable else Icons.Outlined.VideoStable,
+                        imageVector = if (isEisActive) Icons.Filled.VideoStable else Icons.Outlined.VideoStable,
                         contentDescription = "Stabilization: $badgeText",
                         tint = badgeColor,
                         modifier = Modifier.size(15.dp)

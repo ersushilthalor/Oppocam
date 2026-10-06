@@ -649,19 +649,19 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
-    fun testCinemaTexMatrixAlreadyRotatedMatchesStMatrix() {
+    fun testCinemaTexMatrixPreservesSurfaceTextureTransform() {
         val recorder = CinemaSoftwareRecordingEngine(context)
-        // Simulated stMatrix that already contains ROT_90:
-        val stMatrixRotated = floatArrayOf(
-            0f, -1f, 0f, 0f,
-            -1f, 0f, 0f, 0f,
+        // Simulated stMatrix with custom crop from HAL:
+        val stMatrixCrop = floatArrayOf(
+            0.9f, 0f, 0f, 0f,
+            0f, -0.9f, 0f, 0f,
             0f, 0f, 1f, 0f,
-            1f, 1f, 0f, 1f
+            0.05f, 0.95f, 0f, 1f
         )
         val outMatrix = FloatArray(16)
 
         recorder.computeCameraTexMatrix(
-            stMatrix = stMatrixRotated,
+            stMatrix = stMatrixCrop,
             isFront = false,
             sensorOrientation = 90,
             deviceRotation = 0,
@@ -672,10 +672,9 @@ class CinemaPipelineVerificationTest {
             outMatrix = outMatrix
         )
 
-        // When stMatrix already has ROT_90, localTexMatrix is Identity, so outMatrix == stMatrix
-        for (i in 0 until 16) {
-            assertEquals("Index $i should match stMatrix", stMatrixRotated[i], outMatrix[i], 0.001f)
-        }
+        // Verify outMatrix preserves the SurfaceTexture scale (0.9f)
+        val det = outMatrix[0] * outMatrix[5] - outMatrix[4] * outMatrix[1]
+        assertEquals("Submatrix determinant must preserve 0.9f * 0.9f = 0.81f", 0.81f, det, 0.005f)
     }
 
     @Test
@@ -899,19 +898,19 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
-    fun testCinemaTexMatrixLandscape90WithRotatedSurfaceTexture() {
+    fun testCinemaTexMatrixLandscape90And270BothNonMirrored() {
         val recorder = CinemaSoftwareRecordingEngine(context)
-        // Simulated stMatrix that already contains ROT_90 from HAL:
-        val stMatrixRotated = floatArrayOf(
+        val stMatrixStandard = floatArrayOf(
+            1f, 0f, 0f, 0f,
             0f, -1f, 0f, 0f,
-            -1f, 0f, 0f, 0f,
             0f, 0f, 1f, 0f,
-            1f, 1f, 0f, 1f
+            0f, 1f, 0f, 1f
         )
-        val outMatrix = FloatArray(16)
+        val outMatrix90 = FloatArray(16)
+        val outMatrix270 = FloatArray(16)
 
         recorder.computeCameraTexMatrix(
-            stMatrix = stMatrixRotated,
+            stMatrix = stMatrixStandard,
             isFront = false,
             sensorOrientation = 90,
             deviceRotation = 90, // Landscape 90
@@ -919,13 +918,29 @@ class CinemaPipelineVerificationTest {
             viewportHeight = 1080,
             camBufferWidth = 1920,
             camBufferHeight = 1080,
-            outMatrix = outMatrix
+            outMatrix = outMatrix90
         )
 
-        // Must not be horizontally flipped: back camera must NEVER be mirrored even with rotated SurfaceTexture
-        val leftTex = outMatrix[0] * 0.0f + outMatrix[4] * 0.5f + outMatrix[12]
-        val rightTex = outMatrix[0] * 1.0f + outMatrix[4] * 0.5f + outMatrix[12]
-        assertFalse("Rotated SurfaceTexture must not cause back camera to be mirrored", leftTex == rightTex)
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 270, // Landscape 270
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix270
+        )
+
+        // Both 90° and 270° must have positive X scale (non-mirrored) and negative Y scale (preserving OpenGL Y-flip)
+        assertEquals("Landscape 90° X scale must be positive", 1.0f, outMatrix90[0], 0.001f)
+        assertEquals("Landscape 270° X scale must be positive", 1.0f, outMatrix270[0], 0.001f)
+        assertEquals("Landscape 90° Y scale must preserve OpenGL Y-flip", -1.0f, outMatrix90[5], 0.001f)
+        assertEquals("Landscape 270° Y scale must preserve OpenGL Y-flip", -1.0f, outMatrix270[5], 0.001f)
+        for (i in 0 until 16) {
+            assertEquals("Matrix element $i for 270° must match 90°", outMatrix90[i], outMatrix270[i], 0.001f)
+        }
     }
 
     @Test

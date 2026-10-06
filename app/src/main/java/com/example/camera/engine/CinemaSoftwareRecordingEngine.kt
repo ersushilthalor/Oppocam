@@ -1523,46 +1523,24 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         camBufferHeight: Int,
         outMatrix: FloatArray
     ) {
-        val m0 = stMatrix[0]
-        val m1 = stMatrix[1]
-        val m4 = stMatrix[4]
-        val m5 = stMatrix[5]
-
-        val offDiag = kotlin.math.abs(m1) + kotlin.math.abs(m4)
-        val diag = kotlin.math.abs(m0) + kotlin.math.abs(m5)
-        // Determine any rotation already baked into stMatrix by the camera HAL / SurfaceTexture
-        val halRot = if (offDiag + diag > 0.1f) {
-            if (offDiag > diag) {
-                if (m1 < 0f) 90 else 270
-            } else {
-                if (m0 < 0f) 180 else 0
-            }
-        } else {
-            0
-        }
-
         val normRot = ((deviceRotation % 360) + 360) % 360
-        // Natural camera sensor rotation relative to upright device
-        val sensorRot = if (isFront) {
-            if (normRot == 270) {
-                (sensorOrientation + 90) % 360
-            } else {
-                (sensorOrientation + normRot) % 360
-            }
+
+        // Compute effective rotation directly from camera sensor orientation and device rotation.
+        // Do not infer rotation from SurfaceTexture matrix coefficients (m0/m1/m4/m5).
+        // Explicitly handle both 90° and 270° landscape orientations:
+        // In landscape, do not apply any extra 180° rotation or horizontal flip.
+        val isLandscape = (normRot == 90 || normRot == 270)
+        val effRot = if (isLandscape) {
+            0
         } else {
-            // For back camera in landscape (90° and 270°), ensure consistent orientation
-            // without rotating the frame 180° at 270°, preventing inverted/mirrored video.
-            if (normRot == 270) {
-                (sensorOrientation - 90 + 360) % 360
+            if (isFront) {
+                (sensorOrientation + normRot) % 360
             } else {
                 (sensorOrientation - normRot + 360) % 360
             }
         }
 
-        // Apply only the required sensor/device rotation, preserving HAL transform
-        val effRot = (sensorRot - halRot + 360) % 360
-
-        val isUprightPortrait = (sensorRot == 90 || sensorRot == 270)
+        val isUprightPortrait = (effRot == 90 || effRot == 270)
         val camLong = maxOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
         val camShort = minOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
         val uprightCamW = if (isUprightPortrait) camShort else camLong
@@ -1582,7 +1560,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             scaleY = 1.0f
         }
 
-        // Mirror only the front camera when actually required
+        // Mirror only the front camera when actually required (selfie)
         val flipH = isFront
         val sx = if (flipH) -scaleX else scaleX
         val sy = scaleY
@@ -1593,28 +1571,28 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         when (effRot) {
             0 -> {
-                // Landscape upright: s = u, t = v
+                // Landscape 90° upright: s = u, t = v
                 localTexMatrix[0] = sx
                 localTexMatrix[5] = sy
                 localTexMatrix[12] = 0.5f - 0.5f * sx
                 localTexMatrix[13] = 0.5f - 0.5f * sy
             }
             90 -> {
-                // Portrait upright: s = v, t = u
+                // Portrait 0° upright: s = v, t = u
                 localTexMatrix[1] = sx
                 localTexMatrix[4] = sy
                 localTexMatrix[12] = 0.5f - 0.5f * sy
                 localTexMatrix[13] = 0.5f - 0.5f * sx
             }
             180 -> {
-                // Landscape inverted: s = 1 - u, t = 1 - v
+                // Landscape 270° upright (180° rotation relative to 90°): s = 1 - u, t = 1 - v
                 localTexMatrix[0] = -sx
                 localTexMatrix[5] = -sy
                 localTexMatrix[12] = 0.5f + 0.5f * sx
                 localTexMatrix[13] = 0.5f + 0.5f * sy
             }
             270 -> {
-                // Portrait inverted: s = 1 - v, t = 1 - u
+                // Portrait 180° inverted: s = 1 - v, t = 1 - u
                 localTexMatrix[1] = -sx
                 localTexMatrix[4] = -sy
                 localTexMatrix[12] = 0.5f + 0.5f * sy
@@ -1628,6 +1606,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             }
         }
 
+        // Preserve SurfaceTexture transform correctly by multiplying stMatrix on the left
         Matrix.multiplyMM(outMatrix, 0, stMatrix, 0, localTexMatrix, 0)
     }
 
