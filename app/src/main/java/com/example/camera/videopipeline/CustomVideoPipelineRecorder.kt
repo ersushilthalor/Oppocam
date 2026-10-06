@@ -57,7 +57,9 @@ class CustomVideoPipelineRecorder(
     private val pipeline: IVideoPipeline,
     private val isFront: Boolean = false,
     private val sensorOrientation: Int = 90,
-    private val deviceRotation: Int = 0
+    private val deviceRotation: Int = 0,
+    private val sourceBufferWidth: Int = 0,
+    private val sourceBufferHeight: Int = 0
 ) {
     companion object {
         private const val TAG = "CustomPipelineRecorder"
@@ -342,8 +344,19 @@ class CustomVideoPipelineRecorder(
         val safeW = (width and 1.inv()).coerceAtLeast(320)
         val safeH = (height and 1.inv()).coerceAtLeast(240)
 
+        val camBufW = if (sourceBufferWidth > 0 && sourceBufferHeight > 0) {
+            maxOf(sourceBufferWidth, sourceBufferHeight)
+        } else {
+            maxOf(safeW, safeH)
+        }
+        val camBufH = if (sourceBufferWidth > 0 && sourceBufferHeight > 0) {
+            minOf(sourceBufferWidth, sourceBufferHeight)
+        } else {
+            minOf(safeW, safeH)
+        }
+
         val st = SurfaceTexture(oesTextureId).apply {
-            setDefaultBufferSize(maxOf(safeW, safeH), minOf(safeW, safeH))
+            setDefaultBufferSize(camBufW, camBufH)
             setOnFrameAvailableListener({
                 onCameraFrameAvailable()
             }, glHandler)
@@ -404,33 +417,41 @@ class CustomVideoPipelineRecorder(
             scaleY = 1.0f
         }
 
-        val rotToPortrait = when (normRot) {
-            90 -> -90f
-            180 -> 180f
-            270 -> 90f
-            else -> 0f
+        // Determine coordinate scaling and rotation from target viewport space to sensor buffer space
+        val (effScaleY, netRotationDeg) = if (!isStRotated90) {
+            if (!isFront) {
+                when (normRot) {
+                    0 -> (-scaleY) to 90f
+                    180 -> (-scaleY) to -90f
+                    else -> scaleY to 0f // Landscape 90 and 270
+                }
+            } else {
+                when (normRot) {
+                    0 -> (-scaleY) to -90f
+                    180 -> (-scaleY) to 90f
+                    else -> scaleY to 0f // Landscape 90 and 270
+                }
+            }
+        } else {
+            when (normRot) {
+                90 -> scaleY to -90f
+                270 -> scaleY to 90f
+                180 -> scaleY to 180f
+                else -> scaleY to 0f
+            }
         }
 
         val matrix2d = android.graphics.Matrix().apply {
             postTranslate(-0.5f, -0.5f)
-            postScale(scaleX, scaleY)
-            if (rotToPortrait != 0f) {
-                postRotate(rotToPortrait)
+            // 1. Uniform center-crop scaling in the viewport's upright coordinate axes
+            postScale(scaleX, effScaleY)
+            // 2. Rotate to align with sensor buffer coordinates
+            if (netRotationDeg != 0f) {
+                postRotate(netRotationDeg)
             }
+            // 3. Apply horizontal selfie mirror only if stMatrix hasn't already applied FLIP_H
             if (isFront != isStMirrored) {
                 postScale(-1.0f, 1.0f)
-            }
-            if (!isStRotated90) {
-                if (sensorOrientation == 90 || sensorOrientation == 270) {
-                    val fallbackRot = if (isFront) {
-                        if (sensorOrientation == 270) 90f else -90f
-                    } else {
-                        if (sensorOrientation == 90) -90f else 90f
-                    }
-                    postRotate(fallbackRot)
-                } else if (sensorOrientation == 180) {
-                    postRotate(180f)
-                }
             }
             postTranslate(0.5f, 0.5f)
         }

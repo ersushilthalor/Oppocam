@@ -895,6 +895,50 @@ class CinemaPipelineVerificationTest {
         assertEquals("IMAX ratioValue must be 1.43", 1.43f, CinemaAspectRatio.IMAX.ratioValue, 0.01f)
         assertEquals("Cinematic ratioValue must be 2.39", 2.39f, CinemaAspectRatio.CINEMATIC.ratioValue, 0.01f)
         assertEquals("16:9 ratioValue must be 16/9", 16f / 9f, CinemaAspectRatio.RATIO_16_9.ratioValue, 0.01f)
+
+        // 3. IMAX Portrait (1080x1544 from 1920x1080 buffer, sensor rotated 90 in portrait)
+        val outImaxPortrait = FloatArray(16)
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 0,
+            viewportWidth = 1080,
+            viewportHeight = 1544,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outImaxPortrait
+        )
+        // Upright camera buffer is 1080x1920 (aspect = 1080/1920 = 0.5625).
+        // Target is 1080x1544 (aspect = 1080/1544 = 0.6995).
+        // Target is wider/shorter than tall 9:16 frame -> height is cropped (scaleY = 1544/1920 ≈ 0.804f), width fits fully (scaleX = 1.0f)
+        val expectedImaxPortraitScaleY = (1080f / 1920f) / (1080f / 1544f) // 1544 / 1920 ≈ 0.804f
+        val detImax = outImaxPortrait[0] * outImaxPortrait[5] - outImaxPortrait[4] * outImaxPortrait[1]
+        assertEquals("IMAX portrait submatrix determinant must equal the crop scale", expectedImaxPortraitScaleY, detImax, 0.005f)
+        assertEquals("IMAX portrait Y-mapping off-diagonal element must reflect height crop scale", expectedImaxPortraitScaleY, outImaxPortrait[4], 0.005f)
+        assertEquals("IMAX portrait X-mapping off-diagonal element must fit width fully", -1.0f, outImaxPortrait[1], 0.005f)
+
+        // 4. Cinematic Portrait (804x1920 from 1920x1080 buffer, sensor rotated 90 in portrait)
+        val outCinematicPortrait = FloatArray(16)
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 0,
+            viewportWidth = 804,
+            viewportHeight = 1920,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outCinematicPortrait
+        )
+        // Upright camera buffer is 1080x1920 (aspect = 1080/1920 = 0.5625).
+        // Target is 804x1920 (aspect = 804/1920 = 0.41875).
+        // Target is narrower/taller than 9:16 frame -> width is cropped (scaleX = 804/1080 ≈ 0.744f), height fits fully (scaleY = 1.0f)
+        val expectedCinematicPortraitScaleX = (804f / 1920f) / (1080f / 1920f) // 804 / 1080 ≈ 0.744f
+        val detCinematic = outCinematicPortrait[0] * outCinematicPortrait[5] - outCinematicPortrait[4] * outCinematicPortrait[1]
+        assertEquals("Cinematic portrait submatrix determinant must equal the crop scale", expectedCinematicPortraitScaleX, detCinematic, 0.005f)
+        assertEquals("Cinematic portrait X-mapping off-diagonal element must reflect width crop scale", -expectedCinematicPortraitScaleX, outCinematicPortrait[1], 0.005f)
+        assertEquals("Cinematic portrait Y-mapping off-diagonal element must fit height fully", 1.0f, outCinematicPortrait[4], 0.005f)
     }
 
     @Test

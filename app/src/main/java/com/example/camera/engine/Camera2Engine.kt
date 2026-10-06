@@ -1146,17 +1146,22 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun getOptimalPreviewSize(cameraId: String? = null, targetRatio: Float = getTargetAspectRatioForMode(currentMode)): Size {
-        val id = cameraId ?: _selectedLens.value?.cameraId ?: return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
-        val chars = getCharacteristics(id) ?: return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
-        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+        val streamRatio = if (currentMode == CameraMode.CINEMA || currentMode == CameraMode.VIDEO || currentMode == CameraMode.DUAL_VIDEO) {
+            16f / 9f
+        } else {
+            targetRatio
+        }
+        val id = cameraId ?: _selectedLens.value?.cameraId ?: return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
+        val chars = getCharacteristics(id) ?: return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
         val previewSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
         if (previewSizes.isEmpty()) {
-            return Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+            return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
         }
         val maxDim = viewfinderResolution.maxDimension
         val matchingRatioSizes = previewSizes.filter {
             val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
-            kotlin.math.abs(r - targetRatio) < 0.08f
+            kotlin.math.abs(r - streamRatio) < 0.08f
         }
         return matchingRatioSizes
             .filter { max(it.width, it.height) <= maxDim }
@@ -1164,9 +1169,9 @@ class Camera2Engine(private val context: Context) {
             ?: matchingRatioSizes.minByOrNull { max(it.width, it.height) }
             ?: previewSizes.minByOrNull {
                 val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
-                kotlin.math.abs(r - targetRatio)
+                kotlin.math.abs(r - streamRatio)
             }
-            ?: Size(if (targetRatio > 1.5f) 1920 else 1440, 1080)
+            ?: Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
     }
 
     private fun onSessionConfigurationFinished() {
@@ -5970,7 +5975,9 @@ class Camera2Engine(private val context: Context) {
                         pipeline = customPipeline,
                         isFront = isFrontLens,
                         sensorOrientation = sensorOrient,
-                        deviceRotation = currentRot
+                        deviceRotation = currentRot,
+                        sourceBufferWidth = maxOf(videoRes.width, videoRes.height),
+                        sourceBufferHeight = minOf(videoRes.width, videoRes.height)
                     )
                     customRecorderSurface = recorder.prepare()
                     customPipelineRecorder = recorder
@@ -6074,7 +6081,9 @@ class Camera2Engine(private val context: Context) {
                         rec2020Params = rec2020AutoToneParams.value,
                         isFront = isFront,
                         sensorOrientation = sensorOrientation,
-                        deviceRotation = currentRot
+                        deviceRotation = currentRot,
+                        sourceBufferWidth = maxOf(videoRes.width, videoRes.height),
+                        sourceBufferHeight = minOf(videoRes.width, videoRes.height)
                     )
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed starting software cinema recording: ${t.message}", t)
@@ -6924,12 +6933,12 @@ class Camera2Engine(private val context: Context) {
             val finalOrientation: Int
 
             if (isCinema || isCustomPipelineRecording) {
-                finalWidth = preparedVideoGeometry?.width ?: if (isPortraitRecording) minDim else maxDim
-                finalHeight = preparedVideoGeometry?.height ?: if (isPortraitRecording) maxDim else minDim
+                finalWidth = preparedVideoGeometry?.width ?: 1920
+                finalHeight = preparedVideoGeometry?.height ?: 1080
                 finalOrientation = 0
             } else {
-                val geomW = preparedVideoGeometry?.width ?: maxOf(videoRes.width, videoRes.height)
-                val geomH = preparedVideoGeometry?.height ?: minOf(videoRes.width, videoRes.height)
+                val geomW = preparedVideoGeometry?.width ?: 1920
+                val geomH = preparedVideoGeometry?.height ?: 1080
                 finalOrientation = lockedOrientationHint
                 if (lockedOrientationHint == 90 || lockedOrientationHint == 270) {
                     finalWidth = minOf(geomW, geomH)

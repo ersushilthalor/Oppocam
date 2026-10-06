@@ -200,7 +200,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         rec2020Params: Rec2020AutoToneParams? = null,
         isFront: Boolean = false,
         sensorOrientation: Int = 90,
-        deviceRotation: Int = 0
+        deviceRotation: Int = 0,
+        sourceBufferWidth: Int = 0,
+        sourceBufferHeight: Int = 0
     ): Surface {
         val isHlg10 = colorProfile == com.example.camera.model.CinemaColorProfile.HLG10
         val effectiveCodec = if (isHlg10 && codec == CinemaCodec.H264) CinemaCodec.H265 else codec
@@ -258,7 +260,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 isAudioEnabled = isAudioEnabled,
                 colorProfile = colorProfile,
                 colorSpace = activeColorSpace,
-                isSource10Bit = isSource10Bit
+                isSource10Bit = isSource10Bit,
+                sourceBufferWidth = if (sourceBufferWidth > 0) sourceBufferWidth else safeWidth,
+                sourceBufferHeight = if (sourceBufferHeight > 0) sourceBufferHeight else safeHeight
             )
             activeProResSession = session
             return session.start()
@@ -377,7 +381,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 normWidth = safeWidth,
                 normHeight = safeHeight,
                 config = cinemaConfig,
-                rec2020Params = rec2020Params
+                rec2020Params = rec2020Params,
+                sourceBufferWidth = sourceBufferWidth,
+                sourceBufferHeight = sourceBufferHeight
             )
         } catch (t: Throwable) {
             Log.w(TAG, "Failed initializing real-time GPU cinema pipeline, falling back to direct encoder surface: ${t.message}", t)
@@ -1297,7 +1303,9 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         normWidth: Int,
         normHeight: Int,
         config: CinemaConfig?,
-        rec2020Params: Rec2020AutoToneParams?
+        rec2020Params: Rec2020AutoToneParams?,
+        sourceBufferWidth: Int = 0,
+        sourceBufferHeight: Int = 0
     ): Surface {
         val thread = HandlerThread("CinemaGLThread").apply { start() }
         glThread = thread
@@ -1442,8 +1450,16 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
                 Matrix.setIdentityM(mvpMatrix, 0)
 
-                val camBufW = maxOf(normWidth, normHeight)
-                val camBufH = minOf(normWidth, normHeight)
+                val camBufW = if (sourceBufferWidth > 0 && sourceBufferHeight > 0) {
+                    maxOf(sourceBufferWidth, sourceBufferHeight)
+                } else {
+                    maxOf(normWidth, normHeight)
+                }
+                val camBufH = if (sourceBufferWidth > 0 && sourceBufferHeight > 0) {
+                    minOf(sourceBufferWidth, sourceBufferHeight)
+                } else {
+                    minOf(normWidth, normHeight)
+                }
                 cameraBufferWidth = camBufW
                 cameraBufferHeight = camBufH
 
@@ -1565,38 +1581,41 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             scaleY = 1.0f
         }
 
-        // Map from target viewport orientation (0, 90, 180, 270) into natural portrait (0)
-        val rotToPortrait = when (normRot) {
-            90 -> -90f
-            180 -> 180f
-            270 -> 90f
-            else -> 0f
+        // Determine coordinate scaling and rotation from target viewport space to sensor buffer space
+        val (effScaleY, netRotationDeg) = if (!isStRotated90) {
+            if (!isFront) {
+                when (normRot) {
+                    0 -> (-scaleY) to 90f
+                    180 -> (-scaleY) to -90f
+                    else -> scaleY to 0f // Landscape 90 and 270
+                }
+            } else {
+                when (normRot) {
+                    0 -> (-scaleY) to -90f
+                    180 -> (-scaleY) to 90f
+                    else -> scaleY to 0f // Landscape 90 and 270
+                }
+            }
+        } else {
+            when (normRot) {
+                90 -> scaleY to -90f
+                270 -> scaleY to 90f
+                180 -> scaleY to 180f
+                else -> scaleY to 0f
+            }
         }
 
         val matrix2d = android.graphics.Matrix().apply {
             postTranslate(-0.5f, -0.5f)
             // 1. Uniform center-crop scaling in the viewport's upright coordinate axes
-            postScale(scaleX, scaleY)
-            // 2. Rotate from display/recording orientation into natural portrait space
-            if (rotToPortrait != 0f) {
-                postRotate(rotToPortrait)
+            postScale(scaleX, effScaleY)
+            // 2. Rotate to align with sensor buffer coordinates
+            if (netRotationDeg != 0f) {
+                postRotate(netRotationDeg)
             }
             // 3. Apply horizontal selfie mirror only if stMatrix hasn't already applied FLIP_H
             if (isFront != isStMirrored) {
                 postScale(-1.0f, 1.0f)
-            }
-            // 4. Apply sensor orientation rotation only if stMatrix hasn't already rotated the buffer
-            if (!isStRotated90) {
-                if (sensorOrientation == 90 || sensorOrientation == 270) {
-                    val fallbackRot = if (isFront) {
-                        if (sensorOrientation == 270) 90f else -90f
-                    } else {
-                        if (sensorOrientation == 90) -90f else 90f
-                    }
-                    postRotate(fallbackRot)
-                } else if (sensorOrientation == 180) {
-                    postRotate(180f)
-                }
             }
             postTranslate(0.5f, 0.5f)
         }

@@ -40,6 +40,8 @@ class ProResSoftwareRecordingSession(
     val colorProfile: CinemaColorProfile,
     val colorSpace: CinemaColorSpace,
     val isSource10Bit: Boolean = false,
+    val sourceBufferWidth: Int = width,
+    val sourceBufferHeight: Int = height,
     val onError: ((Throwable) -> Unit)? = null
 ) {
     companion object {
@@ -91,15 +93,18 @@ class ProResSoftwareRecordingSession(
         val isRec2020 = (colorSpace == CinemaColorSpace.REC_2020) || (colorProfile == CinemaColorProfile.REC_2020)
         val isHlg = (colorProfile == CinemaColorProfile.HLG10)
 
+        val readerW = if (sourceBufferWidth > 0) sourceBufferWidth else width
+        val readerH = if (sourceBufferHeight > 0) sourceBufferHeight else height
+
         // Attempt highest-bit-depth camera source stream: YCBCR_P010 on Android 13+ (API 33+)
         var reader: ImageReader? = null
         var configured10BitSource = false
 
         if (isSource10Bit && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
-                reader = ImageReader.newInstance(width, height, ImageFormat.YCBCR_P010, 4)
+                reader = ImageReader.newInstance(readerW, readerH, ImageFormat.YCBCR_P010, 4)
                 configured10BitSource = true
-                Log.i(TAG, "Configured 10-bit YCBCR_P010 camera source ImageReader")
+                Log.i(TAG, "Configured 10-bit YCBCR_P010 camera source ImageReader (${readerW}x${readerH})")
             } catch (t: Throwable) {
                 Log.w(TAG, "Failed creating YCBCR_P010 ImageReader, falling back to 8-bit YUV_420_888", t)
                 reader = null
@@ -108,9 +113,9 @@ class ProResSoftwareRecordingSession(
         }
 
         if (reader == null) {
-            reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 4)
+            reader = ImageReader.newInstance(readerW, readerH, ImageFormat.YUV_420_888, 4)
             configured10BitSource = false
-            Log.i(TAG, "Configured 8-bit YUV_420_888 camera source ImageReader (converted to 10-bit in software ProRes encoder)")
+            Log.i(TAG, "Configured 8-bit YUV_420_888 camera source ImageReader (${readerW}x${readerH})")
         }
 
         actualIsSource10Bit = configured10BitSource
@@ -237,19 +242,108 @@ class ProResSoftwareRecordingSession(
         val uBuf = uPlane.buffer
         val vBuf = vPlane.buffer
 
-        val yBytes = ByteArray(yBuf.remaining()).also { yBuf.get(it) }
-        val uBytes = ByteArray(uBuf.remaining()).also { uBuf.get(it) }
-        val vBytes = ByteArray(vBuf.remaining()).also { vBuf.get(it) }
+        val imgW = image.width
+        val imgH = image.height
+
+        val (yBytes, uBytes, vBytes, yRowStride, uRowStride, vRowStride, uPixelStride, vPixelStride) = if (
+            (imgW != width || imgH != height) && imgW >= width && imgH >= height
+        ) {
+            val cropX = ((imgW - width) / 2) and 1.inv()
+            val cropY = ((imgH - height) / 2) and 1.inv()
+            val bytesPerSample = if (isImage10Bit) 2 else 1
+
+            val croppedY = ByteArray(width * height * bytesPerSample)
+            val croppedU = ByteArray((width / 2) * (height / 2) * bytesPerSample)
+            val croppedV = ByteArray((width / 2) * (height / 2) * bytesPerSample)
+
+            val yStride = yPlane.rowStride
+            val yPixStride = yPlane.pixelStride
+            val uStride = uPlane.rowStride
+            val uPixStride = uPlane.pixelStride
+            val vStride = vPlane.rowStride
+            val vPixStride = vPlane.pixelStride
+
+            // Crop Luma (Y)
+            for (r in 0 until height) {
+                val srcRowByteOffset = (cropY + r) * yStride + cropX * yPixStride
+                val dstRowByteOffset = r * width * bytesPerSample
+                if (yPixStride == bytesPerSample) {
+                    yBuf.position(srcRowByteOffset)
+                    yBuf.get(croppedY, dstRowByteOffset, width * bytesPerSample)
+                } else {
+                    for (c in 0 until width) {
+                        for (b in 0 until bytesPerSample) {
+                            croppedY[dstRowByteOffset + c * bytesPerSample + b] = yBuf.get(srcRowByteOffset + c * yPixStride + b)
+                        }
+                    }
+                }
+            }
+
+            // Crop Chroma (U & V)
+            val chromaWidth = width / 2
+            val chromaHeight = height / 2
+            val chromaCropX = cropX / 2
+            val chromaCropY = cropY / 2
+
+            for (r in 0 until chromaHeight) {
+                val uSrcRowByteOffset = (chromaCropY + r) * uStride + chromaCropX * uPixStride
+                val vSrcRowByteOffset = (chromaCropY + r) * vStride + chromaCropX * vPixStride
+                val dstRowByteOffset = r * chromaWidth * bytesPerSample
+                if (uPixStride == bytesPerSample && vPixStride == bytesPerSample) {
+                    uBuf.position(uSrcRowByteOffset)
+                    uBuf.get(croppedU, dstRowByteOffset, chromaWidth * bytesPerSample)
+                    vBuf.position(vSrcRowByteOffset)
+                    vBuf.get(croppedV, dstRowByteOffset, chromaWidth * bytesPerSample)
+                } else {
+                    for (c in 0 until chromaWidth) {
+                        for (b in 0 until bytesPerSample) {
+                            croppedU[dstRowByteOffset + c * bytesPerSample + b] = uBuf.get(uSrcRowByteOffset + c * uPixStride + b)
+                            croppedV[dstRowByteOffset + c * bytesPerSample + b] = vBuf.get(vSrcRowByteOffset + c * vPixStride + b)
+                        }
+                    }
+                }
+            }
+
+            val finalYRowStride = width * bytesPerSample
+            val finalUVRowStride = chromaWidth * bytesPerSample
+            val finalUVPixelStride = bytesPerSample
+
+            ImageCropResult(
+                yBytes = croppedY,
+                uBytes = croppedU,
+                vBytes = croppedV,
+                yRowStride = finalYRowStride,
+                uRowStride = finalUVRowStride,
+                vRowStride = finalUVRowStride,
+                uPixelStride = finalUVPixelStride,
+                vPixelStride = finalUVPixelStride
+            )
+        } else {
+            val yBytes = ByteArray(yBuf.remaining()).also { yBuf.get(it) }
+            val uBytes = ByteArray(uBuf.remaining()).also { uBuf.get(it) }
+            val vBytes = ByteArray(vBuf.remaining()).also { vBuf.get(it) }
+
+            ImageCropResult(
+                yBytes = yBytes,
+                uBytes = uBytes,
+                vBytes = vBytes,
+                yRowStride = yPlane.rowStride,
+                uRowStride = uPlane.rowStride,
+                vRowStride = vPlane.rowStride,
+                uPixelStride = uPlane.pixelStride,
+                vPixelStride = vPlane.pixelStride
+            )
+        }
 
         val proresFrame = encoder.encodeFrame(
             yPlane = yBytes,
             uPlane = uBytes,
             vPlane = vBytes,
-            yRowStride = yPlane.rowStride,
-            uRowStride = uPlane.rowStride,
-            vRowStride = vPlane.rowStride,
-            uPixelStride = uPlane.pixelStride,
-            vPixelStride = vPlane.pixelStride,
+            yRowStride = yRowStride,
+            uRowStride = uRowStride,
+            vRowStride = vRowStride,
+            uPixelStride = uPixelStride,
+            vPixelStride = vPixelStride,
             isSource10Bit = isImage10Bit
         )
 
@@ -257,6 +351,17 @@ class ProResSoftwareRecordingSession(
         encodedFramesCount.incrementAndGet()
         consecutiveErrors.set(0)
     }
+
+    private data class ImageCropResult(
+        val yBytes: ByteArray,
+        val uBytes: ByteArray,
+        val vBytes: ByteArray,
+        val yRowStride: Int,
+        val uRowStride: Int,
+        val vRowStride: Int,
+        val uPixelStride: Int,
+        val vPixelStride: Int
+    )
 
     private fun startAudioRecording() {
         try {
