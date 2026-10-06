@@ -330,9 +330,19 @@ enum class ViewfinderResolution(
     val description: String,
     val maxDimension: Int
 ) {
-    NORMAL("Normal", "1080p (Optimized battery & latency)", 1920),
-    HIGH("High (~2K)", "1440p Quad-HD clarity", 2560),
-    MAX("Max (~4K)", "Full sensor resolution preview", 4096)
+    NORMAL("Normal", "1080p live preview (Optimized battery & latency)", 1920),
+    RES_2K("2K", "1440p / 2K live preview clarity", 2560),
+    RES_4K("4K", "2160p / 4K ultra high-definition live preview", 4096);
+
+    companion object {
+        fun fromName(name: String): ViewfinderResolution {
+            return when (name.uppercase()) {
+                "HIGH", "RES_2K", "TWO_K", "2K" -> RES_2K
+                "MAX", "RES_4K", "FOUR_K", "4K" -> RES_4K
+                else -> NORMAL
+            }
+        }
+    }
 }
 
 enum class ColorProfile(val title: String, val isFlat: Boolean) {

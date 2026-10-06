@@ -385,7 +385,7 @@ class CameraPreferences(context: Context) {
         get() {
             val name = prefs.getString(KEY_VIEWFINDER_RESOLUTION, com.example.camera.model.ViewfinderResolution.NORMAL.name)
                 ?: com.example.camera.model.ViewfinderResolution.NORMAL.name
-            return try { com.example.camera.model.ViewfinderResolution.valueOf(name) } catch (e: Exception) { com.example.camera.model.ViewfinderResolution.NORMAL }
+            return try { com.example.camera.model.ViewfinderResolution.fromName(name) } catch (e: Exception) { com.example.camera.model.ViewfinderResolution.NORMAL }
         }
         set(value) = prefs.edit().putString(KEY_VIEWFINDER_RESOLUTION, value.name).apply()
 

@@ -495,7 +495,9 @@ fun SettingsDrawer(
                             onFloatingWindowAppearanceChange = onFloatingWindowAppearanceChange,
                             onResetFloatingWindowAppearance = onResetFloatingWindowAppearance,
                             viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
-                            onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange
+                            onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange,
+                            viewfinderResolution = viewfinderResolution,
+                            onViewfinderResolutionSelected = onViewfinderResolutionSelected
                         )
                         SettingsPage.GENERAL -> GeneralSettingsPage(
                             volumeKeyAction = volumeKeyAction,
@@ -2140,6 +2142,20 @@ private fun CameraLensSettingsPage(
                 onOptionSelected = onViewfinderFpsSelected
             )
         }
+
+        item {
+            SettingsSegmentedCard(
+                title = "Viewfinder Resolution",
+                description = "Live camera preview resolution on viewfinder (Normal 1080p, 2K 1440p, or 4K 2160p). This controls only the real-time preview display and does not affect photo or video recording resolution.",
+                options = listOf(
+                    ViewfinderResolution.NORMAL to "Normal",
+                    ViewfinderResolution.RES_2K to "2K",
+                    ViewfinderResolution.RES_4K to "4K"
+                ),
+                selectedOption = viewfinderResolution,
+                onOptionSelected = onViewfinderResolutionSelected
+            )
+        }
     }
 }
 
@@ -2237,7 +2253,9 @@ private fun UiLayoutSettingsPage(
     onFloatingWindowAppearanceChange: (FloatingWindowAppearanceConfig) -> Unit,
     onResetFloatingWindowAppearance: () -> Unit,
     viewfinderCornerRadiusDp: Int,
-    onViewfinderCornerRadiusChange: (Int) -> Unit
+    onViewfinderCornerRadiusChange: (Int) -> Unit,
+    viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL,
+    onViewfinderResolutionSelected: (ViewfinderResolution) -> Unit = {}
 ) {
     val allTemplates = remember {
         listOf(
@@ -2654,6 +2672,21 @@ private fun UiLayoutSettingsPage(
             ViewfinderCornerRadiusCard(
                 cornerRadiusDp = viewfinderCornerRadiusDp,
                 onCornerRadiusChange = onViewfinderCornerRadiusChange
+            )
+        }
+
+        // 2c. Viewfinder Preview Resolution
+        item {
+            SettingsSegmentedCard(
+                title = "Viewfinder Resolution",
+                description = "Live camera viewfinder preview resolution. Controls only the on-screen preview clarity and does not affect final photo or video recording resolution.",
+                options = listOf(
+                    ViewfinderResolution.NORMAL to "Normal",
+                    ViewfinderResolution.RES_2K to "2K",
+                    ViewfinderResolution.RES_4K to "4K"
+                ),
+                selectedOption = viewfinderResolution,
+                onOptionSelected = onViewfinderResolutionSelected
             )
         }
 
