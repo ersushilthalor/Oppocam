@@ -4216,7 +4216,12 @@ class Camera2Engine(private val context: Context) {
     private fun getEffectiveDeviceRotation(): Int {
         val windowRot = getDeviceRotationDegrees()
         if (windowRot != 0) return windowRot
-        return physicalOrientationDegrees
+        if (physicalOrientationDegrees != 0) return physicalOrientationDegrees
+        val configOrientation = context.resources.configuration.orientation
+        if (configOrientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            return 90
+        }
+        return 0
     }
 
     private fun getDeviceRotationDegrees(): Int {
@@ -5949,29 +5954,35 @@ class Camera2Engine(private val context: Context) {
             if (isCustomPipelineMode) {
                 try {
                     val customPipeline = com.example.camera.videopipeline.VideoPipelineManager.getPipeline(recordingVideoPipeline)
-                    val orientHint = getVideoOrientationHint()
-                    val maxD = maxOf(videoRes.width, videoRes.height)
-                    val minD = minOf(videoRes.width, videoRes.height)
+                    val isFrontLens = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
+                    val sensorOrient = try {
+                        chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isFrontLens) 270 else 90)
+                    } catch (_: Exception) {
+                        if (isFrontLens) 270 else 90
+                    }
                     val recorder = com.example.camera.videopipeline.CustomVideoPipelineRecorder(
                         outputFile = tempFile,
-                        width = maxD,
-                        height = minD,
+                        width = finalRecordWidth,
+                        height = finalRecordHeight,
                         fps = targetFps,
                         bitrate = bitrate,
-                        orientationHint = orientHint,
-                        pipeline = customPipeline
+                        orientationHint = 0,
+                        pipeline = customPipeline,
+                        isFront = isFrontLens,
+                        sensorOrientation = sensorOrient,
+                        deviceRotation = currentRot
                     )
                     customRecorderSurface = recorder.prepare()
                     customPipelineRecorder = recorder
                     isCustomPipelineRecording = true
                     preparedVideoGeometry = PreparedVideoGeometry(
-                        width = maxD,
-                        height = minD,
+                        width = finalRecordWidth,
+                        height = finalRecordHeight,
                         fps = targetFps,
-                        orientationHint = orientHint,
+                        orientationHint = 0,
                         encoderRotation = 0
                     )
-                    Log.i(TAG, "Initialized dedicated CustomVideoPipelineRecorder for ${customPipeline.displayName}")
+                    Log.i(TAG, "Initialized dedicated CustomVideoPipelineRecorder for ${customPipeline.displayName} (${finalRecordWidth}x${finalRecordHeight})")
                 } catch (t: Throwable) {
                     Log.w(TAG, "CustomVideoPipelineRecorder hardware init unavailable, falling back to post-transcode path: ${t.message}")
                     try { customPipelineRecorder?.stopAndRelease() } catch (_: Throwable) {}
@@ -6039,6 +6050,7 @@ class Camera2Engine(private val context: Context) {
                 } catch (_: Exception) {
                     if (isFront) 270 else 90
                 }
+                // Frames are rendered directly upright on the GPU into finalRecordWidth x finalRecordHeight
                 val cinemaOrientationHint = 0
                 val cinemaTargetBitDepth = when (cinemaCodec) {
                     CinemaCodec.PRORES -> LogBitDepth.BIT_10
@@ -6907,12 +6919,36 @@ class Camera2Engine(private val context: Context) {
                 return
             }
 
+            val finalWidth: Int
+            val finalHeight: Int
+            val finalOrientation: Int
+
+            if (isCinema || isCustomPipelineRecording) {
+                finalWidth = preparedVideoGeometry?.width ?: if (isPortraitRecording) minDim else maxDim
+                finalHeight = preparedVideoGeometry?.height ?: if (isPortraitRecording) maxDim else minDim
+                finalOrientation = 0
+            } else {
+                val geomW = preparedVideoGeometry?.width ?: maxOf(videoRes.width, videoRes.height)
+                val geomH = preparedVideoGeometry?.height ?: minOf(videoRes.width, videoRes.height)
+                finalOrientation = lockedOrientationHint
+                if (lockedOrientationHint == 90 || lockedOrientationHint == 270) {
+                    finalWidth = minOf(geomW, geomH)
+                    finalHeight = maxOf(geomW, geomH)
+                } else {
+                    finalWidth = maxOf(geomW, geomH)
+                    finalHeight = minOf(geomW, geomH)
+                }
+            }
+
             val savedUri = saveVideoToGallery(
                 tempFile = fileToSave,
                 fileName = effectiveFileName,
                 mimeType = effectiveMimeType,
                 isCinema = isCinema,
-                isFrontFacing = isFrontFacing
+                isFrontFacing = isFrontFacing,
+                orientationDegrees = finalOrientation,
+                width = finalWidth,
+                height = finalHeight
             )
 
             if (savedUri != null) {
@@ -7013,7 +7049,10 @@ class Camera2Engine(private val context: Context) {
         fileName: String,
         mimeType: String,
         isCinema: Boolean,
-        isFrontFacing: Boolean
+        isFrontFacing: Boolean,
+        orientationDegrees: Int = 0,
+        width: Int = 0,
+        height: Int = 0
     ): Uri? = withContext(Dispatchers.IO) {
         if (!tempFile.exists() || tempFile.length() <= 0L) {
             Log.w(TAG, "saveVideoToGallery: tempFile is missing or empty")
@@ -7030,7 +7069,10 @@ class Camera2Engine(private val context: Context) {
             put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
             put(MediaStore.Video.Media.DATE_TAKEN, System.currentTimeMillis())
             put(MediaStore.Video.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
+            if (width > 0) put(MediaStore.Video.Media.WIDTH, width)
+            if (height > 0) put(MediaStore.Video.Media.HEIGHT, height)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Video.Media.ORIENTATION, orientationDegrees)
                 put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/Camera")
                 put(MediaStore.Video.Media.IS_PENDING, 1)
             } else {
@@ -7081,6 +7123,9 @@ class Camera2Engine(private val context: Context) {
                         val updateValues = ContentValues().apply {
                             put(MediaStore.Video.Media.IS_PENDING, 0)
                             put(MediaStore.Video.Media.SIZE, fileToSave.length())
+                            put(MediaStore.Video.Media.ORIENTATION, orientationDegrees)
+                            if (width > 0) put(MediaStore.Video.Media.WIDTH, width)
+                            if (height > 0) put(MediaStore.Video.Media.HEIGHT, height)
                         }
                         resolver.update(targetUri, updateValues, null, null)
                     }

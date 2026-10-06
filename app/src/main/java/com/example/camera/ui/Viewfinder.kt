@@ -293,10 +293,23 @@ fun Viewfinder(
         val currentDollyFocusY by rememberUpdatedState(dollyCropState?.focusNormY ?: 0.5f)
 
         // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame
-        val (targetWidth, targetHeight) = if (containerWidth * targetRatio <= containerHeight) {
-            containerWidth to (containerWidth * targetRatio)
+        val isLandscapeContainer = containerWidth > containerHeight
+        val (targetWidth, targetHeight) = if (isLandscapeContainer) {
+            val maxW = containerWidth
+            val maxH = containerHeight
+            if (maxH * targetRatio <= maxW) {
+                (maxH * targetRatio) to maxH
+            } else {
+                maxW to (maxW / targetRatio)
+            }
         } else {
-            (containerHeight / targetRatio) to containerHeight
+            val maxW = containerWidth
+            val maxH = containerHeight
+            if (maxW * targetRatio <= maxH) {
+                maxW to (maxW * targetRatio)
+            } else {
+                (maxH / targetRatio) to maxH
+            }
         }
 
         Box(
@@ -1094,24 +1107,22 @@ fun configureTransform(
 
     val effectiveViewAspect = effectiveViewH / effectiveViewW
 
-    // 3. Open Camera RectF buffer/view mapping and Matrix.setRectToRect()
-    // When buffer and view aspect ratios differ, perform Open Camera's uniform center scaling:
+    // 3. Uniform center crop scaling preserving original sensor pixel aspect ratio:
+    // TextureView default behavior stretches bufW -> viewW and bufH -> viewH.
+    // To restore uniform 1:1 pixel scaling and crop the excess uniformly without any distortion:
     if (kotlin.math.abs(bufAspect - effectiveViewAspect) > 0.005f) {
-        val viewRect = RectF(0f, 0f, viewW, viewH)
-        val (mappedBufW, mappedBufH) = if (effectiveViewAspect > bufAspect) {
-            viewW to (viewW * bufAspect)
+        val scaleX: Float
+        val scaleY: Float
+        if (effectiveViewAspect > bufAspect) {
+            // View is taller than buffer -> expand X to match Y scale uniformly
+            scaleX = effectiveViewAspect / bufAspect
+            scaleY = 1.0f
         } else {
-            (viewH / bufAspect) to viewH
+            // View is wider than buffer -> expand Y to match X scale uniformly
+            scaleX = 1.0f
+            scaleY = bufAspect / effectiveViewAspect
         }
-        val bufferRect = RectF(0f, 0f, mappedBufW, mappedBufH)
-        bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-
-        // Map viewRect to bufferRect using Matrix.ScaleToFit.FILL
-        matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-
-        // Open Camera uniform center scaling to fill view without non-uniform stretching
-        val scale = maxOf(viewW / mappedBufW, viewH / mappedBufH)
-        matrix.postScale(scale, scale, centerX, centerY)
+        matrix.setScale(scaleX, scaleY, centerX, centerY)
     }
 
     // 4. Open Camera rotation handling

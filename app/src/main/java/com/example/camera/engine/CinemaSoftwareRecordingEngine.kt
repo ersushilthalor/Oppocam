@@ -1523,28 +1523,33 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         camBufferHeight: Int,
         outMatrix: FloatArray
     ) {
+        val m0 = stMatrix[0]
+        val m1 = stMatrix[1]
+        val m4 = stMatrix[4]
+        val m5 = stMatrix[5]
+
+        val offDiag = kotlin.math.abs(m1) + kotlin.math.abs(m4)
+        val diag = kotlin.math.abs(m0) + kotlin.math.abs(m5)
+        // When Camera2 streams to a SurfaceTexture, Camera3OutputStream sets the ANativeWindow
+        // buffer transform (ROT_90 / ROT_270), making off-diagonal terms (m1, m4) dominant.
+        val isStRotated90 = offDiag > diag
+
+        val det = m0 * m5 - m1 * m4
+        val isIdentitySt = kotlin.math.abs(m0 - 1f) < 1e-4f &&
+            kotlin.math.abs(m5 - 1f) < 1e-4f &&
+            offDiag < 1e-4f &&
+            kotlin.math.abs(stMatrix[13]) < 1e-4f
+        val isStMirrored = !isIdentitySt && (offDiag + diag > 0.1f) && (det > 0f)
+
         val normRot = ((deviceRotation % 360) + 360) % 360
+        val isLandscapeTarget = (normRot == 90 || normRot == 270)
+        val isSensorSwappedInPortrait = (sensorOrientation == 90 || sensorOrientation == 270)
+        val isSwapped = isSensorSwappedInPortrait xor isLandscapeTarget
 
-        // Compute effective rotation directly from camera sensor orientation and device rotation.
-        // Do not infer rotation from SurfaceTexture matrix coefficients (m0/m1/m4/m5).
-        // Explicitly handle both 90° and 270° landscape orientations:
-        // In landscape, do not apply any extra 180° rotation or horizontal flip.
-        val isLandscape = (normRot == 90 || normRot == 270)
-        val effRot = if (isLandscape) {
-            0
-        } else {
-            if (isFront) {
-                (sensorOrientation + normRot) % 360
-            } else {
-                (sensorOrientation - normRot + 360) % 360
-            }
-        }
-
-        val isUprightPortrait = (effRot == 90 || effRot == 270)
         val camLong = maxOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
         val camShort = minOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
-        val uprightCamW = if (isUprightPortrait) camShort else camLong
-        val uprightCamH = if (isUprightPortrait) camLong else camShort
+        val uprightCamW = if (isSwapped) camShort else camLong
+        val uprightCamH = if (isSwapped) camLong else camShort
         val camAspect = uprightCamW / uprightCamH
 
         val targetAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
@@ -1560,51 +1565,48 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             scaleY = 1.0f
         }
 
-        // Mirror only the front camera when actually required (selfie)
-        val flipH = isFront
-        val sx = if (flipH) -scaleX else scaleX
-        val sy = scaleY
-
-        localTexMatrix.fill(0f)
-        localTexMatrix[10] = 1f
-        localTexMatrix[15] = 1f
-
-        when (effRot) {
-            0 -> {
-                // Landscape 90° upright: s = u, t = v
-                localTexMatrix[0] = sx
-                localTexMatrix[5] = sy
-                localTexMatrix[12] = 0.5f - 0.5f * sx
-                localTexMatrix[13] = 0.5f - 0.5f * sy
-            }
-            90 -> {
-                // Portrait 0° upright: s = v, t = u
-                localTexMatrix[1] = sx
-                localTexMatrix[4] = sy
-                localTexMatrix[12] = 0.5f - 0.5f * sy
-                localTexMatrix[13] = 0.5f - 0.5f * sx
-            }
-            180 -> {
-                // Landscape 270° upright (180° rotation relative to 90°): s = 1 - u, t = 1 - v
-                localTexMatrix[0] = -sx
-                localTexMatrix[5] = -sy
-                localTexMatrix[12] = 0.5f + 0.5f * sx
-                localTexMatrix[13] = 0.5f + 0.5f * sy
-            }
-            270 -> {
-                // Portrait 180° inverted: s = 1 - v, t = 1 - u
-                localTexMatrix[1] = -sx
-                localTexMatrix[4] = -sy
-                localTexMatrix[12] = 0.5f + 0.5f * sy
-                localTexMatrix[13] = 0.5f + 0.5f * sx
-            }
-            else -> {
-                localTexMatrix[0] = sx
-                localTexMatrix[5] = sy
-                localTexMatrix[12] = 0.5f - 0.5f * sx
-                localTexMatrix[13] = 0.5f - 0.5f * sy
-            }
+        // Map from target viewport orientation (0, 90, 180, 270) into natural portrait (0)
+        val rotToPortrait = when (normRot) {
+            90 -> -90f
+            180 -> 180f
+            270 -> 90f
+            else -> 0f
         }
+
+        val matrix2d = android.graphics.Matrix().apply {
+            postTranslate(-0.5f, -0.5f)
+            // 1. Uniform center-crop scaling in the viewport's upright coordinate axes
+            postScale(scaleX, scaleY)
+            // 2. Rotate from display/recording orientation into natural portrait space
+            if (rotToPortrait != 0f) {
+                postRotate(rotToPortrait)
+            }
+            // 3. Apply horizontal selfie mirror only if stMatrix hasn't already applied FLIP_H
+            if (isFront != isStMirrored) {
+                postScale(-1.0f, 1.0f)
+            }
+            // 4. Apply sensor orientation rotation only if stMatrix hasn't already rotated the buffer
+            if (!isStRotated90) {
+                if (sensorOrientation == 90 || sensorOrientation == 270) {
+                    val fallbackRot = if (isFront) {
+                        if (sensorOrientation == 270) 90f else -90f
+                    } else {
+                        if (sensorOrientation == 90) -90f else 90f
+                    }
+                    postRotate(fallbackRot)
+                } else if (sensorOrientation == 180) {
+                    postRotate(180f)
+                }
+            }
+            postTranslate(0.5f, 0.5f)
+        }
+
+        matrix2d.getValues(matrixValues)
+        // Convert 3x3 affine matrix to 4x4 OpenGL column-major matrix
+        localTexMatrix[0] = matrixValues[0]; localTexMatrix[1] = matrixValues[3]; localTexMatrix[2] = 0f; localTexMatrix[3] = 0f
+        localTexMatrix[4] = matrixValues[1]; localTexMatrix[5] = matrixValues[4]; localTexMatrix[6] = 0f; localTexMatrix[7] = 0f
+        localTexMatrix[8] = 0f;              localTexMatrix[9] = 0f;              localTexMatrix[10] = 1f; localTexMatrix[11] = 0f
+        localTexMatrix[12] = matrixValues[2]; localTexMatrix[13] = matrixValues[5]; localTexMatrix[14] = 0f; localTexMatrix[15] = 1f
 
         // Preserve SurfaceTexture transform correctly by multiplying stMatrix on the left
         Matrix.multiplyMM(outMatrix, 0, stMatrix, 0, localTexMatrix, 0)

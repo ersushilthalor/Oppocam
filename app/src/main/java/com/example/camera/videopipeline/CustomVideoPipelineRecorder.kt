@@ -53,8 +53,11 @@ class CustomVideoPipelineRecorder(
     private val height: Int,
     private val fps: Int,
     private val bitrate: Int,
-    private val orientationHint: Int,
-    private val pipeline: IVideoPipeline
+    private val orientationHint: Int = 0,
+    private val pipeline: IVideoPipeline,
+    private val isFront: Boolean = false,
+    private val sensorOrientation: Int = 90,
+    private val deviceRotation: Int = 0
 ) {
     companion object {
         private const val TAG = "CustomPipelineRecorder"
@@ -110,6 +113,9 @@ class CustomVideoPipelineRecorder(
 
     private val mvpMatrix = FloatArray(16)
     private val stMatrix = FloatArray(16)
+    private val localTexMatrix = FloatArray(16)
+    private val matrixValues = FloatArray(9)
+    private val finalTexMatrix = FloatArray(16)
 
     private val vertexBuffer: FloatBuffer = ByteBuffer.allocateDirect(4 * 3 * 4)
         .order(ByteOrder.nativeOrder())
@@ -337,7 +343,7 @@ class CustomVideoPipelineRecorder(
         val safeH = (height and 1.inv()).coerceAtLeast(240)
 
         val st = SurfaceTexture(oesTextureId).apply {
-            setDefaultBufferSize(safeW, safeH)
+            setDefaultBufferSize(maxOf(safeW, safeH), minOf(safeW, safeH))
             setOnFrameAvailableListener({
                 onCameraFrameAvailable()
             }, glHandler)
@@ -347,6 +353,95 @@ class CustomVideoPipelineRecorder(
 
         Matrix.setIdentityM(mvpMatrix, 0)
         GLES20.glViewport(0, 0, safeW, safeH)
+    }
+
+    private fun computeCameraTexMatrix(
+        stMatrix: FloatArray,
+        isFront: Boolean,
+        sensorOrientation: Int,
+        deviceRotation: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        camBufferWidth: Int,
+        camBufferHeight: Int,
+        outMatrix: FloatArray
+    ) {
+        val m0 = stMatrix[0]
+        val m1 = stMatrix[1]
+        val m4 = stMatrix[4]
+        val m5 = stMatrix[5]
+
+        val offDiag = kotlin.math.abs(m1) + kotlin.math.abs(m4)
+        val diag = kotlin.math.abs(m0) + kotlin.math.abs(m5)
+        val isStRotated90 = offDiag > diag
+
+        val det = m0 * m5 - m1 * m4
+        val isIdentitySt = kotlin.math.abs(m0 - 1f) < 1e-4f &&
+            kotlin.math.abs(m5 - 1f) < 1e-4f &&
+            offDiag < 1e-4f &&
+            kotlin.math.abs(stMatrix[13]) < 1e-4f
+        val isStMirrored = !isIdentitySt && (offDiag + diag > 0.1f) && (det > 0f)
+
+        val normRot = ((deviceRotation % 360) + 360) % 360
+        val isLandscapeTarget = (normRot == 90 || normRot == 270)
+        val isSensorSwappedInPortrait = (sensorOrientation == 90 || sensorOrientation == 270)
+        val isSwapped = isSensorSwappedInPortrait xor isLandscapeTarget
+
+        val camLong = maxOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val camShort = minOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val uprightCamW = if (isSwapped) camShort else camLong
+        val uprightCamH = if (isSwapped) camLong else camShort
+        val camAspect = uprightCamW / uprightCamH
+
+        val targetAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
+        val scaleX: Float
+        val scaleY: Float
+        if (targetAspect > camAspect) {
+            scaleX = 1.0f
+            scaleY = camAspect / targetAspect
+        } else {
+            scaleX = targetAspect / camAspect
+            scaleY = 1.0f
+        }
+
+        val rotToPortrait = when (normRot) {
+            90 -> -90f
+            180 -> 180f
+            270 -> 90f
+            else -> 0f
+        }
+
+        val matrix2d = android.graphics.Matrix().apply {
+            postTranslate(-0.5f, -0.5f)
+            postScale(scaleX, scaleY)
+            if (rotToPortrait != 0f) {
+                postRotate(rotToPortrait)
+            }
+            if (isFront != isStMirrored) {
+                postScale(-1.0f, 1.0f)
+            }
+            if (!isStRotated90) {
+                if (sensorOrientation == 90 || sensorOrientation == 270) {
+                    val fallbackRot = if (isFront) {
+                        if (sensorOrientation == 270) 90f else -90f
+                    } else {
+                        if (sensorOrientation == 90) -90f else 90f
+                    }
+                    postRotate(fallbackRot)
+                } else if (sensorOrientation == 180) {
+                    postRotate(180f)
+                }
+            }
+            postTranslate(0.5f, 0.5f)
+        }
+
+        matrix2d.getValues(matrixValues)
+        localTexMatrix[0] = matrixValues[0]; localTexMatrix[1] = matrixValues[3]; localTexMatrix[2] = 0f; localTexMatrix[3] = 0f
+        localTexMatrix[4] = matrixValues[1]; localTexMatrix[5] = matrixValues[4]; localTexMatrix[6] = 0f; localTexMatrix[7] = 0f
+        localTexMatrix[8] = 0f;              localTexMatrix[9] = 0f;              localTexMatrix[10] = 1f; localTexMatrix[11] = 0f
+        localTexMatrix[12] = matrixValues[2]; localTexMatrix[13] = matrixValues[5]; localTexMatrix[14] = 0f; localTexMatrix[15] = 1f
+
+        Matrix.multiplyMM(outMatrix, 0, stMatrix, 0, localTexMatrix, 0)
     }
 
     /**
@@ -414,8 +509,20 @@ class CustomVideoPipelineRecorder(
             GLES20.glViewport(0, 0, safeW, safeH)
             GLES20.glUseProgram(programId)
 
+            computeCameraTexMatrix(
+                stMatrix = stMatrix,
+                isFront = isFront,
+                sensorOrientation = sensorOrientation,
+                deviceRotation = deviceRotation,
+                viewportWidth = safeW,
+                viewportHeight = safeH,
+                camBufferWidth = maxOf(safeW, safeH),
+                camBufferHeight = minOf(safeW, safeH),
+                outMatrix = finalTexMatrix
+            )
+
             GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
-            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
+            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
             if (uTexelSizeHandle >= 0) {
                 GLES20.glUniform2f(
                     uTexelSizeHandle,
