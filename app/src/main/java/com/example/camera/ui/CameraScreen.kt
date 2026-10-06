@@ -695,8 +695,6 @@ fun CameraScreen(
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             isProActive = isManualProOpen,
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
-            stabilizationMode = videoStabilizationMode,
-            onStabilizationClick = { viewModel.toggleVideoStabilization() },
             layoutConfig = activeLayoutConfig,
             modifier = Modifier.align(Alignment.TopCenter)
         )

@@ -1961,22 +1961,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.setModeVideoStabilizationMode(_cameraMode.value, mode)
         engine.videoStabilizationMode = mode
 
-        // Enforce that normal EIS does NOT re-enable OIS when OIS is turned OFF
+        // CRITICAL: EIS must NEVER automatically enable or activate hardware OIS.
+        // When OIS is OFF in settings, enabling EIS keeps OIS strictly OFF.
         val isOisAllowed = preferences.isOisEnabled
-        if (!isOisAllowed) {
-            val currentHybrid = hybridStabilizationConfig.value
-            val updatedHybrid = currentHybrid.copy(
-                isOisPreferred = false,
-                isOisEnabled = false,
-                isEisPreferred = enabled,
-                isEisOnly = enabled,
-                isHybridEnabled = if (!enabled) false else currentHybrid.isHybridEnabled
-            )
-            setHybridStabilizationConfig(updatedHybrid)
-        }
+        val currentHybrid = hybridStabilizationConfig.value
+        val updatedHybrid = currentHybrid.copy(
+            isOisPreferred = isOisAllowed,
+            isOisEnabled = isOisAllowed,
+            isEisPreferred = enabled,
+            isEisOnly = enabled && !isOisAllowed,
+            isHybridEnabled = enabled && isOisAllowed
+        )
+        setHybridStabilizationConfig(updatedHybrid)
 
         engine.updatePreviewSettings()
-        showToast(if (enabled) "Stabilization: EIS Active" else "Stabilization: OFF")
+        showToast(if (enabled) "Video Stabilization (EIS): ON" else "Video Stabilization: OFF")
     }
 
     fun toggleVideoStabilization() {

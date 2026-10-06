@@ -912,47 +912,6 @@ fun TopControlBar(
             }
         }
 
-        val stabilizationButton = @Composable {
-            val isEisActive = stabilizationMode == VideoStabilizationMode.EIS
-            val badgeText = if (isEisActive) "EIS" else "OFF"
-            val badgeColor = if (isEisActive) Color(0xFF81D4FA) else Color.White.copy(alpha = 0.70f)
-
-            Box(
-                modifier = Modifier
-                    .height(34.dp)
-                    .topControlStyle(
-                        layoutConfig,
-                        activeColor = if (isEisActive) badgeColor else null,
-                        isPill = true
-                    )
-                    .clickable { onStabilizationClick() }
-                    .padding(horizontal = 9.dp)
-                    .testTag("stabilization_mode_button"),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isEisActive) Icons.Filled.VideoStable else Icons.Outlined.VideoStable,
-                        contentDescription = "Stabilization: $badgeText",
-                        tint = badgeColor,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        text = badgeText,
-                        color = badgeColor,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-            }
-        }
-
         @Composable
         fun RenderItem(item: TopControlItem) {
             Box(
@@ -969,7 +928,7 @@ fun TopControlBar(
                     TopControlItem.LOG -> logButton()
                     TopControlItem.LUT -> lutButton()
                     TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
-                    TopControlItem.STABILIZATION -> stabilizationButton()
+                    TopControlItem.STABILIZATION -> { /* EIS is configurable only in Settings */ }
                     TopControlItem.EV -> evButton()
                     TopControlItem.HORIZON_LOCK -> horizonLockButton()
                     TopControlItem.DOLLY_ZOOM -> dollyZoomButton()
@@ -982,19 +941,9 @@ fun TopControlBar(
             }
         }
 
-        // Render Top Controls according to layoutConfig and position
-        val rawVisibleItems = layoutConfig.topControlsOrder.filterNot { layoutConfig.hiddenTopControls.contains(it) }
-        val isVideoOrCinema = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)
-        val visibleItems = if (isVideoOrCinema && !rawVisibleItems.contains(TopControlItem.STABILIZATION) && !layoutConfig.hiddenTopControls.contains(TopControlItem.STABILIZATION)) {
-            val list = rawVisibleItems.toMutableList()
-            val insertIdx = if (list.contains(TopControlItem.TIMER)) list.indexOf(TopControlItem.TIMER) + 1
-            else if (list.contains(TopControlItem.FLASH)) list.indexOf(TopControlItem.FLASH) + 1
-            else 0
-            list.add(insertIdx.coerceIn(0, list.size), TopControlItem.STABILIZATION)
-            list
-        } else {
-            rawVisibleItems
-        }
+        // Render Top Controls according to layoutConfig and position (EIS is configurable only in Settings)
+        val visibleItems = layoutConfig.topControlsOrder
+            .filterNot { layoutConfig.hiddenTopControls.contains(it) || it == TopControlItem.STABILIZATION }
 
         val leftItems = visibleItems.filter { layoutConfig.getIconPosition(it) == TopIconPosition.LEFT }
         val centerItems = visibleItems.filter { layoutConfig.getIconPosition(it) == TopIconPosition.CENTER }

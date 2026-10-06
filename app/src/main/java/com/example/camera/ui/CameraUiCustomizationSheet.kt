@@ -1506,7 +1506,7 @@ fun TopBarControlsEditor(
                         onDismissRequest = { showAddSlotMenu = false },
                         modifier = Modifier.background(Color(0xFF1E2435))
                     ) {
-                        TopControlItem.entries.forEach { itemOption ->
+                        TopControlItem.entries.filterNot { it == TopControlItem.STABILIZATION }.forEach { itemOption ->
                             val alreadyInOrder = config.topControlsOrder.contains(itemOption)
                             DropdownMenuItem(
                                 text = {
@@ -1715,7 +1715,7 @@ fun TopBarControlsEditor(
                                 .background(Color(0xFF1C2233))
                                 .heightIn(max = 280.dp)
                         ) {
-                            TopControlItem.entries.forEach { opt ->
+                            TopControlItem.entries.filterNot { it == TopControlItem.STABILIZATION }.forEach { opt ->
                                 val isCur = opt == item
                                 DropdownMenuItem(
                                     text = {

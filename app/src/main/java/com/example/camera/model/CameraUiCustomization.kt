@@ -540,7 +540,6 @@ object CameraUiTemplates {
             CameraMode.CINEMA -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
-                    TopControlItem.STABILIZATION,
                     TopControlItem.LOG,
                     TopControlItem.LUT,
                     TopControlItem.RESOLUTION,
@@ -548,7 +547,6 @@ object CameraUiTemplates {
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
-                    TopControlItem.STABILIZATION to TopIconPosition.LEFT,
                     TopControlItem.LOG to TopIconPosition.CENTER,
                     TopControlItem.LUT to TopIconPosition.CENTER,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
@@ -560,7 +558,6 @@ object CameraUiTemplates {
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
                     TopControlItem.TIMER,
-                    TopControlItem.STABILIZATION,
                     TopControlItem.RESOLUTION,
                     TopControlItem.EV,
                     TopControlItem.VIDEO_ADJUSTMENTS,
@@ -569,7 +566,6 @@ object CameraUiTemplates {
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
                     TopControlItem.TIMER to TopIconPosition.LEFT,
-                    TopControlItem.STABILIZATION to TopIconPosition.LEFT,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
                     TopControlItem.EV to TopIconPosition.CENTER,
                     TopControlItem.VIDEO_ADJUSTMENTS to TopIconPosition.RIGHT,

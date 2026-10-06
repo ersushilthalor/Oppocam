@@ -3143,47 +3143,32 @@ class Camera2Engine(private val context: Context) {
             }
 
             val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            val hybridConfig = _hybridStabilizationConfig.value
-            val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
-            val isOisOnly = hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
-            if (isVideoMode && isVideoStabilizationEnabled && !isOisOnly) {
-                // When hardware EIS is supported, the camera HAL's internal DSP/ISP handles gyro EIS.
-                // Interfering with SCALER_CROP_REGION simultaneously causes double stabilization.
-                // We use gyro-based EIS ONLY when the hardware lacks native EIS on this lens/mode!
-                val caps = capabilities.value
-                val effectiveRes = if (currentMode == CameraMode.CINEMA) {
-                    cinemaConfig.value.selectedResolution ?: _selectedVideoResolution.value
-                } else {
-                    _selectedVideoResolution.value
-                }
-                val effectiveFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
-                val isHighFps4k = (effectiveRes?.width ?: 0) >= 3840 && effectiveFps >= 60
-                val isHardwareEisActive = caps.supportsEis && (hybridConfig.isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
+            val caps = capabilities.value
+            val isHardwareEisActive = caps.supportsEis && isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
 
-                if (!isHardwareEisActive) {
-                    val lens = _selectedLens.value
-                    if (lens != null) {
-                        try {
-                            val chars = getCharacteristics(lens.cameraId)
-                            val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                            val focalLengths = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                            val focalLength = focalLengths?.firstOrNull() ?: 4.38f
-                            val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: SizeF(6.4f, 4.8f)
+            if (isVideoMode && isVideoStabilizationEnabled && !isHardwareEisActive) {
+                val lens = _selectedLens.value
+                if (lens != null) {
+                    try {
+                        val chars = getCharacteristics(lens.cameraId)
+                        val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                        val focalLengths = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                        val focalLength = focalLengths?.firstOrNull() ?: 4.38f
+                        val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: SizeF(6.4f, 4.8f)
 
-                            if (activeArray != null) {
-                                val crop = gyroStabilizationEngine.computeStabilizedCrop(
-                                    result = result,
-                                    activeArray = activeArray,
-                                    baseZoom = currentZoom,
-                                    focalLengthMm = focalLength,
-                                    sensorPhysicalSizeMm = sensorSize
-                                )
-                                if (crop != null) {
-                                    applyStabilizedCrop(crop)
-                                }
+                        if (activeArray != null) {
+                            val crop = gyroStabilizationEngine.computeStabilizedCrop(
+                                result = result,
+                                activeArray = activeArray,
+                                baseZoom = currentZoom,
+                                focalLengthMm = focalLength,
+                                sensorPhysicalSizeMm = sensorSize
+                            )
+                            if (crop != null) {
+                                applyStabilizedCrop(crop)
                             }
-                        } catch (ignored: Exception) {}
-                    }
+                        }
+                    } catch (ignored: Exception) {}
                 }
             }
 
@@ -3560,94 +3545,37 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        // Coordinated Hybrid OIS + EIS Stabilization
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA ||
-                _isRecordingVideo.value
-
-        val hybridConfig = _hybridStabilizationConfig.value
-        val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred) || !isOisAllowed
-        val isOisOnly = isOisAllowed && hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
-
-        if (isVideoMode) {
-            val isUltra = hybridConfig.isUltraStabilizationEnabled
-            val isStabActive = isVideoStabilizationEnabled && (isUltra || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly || videoStabilizationMode.isEnabled)
-
-            if (isStabActive) {
-                // Optical Image Stabilization (Physical voice-coil motor hardware)
-                // When OIS is OFF: forcefully disable hardware OIS and any vendor OIS controls on every path.
-                // When OIS is ON: allow the main camera lens to use hardware OIS normally.
-                if (!isOisAllowed) {
-                    try {
-                        builder.set(
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                        )
-                    } catch (_: Throwable) {}
-                    applyVendorOisControls(builder, oisAllowed = false)
-                } else if (caps.supportsOis) {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                    )
-                }
-
-                // Electronic Image Stabilization (Digital frame margin compensation)
-                if (isOisOnly) {
-                    builder.set(
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-                    )
-                } else {
-                    val effectiveRes = if (currentMode == CameraMode.CINEMA) {
-                        cinemaConfig.value.selectedResolution ?: _selectedVideoResolution.value
-                    } else {
-                        _selectedVideoResolution.value
-                    }
-                    val effectiveFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
-                    val isHighFps4k = (effectiveRes?.width ?: 0) >= 3840 && effectiveFps >= 60
-                    val allowEis = caps.supportsEis && (isUltra || isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
-
-                    if (allowEis) {
-                        builder.set(
-                            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-                        )
-                    } else {
-                        builder.set(
-                            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-                        )
-                    }
-                }
-            } else {
-                builder.set(
-                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-                )
-                try {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                    )
-                } catch (_: Throwable) {}
-                applyVendorOisControls(builder, oisAllowed = false)
-            }
+        // Coordinated Hybrid OIS + EIS Stabilization:
+        // EIS and OIS are fully independent.
+        // 1. Hardware OIS: Physical voice-coil motor hardware.
+        // When OIS is OFF: forcefully disable hardware OIS and any vendor OIS controls on every path.
+        // When OIS is ON: allow the main camera lens to use hardware OIS normally.
+        val oisAllowed = isOisAllowed && caps.supportsOis
+        if (oisAllowed) {
+            builder.set(
+                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+            )
         } else {
-            // In Still Photo / Night / Portrait: respect OIS toggle state
-            if (!isOisAllowed) {
-                try {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                    )
-                } catch (_: Throwable) {}
-                applyVendorOisControls(builder, oisAllowed = false)
-            } else if (caps.supportsOis) {
+            try {
                 builder.set(
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
                 )
-            }
+            } catch (_: Throwable) {}
+            applyVendorOisControls(builder, oisAllowed = false)
+        }
+
+        // 2. Electronic Image Stabilization (EIS):
+        // Only active in Video / Cinema modes when video stabilization is enabled.
+        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value
+        val eisAllowed = isVideoMode && isVideoStabilizationEnabled && videoStabilizationMode.isEnabled && caps.supportsEis
+        if (eisAllowed) {
+            builder.set(
+                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+            )
+        } else {
             builder.set(
                 CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                 CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
@@ -3740,23 +3668,11 @@ class Camera2Engine(private val context: Context) {
     private fun applyZoom(builder: CaptureRequest.Builder) {
         val lens = activeSessionLens ?: _selectedLens.value ?: return
 
-        val hybridConfig = _hybridStabilizationConfig.value
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
         val caps = capabilities.value
-        val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
-        val isOisOnly = hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
-        val isStabActive = isVideoStabilizationEnabled && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly)
+        val isHardwareEisActive = caps.supportsEis && isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
 
-        val effectiveRes = if (currentMode == CameraMode.CINEMA) {
-            cinemaConfig.value.selectedResolution ?: _selectedVideoResolution.value
-        } else {
-            _selectedVideoResolution.value
-        }
-        val effectiveFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
-        val isHighFps4k = (effectiveRes?.width ?: 0) >= 3840 && effectiveFps >= 60
-        val isHardwareEisActive = caps.supportsEis && (hybridConfig.isUltraStabilizationEnabled || isEisOnly || (hybridConfig.isEisPreferred && (!hybridConfig.isAdaptiveFpsLens || !isHighFps4k)))
-
-        if (!isHardwareEisActive && isStabActive && !isOisOnly && isVideoMode && lastStabilizedCrop != null) {
+        if (!isHardwareEisActive && isVideoStabilizationEnabled && isVideoMode && lastStabilizedCrop != null) {
             builder.set(CaptureRequest.SCALER_CROP_REGION, lastStabilizedCrop)
             return
         }
