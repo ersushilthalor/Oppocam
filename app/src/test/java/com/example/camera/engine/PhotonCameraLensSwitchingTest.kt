@@ -450,10 +450,10 @@ class PhotonCameraLensSwitchingTest {
             // Trigger 1x -> .5x transition
             viewModel.startSmoothOneXToHalfXTransition(fromZoom = 1.0f, targetZoom = 0.5f)
 
-            // First action: must switch immediately to Ultra-Wide lens at .999x
+            // First action: must switch target to Ultra-Wide lens and smoothly transition zoom down
             assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
             assertEquals(LensType.ULTRAWIDE, viewModel.engine.selectedLens.value?.lensType)
-            assertTrue("Zoom must start at .999x or smoothly transition down", viewModel.currentZoom.value <= 0.999f && viewModel.currentZoom.value >= 0.5f)
+            assertTrue("Zoom must start and smoothly transition down", viewModel.currentZoom.value <= 1.0f && viewModel.currentZoom.value >= 0.5f)
         }
     }
 

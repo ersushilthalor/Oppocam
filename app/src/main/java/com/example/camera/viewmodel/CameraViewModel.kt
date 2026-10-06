@@ -1709,15 +1709,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
                 ?: lensesForFacing.firstOrNull()
 
-            // Ensure we are currently on ultra-wide before starting the 0.25s zoom transition
-            if (ultraWideLens != null && !engine.isRunningOnLens(ultraWideLens)) {
-                engine.switchLensSuspend(ultraWideLens, preserveZoom = true, targetZoom = fromZoom.coerceIn(0.5f, 0.999f))
-            }
-
-            // Step 1: Smoothly transition from 0.5x up to 0.999x on the Ultra-Wide lens over exactly 0.25s (250 ms)
+            // Step 1: Smoothly transition from startZ up to 1.0f on the continuous camera stream over exactly 0.25s (250 ms)
             val durationMs = 250L // Exactly 0.25 seconds
-            val startZ = fromZoom.coerceIn(0.5f, 0.999f)
-            val endZ = 0.999f
+            val startZ = fromZoom.coerceIn(0.5f, 1.0f)
+            val endZ = 1.0f
             val startTime = System.currentTimeMillis()
             val frameIntervalMs = 16L // ~60 FPS smooth continuous updates
 
@@ -1737,21 +1732,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 delay(sleepTime)
             }
 
-            // Cleanly reached .999x
-            _currentZoom.value = 0.999f
-            preferences.setModeZoom(_cameraMode.value, 0.999f)
-            engine.setZoom(0.999f, isPresetTap = false)
+            // Cleanly reached 1.0x
+            _currentZoom.value = 1.0f
+            preferences.setModeZoom(_cameraMode.value, 1.0f)
+            engine.setZoom(1.0f, isPresetTap = true)
 
-            // Step 2: Instantly switch to the 1x Main Wide lens with zero visible FOV jump
+            // Step 2: Finalize 1x Main Wide lens selection
             if (mainWideLens != null) {
                 preferences.lastFacing = mainWideLens.facing
                 preferences.saveLastLens(mainWideLens)
                 preferences.setModeLens(_cameraMode.value, mainWideLens)
-                engine.switchLensSuspend(mainWideLens, preserveZoom = false, targetZoom = 1.0f)
+                if (!engine.isRunningOnLens(mainWideLens)) {
+                    engine.selectLens(mainWideLens, preserveZoom = true, targetZoom = 1.0f)
+                }
             }
-            _currentZoom.value = 1.0f
-            preferences.setModeZoom(_cameraMode.value, 1.0f)
-            engine.setZoom(1.0f, isPresetTap = true)
 
             zoomTransitionJob = null
         }
@@ -1759,9 +1753,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Smoothly transitions from 1x -> 0.5x:
-     * - First switch to the ultra-wide lens at 0.999x (exact FOV match with 1x Main).
-     * - As soon as the lens switch is completed, immediately start the smooth zoom transition from 0.999x -> 0.5x over 0.25s.
-     * - Do NOT start the transition before the lens switch. Do NOT add any unnecessary delay after the switch.
+     * - Continuously interpolates zoom from 1.0x down to 0.5x over exactly 0.25s (250 ms) on the live stream.
+     * - Seamlessly hands over to the ultra-wide lens without preview stalls or session destruction.
      */
     fun startSmoothOneXToHalfXTransition(fromZoom: Float = _currentZoom.value, targetZoom: Float = 0.5f) {
         zoomTransitionJob?.cancel()
@@ -1779,21 +1772,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 return@launch
             }
 
-            // Step 1: Switch to the ultra-wide lens at 0.999x.
-            // Await lens switch completion so the 0.25s transition does NOT start before the switch finishes!
-            _currentZoom.value = 0.999f
-            preferences.setModeZoom(_cameraMode.value, 0.999f)
             preferences.lastFacing = ultraWideLens.facing
             preferences.saveLastLens(ultraWideLens)
             preferences.setModeLens(_cameraMode.value, ultraWideLens)
 
-            engine.switchLensSuspend(ultraWideLens, preserveZoom = true, targetZoom = 0.999f)
-
-            // Step 2: As soon as the ultra-wide lens switch is completed, immediately start the smooth zoom transition
-            // from 0.999x down to 0.5x over exactly 0.25s (250 ms)
+            // Step 1: Smoothly transition from startZ down to targetZoom (0.5x) over exactly 0.25s (250 ms)
             val durationMs = 250L // Exactly 0.25 seconds
-            val startZ = 0.999f
-            val endZ = targetZoom.coerceIn(0.5f, 0.999f)
+            val startZ = fromZoom.coerceIn(0.5f, 1.0f)
+            val endZ = targetZoom.coerceIn(0.5f, 1.0f)
             val startTime = System.currentTimeMillis()
             val frameIntervalMs = 16L // ~60 FPS smooth continuous updates
 
@@ -1817,6 +1803,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _currentZoom.value = endZ
             preferences.setModeZoom(_cameraMode.value, endZ)
             engine.setZoom(endZ, isPresetTap = true)
+            if (!engine.isRunningOnLens(ultraWideLens)) {
+                engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = endZ)
+            }
 
             zoomTransitionJob = null
         }
