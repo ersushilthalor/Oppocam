@@ -147,9 +147,9 @@ object CameraOpticalCalibration {
                 if (uiZoom <= 0.5f) {
                     1.0f
                 } else {
-                    // Maximum zoom on Ultra-wide is 0.999x; at 1.000x the camera strictly uses native Main Wide
+                    // Maximum zoom on Ultra-wide is 0.999x; at 0.999x the crop reaches exactly maxCrop matching 1x Main FOV
                     val clampedUi = uiZoom.coerceIn(0.5f, 0.999f)
-                    val t = ((clampedUi - 0.5f) / (1.0f - 0.5f)).coerceIn(0f, 1f)
+                    val t = ((clampedUi - 0.5f) / (0.999f - 0.5f)).coerceIn(0f, 1f)
                     val crop = 1.0f + t * (maxCrop - 1.0f)
                     crop.coerceIn(1.0f, maxCrop)
                 }

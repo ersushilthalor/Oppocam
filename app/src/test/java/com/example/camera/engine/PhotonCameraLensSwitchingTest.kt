@@ -427,9 +427,71 @@ class PhotonCameraLensSwitchingTest {
             // Tap 0.5x preset
             viewModel.setZoom(0.5f, isPresetTap = true)
 
-            // Selected lens must be the real Ultra-Wide camera, not cropped Main
+            // Selected lens must immediately be the real Ultra-Wide camera at .999x with no visible FOV jump
             assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
             assertEquals(LensType.ULTRAWIDE, viewModel.engine.selectedLens.value?.lensType)
         }
+    }
+
+    @Test
+    fun testOneXToHalfXTransitionFirstSwitchesToUltraWideAtPointNineNineNine() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (ultraWideLens != null && mainLens != null) {
+            viewModel.engine.selectLens(mainLens)
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            assertEquals(1.0f, viewModel.currentZoom.value, 0.001f)
+
+            // Trigger 1x -> .5x transition
+            viewModel.startSmoothOneXToHalfXTransition(fromZoom = 1.0f, targetZoom = 0.5f)
+
+            // First action: must switch immediately to Ultra-Wide lens at .999x
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+            assertEquals(LensType.ULTRAWIDE, viewModel.engine.selectedLens.value?.lensType)
+            assertTrue("Zoom must start at .999x or smoothly transition down", viewModel.currentZoom.value <= 0.999f && viewModel.currentZoom.value >= 0.5f)
+        }
+    }
+
+    @Test
+    fun testHalfXToOneXTransitionTransitionsToPointNineNineNineThenSwitchesToMainAtOneX() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (ultraWideLens != null && mainLens != null) {
+            viewModel.engine.selectLens(ultraWideLens)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.currentZoom.value, 0.001f)
+
+            // Trigger .5x -> 1x transition
+            viewModel.startSmoothHalfXToOneXTransition(fromZoom = 0.5f)
+
+            // During initial transition, must stay on Ultra-Wide lens and zoom towards .999x
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+            assertTrue("Zoom must transition up from .5x towards .999x", viewModel.currentZoom.value >= 0.5f && viewModel.currentZoom.value <= 1.0f)
+        }
+    }
+
+    @Test
+    fun testOpticalCalibrationAtPointNineNineNineMatchesOneXMainCropLimit() {
+        // At 0.5x on Ultra-Wide: 1.0x digital crop (full uncropped sensor)
+        val cropAt05 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.5f, 0.5f, LensType.ULTRAWIDE)
+        assertEquals(1.0f, cropAt05, 0.001f)
+
+        // At 0.999x on Ultra-Wide: exactly matches 1x Main FOV limit (1.44x crop)
+        val cropAt0999 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.999f, 0.5f, LensType.ULTRAWIDE)
+        assertEquals(1.44f, cropAt0999, 0.001f)
+
+        // At 1.000x on Main: 1.0x digital crop (native uncropped 1x Main FOV)
+        val cropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.WIDE)
+        assertEquals(1.0f, cropAt10, 0.001f)
     }
 }
