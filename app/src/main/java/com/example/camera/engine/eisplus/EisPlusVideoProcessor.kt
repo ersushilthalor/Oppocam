@@ -214,18 +214,30 @@ object EisPlusVideoProcessor {
             glManager = EisPlusGlManager(encoderInputSurface, width, height)
             val decoderOutputSurface = glManager.createDecoderSurface()
 
+            val inputRotation = if (inputVideoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                inputVideoFormat.getInteger(MediaFormat.KEY_ROTATION)
+            } else if (inputVideoFormat.containsKey("rotation-degrees")) {
+                try { inputVideoFormat.getInteger("rotation-degrees") } catch (_: Exception) { 0 }
+            } else {
+                orientationDegrees
+            }
+            val finalOrientationHint = if (inputRotation != 0) inputRotation else (if (orientationDegrees >= 0) orientationDegrees else 0)
+
+            // CRITICAL: Force decoder rotation to 0 so decoded frames are not distorted/squashed onto the surface!
+            // The MediaMuxer will set the single correct orientationHint on the MP4 container metadata.
+            if (inputVideoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                inputVideoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
+            }
+            try {
+                inputVideoFormat.setInteger("rotation-degrees", 0)
+            } catch (_: Exception) {}
+
             decoder = MediaCodec.createDecoderByType(inputMime)
             decoder.configure(inputVideoFormat, decoderOutputSurface, null, 0)
             decoder.start()
 
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            if (orientationDegrees >= 0) {
-                muxer.setOrientationHint(orientationDegrees)
-            } else if (inputVideoFormat.containsKey("rotation-degrees")) {
-                try {
-                    muxer.setOrientationHint(inputVideoFormat.getInteger("rotation-degrees"))
-                } catch (ignored: Exception) {}
-            }
+            muxer.setOrientationHint(finalOrientationHint)
 
             extractor.selectTrack(videoTrackIndex)
 
@@ -276,7 +288,7 @@ object EisPlusVideoProcessor {
                         if (!isEOS) {
                             glManager.awaitNewImage()
                             val motion = interpolateTrajectory(trajectory, ptsUs)
-                            glManager.drawFrame(motion)
+                            glManager.drawFrame(motion, finalOrientationHint)
                             glManager.setPresentationTime(ptsUs * 1000L)
                             glManager.swapBuffers()
                         } else {
@@ -527,7 +539,7 @@ object EisPlusVideoProcessor {
             surfaceTexture?.getTransformMatrix(stMatrix)
         }
 
-        fun drawFrame(motion: InterpolatedEisPoint) {
+        fun drawFrame(motion: InterpolatedEisPoint, orientationHint: Int = 0) {
             GLES20.glViewport(0, 0, width, height)
             GLES20.glClearColor(0f, 0f, 0f, 1f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -542,21 +554,37 @@ object EisPlusVideoProcessor {
                 Matrix.rotateM(mvpMatrix, 0, motion.rotationDeg, 0f, 0f, 1f)
             }
 
-            // 2. Scale (dynamic crop margin to prevent black borders)
+            // 2. Scale (dynamic crop margin matching Viewfinder)
             val s = motion.scaleFactor.coerceIn(1.0f, 1.35f)
             Matrix.scaleM(mvpMatrix, 0, s, s, 1f)
 
-            // 3. Normalized Translation shift (pitch and yaw counter-motion)
-            val tx = motion.dxNorm * (1f - 1f / s) * 0.90f
-            val ty = motion.dyNorm * (1f - 1f / s) * 0.90f
+            // 3. Map display normalized shifts (dxNorm, dyNorm) to the video buffer orientation
+            val normRot = ((orientationHint % 360) + 360) % 360
+            val (bufDx, bufDy) = when (normRot) {
+                90 -> Pair(motion.dyNorm, -motion.dxNorm)
+                180 -> Pair(-motion.dxNorm, -motion.dyNorm)
+                270 -> Pair(-motion.dyNorm, motion.dxNorm)
+                else -> Pair(motion.dxNorm, motion.dyNorm)
+            }
+
+            // Translation shift matching Viewfinder preview matrix identically
+            val maxShift = (1f - 1f / s)
+            val tx = bufDx * maxShift * 0.88f
+            val ty = bufDy * maxShift * 0.88f
             Matrix.translateM(mvpMatrix, 0, tx, ty, 0f)
 
             GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
             GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
 
-            // 4. Rolling shutter shear compensation
-            GLES20.glUniform1f(uShearXHandle, -motion.shearX * 0.5f)
-            GLES20.glUniform1f(uShearYHandle, -motion.shearY * 0.5f)
+            // 4. Rolling shutter shear compensation mapped to buffer orientation
+            val (bufShearX, bufShearY) = when (normRot) {
+                90 -> Pair(motion.shearY, -motion.shearX)
+                180 -> Pair(-motion.shearX, -motion.shearY)
+                270 -> Pair(-motion.shearY, motion.shearX)
+                else -> Pair(motion.shearX, motion.shearY)
+            }
+            GLES20.glUniform1f(uShearXHandle, -bufShearX * 0.5f)
+            GLES20.glUniform1f(uShearYHandle, -bufShearY * 0.5f)
 
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTextureId)

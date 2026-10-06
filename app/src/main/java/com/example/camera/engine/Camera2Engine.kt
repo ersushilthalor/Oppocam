@@ -708,6 +708,17 @@ class Camera2Engine(private val context: Context) {
     val proSharpness = MutableStateFlow(preferences.proSharpness)
     val proNoiseReduction = MutableStateFlow(preferences.proNoiseReduction)
 
+    private val _actualOisHardwareActive = MutableStateFlow(false)
+    val actualOisHardwareActive: StateFlow<Boolean> = _actualOisHardwareActive.asStateFlow()
+
+    private val _actualEisHardwareActive = MutableStateFlow(false)
+    val actualEisHardwareActive: StateFlow<Boolean> = _actualEisHardwareActive.asStateFlow()
+
+    val isOisAllowed: Boolean
+        get() = preferences.isOisEnabled &&
+                _hybridStabilizationConfig.value.isOisEnabled &&
+                _hybridStabilizationConfig.value.isOisPreferred
+
     var isOisEnabled: Boolean
         get() = preferences.isOisEnabled
         set(value) {
@@ -3116,6 +3127,26 @@ class Camera2Engine(private val context: Context) {
             lastCaptureResult = result
             CameraPerformanceMonitor.onPreviewFrame()
 
+            // Verify actual hardware OIS and EIS states directly from CaptureResult
+            val actualOisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)
+            val isActualOisHwActive = (actualOisMode == CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_ON)
+            _actualOisHardwareActive.value = isActualOisHwActive
+
+            val actualEisMode = result.get(CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE)
+            val isActualEisHwActive = (actualEisMode == CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE_ON)
+            _actualEisHardwareActive.value = isActualEisHwActive
+
+            // When OIS is OFF: if the hardware HAL unexpectedly re-enabled OIS, force it OFF immediately
+            if (!isOisAllowed && isActualOisHwActive) {
+                try {
+                    previewRequestBuilder?.let { b ->
+                        b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                        applyVendorOisControls(b, oisAllowed = false)
+                        captureSession?.setRepeatingRequest(b.build(), this, backgroundHandler)
+                    }
+                } catch (_: Throwable) {}
+            }
+
             if (_isAutoSwitchToUltraWide.value && !_isRecordingVideo.value && !isSwitchingLens.get()) {
                 checkAutoLensSwitch(result)
             }
@@ -3145,20 +3176,28 @@ class Camera2Engine(private val context: Context) {
                         val focalLengths = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                         val focalLength = focalLengths?.firstOrNull() ?: 4.38f
                         val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: SizeF(6.4f, 4.8f)
+                        val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+                        val isFront = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
+                        val currentRot = getEffectiveDeviceRotation()
 
                         if (activeArray != null) {
                             val ptsUs = (result.get(CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()) / 1000L
-                            val transform = eisPlusStabilizationEngine.onFrameCaptured(
+                            eisPlusStabilizationEngine.onFrameCaptured(
                                 result = result,
                                 activeArray = activeArray,
                                 baseZoom = currentZoom,
                                 focalLengthMm = focalLength,
                                 sensorPhysicalSizeMm = sensorSize,
-                                ptsUs = ptsUs
+                                ptsUs = ptsUs,
+                                deviceRotation = currentRot,
+                                sensorOrientation = sensorOrientation,
+                                isFront = isFront,
+                                actualOisHardwareActive = isOisAllowed && isActualOisHwActive
                             )
-                            if (transform?.cropRect != null) {
-                                applyStabilizedCrop(transform.cropRect)
-                            }
+                            // NOTE: In EIS+, stabilization is rendered via the GPU transform matrix in
+                            // both Viewfinder TextureView and EisPlusVideoProcessor. We do NOT call
+                            // applyStabilizedCrop(transform.cropRect) to prevent Camera2 SCALER_CROP_REGION
+                            // fighting against the matrix transform, eliminating vertical jitter and frame bouncing!
                         }
                     } catch (ignored: Exception) {}
                 }
@@ -3581,10 +3620,8 @@ class Camera2Engine(private val context: Context) {
                 _isRecordingVideo.value
 
         val hybridConfig = _hybridStabilizationConfig.value
-        val isOisGloballyEnabled = preferences.isOisEnabled && hybridConfig.isOisEnabled
-        val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred) || !isOisGloballyEnabled
-        val isOisOnly = isOisGloballyEnabled && hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
-        val isOisAllowed = isOisGloballyEnabled && hybridConfig.isOisPreferred && !isEisOnly
+        val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred) || !isOisAllowed
+        val isOisOnly = isOisAllowed && hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
 
         if (isVideoMode) {
             val isUltra = hybridConfig.isUltraStabilizationEnabled
@@ -3592,17 +3629,15 @@ class Camera2Engine(private val context: Context) {
 
             if (isStabActive) {
                 // Optical Image Stabilization (Physical voice-coil motor hardware)
-                // When OIS is OFF: forcefully disable hardware OIS and any vendor OIS controls.
+                // When OIS is OFF: forcefully disable hardware OIS and any vendor OIS controls on every path.
                 // When OIS is ON: allow the main camera lens to use hardware OIS normally.
                 if (!isOisAllowed) {
-                    if (caps.supportsOis) {
-                        try {
-                            builder.set(
-                                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                            )
-                        } catch (_: Throwable) {}
-                    }
+                    try {
+                        builder.set(
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                        )
+                    } catch (_: Throwable) {}
                     applyVendorOisControls(builder, oisAllowed = false)
                 } else if (caps.supportsOis) {
                     builder.set(
@@ -3651,27 +3686,23 @@ class Camera2Engine(private val context: Context) {
                     CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
                     CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
                 )
-                if (caps.supportsOis) {
-                    try {
-                        builder.set(
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                        )
-                    } catch (_: Throwable) {}
-                }
+                try {
+                    builder.set(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                    )
+                } catch (_: Throwable) {}
                 applyVendorOisControls(builder, oisAllowed = false)
             }
         } else {
             // In Still Photo / Night / Portrait: respect OIS toggle state
             if (!isOisAllowed) {
-                if (caps.supportsOis) {
-                    try {
-                        builder.set(
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                        )
-                    } catch (_: Throwable) {}
-                }
+                try {
+                    builder.set(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                    )
+                } catch (_: Throwable) {}
                 applyVendorOisControls(builder, oisAllowed = false)
             } else if (caps.supportsOis) {
                 builder.set(
@@ -6377,6 +6408,12 @@ class Camera2Engine(private val context: Context) {
                                     set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)
                                 }
                             }
+                            if (!isOisAllowed) {
+                                try {
+                                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                                } catch (_: Throwable) {}
+                                applyVendorOisControls(this, oisAllowed = false)
+                            }
                         }
                         synchronized(previewRequestLock) {
                             previewRequestBuilder = recordBuilder
@@ -6390,6 +6427,12 @@ class Camera2Engine(private val context: Context) {
                                 try {
                                     synchronized(previewRequestLock) {
                                         applyCommonSettings(recordBuilder)
+                                        if (!isOisAllowed) {
+                                            try {
+                                                recordBuilder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                                            } catch (_: Throwable) {}
+                                            applyVendorOisControls(recordBuilder, oisAllowed = false)
+                                        }
                                         session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
                                     }
                                     if (isCustomPipelineRecording) {
@@ -6423,6 +6466,12 @@ class Camera2Engine(private val context: Context) {
                                             addTarget(previewSurf)
                                             addTarget(recorderSurface)
                                             applyCommonSettings(this)
+                                            if (!isOisAllowed) {
+                                                try {
+                                                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                                                } catch (_: Throwable) {}
+                                                applyVendorOisControls(this, oisAllowed = false)
+                                            }
                                             set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
                                             // Set safe 30fps range
                                             val fpsRanges = chars?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
@@ -6470,6 +6519,12 @@ class Camera2Engine(private val context: Context) {
                                                         addTarget(previewSurf)
                                                         addTarget(recorderSurface)
                                                         applyCommonSettings(this)
+                                                        if (!isOisAllowed) {
+                                                            try {
+                                                                set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                                                            } catch (_: Throwable) {}
+                                                            applyVendorOisControls(this, oisAllowed = false)
+                                                        }
                                                     }
                                                     synchronized(previewRequestLock) {
                                                         previewRequestBuilder = previewTemplateBuilder

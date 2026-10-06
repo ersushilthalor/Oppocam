@@ -933,6 +933,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val isOisEnabled: StateFlow<Boolean> = _isOisEnabled.asStateFlow()
     val eisPlusTelemetry: StateFlow<com.example.camera.engine.eisplus.EisPlusTelemetry?> = engine.eisPlusStabilizationEngine.telemetry
     val eisPlusTransform: StateFlow<com.example.camera.engine.eisplus.EisPlusTransform?> = engine.eisPlusTransform
+    val actualOisHardwareActive: StateFlow<Boolean> = engine.actualOisHardwareActive
+    val actualEisHardwareActive: StateFlow<Boolean> = engine.actualEisHardwareActive
 
     private val _isVideoStabilizationEnabled = MutableStateFlow(preferences.getModeVideoStabilization(preferences.cameraMode))
     val isVideoStabilizationEnabled: StateFlow<Boolean> = _isVideoStabilizationEnabled.asStateFlow()

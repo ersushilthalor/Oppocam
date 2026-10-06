@@ -121,4 +121,42 @@ class EisPlusStabilizationTest {
 
         eisPlusEngine.stop()
     }
+
+    @Test
+    fun testWhenOisOffEisPlusDoesNotUseOisAndForcesOisOff() {
+        // Turn OIS OFF
+        viewModel.setOisEnabled(false)
+        assertFalse(viewModel.isOisEnabled.value)
+        assertFalse(viewModel.engine.isOisAllowed)
+        assertFalse(viewModel.engine.eisPlusStabilizationEngine.isOisEnabled)
+
+        // Turn on EIS+
+        viewModel.setVideoStabilizationMode(VideoStabilizationMode.EIS_PLUS)
+        assertTrue(viewModel.videoStabilizationMode.value.isEisPlus)
+        // Ensure OIS is still strictly forbidden
+        assertFalse("OIS must never be re-enabled when EIS+ is turned on", viewModel.engine.isOisAllowed)
+        assertFalse(viewModel.engine.eisPlusStabilizationEngine.isOisEnabled)
+
+        // Switch to Video Mode
+        viewModel.setCameraMode(CameraMode.VIDEO)
+        assertFalse(viewModel.engine.isOisAllowed)
+        assertFalse(viewModel.engine.eisPlusStabilizationEngine.isOisEnabled)
+
+        // Switch to Cinema Mode
+        viewModel.setCameraMode(CameraMode.CINEMA)
+        assertFalse(viewModel.engine.isOisAllowed)
+        assertFalse(viewModel.engine.eisPlusStabilizationEngine.isOisEnabled)
+    }
+
+    @Test
+    fun testActualHardwareStabilizationStatesExposed() {
+        assertNotNull(viewModel.actualOisHardwareActive)
+        assertNotNull(viewModel.actualEisHardwareActive)
+        assertNotNull(viewModel.engine.actualOisHardwareActive)
+        assertNotNull(viewModel.engine.actualEisHardwareActive)
+
+        // Default state when camera not started
+        assertFalse(viewModel.actualOisHardwareActive.value)
+        assertFalse(viewModel.actualEisHardwareActive.value)
+    }
 }

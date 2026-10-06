@@ -224,8 +224,9 @@ fun StabilizationFloatingWindow(
                         )
                     }
 
+                    val oisTag = if (telemetry.isOisFused) " • OIS Fused" else (if (!isOisEnabled) " • OIS OFF" else "")
                     Text(
-                        text = "Margin: ${telemetry.dynamicCropMarginPercent}% • Gyro 200Hz",
+                        text = "Margin: ${telemetry.dynamicCropMarginPercent}% • Gyro 200Hz$oisTag",
                         color = Color.White.copy(alpha = 0.75f),
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.Medium

@@ -141,6 +141,7 @@ class OisEisStabilizationEngineTest {
         assertTrue("Video stabilization should be active for EIS", viewModel.isVideoStabilizationEnabled.value)
         assertFalse("OIS must NOT be re-enabled by selecting EIS", viewModel.isOisEnabled.value)
         assertFalse("Engine OIS must stay false in EIS", viewModel.engine.isOisEnabled)
+        assertFalse("Engine isOisAllowed must stay false in EIS", viewModel.engine.isOisAllowed)
         assertFalse("Hybrid config OIS must stay false in EIS", viewModel.hybridStabilizationConfig.value.isOisEnabled)
         assertFalse("Hybrid config isOisPreferred must stay false in EIS", viewModel.hybridStabilizationConfig.value.isOisPreferred)
 
@@ -150,6 +151,7 @@ class OisEisStabilizationEngineTest {
         assertTrue("Video stabilization should be active for EIS+", viewModel.isVideoStabilizationEnabled.value)
         assertFalse("OIS must NOT be re-enabled by selecting EIS+", viewModel.isOisEnabled.value)
         assertFalse("Engine OIS must stay false in EIS+", viewModel.engine.isOisEnabled)
+        assertFalse("Engine isOisAllowed must stay false in EIS+", viewModel.engine.isOisAllowed)
         assertFalse("EIS+ engine OIS must stay false in EIS+", viewModel.engine.eisPlusStabilizationEngine.isOisEnabled)
         assertFalse("Hybrid config OIS must stay false in EIS+", viewModel.hybridStabilizationConfig.value.isOisEnabled)
         assertFalse("Hybrid config isOisPreferred must stay false in EIS+", viewModel.hybridStabilizationConfig.value.isOisPreferred)

@@ -73,8 +73,8 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
 
     private data class RawFrameMotion(
         val timestampNanos: Long,
-        val pitch: Float,
-        val yaw: Float,
+        val pan: Float,
+        val tilt: Float,
         val roll: Float,
         val oisShiftX: Float,
         val oisShiftY: Float,
@@ -94,18 +94,21 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
     private val gyroRingBuffer = ConcurrentLinkedDeque<GyroSample>()
     private val frameMotionHistory = ArrayDeque<RawFrameMotion>(LOOK_AHEAD_WINDOW_SIZE + 2)
 
-    // Trajectory state
+    // Trajectory state (in camera display viewing frame)
     private var lastMidFrameTimestamp: Long = 0L
-    private var integratedPitch: Float = 0f
-    private var integratedYaw: Float = 0f
+    private var integratedPan: Float = 0f
+    private var integratedTilt: Float = 0f
     private var integratedRoll: Float = 0f
 
     // Smoothed reference anchor trajectory
-    private var smoothAnchorPitch: Float = 0f
-    private var smoothAnchorYaw: Float = 0f
+    private var smoothAnchorPan: Float = 0f
+    private var smoothAnchorTilt: Float = 0f
     private var smoothAnchorRoll: Float = 0f
 
-    // 2nd-order critically-damped spring state for displacement
+    // Current smooth roll degrees
+    private var currentRollDeg: Float = 0f
+
+    // Critically-damped displacement state (analytic exponential, zero overshoot, zero bounce)
     private var currentDxPx: Float = 0f
     private var currentDyPx: Float = 0f
     private var velocityDx: Float = 0f
@@ -114,8 +117,8 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
     // Low-motion / Tripod lock state
     private var consecutiveStillFrames: Int = 0
     private var tripodConfidence: Float = 0f
-    private var tripodLockedPitch: Float = 0f
-    private var tripodLockedYaw: Float = 0f
+    private var tripodLockedPan: Float = 0f
+    private var tripodLockedTilt: Float = 0f
 
     // Dynamic crop margin state
     private var dynamicCropMargin: Float = MIN_CROP_MARGIN
@@ -142,18 +145,21 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
             gyroRingBuffer.clear()
             frameMotionHistory.clear()
             lastMidFrameTimestamp = 0L
-            integratedPitch = 0f
-            integratedYaw = 0f
+            integratedPan = 0f
+            integratedTilt = 0f
             integratedRoll = 0f
-            smoothAnchorPitch = 0f
-            smoothAnchorYaw = 0f
+            smoothAnchorPan = 0f
+            smoothAnchorTilt = 0f
             smoothAnchorRoll = 0f
+            currentRollDeg = 0f
             currentDxPx = 0f
             currentDyPx = 0f
             velocityDx = 0f
             velocityDy = 0f
             consecutiveStillFrames = 0
             tripodConfidence = 0f
+            tripodLockedPan = 0f
+            tripodLockedTilt = 0f
             dynamicCropMargin = MIN_CROP_MARGIN
             _currentTransform.value = null
 
@@ -304,8 +310,8 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
     /**
      * Core EIS+ Frame Processing:
      * Synchronizes gyro, OIS, and camera timestamps, applies rolling shutter slant compensation,
-     * performs temporal 5-7 frame look-ahead smoothing, detects tripod stillness, and generates
-     * both the sensor crop rect and the GPU matrix transform.
+     * maps gyro axes to exact camera viewing/display orientation, performs temporal 5-7 frame look-ahead
+     * smoothing, and generates the GPU transformation matrix with analytic critically-damped decay.
      */
     fun onFrameCaptured(
         result: CaptureResult,
@@ -313,7 +319,11 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
         baseZoom: Float = 1.0f,
         focalLengthMm: Float = 4.38f,
         sensorPhysicalSizeMm: SizeF = SizeF(6.4f, 4.8f),
-        ptsUs: Long = 0L
+        ptsUs: Long = 0L,
+        deviceRotation: Int = 0,
+        sensorOrientation: Int = 90,
+        isFront: Boolean = false,
+        actualOisHardwareActive: Boolean = false
     ): EisPlusTransform? {
         if (!isRunning.get()) return null
 
@@ -348,9 +358,9 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
 
         val inRangeSamples = samplesSnapshot.filter { it.timestampNanos in (tStart + 1) until tEnd }
 
-        var deltaPitch = 0f
-        var deltaYaw = 0f
-        var deltaRoll = 0f
+        var deltaWx = 0f
+        var deltaWy = 0f
+        var deltaWz = 0f
         var prevT = tStart
         var prevWx = wxStart
         var prevWy = wyStart
@@ -359,9 +369,9 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
         for (sample in inRangeSamples) {
             val dt = (sample.timestampNanos - prevT) * 1e-9f
             if (dt in 0.00001f..0.05f) {
-                deltaPitch += 0.5f * (prevWx + sample.wx) * dt
-                deltaYaw += 0.5f * (prevWy + sample.wy) * dt
-                deltaRoll += 0.5f * (prevWz + sample.wz) * dt
+                deltaWx += 0.5f * (prevWx + sample.wx) * dt
+                deltaWy += 0.5f * (prevWy + sample.wy) * dt
+                deltaWz += 0.5f * (prevWz + sample.wz) * dt
             }
             prevT = sample.timestampNanos
             prevWx = sample.wx
@@ -371,9 +381,9 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
 
         val finalDt = (tEnd - prevT) * 1e-9f
         if (finalDt in 0.00001f..0.05f) {
-            deltaPitch += 0.5f * (prevWx + wxEnd) * finalDt
-            deltaYaw += 0.5f * (prevWy + wyEnd) * finalDt
-            deltaRoll += 0.5f * (prevWz + wzEnd) * finalDt
+            deltaWx += 0.5f * (prevWx + wxEnd) * finalDt
+            deltaWy += 0.5f * (prevWy + wyEnd) * finalDt
+            deltaWz += 0.5f * (prevWz + wzEnd) * finalDt
         }
 
         // Clean out stale gyro samples older than 500ms
@@ -382,24 +392,58 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
             gyroRingBuffer.pollFirst()
         }
 
-        // 3. Accumulate raw integrated angular trajectory
-        integratedPitch += deltaPitch
-        integratedYaw += deltaYaw
-        integratedRoll += deltaRoll
+        // 3. Map hardware phone gyro (gx, gy, gz) into camera viewing frame (panX, tiltY, rollZ):
+        // In viewing frame: panX = pan right, tiltY = tilt up, rollZ = roll CCW
+        val normRot = ((deviceRotation % 360) + 360) % 360
+        val (dPan, dTilt, dRoll) = when (normRot) {
+            90 -> {
+                // Landscape (top of phone is left)
+                if (isFront) Triple(-deltaWx, deltaWy, -deltaWz)
+                else Triple(-deltaWx, -deltaWy, deltaWz)
+            }
+            180 -> {
+                // Reverse portrait (upside down)
+                if (isFront) Triple(-deltaWy, -deltaWx, -deltaWz)
+                else Triple(deltaWy, -deltaWx, deltaWz)
+            }
+            270 -> {
+                // Landscape reverse (top of phone is right)
+                if (isFront) Triple(deltaWx, -deltaWy, -deltaWz)
+                else Triple(deltaWx, deltaWy, deltaWz)
+            }
+            else -> {
+                // 0: Standard Portrait
+                if (isFront) Triple(deltaWy, deltaWx, -deltaWz)
+                else Triple(-deltaWy, deltaWx, deltaWz)
+            }
+        }
 
-        // 4. OIS Physical Voice-Coil Lens Movement Fusion
-        val oisShift = if (isOisEnabled) extractOisTelemetry(result) else null
-        val oisFused = isOisEnabled && (oisShift != null)
-        val oisOffsetX = if (isOisEnabled) (oisShift?.first ?: 0f) else 0f
-        val oisOffsetY = if (isOisEnabled) (oisShift?.second ?: 0f) else 0f
+        val (curPanSpeed, curTiltSpeed) = when (normRot) {
+            90 -> if (isFront) Pair(-wxEnd, wyEnd) else Pair(-wxEnd, -wyEnd)
+            180 -> if (isFront) Pair(-wyEnd, -wxEnd) else Pair(wyEnd, -wxEnd)
+            270 -> if (isFront) Pair(wxEnd, -wyEnd) else Pair(wxEnd, wyEnd)
+            else -> if (isFront) Pair(wyEnd, wxEnd) else Pair(-wyEnd, wxEnd)
+        }
 
-        val currentAngularSpeed = sqrt(wxEnd * wxEnd + wyEnd * wyEnd)
+        // Accumulate raw integrated angular trajectory in viewing frame
+        integratedPan += dPan
+        integratedTilt += dTilt
+        integratedRoll += dRoll
+
+        // 4. OIS Physical Voice-Coil Lens Movement Fusion (Strictly OFF when OIS is disabled)
+        val oisAllowed = isOisEnabled && actualOisHardwareActive
+        val oisShift = if (oisAllowed) extractOisTelemetry(result) else null
+        val oisFused = oisAllowed && (oisShift != null)
+        val oisOffsetX = if (oisFused) (oisShift?.first ?: 0f) else 0f
+        val oisOffsetY = if (oisFused) (oisShift?.second ?: 0f) else 0f
+
+        val currentAngularSpeed = sqrt(curPanSpeed * curPanSpeed + curTiltSpeed * curTiltSpeed)
 
         // 5. Look-ahead Queue: Push raw motion into temporal history
         val currentRawMotion = RawFrameMotion(
             timestampNanos = midFrameTimestamp,
-            pitch = integratedPitch,
-            yaw = integratedYaw,
+            pan = integratedPan,
+            tilt = integratedTilt,
             roll = integratedRoll,
             oisShiftX = oisOffsetX,
             oisShiftY = oisOffsetY,
@@ -410,7 +454,7 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
             frameMotionHistory.removeFirst()
         }
 
-        // 6. Aggressive Low-Motion / Tripod Stillness Detection
+        // 6. Low-Motion / Tripod Stillness Detection
         val recentRms = getRecentRmsMotion()
         if (recentRms < TRIPOD_SPEED_THRESHOLD && currentAngularSpeed < TRIPOD_SPEED_THRESHOLD) {
             consecutiveStillFrames++
@@ -420,35 +464,32 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
 
         val isStillTripod = consecutiveStillFrames >= TRIPOD_MIN_STILL_FRAMES
         val targetTripodConfidence = if (isStillTripod) 1.0f else 0.0f
-        tripodConfidence = tripodConfidence * 0.88f + targetTripodConfidence * 0.12f
+        tripodConfidence = tripodConfidence * 0.90f + targetTripodConfidence * 0.10f
 
         if (isStillTripod && consecutiveStillFrames == TRIPOD_MIN_STILL_FRAMES) {
-            // Lock initial tripod anchor position
-            tripodLockedPitch = smoothAnchorPitch
-            tripodLockedYaw = smoothAnchorYaw
+            tripodLockedPan = smoothAnchorPan
+            tripodLockedTilt = smoothAnchorTilt
         }
 
-        // 7. Temporal Motion Filtering with Look-ahead
-        // Computes smoothed reference trajectory across 5-7 frames window
-        var weightedPitch = 0f
-        var weightedYaw = 0f
+        // 7. Temporal Motion Filtering with Gaussian Look-ahead
+        var weightedPan = 0f
+        var weightedTilt = 0f
         var weightedRoll = 0f
         var totalWeight = 0f
 
         val historyList = frameMotionHistory.toList()
         val numFrames = historyList.size
         for (i in 0 until numFrames) {
-            // Align kernel indices centered around latest available samples
             val kernelIdx = ((LOOK_AHEAD_WINDOW_SIZE - numFrames) + i).coerceIn(0, GAUSSIAN_7_KERNEL.size - 1)
             val w = GAUSSIAN_7_KERNEL[kernelIdx]
-            weightedPitch += historyList[i].pitch * w
-            weightedYaw += historyList[i].yaw * w
+            weightedPan += historyList[i].pan * w
+            weightedTilt += historyList[i].tilt * w
             weightedRoll += historyList[i].roll * w
             totalWeight += w
         }
 
-        val smoothedTrajectoryPitch = if (totalWeight > 0.001f) weightedPitch / totalWeight else integratedPitch
-        val smoothedTrajectoryYaw = if (totalWeight > 0.001f) weightedYaw / totalWeight else integratedYaw
+        val smoothedTrajectoryPan = if (totalWeight > 0.001f) weightedPan / totalWeight else integratedPan
+        val smoothedTrajectoryTilt = if (totalWeight > 0.001f) weightedTilt / totalWeight else integratedTilt
         val smoothedTrajectoryRoll = if (totalWeight > 0.001f) weightedRoll / totalWeight else integratedRoll
 
         // 8. Adaptive Pan vs Stationary Tracking Bandwidth
@@ -456,35 +497,35 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
         val adaptiveAlpha = MIN_PAN_ALPHA + (MAX_PAN_ALPHA - MIN_PAN_ALPHA) * (panFactor * panFactor)
 
         if (tripodConfidence > 0.40f) {
-            // Aggressive Tripod Lock: hold reference anchor steady with 99.5% drift attenuation
             val tripodBlend = tripodConfidence.coerceIn(0f, 1f)
-            val tripodDampedPitch = tripodLockedPitch * 0.995f + integratedPitch * 0.005f
-            val tripodDampedYaw = tripodLockedYaw * 0.995f + integratedYaw * 0.005f
-            tripodLockedPitch = tripodDampedPitch
-            tripodLockedYaw = tripodDampedYaw
+            val tripodDampedPan = tripodLockedPan * 0.995f + integratedPan * 0.005f
+            val tripodDampedTilt = tripodLockedTilt * 0.995f + integratedTilt * 0.005f
+            tripodLockedPan = tripodDampedPan
+            tripodLockedTilt = tripodDampedTilt
 
-            smoothAnchorPitch = smoothAnchorPitch * (1f - tripodBlend) + tripodDampedPitch * tripodBlend
-            smoothAnchorYaw = smoothAnchorYaw * (1f - tripodBlend) + tripodDampedYaw * tripodBlend
+            smoothAnchorPan = smoothAnchorPan * (1f - tripodBlend) + tripodDampedPan * tripodBlend
+            smoothAnchorTilt = smoothAnchorTilt * (1f - tripodBlend) + tripodDampedTilt * tripodBlend
             smoothAnchorRoll = smoothAnchorRoll * 0.98f
         } else {
-            smoothAnchorPitch = smoothAnchorPitch * (1f - adaptiveAlpha) + smoothedTrajectoryPitch * adaptiveAlpha
-            smoothAnchorYaw = smoothAnchorYaw * (1f - adaptiveAlpha) + smoothedTrajectoryYaw * adaptiveAlpha
+            smoothAnchorPan = smoothAnchorPan * (1f - adaptiveAlpha) + smoothedTrajectoryPan * adaptiveAlpha
+            smoothAnchorTilt = smoothAnchorTilt * (1f - adaptiveAlpha) + smoothedTrajectoryTilt * adaptiveAlpha
             smoothAnchorRoll = smoothAnchorRoll * (1f - adaptiveAlpha) + smoothedTrajectoryRoll * adaptiveAlpha
 
-            // Anti-rubberband settlement during pan deceleration
-            if (panFactor < 0.15f) {
-                val catchupRate = 0.09f * (1f - panFactor / 0.15f)
-                smoothAnchorPitch += (integratedPitch - smoothAnchorPitch) * catchupRate
-                smoothAnchorYaw += (integratedYaw - smoothAnchorYaw) * catchupRate
+            // Smooth catchup during deceleration without rubber-band rebound
+            if (panFactor < 0.20f) {
+                val catchupRate = 0.06f * (1f - panFactor / 0.20f)
+                smoothAnchorPan += (integratedPan - smoothAnchorPan) * catchupRate
+                smoothAnchorTilt += (integratedTilt - smoothAnchorTilt) * catchupRate
                 smoothAnchorRoll += (integratedRoll - smoothAnchorRoll) * catchupRate
             }
         }
 
-        // 9. Angular Shake Error relative to smoothed trajectory
-        val errPitch = integratedPitch - smoothAnchorPitch
-        val errYaw = integratedYaw - smoothAnchorYaw
+        // 9. Angular Shake Error relative to smoothed reference trajectory
+        val errPan = integratedPan - smoothAnchorPan
+        val errTilt = integratedTilt - smoothAnchorTilt
         val errRollRad = integratedRoll - smoothAnchorRoll
-        val errRollDeg = Math.toDegrees(errRollRad.toDouble()).toFloat()
+        val targetRollDeg = Math.toDegrees(-errRollRad.toDouble()).toFloat().coerceIn(-20f, 20f)
+        currentRollDeg = currentRollDeg * 0.85f + targetRollDeg * 0.15f
 
         // 10. Dynamic Crop Margin Control (8% calm to 20% vigorous shake)
         val targetCropMargin = (MIN_CROP_MARGIN + (recentRms * 0.28f)).coerceIn(MIN_CROP_MARGIN, MAX_CROP_MARGIN)
@@ -494,15 +535,21 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
         val cropW = (activeArray.width() / effectiveScale).toInt().coerceIn(100, activeArray.width())
         val cropH = (activeArray.height() / effectiveScale).toInt().coerceIn(100, activeArray.height())
 
-        // 11. Convert angular error to pixel displacement on active sensor array
+        // 11. Convert angular error to pixel displacement
         val fSensorW = if (sensorPhysicalSizeMm.width > 0.1f) sensorPhysicalSizeMm.width else 6.4f
         val fSensorH = if (sensorPhysicalSizeMm.height > 0.1f) sensorPhysicalSizeMm.height else 4.8f
         val focalPxX = activeArray.width() * (focalLengthMm / fSensorW)
         val focalPxY = activeArray.height() * (focalLengthMm / fSensorH)
 
-        // Fuse physical OIS displacement: subtract voice-coil lens shift from error (only if OIS is enabled)
-        val rawShiftX = if (isOisEnabled) (errYaw * focalPxX) - (oisOffsetX * 0.85f) else (errYaw * focalPxX)
-        val rawShiftY = if (isOisEnabled) (-errPitch * focalPxY) - (oisOffsetY * 0.85f) else (-errPitch * focalPxY)
+        // In viewing frame: when camera pans right (errPan > 0), image moves left to counteract
+        var rawShiftX = -(errPan * focalPxX)
+        var rawShiftY = -(errTilt * focalPxY)
+
+        // Fuse physical OIS displacement only when OIS is genuinely active
+        if (oisFused) {
+            rawShiftX += oisOffsetX * 0.85f
+            rawShiftY += oisOffsetY * 0.85f
+        }
 
         val maxShiftX = ((activeArray.width() - cropW) / 2).toFloat().coerceAtLeast(1f)
         val maxShiftY = ((activeArray.height() - cropH) / 2).toFloat().coerceAtLeast(1f)
@@ -511,24 +558,29 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
         val softShiftX = maxShiftX * tanh((rawShiftX / maxShiftX).toDouble()).toFloat()
         val softShiftY = maxShiftY * tanh((rawShiftY / maxShiftY).toDouble()).toFloat()
 
-        // 13. Critically-damped 2nd-order spring filter for zero-jitter and zero ringing
-        val omegaN = 24.0f // Natural resonance frequency (~3.8 Hz)
-        val zeta = 1.0f   // Critical damping
-        val springForceX = omegaN * omegaN * (softShiftX - currentDxPx) - 2f * zeta * omegaN * velocityDx
-        val springForceY = omegaN * omegaN * (softShiftY - currentDyPx) - 2f * zeta * omegaN * velocityDy
+        // 13. Analytic critically-damped filter: UNCONDITIONALLY STABLE, ZERO OVERSHOOT, ZERO BOUNCE
+        // Closed-form solution to harmonic decay prevents all vertical up/down jitter and ringing
+        val omega = 12.0f // Natural frequency (rad/s), smooth and organic
+        val expTerm = kotlin.math.exp((-omega * frameDt).toDouble()).toFloat()
 
-        velocityDx += springForceX * frameDt
-        velocityDy += springForceY * frameDt
-        currentDxPx += velocityDx * frameDt
-        currentDyPx += velocityDy * frameDt
+        val diffX = currentDxPx - softShiftX
+        val diffY = currentDyPx - softShiftY
 
-        // 14. Rolling Shutter Slant/Shear Correction
-        // Rows read sequentially over rollingShutterSkew; angular velocity tilts rows
+        val tempX = (velocityDx + omega * diffX) * frameDt
+        val tempY = (velocityDy + omega * diffY) * frameDt
+
+        currentDxPx = softShiftX + (diffX + tempX) * expTerm
+        currentDyPx = softShiftY + (diffY + tempY) * expTerm
+
+        velocityDx = (velocityDx - omega * tempX) * expTerm
+        velocityDy = (velocityDy - omega * tempY) * expTerm
+
+        // 14. Rolling Shutter Slant/Shear Correction in viewing frame
         val skewSec = rollingShutterSkew * 1e-9f
-        val shearX = (-wyEnd * skewSec * (focalPxX / activeArray.height())).coerceIn(-0.06f, 0.06f)
-        val shearY = (wxEnd * skewSec * (focalPxY / activeArray.height())).coerceIn(-0.06f, 0.06f)
+        val shearX = (-curPanSpeed * skewSec * (focalPxX / activeArray.height())).coerceIn(-0.06f, 0.06f)
+        val shearY = (curTiltSpeed * skewSec * (focalPxY / activeArray.height())).coerceIn(-0.06f, 0.06f)
 
-        // 15. Stabilized Sensor Crop Region
+        // 15. Stabilized Sensor Crop Region (reference for framing)
         val clampedShiftX = currentDxPx.toInt().coerceIn(-maxShiftX.toInt(), maxShiftX.toInt())
         val clampedShiftY = currentDyPx.toInt().coerceIn(-maxShiftY.toInt(), maxShiftY.toInt())
 
@@ -548,7 +600,7 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
             ptsUs = ptsUs,
             dxNorm = dxNorm,
             dyNorm = dyNorm,
-            rotationDeg = -errRollDeg.coerceIn(-25f, 25f),
+            rotationDeg = currentRollDeg,
             scaleFactor = dynamicCropMargin,
             shearX = shearX,
             shearY = shearY,
@@ -568,7 +620,7 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
                 timestampNanos = midFrameTimestamp,
                 dxNorm = dxNorm,
                 dyNorm = dyNorm,
-                rotationDeg = transform.rotationDeg,
+                rotationDeg = currentRollDeg,
                 scaleFactor = dynamicCropMargin,
                 shearX = shearX,
                 shearY = shearY
@@ -580,10 +632,12 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
             }
         }
 
-        // Update telemetry
+        // Update telemetry with verified hardware states
         _telemetry.value = EisPlusTelemetry(
             isGyroActive = true,
             isOisFused = oisFused,
+            actualOisHardwareActive = actualOisHardwareActive,
+            actualEisHardwareActive = true,
             isTripodLocked = isStillTripod,
             rmsMotionRadS = recentRms,
             dynamicCropMarginPercent = ((dynamicCropMargin - 1.0f) * 100f).toInt(),

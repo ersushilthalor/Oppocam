@@ -42,6 +42,8 @@ data class EisPlusTrajectoryPoint(
 data class EisPlusTelemetry(
     val isGyroActive: Boolean = false,
     val isOisFused: Boolean = false,
+    val actualOisHardwareActive: Boolean = false,
+    val actualEisHardwareActive: Boolean = false,
     val isTripodLocked: Boolean = false,
     val rmsMotionRadS: Float = 0f,
     val dynamicCropMarginPercent: Int = 8,
