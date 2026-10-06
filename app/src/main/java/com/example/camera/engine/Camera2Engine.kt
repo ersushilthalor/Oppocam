@@ -142,6 +142,42 @@ class Camera2Engine(private val context: Context) {
     val isAutoMacroActive: StateFlow<Boolean> = _isAutoMacroActive.asStateFlow()
 
     var onLensSwitchCompletedListener: ((LensInfo, Float) -> Unit)? = null
+    private val lensSwitchListeners = java.util.concurrent.CopyOnWriteArrayList<(LensInfo, Float) -> Unit>()
+
+    fun addLensSwitchCompleteListener(listener: (LensInfo, Float) -> Unit) {
+        lensSwitchListeners.add(listener)
+    }
+
+    fun removeLensSwitchCompleteListener(listener: (LensInfo, Float) -> Unit) {
+        lensSwitchListeners.remove(listener)
+    }
+
+    suspend fun switchLensSuspend(lens: LensInfo, preserveZoom: Boolean = false, targetZoom: Float? = null): LensInfo {
+        if (isRunningOnLens(lens) && !isSwitchingLens.get()) {
+            if (targetZoom != null) {
+                setZoom(targetZoom, isPresetTap = false)
+            }
+            return lens
+        }
+
+        return kotlinx.coroutines.withTimeoutOrNull(2500L) {
+            kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+                val listener = object : (LensInfo, Float) -> Unit {
+                    override fun invoke(completedLens: LensInfo, zoom: Float) {
+                        if (continuation.isActive && (completedLens.id == lens.id || completedLens.cameraId == lens.cameraId || completedLens.lensType == lens.lensType)) {
+                            removeLensSwitchCompleteListener(this)
+                            continuation.resume(completedLens) { _, _, _ -> }
+                        }
+                    }
+                }
+                addLensSwitchCompleteListener(listener)
+                continuation.invokeOnCancellation {
+                    removeLensSwitchCompleteListener(listener)
+                }
+                selectLens(lens, preserveZoom = preserveZoom, targetZoom = targetZoom)
+            }
+        } ?: lens
+    }
 
     private var ultraWideReconnectRunnable: Runnable? = null
     private var lastAutoSwitchTimestampMs: Long = 0L
@@ -439,10 +475,11 @@ class Camera2Engine(private val context: Context) {
     val selectedLens: StateFlow<LensInfo?> = _selectedLens.asStateFlow()
 
     fun isRunningOnLens(targetLens: LensInfo): Boolean {
-        val active = activeSessionLens ?: _selectedLens.value
+        if (isSwitchingLens.get()) return false
+        val active = activeSessionLens ?: _selectedLens.value ?: return false
         val cam = cameraDevice
-        return active?.id == targetLens.id &&
-                active?.lensType == targetLens.lensType &&
+        return active.id == targetLens.id &&
+                active.lensType == targetLens.lensType &&
                 (cam == null || cam.id == targetLens.cameraId) &&
                 activeSessionPhysicalCameraId == targetLens.physicalCameraId
     }
@@ -1261,6 +1298,11 @@ class Camera2Engine(private val context: Context) {
 
         if (currentActive != null) {
             onLensSwitchCompletedListener?.invoke(currentActive, currentZoom)
+            for (listener in lensSwitchListeners) {
+                try {
+                    listener.invoke(currentActive, currentZoom)
+                } catch (ignored: Exception) {}
+            }
         }
     }
 
