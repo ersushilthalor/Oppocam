@@ -87,6 +87,9 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
 
     val isGyroAvailable: Boolean get() = gyroSensor != null
 
+    @Volatile
+    var isOisEnabled: Boolean = true
+
     private val isRunning = AtomicBoolean(false)
     private val gyroRingBuffer = ConcurrentLinkedDeque<GyroSample>()
     private val frameMotionHistory = ArrayDeque<RawFrameMotion>(LOOK_AHEAD_WINDOW_SIZE + 2)
@@ -385,10 +388,10 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
         integratedRoll += deltaRoll
 
         // 4. OIS Physical Voice-Coil Lens Movement Fusion
-        val oisShift = extractOisTelemetry(result)
-        val oisFused = oisShift != null
-        val oisOffsetX = oisShift?.first ?: 0f
-        val oisOffsetY = oisShift?.second ?: 0f
+        val oisShift = if (isOisEnabled) extractOisTelemetry(result) else null
+        val oisFused = isOisEnabled && (oisShift != null)
+        val oisOffsetX = if (isOisEnabled) (oisShift?.first ?: 0f) else 0f
+        val oisOffsetY = if (isOisEnabled) (oisShift?.second ?: 0f) else 0f
 
         val currentAngularSpeed = sqrt(wxEnd * wxEnd + wyEnd * wyEnd)
 
@@ -497,9 +500,9 @@ class EisPlusStabilizationEngine(private val context: Context) : SensorEventList
         val focalPxX = activeArray.width() * (focalLengthMm / fSensorW)
         val focalPxY = activeArray.height() * (focalLengthMm / fSensorH)
 
-        // Fuse physical OIS displacement: subtract voice-coil lens shift from error
-        val rawShiftX = (errYaw * focalPxX) - (oisOffsetX * 0.85f)
-        val rawShiftY = (-errPitch * focalPxY) - (oisOffsetY * 0.85f)
+        // Fuse physical OIS displacement: subtract voice-coil lens shift from error (only if OIS is enabled)
+        val rawShiftX = if (isOisEnabled) (errYaw * focalPxX) - (oisOffsetX * 0.85f) else (errYaw * focalPxX)
+        val rawShiftY = if (isOisEnabled) (-errPitch * focalPxY) - (oisOffsetY * 0.85f) else (-errPitch * focalPxY)
 
         val maxShiftX = ((activeArray.width() - cropW) / 2).toFloat().coerceAtLeast(1f)
         val maxShiftY = ((activeArray.height() - cropH) / 2).toFloat().coerceAtLeast(1f)

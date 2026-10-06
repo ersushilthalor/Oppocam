@@ -907,6 +907,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _videoStabilizationMode = MutableStateFlow(preferences.getModeVideoStabilizationMode(preferences.cameraMode))
     val videoStabilizationMode: StateFlow<VideoStabilizationMode> = _videoStabilizationMode.asStateFlow()
+    private val _isOisEnabled = MutableStateFlow(preferences.isOisEnabled)
+    val isOisEnabled: StateFlow<Boolean> = _isOisEnabled.asStateFlow()
     val eisPlusTelemetry: StateFlow<com.example.camera.engine.eisplus.EisPlusTelemetry?> = engine.eisPlusStabilizationEngine.telemetry
     val eisPlusTransform: StateFlow<com.example.camera.engine.eisplus.EisPlusTransform?> = engine.eisPlusTransform
 
@@ -958,6 +960,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // Apply restored mode-specific preferences into engine
         engine.flashMode = preferences.getModeFlashMode(initialMode)
         engine.isRawCaptureEnabled = preferences.getModeRaw(initialMode)
+        val initialOis = preferences.isOisEnabled
+        _isOisEnabled.value = initialOis
+        engine.isOisEnabled = initialOis
+        engine.eisPlusStabilizationEngine.isOisEnabled = initialOis
         val initialStabMode = preferences.getModeVideoStabilizationMode(initialMode)
         _videoStabilizationMode.value = initialStabMode
         engine.videoStabilizationMode = initialStabMode
@@ -1765,6 +1771,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.setModeVideoStabilization(_cameraMode.value, isEnabled)
         engine.isVideoStabilizationEnabled = isEnabled
 
+        // Enforce that EIS and EIS+ do NOT re-enable OIS when OIS is turned OFF
+        val isOisAllowed = preferences.isOisEnabled
+        if (!isOisAllowed) {
+            val currentHybrid = hybridStabilizationConfig.value
+            val updatedHybrid = currentHybrid.copy(
+                isOisPreferred = false,
+                isOisEnabled = false,
+                isEisPreferred = isEnabled,
+                isEisOnly = isEnabled
+            )
+            setHybridStabilizationConfig(updatedHybrid)
+        }
+
         val toastMsg = when (mode) {
             VideoStabilizationMode.OFF -> "Stabilization: OFF"
             VideoStabilizationMode.EIS -> "Stabilization: EIS (Standard Electronic)"
@@ -1990,17 +2009,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setMainCameraStabilizationMode(mode: MainCameraStabilizationMode) {
         val current = hybridStabilizationConfig.value
+        val isOisAllowed = preferences.isOisEnabled
         val updated = when (mode) {
             MainCameraStabilizationMode.OFF -> current.copy(
                 isHybridEnabled = false,
                 isOisPreferred = false,
+                isOisEnabled = false,
                 isEisPreferred = false,
                 isUltraStabilizationEnabled = false,
                 isEisOnly = false
             )
             MainCameraStabilizationMode.OIS_ONLY -> current.copy(
                 isHybridEnabled = false,
-                isOisPreferred = true,
+                isOisPreferred = isOisAllowed,
+                isOisEnabled = isOisAllowed,
                 isEisPreferred = false,
                 isUltraStabilizationEnabled = false,
                 isEisOnly = false
@@ -2008,23 +2030,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             MainCameraStabilizationMode.EIS_ONLY -> current.copy(
                 isHybridEnabled = false,
                 isOisPreferred = false,
+                isOisEnabled = isOisAllowed,
                 isEisPreferred = true,
                 isUltraStabilizationEnabled = false,
                 isEisOnly = true
             )
             MainCameraStabilizationMode.HYBRID_OIS_EIS -> current.copy(
                 isHybridEnabled = true,
-                isOisPreferred = true,
+                isOisPreferred = isOisAllowed,
+                isOisEnabled = isOisAllowed,
                 isEisPreferred = true,
                 isUltraStabilizationEnabled = false,
-                isEisOnly = false
+                isEisOnly = !isOisAllowed
             )
             MainCameraStabilizationMode.ULTRA -> current.copy(
                 isHybridEnabled = true,
-                isOisPreferred = true,
+                isOisPreferred = isOisAllowed,
+                isOisEnabled = isOisAllowed,
                 isEisPreferred = true,
                 isUltraStabilizationEnabled = true,
-                isEisOnly = false
+                isEisOnly = !isOisAllowed
             )
         }
         val isStabOn = (mode != MainCameraStabilizationMode.OFF)
@@ -2039,10 +2064,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun toggleUltraStabilization() {
         val current = hybridStabilizationConfig.value
         val nextState = !current.isUltraStabilizationEnabled
+        val isOisAllowed = preferences.isOisEnabled
         val updated = current.copy(
             isUltraStabilizationEnabled = nextState,
             isHybridEnabled = if (nextState) true else current.isHybridEnabled,
-            isEisPreferred = if (nextState) true else current.isEisPreferred
+            isEisPreferred = if (nextState) true else current.isEisPreferred,
+            isOisPreferred = if (nextState) (current.isOisPreferred && isOisAllowed) else current.isOisPreferred,
+            isOisEnabled = isOisAllowed
         )
         if (nextState) {
             _isVideoStabilizationEnabled.value = true
@@ -2054,11 +2082,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (nextState) "Ultra Action Steady: Active" else "Ultra Stabilization: Off")
     }
 
-    fun setOisPreferred(enabled: Boolean) {
+    fun setOisEnabled(enabled: Boolean) {
+        _isOisEnabled.value = enabled
+        preferences.isOisEnabled = enabled
+        preferences.isOisPreferred = enabled
+        engine.isOisEnabled = enabled
+        engine.eisPlusStabilizationEngine.isOisEnabled = enabled
+
         val current = hybridStabilizationConfig.value
-        val updated = current.copy(isOisPreferred = enabled)
+        val updated = current.copy(
+            isOisPreferred = enabled,
+            isOisEnabled = enabled,
+            isHybridEnabled = if (!enabled && !current.isEisPreferred) false else current.isHybridEnabled,
+            isEisOnly = if (!enabled && current.isEisPreferred) true else (if (!enabled) false else current.isEisOnly)
+        )
         setHybridStabilizationConfig(updated)
-        showToast(if (enabled) "Optical Stabilization (OIS): On" else "Optical Stabilization (OIS): Off")
+        engine.updatePreviewSettings()
+        showToast(if (enabled) "Optical Image Stabilization (OIS): ON" else "Optical Image Stabilization (OIS): OFF")
+    }
+
+    fun setOisPreferred(enabled: Boolean) {
+        setOisEnabled(enabled)
     }
 
     fun setTapFocusConfig(config: TapFocusConfig) {

@@ -769,9 +769,20 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean("pref_hybrid_stabilization", true)
         set(value) = prefs.edit().putBoolean("pref_hybrid_stabilization", value).apply()
 
+    var isOisEnabled: Boolean
+        get() = prefs.getBoolean("pref_ois_enabled", prefs.getBoolean("pref_ois_preferred", true))
+        set(value) {
+            prefs.edit()
+                .putBoolean("pref_ois_enabled", value)
+                .putBoolean("pref_ois_preferred", value)
+                .apply()
+        }
+
     var isOisPreferred: Boolean
-        get() = prefs.getBoolean("pref_ois_preferred", true)
-        set(value) = prefs.edit().putBoolean("pref_ois_preferred", value).apply()
+        get() = isOisEnabled
+        set(value) {
+            isOisEnabled = value
+        }
 
     var isEisPreferred: Boolean
         get() = prefs.getBoolean("pref_eis_preferred", true)
@@ -839,7 +850,8 @@ class CameraPreferences(context: Context) {
     var hybridStabilizationConfig: HybridStabilizationConfig
         get() = HybridStabilizationConfig(
             isHybridEnabled = isHybridStabilizationEnabled,
-            isOisPreferred = isOisPreferred,
+            isOisPreferred = isOisEnabled,
+            isOisEnabled = isOisEnabled,
             isEisPreferred = isEisPreferred,
             isAdaptiveFpsLens = isAdaptiveFpsLensStabilization,
             isUltraStabilizationEnabled = isUltraStabilizationEnabled,
@@ -847,7 +859,7 @@ class CameraPreferences(context: Context) {
         )
         set(value) {
             isHybridStabilizationEnabled = value.isHybridEnabled
-            isOisPreferred = value.isOisPreferred
+            isOisEnabled = value.isOisEnabled && value.isOisPreferred
             isEisPreferred = value.isEisPreferred
             isAdaptiveFpsLensStabilization = value.isAdaptiveFpsLens
             isUltraStabilizationEnabled = value.isUltraStabilizationEnabled

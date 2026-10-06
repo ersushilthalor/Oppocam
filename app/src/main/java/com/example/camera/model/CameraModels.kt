@@ -537,6 +537,7 @@ enum class MainCameraStabilizationMode(val title: String, val subtitle: String) 
 data class HybridStabilizationConfig(
     val isHybridEnabled: Boolean = true,
     val isOisPreferred: Boolean = true,
+    val isOisEnabled: Boolean = true,
     val isEisPreferred: Boolean = true,
     val isAdaptiveFpsLens: Boolean = true,
     val isUltraStabilizationEnabled: Boolean = false,
@@ -546,12 +547,15 @@ data class HybridStabilizationConfig(
     val ultraStabilizationStatus: String = "Ready"
 ) {
     val stabilizationMode: MainCameraStabilizationMode
-        get() = when {
-            isUltraStabilizationEnabled -> MainCameraStabilizationMode.ULTRA
-            isEisOnly || (!isOisPreferred && isEisPreferred) -> MainCameraStabilizationMode.EIS_ONLY
-            isOisPreferred && !isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
-            isHybridEnabled || (isOisPreferred && isEisPreferred) -> MainCameraStabilizationMode.HYBRID_OIS_EIS
-            else -> MainCameraStabilizationMode.OFF
+        get() {
+            val oisEffective = isOisPreferred && isOisEnabled
+            return when {
+                isUltraStabilizationEnabled -> MainCameraStabilizationMode.ULTRA
+                isEisOnly || (!oisEffective && isEisPreferred) -> MainCameraStabilizationMode.EIS_ONLY
+                oisEffective && !isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
+                isHybridEnabled || (oisEffective && isEisPreferred) -> MainCameraStabilizationMode.HYBRID_OIS_EIS
+                else -> MainCameraStabilizationMode.OFF
+            }
         }
 }
 

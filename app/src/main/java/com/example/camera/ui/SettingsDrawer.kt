@@ -411,6 +411,8 @@ fun SettingsDrawer(
                             onAudioSourceSelected = onAudioSourceSelected,
                             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
                             onStabilizationToggle = onStabilizationToggle,
+                            isOisPreferred = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
+                            onOisToggle = onOisToggle,
                             isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
                             onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
                             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
@@ -472,7 +474,7 @@ fun SettingsDrawer(
                             onMainCameraStabilizationModeSelected = onMainCameraStabilizationModeSelected,
                             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
                             onStabilizationToggle = onStabilizationToggle,
-                            isOisPreferred = hybridStabilizationConfig.isOisPreferred,
+                            isOisPreferred = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
                             onOisToggle = onOisToggle,
                             isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
                             onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
@@ -762,6 +764,8 @@ private fun VideoSettingsPage(
     onAudioSourceSelected: (String) -> Unit,
     isVideoStabilizationEnabled: Boolean,
     onStabilizationToggle: (Boolean) -> Unit,
+    isOisPreferred: Boolean = true,
+    onOisToggle: (Boolean) -> Unit = {},
     isHorizontalLockSettingEnabled: Boolean = true,
     onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isUltraStabilizationEnabled: Boolean,
@@ -916,6 +920,20 @@ private fun VideoSettingsPage(
                 isChecked = isVideoStabilizationEnabled,
                 onCheckedChange = onStabilizationToggle,
                 tag = "toggle_video_stabilization"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Hardware OIS (Optical Image Stabilization)",
+                description = if (isOisPreferred) {
+                    "ON: Allow the main camera lens to use hardware voice-coil OIS normally."
+                } else {
+                    "OFF: Hardware OIS forcefully disabled. EIS & EIS+ operate purely electronically without triggering OIS."
+                },
+                isChecked = isOisPreferred,
+                onCheckedChange = onOisToggle,
+                tag = "toggle_video_ois_switch"
             )
         }
 
@@ -2172,11 +2190,15 @@ private fun StabilizationSettingsPage(
 
         item {
             SettingsSwitchCard(
-                title = "Hardware OIS Preferred",
-                description = "Prioritize mechanical lens-shift stabilization when supported.",
+                title = "Hardware OIS (Optical Image Stabilization)",
+                description = if (isOisPreferred) {
+                    "ON: Allow the main camera lens to use hardware voice-coil OIS normally."
+                } else {
+                    "OFF: Hardware OIS is forcefully disabled for the main lens. EIS and EIS+ operate independently via electronic/gyro stabilization."
+                },
                 isChecked = isOisPreferred,
                 onCheckedChange = onOisToggle,
-                tag = "toggle_ois_preferred"
+                tag = "toggle_ois_switch"
             )
         }
 
@@ -3845,13 +3867,15 @@ fun CameraSettingsScreen(
     val customVideoPipelineConfig by viewModel.customVideoPipelineConfig.collectAsStateWithLifecycle()
 
     val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
+        val oisEffective = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred
         when {
             !isVideoStabilizationEnabled -> MainCameraStabilizationMode.OFF
             hybridStabilizationConfig.isUltraStabilizationEnabled -> MainCameraStabilizationMode.ULTRA
-            hybridStabilizationConfig.isEisOnly -> MainCameraStabilizationMode.EIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled -> MainCameraStabilizationMode.HYBRID_OIS_EIS
-            hybridStabilizationConfig.isOisPreferred && !hybridStabilizationConfig.isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
-            else -> MainCameraStabilizationMode.HYBRID_OIS_EIS
+            hybridStabilizationConfig.isEisOnly || (!oisEffective && hybridStabilizationConfig.isEisPreferred) -> MainCameraStabilizationMode.EIS_ONLY
+            hybridStabilizationConfig.isHybridEnabled && oisEffective -> MainCameraStabilizationMode.HYBRID_OIS_EIS
+            oisEffective && !hybridStabilizationConfig.isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
+            hybridStabilizationConfig.isHybridEnabled -> MainCameraStabilizationMode.EIS_ONLY
+            else -> MainCameraStabilizationMode.OFF
         }
     }
 
@@ -3958,7 +3982,7 @@ fun CameraSettingsScreen(
         onVideoBitrateSelected = { viewModel.setVideoBitrate(it) },
         onStabilizationToggle = { viewModel.setVideoStabilization(it) },
         onHybridStabilizationChange = { viewModel.setHybridStabilizationConfig(it) },
-        onOisToggle = { viewModel.setOisPreferred(it) },
+        onOisToggle = { viewModel.setOisEnabled(it) },
         onUltraStabilizationToggle = { viewModel.toggleUltraStabilization() },
         onNightConfigChange = { viewModel.setNightConfig(it) },
         onTapFocusConfigChange = { viewModel.setTapFocusConfig(it) },

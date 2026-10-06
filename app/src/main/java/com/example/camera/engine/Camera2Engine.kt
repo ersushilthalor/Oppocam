@@ -708,8 +708,20 @@ class Camera2Engine(private val context: Context) {
     val proSharpness = MutableStateFlow(preferences.proSharpness)
     val proNoiseReduction = MutableStateFlow(preferences.proNoiseReduction)
 
+    var isOisEnabled: Boolean
+        get() = preferences.isOisEnabled
+        set(value) {
+            preferences.isOisEnabled = value
+            val current = _hybridStabilizationConfig.value
+            _hybridStabilizationConfig.value = current.copy(isOisPreferred = value, isOisEnabled = value)
+            eisPlusStabilizationEngine.isOisEnabled = value
+            updatePreviewSettings()
+        }
+
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
+        val oisAllowed = preferences.isOisEnabled && config.isOisEnabled && config.isOisPreferred
+        eisPlusStabilizationEngine.isOisEnabled = oisAllowed
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
         if (config.isUltraStabilizationEnabled) {
             videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS_PLUS
@@ -3431,6 +3443,38 @@ class Camera2Engine(private val context: Context) {
 
 
     /**
+     * Forcefully disables vendor-specific OIS capture request controls when OIS is OFF.
+     */
+    private fun applyVendorOisControls(builder: CaptureRequest.Builder, oisAllowed: Boolean) {
+        if (oisAllowed) return
+        try {
+            val camId = cameraDevice?.id ?: activeSessionLens?.cameraId ?: _selectedLens.value?.cameraId ?: return
+            val chars = getCharacteristics(camId) ?: return
+            val requestKeys = chars.availableCaptureRequestKeys ?: return
+            for (key in requestKeys) {
+                val keyName = key.name.lowercase(Locale.ROOT)
+                if (keyName.contains("ois") || keyName.contains("optical_stabilization") || keyName.contains("opticalstabilization")) {
+                    try {
+                        @Suppress("UNCHECKED_CAST")
+                        val typedKey = key as CaptureRequest.Key<Any>
+                        try {
+                            builder.set(typedKey, 0)
+                        } catch (_: Throwable) {
+                            try {
+                                builder.set(typedKey, 0.toByte())
+                            } catch (_: Throwable) {
+                                try {
+                                    builder.set(typedKey, false)
+                                } catch (_: Throwable) {}
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    /**
      * Apply AE, AF, AWB, Flash, ISO, Shutter, Zoom, Stabilization to CaptureRequest.Builder
      */
     private fun applyCommonSettings(builder: CaptureRequest.Builder) {
@@ -3536,38 +3580,39 @@ class Camera2Engine(private val context: Context) {
                 _isRecordingVideo.value
 
         val hybridConfig = _hybridStabilizationConfig.value
-        val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred)
-        val isOisOnly = hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
+        val isOisGloballyEnabled = preferences.isOisEnabled && hybridConfig.isOisEnabled
+        val isEisOnly = hybridConfig.isEisOnly || (!hybridConfig.isOisPreferred && hybridConfig.isEisPreferred) || !isOisGloballyEnabled
+        val isOisOnly = isOisGloballyEnabled && hybridConfig.isOisPreferred && !hybridConfig.isEisPreferred && !hybridConfig.isHybridEnabled
+        val isOisAllowed = isOisGloballyEnabled && hybridConfig.isOisPreferred && !isEisOnly
 
         if (isVideoMode) {
             val isUltra = hybridConfig.isUltraStabilizationEnabled
-            val isStabActive = isVideoStabilizationEnabled && (isUltra || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly)
+            val isStabActive = isVideoStabilizationEnabled && (isUltra || hybridConfig.isHybridEnabled || isEisOnly || isOisOnly || videoStabilizationMode.isEnabled)
 
             if (isStabActive) {
                 // Optical Image Stabilization (Physical voice-coil motor hardware)
-                // When "EIS Only" is selected, OIS is strictly OFF.
-                if (isEisOnly) {
+                // When OIS is OFF: forcefully disable hardware OIS and any vendor OIS controls.
+                // When OIS is ON: allow the main camera lens to use hardware OIS normally.
+                if (!isOisAllowed) {
                     if (caps.supportsOis) {
-                        builder.set(
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                        )
+                        try {
+                            builder.set(
+                                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                            )
+                        } catch (_: Throwable) {}
                     }
-                } else if (caps.supportsOis && hybridConfig.isOisPreferred) {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                    )
+                    applyVendorOisControls(builder, oisAllowed = false)
                 } else if (caps.supportsOis) {
                     builder.set(
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
                     )
                 }
 
                 // Electronic Image Stabilization (Digital frame margin compensation)
                 // When EIS+ is active: do NOT double-apply HAL EIS! EIS+ handles stabilization at the app/pipeline level.
-                // Camera2 HAL EIS is strictly turned OFF, while physical OIS stays ON to fuse lens movement data.
+                // When OIS is disabled, EIS+ operates independently using only its own gyro/rolling-shutter pipeline.
                 if (videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
                     builder.set(
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
@@ -3606,22 +3651,31 @@ class Camera2Engine(private val context: Context) {
                     CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
                 )
                 if (caps.supportsOis) {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                    )
+                    try {
+                        builder.set(
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                        )
+                    } catch (_: Throwable) {}
                 }
+                applyVendorOisControls(builder, oisAllowed = false)
             }
         } else {
             // In Still Photo / Night / Portrait: respect OIS toggle state
-            if (caps.supportsOis) {
+            if (!isOisAllowed) {
+                if (caps.supportsOis) {
+                    try {
+                        builder.set(
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                        )
+                    } catch (_: Throwable) {}
+                }
+                applyVendorOisControls(builder, oisAllowed = false)
+            } else if (caps.supportsOis) {
                 builder.set(
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                    if (hybridConfig.isOisPreferred && !isEisOnly) {
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                    } else {
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                    }
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
                 )
             }
             builder.set(
@@ -6287,7 +6341,7 @@ class Camera2Engine(private val context: Context) {
                             if (matchedFpsRange != null) {
                                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
                             }
-                            if (isVideoStabilizationEnabled) {
+                            if (isVideoStabilizationEnabled && videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS) {
                                 val eisModes = chars?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
                                 if (eisModes.contains(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
                                     set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)

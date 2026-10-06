@@ -52,13 +52,15 @@ fun CameraSettingsHost(
     val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
 
     val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
+        val oisEffective = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred
         when {
             !isVideoStabilizationEnabled -> MainCameraStabilizationMode.OFF
             hybridStabilizationConfig.isUltraStabilizationEnabled -> MainCameraStabilizationMode.ULTRA
-            hybridStabilizationConfig.isEisOnly -> MainCameraStabilizationMode.EIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled -> MainCameraStabilizationMode.HYBRID_OIS_EIS
-            hybridStabilizationConfig.isOisPreferred && !hybridStabilizationConfig.isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
-            else -> MainCameraStabilizationMode.HYBRID_OIS_EIS
+            hybridStabilizationConfig.isEisOnly || (!oisEffective && hybridStabilizationConfig.isEisPreferred) -> MainCameraStabilizationMode.EIS_ONLY
+            hybridStabilizationConfig.isHybridEnabled && oisEffective -> MainCameraStabilizationMode.HYBRID_OIS_EIS
+            oisEffective && !hybridStabilizationConfig.isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
+            hybridStabilizationConfig.isHybridEnabled -> MainCameraStabilizationMode.EIS_ONLY
+            else -> MainCameraStabilizationMode.OFF
         }
     }
 
@@ -209,7 +211,7 @@ fun CameraSettingsHost(
         onVideoBitrateSelected = { viewModel.setVideoBitrate(it) },
         onStabilizationToggle = { viewModel.setVideoStabilization(it) },
         onHybridStabilizationChange = { viewModel.setHybridStabilizationConfig(it) },
-        onOisToggle = { viewModel.setOisPreferred(it) },
+        onOisToggle = { viewModel.setOisEnabled(it) },
         onUltraStabilizationToggle = { viewModel.toggleUltraStabilization() },
         onNightConfigChange = { viewModel.setNightConfig(it) },
         onTapFocusConfigChange = { viewModel.setTapFocusConfig(it) },

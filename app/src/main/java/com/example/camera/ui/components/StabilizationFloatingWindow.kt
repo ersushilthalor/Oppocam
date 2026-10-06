@@ -42,6 +42,8 @@ fun StabilizationFloatingWindow(
     onSelectMode: (VideoStabilizationMode) -> Unit,
     onDismiss: () -> Unit,
     telemetry: EisPlusTelemetry? = null,
+    isOisEnabled: Boolean = true,
+    onToggleOis: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     FrostedGlassBox(
@@ -228,6 +230,50 @@ fun StabilizationFloatingWindow(
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.Medium
                     )
+                }
+            }
+
+            if (onToggleOis != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = 0.04f))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .clickable { onToggleOis(!isOisEnabled) }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("floating_ois_toggle"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Hardware Lens OIS",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (isOisEnabled) "Physical voice-coil motor active" else "Forcefully disabled (EIS only)",
+                            color = if (isOisEnabled) Color(0xFF81D4FA) else Color.White.copy(alpha = 0.45f),
+                            fontSize = 9.5.sp
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isOisEnabled) Color(0xFF00E676).copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f))
+                            .border(1.dp, if (isOisEnabled) Color(0xFF00E676) else Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = if (isOisEnabled) "ON" else "OFF",
+                            color = if (isOisEnabled) Color(0xFF00E676) else Color.White.copy(alpha = 0.6f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

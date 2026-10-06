@@ -258,6 +258,7 @@ fun CameraScreen(
     val nightProgress by viewModel.nightProgress.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val videoStabilizationMode by viewModel.videoStabilizationMode.collectAsStateWithLifecycle()
+    val isOisEnabled by viewModel.isOisEnabled.collectAsStateWithLifecycle()
     val eisPlusTelemetry by viewModel.eisPlusTelemetry.collectAsStateWithLifecycle()
     val eisPlusTransform by viewModel.eisPlusTransform.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
@@ -1072,7 +1073,9 @@ fun CameraScreen(
                     viewModel.setVideoStabilizationMode(mode)
                 },
                 onDismiss = { viewModel.setStabilizationWindowOpen(false) },
-                telemetry = eisPlusTelemetry
+                telemetry = eisPlusTelemetry,
+                isOisEnabled = isOisEnabled,
+                onToggleOis = { viewModel.setOisEnabled(it) }
             )
         }
 
