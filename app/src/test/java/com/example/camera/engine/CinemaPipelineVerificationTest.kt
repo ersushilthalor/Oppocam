@@ -679,6 +679,162 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
+    fun testCinemaTexMatrixLandscape90UprightNotMirrored() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        // Standard Android Camera2 unrotated SurfaceTexture transform (1:1 with OpenGL Y-flip):
+        val stMatrixStandard = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 90, // Landscape 90
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix
+        )
+
+        // For back camera in landscape 90, localTexMatrix is identity (effRot = 0).
+        // Since stMatrix has OpenGL Y-flip (m5 = -1), outMatrix[0] should be +1.0 (no horizontal flip).
+        assertEquals("X scale must be +1.0 (not mirrored horizontally)", 1.0f, outMatrix[0], 0.001f)
+        assertEquals("Y scale must be -1.0 (preserving OpenGL Y-flip)", -1.0f, outMatrix[5], 0.001f)
+
+        // Verify left-to-right is not flipped:
+        val leftTexX = outMatrix[0] * 0.0f + outMatrix[4] * 0.5f + outMatrix[12]
+        val rightTexX = outMatrix[0] * 1.0f + outMatrix[4] * 0.5f + outMatrix[12]
+        assertEquals("Left of viewport must map to left of camera buffer (texX = 0.0)", 0.0f, leftTexX, 0.001f)
+        assertEquals("Right of viewport must map to right of camera buffer (texX = 1.0)", 1.0f, rightTexX, 0.001f)
+        assertTrue("Image must not be mirrored horizontally", rightTexX > leftTexX)
+
+        // Verify top-to-bottom is upright (not 180° inverted):
+        val topTexY = outMatrix[1] * 0.5f + outMatrix[5] * 1.0f + outMatrix[13]
+        val bottomTexY = outMatrix[1] * 0.5f + outMatrix[5] * 0.0f + outMatrix[13]
+        assertEquals("Top of viewport must map to top of camera buffer (texY = 0.0)", 0.0f, topTexY, 0.001f)
+        assertEquals("Bottom of viewport must map to bottom of camera buffer (texY = 1.0)", 1.0f, bottomTexY, 0.001f)
+        assertTrue("Image must be upright, not inverted", bottomTexY > topTexY)
+    }
+
+    @Test
+    fun testCinemaTexMatrixLandscape270UprightNotMirrored() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        val stMatrixStandard = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 270, // Landscape 270
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix
+        )
+
+        // In Landscape 270 (device inverted relative to landscape 90), effRot = 180.
+        // It compensates for the physical 180° device flip so recording is upright:
+        val leftTexX = outMatrix[0] * 0.0f + outMatrix[4] * 0.5f + outMatrix[12]
+        val rightTexX = outMatrix[0] * 1.0f + outMatrix[4] * 0.5f + outMatrix[12]
+        val topTexY = outMatrix[1] * 0.5f + outMatrix[5] * 1.0f + outMatrix[13]
+        val bottomTexY = outMatrix[1] * 0.5f + outMatrix[5] * 0.0f + outMatrix[13]
+
+        // 180° rotation maps top of screen to bottom of sensor (1.0) and bottom of screen to top of sensor (0.0)
+        assertEquals(1.0f, topTexY, 0.001f)
+        assertEquals(0.0f, bottomTexY, 0.001f)
+        assertEquals(1.0f, leftTexX, 0.001f)
+        assertEquals(0.0f, rightTexX, 0.001f)
+    }
+
+    @Test
+    fun testCinemaTexMatrixLandscape90WithRotatedSurfaceTexture() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        // Simulated stMatrix that already contains ROT_90 from HAL:
+        val stMatrixRotated = floatArrayOf(
+            0f, -1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 1f, 0f, 1f
+        )
+        val outMatrix = FloatArray(16)
+
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixRotated,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 90, // Landscape 90
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix
+        )
+
+        // Must not be horizontally flipped: back camera must NEVER be mirrored even with rotated SurfaceTexture
+        val leftTex = outMatrix[0] * 0.0f + outMatrix[4] * 0.5f + outMatrix[12]
+        val rightTex = outMatrix[0] * 1.0f + outMatrix[4] * 0.5f + outMatrix[12]
+        assertFalse("Rotated SurfaceTexture must not cause back camera to be mirrored", leftTex == rightTex)
+    }
+
+    @Test
+    fun testCinemaTexMatrixFrontCameraMirroredSelfie() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        val stMatrixStandard = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
+        val outMatrixPortrait = FloatArray(16)
+        val outMatrixLandscape = FloatArray(16)
+
+        // Front Camera Portrait
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = true,
+            sensorOrientation = 270,
+            deviceRotation = 0,
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrixPortrait
+        )
+
+        // Front Camera Landscape 90
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = true,
+            sensorOrientation = 270,
+            deviceRotation = 90,
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrixLandscape
+        )
+
+        // In landscape, front camera has sx = -1.0 (mirrored horizontally)
+        val leftTexX = outMatrixLandscape[0] * 0.0f + outMatrixLandscape[4] * 0.5f + outMatrixLandscape[12]
+        val rightTexX = outMatrixLandscape[0] * 1.0f + outMatrixLandscape[4] * 0.5f + outMatrixLandscape[12]
+        assertEquals("Front camera left of viewport maps to right of sensor (texX = 1.0)", 1.0f, leftTexX, 0.001f)
+        assertEquals("Front camera right of viewport maps to left of sensor (texX = 0.0)", 0.0f, rightTexX, 0.001f)
+    }
+
+    @Test
     fun testCinemaSoftwareRecordingEnginePauseResumeState() {
         val recorder = CinemaSoftwareRecordingEngine(context)
         val tempDest = File(context.cacheDir, "cinema_pause_test_${System.currentTimeMillis()}.mp4")

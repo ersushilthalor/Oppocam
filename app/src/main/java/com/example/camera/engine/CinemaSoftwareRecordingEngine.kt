@@ -1530,16 +1530,16 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         val offDiag = kotlin.math.abs(m1) + kotlin.math.abs(m4)
         val diag = kotlin.math.abs(m0) + kotlin.math.abs(m5)
-        // When Camera2 streams to a SurfaceTexture, Camera3OutputStream sets the ANativeWindow
-        // buffer transform (ROT_90 / ROT_270), making off-diagonal terms (m1, m4) dominant.
-        val isStRotated90 = offDiag > diag
-
-        val isIdentitySt = kotlin.math.abs(m0 - 1f) < 1e-4f &&
-            kotlin.math.abs(m5 - 1f) < 1e-4f &&
-            offDiag < 1e-4f &&
-            kotlin.math.abs(stMatrix[13]) < 1e-4f
-        val det = m0 * m5 - m1 * m4
-        val isStMirrored = !isIdentitySt && (offDiag + diag > 0.1f) && (det > 0f)
+        // Determine any rotation already baked into stMatrix by the camera HAL / SurfaceTexture
+        val halRot = if (offDiag + diag > 0.1f) {
+            if (offDiag > diag) {
+                if (m1 < 0f) 90 else 270
+            } else {
+                if (m0 < 0f) 180 else 0
+            }
+        } else {
+            0
+        }
 
         val normRot = ((deviceRotation % 360) + 360) % 360
         // Natural camera sensor rotation relative to upright device
@@ -1549,12 +1549,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             (sensorOrientation - normRot + 360) % 360
         }
 
-        // If stMatrix already contains ROT_90 baked in from camera HAL, subtract 90°
-        val effRot = if (isStRotated90) {
-            (sensorRot - 90 + 360) % 360
-        } else {
-            sensorRot
-        }
+        // Apply only the required sensor/device rotation, preserving HAL transform
+        val effRot = (sensorRot - halRot + 360) % 360
 
         val isUprightPortrait = (sensorRot == 90 || sensorRot == 270)
         val camLong = maxOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
@@ -1576,7 +1572,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             scaleY = 1.0f
         }
 
-        val flipH = (isFront != isStMirrored)
+        // Mirror only the front camera when actually required
+        val flipH = isFront
         val sx = if (flipH) -scaleX else scaleX
         val sy = scaleY
 
