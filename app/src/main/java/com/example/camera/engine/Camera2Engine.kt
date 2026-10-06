@@ -1153,6 +1153,7 @@ class Camera2Engine(private val context: Context) {
     fun getTargetAspectRatioForMode(mode: CameraMode = currentMode): Float {
         return when (mode) {
             CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f // Fixed 3:4 portrait (sensor landscape 4:3)
+            CameraMode.CINEMA -> cinemaConfig.value.aspectRatio.ratioValue
             else -> 16f / 9f // Fixed 9:16 portrait (sensor landscape 16:9)
         }
     }
@@ -5935,8 +5936,37 @@ class Camera2Engine(private val context: Context) {
             val isPortraitRecording = (currentRot == 0 || currentRot == 180)
             val maxDim = maxOf(videoRes.width, videoRes.height)
             val minDim = minOf(videoRes.width, videoRes.height)
-            val finalRecordWidth = if (isPortraitRecording) minDim else maxDim
-            val finalRecordHeight = if (isPortraitRecording) maxDim else minDim
+            val (finalRecordWidth, finalRecordHeight) = if (isSoftwareCinema) {
+                when (cinemaConfig.value.aspectRatio) {
+                    com.example.camera.model.CinemaAspectRatio.IMAX -> {
+                        if (isPortraitRecording) {
+                            val w = minDim and 1.inv()
+                            val h = ((w * 1.43f).toInt() and 1.inv()).coerceAtLeast(240)
+                            w to h
+                        } else {
+                            val h = minDim and 1.inv()
+                            val w = ((h * 1.43f).toInt() and 1.inv()).coerceAtLeast(320)
+                            w to h
+                        }
+                    }
+                    com.example.camera.model.CinemaAspectRatio.CINEMATIC -> {
+                        if (isPortraitRecording) {
+                            val h = maxDim and 1.inv()
+                            val w = ((h / 2.39f).toInt() and 1.inv()).coerceAtLeast(240)
+                            w to h
+                        } else {
+                            val w = maxDim and 1.inv()
+                            val h = ((w / 2.39f).toInt() and 1.inv()).coerceAtLeast(240)
+                            w to h
+                        }
+                    }
+                    com.example.camera.model.CinemaAspectRatio.RATIO_16_9 -> {
+                        if (isPortraitRecording) minDim to maxDim else maxDim to minDim
+                    }
+                }
+            } else {
+                if (isPortraitRecording) minDim to maxDim else maxDim to minDim
+            }
 
             val isFront = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
             val encoderRotation = if (isPortraitRecording) {

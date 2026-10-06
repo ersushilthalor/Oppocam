@@ -252,8 +252,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             val session = com.example.camera.engine.prores.ProResSoftwareRecordingSession(
                 context = context,
                 destFile = destFile,
-                width = maxOf(safeWidth, safeHeight),
-                height = minOf(safeWidth, safeHeight),
+                width = safeWidth,
+                height = safeHeight,
                 fps = fps,
                 isAudioEnabled = isAudioEnabled,
                 colorProfile = colorProfile,
@@ -1544,9 +1544,19 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val normRot = ((deviceRotation % 360) + 360) % 360
         // Natural camera sensor rotation relative to upright device
         val sensorRot = if (isFront) {
-            (sensorOrientation + normRot) % 360
+            if (normRot == 270) {
+                (sensorOrientation + 90) % 360
+            } else {
+                (sensorOrientation + normRot) % 360
+            }
         } else {
-            (sensorOrientation - normRot + 360) % 360
+            // For back camera in landscape (90° and 270°), ensure consistent orientation
+            // without rotating the frame 180° at 270°, preventing inverted/mirrored video.
+            if (normRot == 270) {
+                (sensorOrientation - 90 + 360) % 360
+            } else {
+                (sensorOrientation - normRot + 360) % 360
+            }
         }
 
         // Apply only the required sensor/device rotation, preserving HAL transform

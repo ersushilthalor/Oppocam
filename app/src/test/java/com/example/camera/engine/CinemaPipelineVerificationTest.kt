@@ -745,18 +745,157 @@ class CinemaPipelineVerificationTest {
             outMatrix = outMatrix
         )
 
-        // In Landscape 270 (device inverted relative to landscape 90), effRot = 180.
-        // It compensates for the physical 180° device flip so recording is upright:
+        // For back camera in landscape 270, orientation handling is consistent with landscape 90 (effRot = 0).
+        // It does not rotate 180° and never mirrors horizontally.
+        assertEquals("X scale must be +1.0 (not mirrored horizontally)", 1.0f, outMatrix[0], 0.001f)
+        assertEquals("Y scale must be -1.0 (preserving OpenGL Y-flip)", -1.0f, outMatrix[5], 0.001f)
+
+        // Verify left-to-right is not flipped:
         val leftTexX = outMatrix[0] * 0.0f + outMatrix[4] * 0.5f + outMatrix[12]
         val rightTexX = outMatrix[0] * 1.0f + outMatrix[4] * 0.5f + outMatrix[12]
+        assertEquals("Left of viewport must map to left of camera buffer (texX = 0.0)", 0.0f, leftTexX, 0.001f)
+        assertEquals("Right of viewport must map to right of camera buffer (texX = 1.0)", 1.0f, rightTexX, 0.001f)
+        assertTrue("Image must not be mirrored horizontally", rightTexX > leftTexX)
+
+        // Verify top-to-bottom is upright (not 180° inverted):
         val topTexY = outMatrix[1] * 0.5f + outMatrix[5] * 1.0f + outMatrix[13]
         val bottomTexY = outMatrix[1] * 0.5f + outMatrix[5] * 0.0f + outMatrix[13]
+        assertEquals("Top of viewport must map to top of camera buffer (texY = 0.0)", 0.0f, topTexY, 0.001f)
+        assertEquals("Bottom of viewport must map to bottom of camera buffer (texY = 1.0)", 1.0f, bottomTexY, 0.001f)
+        assertTrue("Image must be upright, not inverted", bottomTexY > topTexY)
+    }
 
-        // 180° rotation maps top of screen to bottom of sensor (1.0) and bottom of screen to top of sensor (0.0)
-        assertEquals(1.0f, topTexY, 0.001f)
-        assertEquals(0.0f, bottomTexY, 0.001f)
-        assertEquals(1.0f, leftTexX, 0.001f)
-        assertEquals(0.0f, rightTexX, 0.001f)
+    @Test
+    fun testCinemaTexMatrixAllFourDeviceRotations() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        val stMatrixStandard = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
+        val outMatrix0 = FloatArray(16)
+        val outMatrix90 = FloatArray(16)
+        val outMatrix180 = FloatArray(16)
+        val outMatrix270 = FloatArray(16)
+
+        // 1. Portrait 0° (Upright)
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 0,
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix0
+        )
+        val det0 = outMatrix0[0] * outMatrix0[5] - outMatrix0[4] * outMatrix0[1]
+        assertEquals("Portrait 0° must have positive determinant +1.0 (no reflection)", 1.0f, det0, 0.001f)
+
+        // 2. Landscape 90°
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 90,
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix90
+        )
+        assertEquals("Landscape 90° X scale must be positive (not mirrored)", 1.0f, outMatrix90[0], 0.001f)
+        assertEquals("Landscape 90° Y scale must preserve OpenGL Y-flip", -1.0f, outMatrix90[5], 0.001f)
+
+        // 3. Portrait 180° (Inverted)
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 180,
+            viewportWidth = 1080,
+            viewportHeight = 1920,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix180
+        )
+        val det180 = outMatrix180[0] * outMatrix180[5] - outMatrix180[4] * outMatrix180[1]
+        assertEquals("Portrait 180° must have positive determinant +1.0 (pure rotation)", 1.0f, det180, 0.001f)
+
+        // 4. Landscape 270°
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 270,
+            viewportWidth = 1920,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outMatrix270
+        )
+        // Must match Landscape 90° exactly (consistent orientation, no 180° rotation, no mirroring)
+        for (i in 0 until 16) {
+            assertEquals("Matrix element $i for 270° must match 90°", outMatrix90[i], outMatrix270[i], 0.001f)
+        }
+    }
+
+    @Test
+    fun testCinemaNewAspectRatiosImaxAndCinematicFraming() {
+        val recorder = CinemaSoftwareRecordingEngine(context)
+        val stMatrixStandard = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
+        val outImaxLandscape = FloatArray(16)
+        val outCinematicLandscape = FloatArray(16)
+
+        // 1. IMAX Landscape (true 1.43:1 -> 1544x1080 from 1920x1080 buffer)
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 90,
+            viewportWidth = 1544,
+            viewportHeight = 1080,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outImaxLandscape
+        )
+        // Camera buffer is 1920/1080 (1.778), target is 1544/1080 (1.43). Target is narrower than buffer:
+        // Width is cropped (scaleX < 1.0), height fits fully (scaleY = 1.0)
+        val expectedImaxScaleX = (1544f / 1080f) / (1920f / 1080f) // 1544 / 1920 ≈ 0.804f
+        assertEquals("IMAX width should be cropped uniformly without stretching", expectedImaxScaleX, outImaxLandscape[0], 0.005f)
+        assertEquals("IMAX height fits fully", -1.0f, outImaxLandscape[5], 0.005f)
+        assertTrue("IMAX must not be mirrored horizontally", outImaxLandscape[0] > 0f)
+
+        // 2. Cinematic Landscape (true 2.39:1 -> 1920x804 from 1920x1080 buffer)
+        recorder.computeCameraTexMatrix(
+            stMatrix = stMatrixStandard,
+            isFront = false,
+            sensorOrientation = 90,
+            deviceRotation = 90,
+            viewportWidth = 1920,
+            viewportHeight = 804,
+            camBufferWidth = 1920,
+            camBufferHeight = 1080,
+            outMatrix = outCinematicLandscape
+        )
+        // Camera buffer is 1920/1080 (1.778), target is 1920/804 (2.388). Target is wider than buffer:
+        // Width fits fully (scaleX = 1.0), height is cropped (scaleY < 1.0)
+        val expectedCinematicScaleY = (1920f / 1080f) / (1920f / 804f) // 804 / 1080 ≈ 0.744f
+        assertEquals("Cinematic width fits fully", 1.0f, outCinematicLandscape[0], 0.005f)
+        assertEquals("Cinematic height should be cropped uniformly without stretching", -expectedCinematicScaleY, outCinematicLandscape[5], 0.005f)
+        assertTrue("Cinematic must not be mirrored horizontally", outCinematicLandscape[0] > 0f)
+
+        // Verify aspect ratio values and labels
+        assertEquals("IMAX ratioValue must be 1.43", 1.43f, CinemaAspectRatio.IMAX.ratioValue, 0.01f)
+        assertEquals("Cinematic ratioValue must be 2.39", 2.39f, CinemaAspectRatio.CINEMATIC.ratioValue, 0.01f)
+        assertEquals("16:9 ratioValue must be 16/9", 16f / 9f, CinemaAspectRatio.RATIO_16_9.ratioValue, 0.01f)
     }
 
     @Test

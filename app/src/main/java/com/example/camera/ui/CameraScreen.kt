@@ -685,6 +685,7 @@ fun CameraScreen(
             onVideoQualityClick = { viewModel.cycleVideoQuality() },
             onVideoSettingsClick = { viewModel.toggleVideoSettingsPanel() },
             onCinemaResolutionClick = { viewModel.toggleVideoSettingsPanel() },
+            onCinemaAspectRatioClick = { viewModel.cycleCinemaAspectRatio() },
             onToggleMegapixelMode = { viewModel.togglePhotoMegapixelMode() },
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,

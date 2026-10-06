@@ -639,6 +639,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.saveCinemaConfig(config)
     }
 
+    fun selectCinemaAspectRatio(aspectRatio: com.example.camera.model.CinemaAspectRatio) {
+        val current = cinemaConfig.value
+        if (current.aspectRatio != aspectRatio) {
+            val updated = current.copy(aspectRatio = aspectRatio)
+            updateCinemaConfig(updated)
+            _selectedAspectRatio.value = when (aspectRatio) {
+                com.example.camera.model.CinemaAspectRatio.IMAX -> CameraAspectRatio.RATIO_IMAX
+                com.example.camera.model.CinemaAspectRatio.CINEMATIC -> CameraAspectRatio.RATIO_CINEMATIC
+                else -> CameraAspectRatio.RATIO_16_9
+            }
+            engine.setPreviewAspectRatio(aspectRatio.ratioValue)
+            showToast("Cinema Ratio: ${aspectRatio.label}")
+        }
+    }
+
+    fun cycleCinemaAspectRatio() {
+        val current = cinemaConfig.value.aspectRatio
+        val values = com.example.camera.model.CinemaAspectRatio.values()
+        val nextIndex = (values.indexOf(current) + 1) % values.size
+        selectCinemaAspectRatio(values[nextIndex])
+    }
+
     fun cycleCinemaResolution() {
         val supported = cinemaCapabilities.value.supportedResolutions.takeIf { it.isNotEmpty() }
             ?: listOf(
@@ -1026,10 +1048,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // - Photo mode: fixed 3:4
         // - Portrait mode: fixed 3:4
         // - Night mode: fixed 3:4
-        // - All other modes (Video, Cinema, etc.): fixed 9:16
+        // - Cinema mode: mode-specific cinema aspect ratio (16:9, IMAX, Cinematic)
+        // - All other modes: fixed 9:16
         if (initialMode == CameraMode.PHOTO || initialMode == CameraMode.PORTRAIT || initialMode == CameraMode.NIGHT) {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
             engine.setPreviewAspectRatio(4f / 3f)
+        } else if (initialMode == CameraMode.CINEMA) {
+            val aspect = engine.cinemaConfig.value.aspectRatio
+            _selectedAspectRatio.value = when (aspect) {
+                com.example.camera.model.CinemaAspectRatio.IMAX -> CameraAspectRatio.RATIO_IMAX
+                com.example.camera.model.CinemaAspectRatio.CINEMATIC -> CameraAspectRatio.RATIO_CINEMATIC
+                else -> CameraAspectRatio.RATIO_16_9
+            }
+            engine.setPreviewAspectRatio(aspect.ratioValue)
         } else {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
             engine.setPreviewAspectRatio(16f / 9f)
@@ -1134,10 +1165,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 3. Immediately synchronize aspect ratio:
         // Photo, Portrait, Night, and Pro modes strictly keep 3:4 aspect ratio.
-        // Video and Cinema modes keep 9:16 aspect ratio.
+        // Cinema mode uses selected cinema aspect ratio (16:9, IMAX, Cinematic).
+        // Video mode keeps 9:16 aspect ratio.
         if (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT || mode == CameraMode.NIGHT) {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
             engine.setPreviewAspectRatio(4f / 3f)
+        } else if (mode == CameraMode.CINEMA) {
+            val aspect = engine.cinemaConfig.value.aspectRatio
+            _selectedAspectRatio.value = when (aspect) {
+                com.example.camera.model.CinemaAspectRatio.IMAX -> CameraAspectRatio.RATIO_IMAX
+                com.example.camera.model.CinemaAspectRatio.CINEMATIC -> CameraAspectRatio.RATIO_CINEMATIC
+                else -> CameraAspectRatio.RATIO_16_9
+            }
+            engine.setPreviewAspectRatio(aspect.ratioValue)
         } else {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_9_16
             engine.setPreviewAspectRatio(16f / 9f)

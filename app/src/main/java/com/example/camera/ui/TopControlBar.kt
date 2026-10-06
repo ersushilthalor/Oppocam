@@ -138,6 +138,7 @@ fun TopControlBar(
     onVideoQualityClick: () -> Unit = {},
     onVideoSettingsClick: () -> Unit = {},
     onCinemaResolutionClick: () -> Unit = {},
+    onCinemaAspectRatioClick: () -> Unit = {},
     onToggleMegapixelMode: () -> Unit = {},
     isVideoAdjustmentsOpen: Boolean = false,
     hasActiveVideoAdjustments: Boolean = false,
@@ -370,26 +371,53 @@ fun TopControlBar(
                         cinemaConfig.selectedResolution?.width == 1280 || cinemaConfig.selectedResolution?.height == 1280 -> "720p"
                         else -> "4K"
                     }
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                            .clickable { onCinemaResolutionClick() }
-                            .padding(horizontal = 10.dp)
-                            .testTag("pro_video_resolution_button"),
-                        contentAlignment = Alignment.Center
+                    val aspectLabel = cinemaConfig.aspectRatio.label
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = resLabel,
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                        Box(
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(17.dp))
+                                .background(Color(0xB21A1A1E))
+                                .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
+                                .clickable { onCinemaResolutionClick() }
+                                .padding(horizontal = 10.dp)
+                                .testTag("pro_video_resolution_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = resLabel,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(17.dp))
+                                .background(Color(0xB21A1A1E))
+                                .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f), RoundedCornerShape(17.dp))
+                                .clickable { onCinemaAspectRatioClick() }
+                                .padding(horizontal = 10.dp)
+                                .testTag("cinema_aspect_ratio_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = aspectLabel,
+                                color = Color(0xFFFFD54F),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
                 CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING, CameraMode.DUAL_VIDEO -> {

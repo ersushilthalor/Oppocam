@@ -268,7 +268,9 @@ enum class CameraAspectRatio(
     RATIO_16_9("16:9", 16f / 9f, true),
     RATIO_4_3("4:3", 4f / 3f, false),
     RATIO_1_1("1:1", 1f, false),
-    RATIO_FULL("FULL", 0f, true)
+    RATIO_FULL("FULL", 0f, true),
+    RATIO_IMAX("1.43:1", 1.43f, true),
+    RATIO_CINEMATIC("2.39:1", 2.39f, true)
 }
 
 enum class WhiteBalanceMode(val title: String, val camera2Mode: Int, val shortLabel: String = title) {

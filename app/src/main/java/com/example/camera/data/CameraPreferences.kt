@@ -549,6 +549,14 @@ class CameraPreferences(context: Context) {
         }
         set(value) = prefs.edit().putString("pref_cinema_codec", value.name).apply()
 
+    var cinemaAspectRatio: com.example.camera.model.CinemaAspectRatio
+        get() {
+            val name = prefs.getString("pref_cinema_aspect_ratio", com.example.camera.model.CinemaAspectRatio.RATIO_16_9.name)
+                ?: com.example.camera.model.CinemaAspectRatio.RATIO_16_9.name
+            return try { com.example.camera.model.CinemaAspectRatio.valueOf(name) } catch (e: Exception) { com.example.camera.model.CinemaAspectRatio.RATIO_16_9 }
+        }
+        set(value) = prefs.edit().putString("pref_cinema_aspect_ratio", value.name).apply()
+
     var cinemaExposure: Float
         get() = prefs.getFloat("pref_cinema_exposure_slider", 0.0f)
         set(value) = prefs.edit().putFloat("pref_cinema_exposure_slider", value).apply()
@@ -640,6 +648,7 @@ class CameraPreferences(context: Context) {
 
     fun getCinemaConfig(): com.example.camera.model.CinemaConfig {
         return com.example.camera.model.CinemaConfig(
+            aspectRatio = cinemaAspectRatio,
             videoFps = cinemaFps,
             selectedResolution = com.example.camera.model.CameraResolution(cinemaWidth, cinemaHeight),
             videoBitrate = cinemaBitrate,
@@ -691,6 +700,7 @@ class CameraPreferences(context: Context) {
     }
 
     fun saveCinemaConfig(config: com.example.camera.model.CinemaConfig) {
+        cinemaAspectRatio = config.aspectRatio
         cinemaFps = config.videoFps
         config.selectedResolution?.let {
             cinemaWidth = it.width

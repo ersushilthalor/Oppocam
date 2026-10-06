@@ -82,6 +82,22 @@ enum class CinemaColorSpace(val label: String) {
     DCI_P3("DCI-P3")
 }
 
+enum class CinemaAspectRatio(
+    val id: String,
+    val label: String,
+    val ratioValue: Float, // width / height in landscape (or height / width in portrait)
+    val displayName: String
+) {
+    RATIO_16_9("16_9", "16:9", 16f / 9f, "16:9 Widescreen"),
+    IMAX("imax", "IMAX", 1.43f, "IMAX (1.43:1)"),
+    CINEMATIC("cinematic", "2.39:1", 2.39f, "Cinematic (2.39:1)");
+
+    companion object {
+        fun fromId(id: String?): CinemaAspectRatio =
+            entries.find { it.id.equals(id, ignoreCase = true) } ?: RATIO_16_9
+    }
+}
+
 enum class ZebraThreshold(val label: String, val thresholdIre: Int) {
     OFF("Off", 0),
     IRE_70("70", 70),
@@ -102,6 +118,7 @@ enum class CinemaNoiseReduction(val label: String, val mode: Int) {
 }
 
 data class CinemaConfig(
+    val aspectRatio: CinemaAspectRatio = CinemaAspectRatio.RATIO_16_9,
     val logBitDepth: LogBitDepth = LogBitDepth.BIT_8,
     val codec: CinemaCodec = CinemaCodec.H265,
     val selectedLut: CinematicLut = CinematicLut.OFF, // Default OFF

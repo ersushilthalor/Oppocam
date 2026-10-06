@@ -132,6 +132,48 @@ fun CinemaSettingsWindow(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            // ASPECT RATIO: 16:9, IMAX 1.43:1, Cinematic 2.39:1
+            CinemaSubSectionHeader("CINEMA ASPECT RATIO")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                com.example.camera.model.CinemaAspectRatio.values().forEach { ratio ->
+                    val isSelected = config.aspectRatio == ratio
+                    val tagSuffix = when (ratio) {
+                        com.example.camera.model.CinemaAspectRatio.RATIO_16_9 -> "16_9"
+                        com.example.camera.model.CinemaAspectRatio.IMAX -> "imax"
+                        com.example.camera.model.CinemaAspectRatio.CINEMATIC -> "cinematic"
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.08f))
+                            .border(
+                                width = 1.dp,
+                                color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .clickable { onConfigChange(config.copy(aspectRatio = ratio)) }
+                            .testTag("cinema_aspect_option_$tagSuffix"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = ratio.label,
+                            color = if (isSelected) Color.Black else Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             // STAGE 1: EXPOSURE & CONTRAST
             CinemaSubSectionHeader("1. EXPOSURE & CONTRAST")
             CinemaSliderRow(

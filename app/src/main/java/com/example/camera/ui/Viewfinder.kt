@@ -217,12 +217,12 @@ fun Viewfinder(
         }
     }
 
-    val isFourThreeMode = when (cameraMode) {
-        CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> true
-        CameraMode.VIDEO, CameraMode.CINEMA -> false
-        else -> if (aspectRatio > 0f) aspectRatio < 1.5f else true
+    val targetRatioCalc = when (cameraMode) {
+        CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f
+        CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
+        CameraMode.VIDEO -> 16f / 9f
+        else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
     }
-    val targetRatioCalc = if (isFourThreeMode) 4f / 3f else 16f / 9f
 
     var framesSyncedSinceTransition by remember { mutableIntStateOf(0) }
 
@@ -273,13 +273,14 @@ fun Viewfinder(
         val containerHeight = maxHeight
 
         // Native viewfinder uses 3:4 portrait frame for Photo, Portrait, Pro, and Night modes,
-        // and 9:16 portrait frame for Video and Cinema modes.
-        val isFourThree = when (cameraMode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> true
-            CameraMode.VIDEO, CameraMode.CINEMA -> false
-            else -> if (aspectRatio > 0f) aspectRatio < 1.5f else true
+        // mode-specific aspect ratio for Cinema mode, and 9:16 portrait frame for Video mode.
+        val isFourThree = (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.PORTRAIT || cameraMode == CameraMode.NIGHT)
+        val targetRatio = when (cameraMode) {
+            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f
+            CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
+            CameraMode.VIDEO -> 16f / 9f
+            else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
         }
-        val targetRatio = if (isFourThree) 4f / 3f else 16f / 9f
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
         val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
