@@ -34,8 +34,8 @@ enum class PreviewStreamSource {
  * without tearing down CameraCaptureSession, closing CameraDevice, or calling openCamera().
  */
 class CameraPreviewCompositor(
-    private val bufferWidth: Int = 1920,
-    private val bufferHeight: Int = 1080
+    var bufferWidth: Int = 1920,
+    var bufferHeight: Int = 1080
 ) {
     companion object {
         private const val TAG = "PreviewCompositor"
@@ -75,7 +75,23 @@ class CameraPreviewCompositor(
 
     private var previewWidth = 0
     private var previewHeight = 0
-    private var previewDisplayRotation = 0
+    @Volatile
+    var displayRotationDegrees = 0
+
+    @Volatile
+    var targetAspectRatio: Float = 4f / 3f
+
+    @Volatile
+    var sensorOrientation: Int = 90
+
+    @Volatile
+    var isFrontCamera: Boolean = false
+
+    @Volatile
+    var uwEquivalentFocalMm: Float = CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+
+    @Volatile
+    var mainEquivalentFocalMm: Float = CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
 
     private var programId = 0
     private var uMVPMatrixHandle = 0
@@ -266,6 +282,16 @@ class CameraPreviewCompositor(
         }
     }
 
+    private fun drainInactiveTexture(st: SurfaceTexture) {
+        val disp = eglDisplay ?: return
+        val pbuf = pbufferSurface ?: return
+        val ctx = eglContext ?: return
+        try {
+            EGL14.eglMakeCurrent(disp, pbuf, pbuf, ctx)
+            st.updateTexImage()
+        } catch (ignored: Throwable) {}
+    }
+
     private fun createPersistentSurfaces() {
         val camW = maxOf(bufferWidth, bufferHeight)
         val camH = minOf(bufferWidth, bufferHeight)
@@ -280,6 +306,8 @@ class CameraPreviewCompositor(
                 }
                 if (activeSource == PreviewStreamSource.MAIN) {
                     renderFrame()
+                } else {
+                    drainInactiveTexture(this)
                 }
             }, glHandler)
         }
@@ -297,6 +325,8 @@ class CameraPreviewCompositor(
                 }
                 if (activeSource == PreviewStreamSource.ULTRAWIDE) {
                     renderFrame()
+                } else {
+                    drainInactiveTexture(this)
                 }
             }, glHandler)
         }
@@ -338,6 +368,35 @@ class CameraPreviewCompositor(
     }
 
     /**
+     * Reconfigures compositor SurfaceTexture buffer dimensions and aspect ratio parameters
+     * whenever camera mode, resolution, or stream ratio changes.
+     */
+    fun reconfigureBuffers(
+        bufWidth: Int,
+        bufHeight: Int,
+        targetRatio: Float,
+        sensorOrientation: Int = 90,
+        displayRotation: Int = 0,
+        isFront: Boolean = false
+    ) {
+        this.bufferWidth = bufWidth
+        this.bufferHeight = bufHeight
+        this.targetAspectRatio = targetRatio
+        this.sensorOrientation = sensorOrientation
+        this.displayRotationDegrees = ((displayRotation % 360) + 360) % 360
+        this.isFrontCamera = isFront
+
+        val camW = maxOf(bufWidth, bufHeight)
+        val camH = minOf(bufWidth, bufHeight)
+        mainSurfaceTexture?.setDefaultBufferSize(camW, camH)
+        ultraWideSurfaceTexture?.setDefaultBufferSize(camW, camH)
+
+        glHandler?.post {
+            renderFrame()
+        }
+    }
+
+    /**
      * Binds or detaches the viewfinder target window surface (from TextureView).
      */
     fun setOutputSurface(surface: Surface?, width: Int, height: Int, displayRotationDegrees: Int = 0) {
@@ -353,7 +412,7 @@ class CameraPreviewCompositor(
                 previewEglSurface = null
                 previewWidth = width
                 previewHeight = height
-                previewDisplayRotation = ((displayRotationDegrees % 360) + 360) % 360
+                this.displayRotationDegrees = ((displayRotationDegrees % 360) + 360) % 360
 
                 if (disp != null && surface != null && surface.isValid) {
                     val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
@@ -411,14 +470,22 @@ class CameraPreviewCompositor(
         EGL14.eglMakeCurrent(disp, targetContextSurf, targetContextSurf, eglContext)
 
         val isUw = activeSource == PreviewStreamSource.ULTRAWIDE
-        val texId = if (isUw) textureIdUltraWide else textureIdMain
-        val st = if (isUw) ultraWideSurfaceTexture else mainSurfaceTexture
-        val stMatrix = if (isUw) ultraWideTransformMatrix else mainTransformMatrix
+        val activeTexId = if (isUw) textureIdUltraWide else textureIdMain
+        val activeSt = if (isUw) ultraWideSurfaceTexture else mainSurfaceTexture
+        val activeStMatrix = if (isUw) ultraWideTransformMatrix else mainTransformMatrix
+        val inactiveSt = if (isUw) mainSurfaceTexture else ultraWideSurfaceTexture
 
-        if (st != null) {
+        // Continuously drain inactive stream so its BufferQueue never fills up or blocks camera HAL
+        if (inactiveSt != null) {
             try {
-                st.updateTexImage()
-                st.getTransformMatrix(stMatrix)
+                inactiveSt.updateTexImage()
+            } catch (ignored: Throwable) {}
+        }
+
+        if (activeSt != null) {
+            try {
+                activeSt.updateTexImage()
+                activeSt.getTransformMatrix(activeStMatrix)
             } catch (ignored: Throwable) {}
         }
 
@@ -432,34 +499,66 @@ class CameraPreviewCompositor(
 
         GLES20.glUseProgram(programId)
 
-        // Calculate zoom crop transformation on MVP matrix
+        // Calculate aspect-ratio geometry and zoom crop on MVP matrix
         Matrix.setIdentityM(mvpMatrix, 0)
-        val zoom = activeCropZoom
-        val cropScale = if (isUw) {
-            CameraOpticalCalibration.calculateRequiredDigitalCrop(
-                uiZoom = zoom,
-                lensBaseRatio = 0.5f,
-                lensType = com.example.camera.model.LensType.ULTRAWIDE,
-                switchPointMm = switchPointMm
-            )
-        } else {
-            CameraOpticalCalibration.calculateRequiredDigitalCrop(
-                uiZoom = zoom,
-                lensBaseRatio = 1.0f,
-                lensType = com.example.camera.model.LensType.WIDE,
-                switchPointMm = switchPointMm
-            )
-        }
 
-        if (cropScale > 1.001f) {
-            Matrix.scaleM(mvpMatrix, 0, cropScale, cropScale, 1.0f)
+        val viewW = previewWidth.toFloat()
+        val viewH = previewHeight.toFloat()
+        if (viewW > 0f && viewH > 0f) {
+            val viewAspect = maxOf(viewW, viewH) / minOf(viewW, viewH)
+            val camW = maxOf(bufferWidth, bufferHeight).toFloat()
+            val camH = minOf(bufferWidth, bufferHeight).toFloat()
+            val camAspect = if (camH > 0f) camW / camH else targetAspectRatio
+
+            val scaleX: Float
+            val scaleY: Float
+            if (kotlin.math.abs(viewAspect - camAspect) > 0.01f) {
+                if (viewAspect > camAspect) {
+                    scaleX = viewAspect / camAspect
+                    scaleY = 1.0f
+                } else {
+                    scaleX = 1.0f
+                    scaleY = camAspect / viewAspect
+                }
+            } else {
+                scaleX = 1.0f
+                scaleY = 1.0f
+            }
+
+            // Optical-calibrated digital crop zoom
+            val zoom = activeCropZoom
+            val cropScale = if (isUw) {
+                CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                    uiZoom = zoom,
+                    lensBaseRatio = 0.5f,
+                    lensType = com.example.camera.model.LensType.ULTRAWIDE,
+                    uwEquivalentFocalMm = uwEquivalentFocalMm,
+                    mainEquivalentFocalMm = mainEquivalentFocalMm,
+                    switchPointMm = switchPointMm
+                )
+            } else {
+                CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                    uiZoom = zoom,
+                    lensBaseRatio = 1.0f,
+                    lensType = com.example.camera.model.LensType.WIDE,
+                    uwEquivalentFocalMm = uwEquivalentFocalMm,
+                    mainEquivalentFocalMm = mainEquivalentFocalMm,
+                    switchPointMm = switchPointMm
+                )
+            }
+
+            val finalScaleX = scaleX * cropScale
+            val finalScaleY = scaleY * cropScale
+            if (finalScaleX > 1.001f || finalScaleY > 1.001f) {
+                Matrix.scaleM(mvpMatrix, 0, finalScaleX, finalScaleY, 1.0f)
+            }
         }
 
         GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
-        GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, stMatrix, 0)
+        GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, activeStMatrix, 0)
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, activeTexId)
 
         fullQuadVertices.position(0)
         GLES20.glEnableVertexAttribArray(aPositionHandle)

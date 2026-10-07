@@ -1774,31 +1774,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _currentZoom.value = currentZ
                 preferences.setModeZoom(_cameraMode.value, currentZ)
 
-                // Synchronize lens switching dynamically with the continuous interpolated zoom value
-                if (currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
-                    val targetType = CameraOpticalCalibration.resolveTargetLensType(
-                        currentLensType = (engine.activeSessionLens ?: engine.selectedLens.value)?.lensType ?: LensType.WIDE,
-                        targetZoom = currentZ,
-                        hasUltraWide = ultraWideLens != null,
-                        hasTelephoto2x = tele2xLens != null,
-                        hasTelephoto3x = tele3xLens != null,
-                        isPresetTap = false,
-                        switchPointMm = switchPoint
-                    )
-                    val stepLens = when (targetType) {
-                        LensType.ULTRAWIDE -> ultraWideLens ?: mainWideLens
-                        LensType.TELEPHOTO -> tele2xLens ?: mainWideLens
-                        LensType.TELEPHOTO_3X -> tele3xLens ?: mainWideLens
-                        else -> mainWideLens
-                    }
-                    if (stepLens != null && !engine.isRunningOnLens(stepLens)) {
-                        engine.selectLens(stepLens, preserveZoom = true, targetZoom = currentZ)
-                        preferences.lastFacing = stepLens.facing
-                        preferences.saveLastLens(stepLens)
-                        preferences.setModeLens(_cameraMode.value, stepLens)
-                    }
-                }
-
+                // Continuous zoom update: engine handles switch-point handoff when threshold is crossed
                 engine.setZoom(currentZ, isPresetTap = false)
 
                 val sleepTime = (frameIntervalMs - (android.os.SystemClock.uptimeMillis() - now)).coerceAtLeast(2L)
@@ -1809,24 +1785,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _currentZoom.value = endZ
             preferences.setModeZoom(_cameraMode.value, endZ)
 
-            val finalLens = targetLens ?: if (currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
-                val finalTargetType = CameraOpticalCalibration.resolveTargetLensType(
-                    currentLensType = (engine.activeSessionLens ?: engine.selectedLens.value)?.lensType ?: LensType.WIDE,
-                    targetZoom = endZ,
-                    hasUltraWide = ultraWideLens != null,
-                    hasTelephoto2x = tele2xLens != null,
-                    hasTelephoto3x = tele3xLens != null,
-                    isPresetTap = true,
-                    switchPointMm = switchPoint
-                )
-                when (finalTargetType) {
-                    LensType.ULTRAWIDE -> ultraWideLens ?: mainWideLens
-                    LensType.TELEPHOTO -> tele2xLens ?: mainWideLens
-                    LensType.TELEPHOTO_3X -> tele3xLens ?: mainWideLens
-                    else -> mainWideLens
-                }
-            } else null
-
+            val finalLens = targetLens ?: engine.resolvedTargetLens.value
             if (finalLens != null && !engine.isRunningOnLens(finalLens)) {
                 engine.selectLens(finalLens, preserveZoom = true, targetZoom = endZ)
                 preferences.lastFacing = finalLens.facing

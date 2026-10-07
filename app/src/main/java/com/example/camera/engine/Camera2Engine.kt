@@ -257,6 +257,17 @@ class Camera2Engine(private val context: Context) {
         if (previewCompositor == null) {
             val optSize = _previewBufferSize.value ?: Size(1920, 1080)
             val comp = CameraPreviewCompositor(optSize.width, optSize.height)
+            comp.switchPointMm = _lensSwitchPointMm.value
+            comp.targetAspectRatio = _previewAspectRatio.value
+            comp.sensorOrientation = _sensorOrientation.value
+            comp.displayRotationDegrees = getDeviceRotationDegrees()
+            val lens = _selectedLens.value
+            if (lens != null) {
+                comp.isFrontCamera = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
+                if (lens.lensType == LensType.ULTRAWIDE && lens.equivalent35mmFocalMm > 0f) {
+                    comp.uwEquivalentFocalMm = lens.equivalent35mmFocalMm
+                }
+            }
             comp.onFirstUltraWideFrameCallback = { ts ->
                 isUltraWideStreaming.set(true)
                 _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
@@ -268,6 +279,21 @@ class Camera2Engine(private val context: Context) {
                 comp.setOutputSurface(surf, optSize.width, optSize.height, getDeviceRotationDegrees())
             }
         }
+    }
+
+    private fun updateCompositorBufferGeometry(optimalSize: Size, targetRatio: Float) {
+        val lens = _selectedLens.value
+        val chars = lens?.let { getCharacteristics(it.cameraId) }
+        val sensorOrient = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: _sensorOrientation.value
+        val isFront = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        previewCompositor?.reconfigureBuffers(
+            bufWidth = optimalSize.width,
+            bufHeight = optimalSize.height,
+            targetRatio = targetRatio,
+            sensorOrientation = sensorOrient,
+            displayRotation = getDeviceRotationDegrees(),
+            isFront = isFront
+        )
     }
 
     fun setAutoSwitchToUltraWide(enabled: Boolean) {
@@ -737,6 +763,14 @@ class Camera2Engine(private val context: Context) {
     var currentZoom: Float = 1.0f
     private val _currentZoom = MutableStateFlow(1.0f)
     val currentZoomState: StateFlow<Float> = _currentZoom.asStateFlow()
+
+    private val _displayedPreviewSource = MutableStateFlow(PreviewStreamSource.MAIN)
+    val displayedPreviewSource: StateFlow<PreviewStreamSource> = _displayedPreviewSource.asStateFlow()
+
+    private val _targetLens = MutableStateFlow<LensInfo?>(null)
+    val targetLens: StateFlow<LensInfo?> = _targetLens.asStateFlow()
+    val resolvedTargetLens: StateFlow<LensInfo?> = _targetLens.asStateFlow()
+
     @Volatile
     var activeSessionLens: LensInfo? = null
 
@@ -1576,6 +1610,8 @@ class Camera2Engine(private val context: Context) {
 
                     activeSessionLens = lens
                     _selectedLens.value = lens
+                    _displayedPreviewSource.value = targetSource
+                    _targetLens.value = lens
                     activeSessionPhysicalCameraId = lens.physicalCameraId
 
                     scheduleZoomPreviewUpdate(immediate = true)
@@ -2317,6 +2353,7 @@ class Camera2Engine(private val context: Context) {
         _previewAspectRatio.value = newRatio
         val optimalSize = getOptimalPreviewSize(_selectedLens.value?.cameraId, newRatio)
         _previewBufferSize.value = optimalSize
+        updateCompositorBufferGeometry(optimalSize, newRatio)
         previewSurfaceTexture?.let { texture ->
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
@@ -2550,6 +2587,7 @@ class Camera2Engine(private val context: Context) {
             }
             val optimalSize = if (isBufMatching && currentBuf != null) currentBuf else getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
             _previewBufferSize.value = optimalSize
+            updateCompositorBufferGeometry(optimalSize, targetRatio)
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
             texture.setDefaultBufferSize(cameraW, cameraH)
@@ -3921,26 +3959,6 @@ class Camera2Engine(private val context: Context) {
 
             val effectiveUiZoom = currentZoom
 
-            // Update active optical lens label/state synchronously with current zoom level
-            if (effectiveUiZoom >= 1.0f && lens.lensType == LensType.ULTRAWIDE) {
-                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                val mainLens = backLenses.firstOrNull { it.isPrimaryMain }
-                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
-                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
-                if (mainLens != null && mainLens.id != lens.id) {
-                    activeSessionLens = mainLens
-                    _selectedLens.value = mainLens
-                }
-            } else if (effectiveUiZoom < 1.0f && lens.lensType == LensType.WIDE) {
-                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                    ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-                if (ultraWideLens != null && ultraWideLens.id != lens.id) {
-                    activeSessionLens = ultraWideLens
-                    _selectedLens.value = ultraWideLens
-                }
-            }
-
             // Digital Crop calculation calibrated from actual sensor FOV
             val uwEqFocal = if (lens.lensType == LensType.ULTRAWIDE && lens.equivalent35mmFocalMm > 0f) {
                 lens.equivalent35mmFocalMm
@@ -4165,6 +4183,8 @@ class Camera2Engine(private val context: Context) {
             clampedZoom
         }
 
+        _targetLens.value = targetLens
+
         if (isSwitchingLens.get()) {
             // Coalesce rapid zoom requests while lens switch is in progress;
             // completeLensSwitch() will apply the latest zoom and lens when the switch finishes.
@@ -4172,6 +4192,23 @@ class Camera2Engine(private val context: Context) {
             pendingZoomPresetTapWhileSwitching = isPresetTap
             pendingLensWhileSwitching = targetLens
             return
+        }
+
+        // Instant optical source handoff via preview compositor when Keep Ultra Wide Ready is streaming
+        if (_isKeepUltraWideReady.value && previewCompositor != null && (isUltraWideStreaming.get() || _ultraWideStreamStatus.value == BackgroundCameraStatus.READY_QUIET)) {
+            val desiredSource = if (targetLens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+            if (_displayedPreviewSource.value != desiredSource) {
+                _displayedPreviewSource.value = desiredSource
+                previewCompositor?.setActiveSource(desiredSource, cropZoom = pZoom)
+                _selectedLens.value = targetLens
+                scheduleZoomPreviewUpdate(immediate = isPresetTap)
+                return
+            } else {
+                previewCompositor?.setCropZoom(pZoom)
+                _selectedLens.value = targetLens
+                scheduleZoomPreviewUpdate(immediate = isPresetTap)
+                return
+            }
         }
 
         val activeLens = activeSessionLens ?: currentLens

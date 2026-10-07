@@ -1055,78 +1055,11 @@ fun configureTransform(
     val centerX = viewW / 2f
     val centerY = viewH / 2f
 
-    // 1. Calculate buffer dimensions in display orientation (Open Camera approach)
-    val isLandscapeDisplay = (displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270)
-    val (bufW, bufH) = if (previewBufferSize != null && previewBufferSize.width > 0 && previewBufferSize.height > 0) {
-        val maxDim = maxOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-        val minDim = minOf(previewBufferSize.width, previewBufferSize.height).toFloat()
-        if (isLandscapeDisplay) {
-            maxDim to minDim
-        } else {
-            minDim to maxDim
-        }
-    } else {
-        if (isLandscapeDisplay) {
-            (viewH * targetRatio) to viewH
-        } else {
-            viewW to (viewW * targetRatio)
-        }
-    }
+    // CameraPreviewCompositor is the single owner of preview aspect ratio, crop,
+    // rotation, and zoom geometry. TextureView displays the compositor output directly
+    // without applying conflicting crop or scale transformations.
 
-    val bufAspect = bufH / bufW
-    val actualViewAspect = viewH / viewW
-
-    // 2. Open Camera mode-transition & stale layout synchronization:
-    // When switching between modes (e.g. Photo 4:3 <-> Video 16:9), if the buffer already matches
-    // the target aspect ratio, ensure we synchronize with targetRatio rather than applying false
-    // distortion from layout dimensions that are transitioning in the background.
-    val isBufMatchingTarget = kotlin.math.abs(bufAspect - targetRatio) < 0.08f
-    val isViewMatchingTarget = kotlin.math.abs(actualViewAspect - targetRatio) < 0.08f
-
-    val effectiveViewW: Float
-    val effectiveViewH: Float
-    if (isBufMatchingTarget && !isViewMatchingTarget) {
-        if (viewH >= viewW) {
-            effectiveViewW = viewW
-            effectiveViewH = viewW * targetRatio
-        } else {
-            effectiveViewW = viewH * targetRatio
-            effectiveViewH = viewH
-        }
-    } else {
-        effectiveViewW = viewW
-        effectiveViewH = viewH
-    }
-
-    val effectiveViewAspect = effectiveViewH / effectiveViewW
-
-    // 3. Uniform center crop scaling preserving original sensor pixel aspect ratio:
-    // TextureView default behavior stretches bufW -> viewW and bufH -> viewH.
-    // To restore uniform 1:1 pixel scaling and crop the excess uniformly without any distortion:
-    if (kotlin.math.abs(bufAspect - effectiveViewAspect) > 0.005f) {
-        val scaleX: Float
-        val scaleY: Float
-        if (effectiveViewAspect > bufAspect) {
-            // View is taller than buffer -> expand X to match Y scale uniformly
-            scaleX = effectiveViewAspect / bufAspect
-            scaleY = 1.0f
-        } else {
-            // View is wider than buffer -> expand Y to match X scale uniformly
-            scaleX = 1.0f
-            scaleY = bufAspect / effectiveViewAspect
-        }
-        matrix.setScale(scaleX, scaleY, centerX, centerY)
-    }
-
-    // 4. Open Camera rotation handling
-    if (displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270) {
-        val degrees = if (displayRotation == Surface.ROTATION_90) -90f else 90f
-        matrix.postRotate(degrees, centerX, centerY)
-    } else if (displayRotation == Surface.ROTATION_180) {
-        matrix.postRotate(180f, centerX, centerY)
-    }
-
-    // 5. Existing camera feature integration: Stable Action Horizon Lock & Dolly Zoom
+    // Viewfinder-level camera feature integration: Stable Action Horizon Lock & Dolly Zoom
     if (isHorizonLockEnabled) {
         val angleDeg = -horizonRollDegrees
         matrix.postRotate(angleDeg, centerX, centerY)
