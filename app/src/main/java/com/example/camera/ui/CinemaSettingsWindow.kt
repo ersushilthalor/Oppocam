@@ -205,6 +205,12 @@ fun CinemaSettingsWindow(
                 valueRange = 0.0f..1.0f,
                 onValueChange = { onConfigChange(config.copy(washedOut = it)) }
             )
+            CinemaSliderRow(
+                label = "Brilliance",
+                value = config.brilliance,
+                valueRange = -1.0f..1.0f,
+                onValueChange = { onConfigChange(config.copy(brilliance = it)) }
+            )
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -384,6 +390,7 @@ private fun resetFineTuning(config: CinemaConfig, onConfigChange: (CinemaConfig)
             contrast = 0.0f,
             saturation = 1.0f,
             washedOut = 0.0f,
+            brilliance = 0.0f,
             shadows = 0.0f,
             highlights = 0.0f,
             vibrance = 0.0f,

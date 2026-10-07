@@ -1711,6 +1711,7 @@ private fun CinemaSettingsPage(
                                             lumaCurve = 0.0f,
                                             outputGamma = 1.0f,
                                             washedOut = 0.0f,
+                                            brilliance = 0.0f,
                                             whites = 0.0f,
                                             highlights = 0.0f,
                                             highlightRolloff = 0.0f,
@@ -1785,6 +1786,12 @@ private fun CinemaSettingsPage(
                         value = cinemaConfig.washedOut,
                         valueRange = 0.0f..1.0f,
                         onValueChange = { onCinemaConfigChange(cinemaConfig.copy(washedOut = it)) }
+                    )
+                    CinemaSettingSliderRow(
+                        label = "Brilliance",
+                        value = cinemaConfig.brilliance,
+                        valueRange = -1.0f..1.0f,
+                        onValueChange = { onCinemaConfigChange(cinemaConfig.copy(brilliance = it)) }
                     )
                     CinemaSettingSliderRow(
                         label = "Tone Map Strength",

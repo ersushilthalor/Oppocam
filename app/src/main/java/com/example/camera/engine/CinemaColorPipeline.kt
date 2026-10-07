@@ -110,7 +110,7 @@ object CinemaColorPipeline {
         if (config.shadows != 0.0f || config.highlights != 0.0f || config.vibrance != 0.0f) {
             return true
         }
-        if (config.exposure != 0.0f || config.contrast != 0.0f || config.saturation != 1.0f || config.washedOut > 0.0f) {
+        if (config.exposure != 0.0f || config.contrast != 0.0f || config.saturation != 1.0f || config.washedOut > 0.0f || config.brilliance != 0.0f) {
             return true
         }
         if (config.colorProfile != CinemaColorProfile.NATIVE) return true
@@ -155,7 +155,8 @@ object CinemaColorPipeline {
                 config.exposure != 0.0f ||
                 config.contrast != 0.0f ||
                 config.saturation != 1.0f ||
-                config.washedOut > 0.0f
+                config.washedOut > 0.0f ||
+                config.brilliance != 0.0f
         val custom3DLutActive = includeCreativeLut &&
                 config.selectedLut == CinematicLut.CUSTOM &&
                 !config.customLutPath.isNullOrBlank() &&
@@ -1113,12 +1114,13 @@ object CinemaColorPipeline {
                 shader.setFloatUniform("uLutSize", lutSize)
                 shader.setFloatUniform("uLutIntensity", lutIntensity)
 
-                // Exposure, Contrast, Saturation, WashedOut
+                // Exposure, Contrast, Saturation, WashedOut, Brilliance
                 val exposure = config.exposure
                 shader.setFloatUniform("uExposure", exposure)
                 shader.setFloatUniform("uContrast", config.contrast)
                 shader.setFloatUniform("uSaturation", config.saturation)
                 shader.setFloatUniform("uWashedOut", config.washedOut)
+                shader.setFloatUniform("uBrilliance", config.brilliance.coerceIn(-1f, 1f))
 
                 val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
                 val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10)
@@ -1208,6 +1210,7 @@ object CinemaColorPipeline {
         uniform float uContrast;
         uniform float uSaturation;
         uniform float uWashedOut;
+        uniform float uBrilliance;
         uniform float uFilmicOutput;
         uniform float uShadows;
         uniform float uHighlights;
@@ -1357,7 +1360,15 @@ object CinemaColorPipeline {
                 deltaLumaCurve = shapedLuma - luma;
             }
 
-            c = clamp(c + float3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
+            float deltaBrilliance = 0.0;
+            if (abs(uBrilliance) > 0.001) {
+                float bShadow = uBrilliance * 0.20 * luma * pow(1.0 - luma, 1.8) * 3.5;
+                float bMidtone = uBrilliance * 0.16 * sin(luma * 3.14159265);
+                float bHighlight = (luma > 0.70) ? -uBrilliance * 0.12 * pow((luma - 0.70) / 0.30, 1.5) : 0.0;
+                deltaBrilliance = bShadow + bMidtone + bHighlight;
+            }
+
+            c = clamp(c + float3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve + deltaBrilliance), 0.0, 1.0);
 
             // 7. Color Transform / Matrix Cross-Talk
             if (abs(uColorTransform) > 0.001) {
@@ -1549,6 +1560,7 @@ object CinemaColorPipeline {
         uniform float uContrast;
         uniform float uSaturation;
         uniform float uWashedOut;
+        uniform float uBrilliance;
         uniform float uFilmicOutput;
         uniform float uShadows;
         uniform float uHighlights;
@@ -1694,7 +1706,15 @@ object CinemaColorPipeline {
                 deltaLumaCurve = shapedLuma - luma;
             }
 
-            c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
+            float deltaBrilliance = 0.0;
+            if (abs(uBrilliance) > 0.001) {
+                float bShadow = uBrilliance * 0.20 * luma * pow(1.0 - luma, 1.8) * 3.5;
+                float bMidtone = uBrilliance * 0.16 * sin(luma * 3.14159265);
+                float bHighlight = (luma > 0.70) ? -uBrilliance * 0.12 * pow((luma - 0.70) / 0.30, 1.5) : 0.0;
+                deltaBrilliance = bShadow + bMidtone + bHighlight;
+            }
+
+            c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve + deltaBrilliance), 0.0, 1.0);
 
             // 7. Color Transform / Matrix Cross-Talk
             if (abs(uColorTransform) > 0.001) {

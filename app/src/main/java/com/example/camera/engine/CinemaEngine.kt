@@ -193,7 +193,8 @@ class CinemaEngine(private val context: Context) {
                 userExposure = config.exposure,
                 userShadows = config.shadows,
                 userHighlights = config.highlights,
-                userContrast = config.contrast
+                userContrast = config.contrast,
+                userBrilliance = config.brilliance
             )
         }
         if (config.colorProfile == CinemaColorProfile.NATIVE) {
@@ -201,7 +202,8 @@ class CinemaEngine(private val context: Context) {
                 userShadows = config.shadows,
                 userHighlights = config.highlights,
                 userContrast = config.contrast,
-                userExposure = config.exposure
+                userExposure = config.exposure,
+                userBrilliance = config.brilliance
             )
         }
         val lutForIsp = config.selectedLut
@@ -212,7 +214,8 @@ class CinemaEngine(private val context: Context) {
             config.contrast,
             lutForIsp,
             config.exposure,
-            config.washedOut
+            config.washedOut,
+            config.brilliance
         )
     }
 
@@ -592,7 +595,8 @@ class CinemaEngine(private val context: Context) {
         contrast: Float,
         lut: CinematicLut = CinematicLut.NONE,
         exposure: Float = 0.0f,
-        washedOut: Float = 0.0f
+        washedOut: Float = 0.0f,
+        brilliance: Float = 0.0f
     ): TonemapCurve {
         val numPoints = CURVE_POINTS
         val lutContrast = if (lut != CinematicLut.NONE) (lut.contrast - 1.0f) else 0.0f
@@ -669,6 +673,18 @@ class CinemaEngine(private val context: Context) {
             if (highlights != 0.0f && x > 0.55f) {
                 val weight = ((x - 0.55f) / 0.45f).let { it * it }
                 y += highlights * 0.15f * weight
+            }
+
+            // 4. Brilliance (intelligent tone-mapping balancing shadows, midtones, and highlights)
+            if (brilliance != 0.0f) {
+                val b = brilliance.coerceIn(-1.0f, 1.0f)
+                val shadowLift = 0.20f * b * (x * (1.0f - x).pow(1.8f)) * 3.5f
+                val midtoneDim = 0.16f * b * kotlin.math.sin(x * Math.PI.toFloat())
+                val highlightCompress = if (x > 0.70f) {
+                    val hWeight = ((x - 0.70f) / 0.30f).pow(1.5f)
+                    -0.12f * b * hWeight
+                } else 0.0f
+                y += shadowLift + midtoneDim + highlightCompress
             }
 
             var finalY = y.coerceIn(0f, 1f)

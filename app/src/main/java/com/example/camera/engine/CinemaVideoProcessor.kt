@@ -359,6 +359,7 @@ object CinemaVideoProcessor {
             val uContrastHandle = GLES20.glGetUniformLocation(programId, "uContrast")
             val uSaturationHandle = GLES20.glGetUniformLocation(programId, "uSaturation")
             val uWashedOutHandle = GLES20.glGetUniformLocation(programId, "uWashedOut")
+            val uBrillianceHandle = GLES20.glGetUniformLocation(programId, "uBrilliance")
             val uFilmicOutputHandle = GLES20.glGetUniformLocation(programId, "uFilmicOutput")
 
             val lutPair = if (config.isBakeLutToOutput) CinemaColorPipeline.getLutStripBitmap(config) else null
@@ -533,6 +534,7 @@ object CinemaVideoProcessor {
                                 GLES20.glUniform1f(uContrastHandle, config.contrast)
                                 GLES20.glUniform1f(uSaturationHandle, config.saturation)
                                 GLES20.glUniform1f(uWashedOutHandle, config.washedOut)
+                                GLES20.glUniform1f(uBrillianceHandle, config.brilliance.coerceIn(-1f, 1f))
 
                                 val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
                                 val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2)
@@ -751,6 +753,7 @@ object CinemaVideoProcessor {
             uniform float uContrast;
             uniform float uSaturation;
             uniform float uWashedOut;
+            uniform float uBrilliance;
             uniform float uFilmicOutput;
             uniform float uShadows;
             uniform float uHighlights;
@@ -896,7 +899,15 @@ object CinemaVideoProcessor {
                     deltaLumaCurve = shapedLuma - luma;
                 }
 
-                c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
+                float deltaBrilliance = 0.0;
+                if (abs(uBrilliance) > 0.001) {
+                    float bShadow = uBrilliance * 0.20 * luma * pow(1.0 - luma, 1.8) * 3.5;
+                    float bMidtone = uBrilliance * 0.16 * sin(luma * 3.14159265);
+                    float bHighlight = (luma > 0.70) ? -uBrilliance * 0.12 * pow((luma - 0.70) / 0.30, 1.5) : 0.0;
+                    deltaBrilliance = bShadow + bMidtone + bHighlight;
+                }
+
+                c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve + deltaBrilliance), 0.0, 1.0);
 
                 // 7. Color Transform / Matrix Cross-Talk
                 if (abs(uColorTransform) > 0.001) {

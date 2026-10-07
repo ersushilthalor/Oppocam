@@ -225,7 +225,8 @@ class Hlg10AutoExposureEngine {
         userExposure: Float = 0.0f,
         userShadows: Float = 0.0f,
         userHighlights: Float = 0.0f,
-        userContrast: Float = 0.0f
+        userContrast: Float = 0.0f,
+        userBrilliance: Float = 0.0f
     ): TonemapCurve {
         val current = _currentParams.value
         val effectiveExp = (userExposure + current.exposureComp).coerceIn(-2.0f, 2.0f)
@@ -282,6 +283,18 @@ class Hlg10AutoExposureEngine {
             if (userHighlights != 0.0f && baseNormalizedX > 0.50f) {
                 val weight = ((baseNormalizedX - 0.50f) / 0.50f).pow(2.0f)
                 y += userHighlights * 0.08f * weight
+            }
+
+            // User Brilliance (intelligent tone-mapping balancing shadows, midtones, and highlights)
+            if (userBrilliance != 0.0f) {
+                val b = userBrilliance.coerceIn(-1.0f, 1.0f)
+                val shadowLift = 0.16f * b * (baseNormalizedX * (1.0f - baseNormalizedX).pow(1.8f)) * 3.5f
+                val midtoneDim = 0.12f * b * kotlin.math.sin(baseNormalizedX * Math.PI.toFloat())
+                val highlightCompress = if (baseNormalizedX > 0.70f) {
+                    val hWeight = ((baseNormalizedX - 0.70f) / 0.30f).pow(1.5f)
+                    -0.10f * b * hWeight
+                } else 0.0f
+                y += shadowLift + midtoneDim + highlightCompress
             }
 
             // Inky black strictly anchored at 0.0, peak white strictly at 1.0, and enforce monotonicity

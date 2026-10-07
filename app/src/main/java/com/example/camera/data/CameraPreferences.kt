@@ -565,6 +565,10 @@ class CameraPreferences(context: Context) {
         get() = prefs.getFloat("pref_cinema_washed_out", 0.0f)
         set(value) = prefs.edit().putFloat("pref_cinema_washed_out", value).apply()
 
+    var cinemaBrilliance: Float
+        get() = prefs.getFloat("pref_cinema_brilliance", 0.0f)
+        set(value) = prefs.edit().putFloat("pref_cinema_brilliance", value).apply()
+
     var cinemaLutIntensity: Float
         get() = prefs.getFloat("pref_cinema_lut_intensity", 1.0f).coerceIn(0.0f, 1.0f)
         set(value) = prefs.edit().putFloat("pref_cinema_lut_intensity", value.coerceIn(0.0f, 1.0f)).apply()
@@ -668,6 +672,7 @@ class CameraPreferences(context: Context) {
             contrast = cinemaContrast,
             exposure = cinemaExposure,
             washedOut = cinemaWashedOut,
+            brilliance = cinemaBrilliance,
             saturation = cinemaSaturation,
             vibrance = cinemaVibrance,
             sharpness = cinemaSharpness,
@@ -723,6 +728,7 @@ class CameraPreferences(context: Context) {
         cinemaContrast = config.contrast
         cinemaExposure = config.exposure
         cinemaWashedOut = config.washedOut
+        cinemaBrilliance = config.brilliance
         cinemaSaturation = config.saturation
         cinemaVibrance = config.vibrance
         cinemaSharpness = config.sharpness

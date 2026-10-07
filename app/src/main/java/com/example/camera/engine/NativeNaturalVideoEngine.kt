@@ -185,7 +185,8 @@ class NativeNaturalVideoEngine {
         userShadows: Float = 0.0f,
         userHighlights: Float = 0.0f,
         userContrast: Float = 0.0f,
-        userExposure: Float = 0.0f
+        userExposure: Float = 0.0f,
+        userBrilliance: Float = 0.0f
     ): TonemapCurve {
         val now = System.currentTimeMillis()
         val p = _currentParams.value
@@ -246,6 +247,18 @@ class NativeNaturalVideoEngine {
                 if (effectiveContrast != 0.0f) {
                     val factor = 1.0f + (effectiveContrast * 0.35f)
                     y = 0.18f + (y - 0.18f) * factor
+                }
+
+                // 5. User Brilliance (intelligent tone-mapping balancing shadows, midtones, and highlights)
+                if (userBrilliance != 0.0f) {
+                    val b = userBrilliance.coerceIn(-1.0f, 1.0f)
+                    val shadowLift = 0.16f * b * (inX * (1.0f - inX).pow(1.8f)) * 3.5f
+                    val midtoneDim = 0.12f * b * kotlin.math.sin(inX * Math.PI.toFloat())
+                    val highlightCompress = if (inX > 0.70f) {
+                        val hWeight = ((inX - 0.70f) / 0.30f).pow(1.5f)
+                        -0.10f * b * hWeight
+                    } else 0.0f
+                    y += shadowLift + midtoneDim + highlightCompress
                 }
             }
 

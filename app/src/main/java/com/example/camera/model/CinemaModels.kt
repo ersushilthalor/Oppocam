@@ -139,6 +139,7 @@ data class CinemaConfig(
     val contrast: Float = 0.0f, // -1.0f (flat latitude) to +1.0f (punchy cinematic S-curve)
     val exposure: Float = 0.0f, // -1.0f to +1.0f real-time live exposure slider
     val washedOut: Float = 0.0f, // 0.0f (pure LOG/HLG10) to 1.0f (progressive reduction of washed-out appearance with contrast/saturation recovery)
+    val brilliance: Float = 0.0f, // -1.0f to +1.0f intelligent tone-mapping balancing shadows, midtones, and highlights
     val saturation: Float = 1.0f, // 0.0f (monochrome/desaturated) to 2.0f (vibrant) via 3x3 color gamut matrix
     val vibrance: Float = 0.0f, // -1.0f to +1.0f selective vibrance with skin-tone protection
     val sharpness: CinemaSharpness = CinemaSharpness.CRISP, // Smartphone-style crisp detail enhancement by default
@@ -188,7 +189,7 @@ data class CinemaConfig(
                 midtones != 0.0f || blackLevel != 0.0f || highlightRolloff != 0.0f || shadowRolloff != 0.0f ||
                 localContrast != 0.0f || lumaCurve != 0.0f || colorTransform != 0.0f || chromaStrength != 1.0f ||
                 lumaNoiseReduction != 0.0f || chromaNoiseReduction != 0.0f || fineSharpening != 0.0f ||
-                microContrast != 0.0f || toneMappingStrength != 0.0f || outputGamma != 1.0f
+                microContrast != 0.0f || toneMappingStrength != 0.0f || outputGamma != 1.0f || brilliance != 0.0f
     val isHlg10: Boolean get() = colorProfile == CinemaColorProfile.HLG10
     val effectiveColorSpace: CinemaColorSpace get() = if (colorProfile == CinemaColorProfile.HLG10) CinemaColorSpace.REC_2020 else colorSpace
     val effectiveBitDepth: LogBitDepth get() = logBitDepth

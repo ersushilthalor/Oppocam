@@ -143,6 +143,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var uContrastHandle: Int = -1
     private var uSaturationHandle: Int = -1
     private var uWashedOutHandle: Int = -1
+    private var uBrillianceHandle: Int = -1
     private var uFilmicOutputHandle: Int = -1
 
     private val mvpMatrix = FloatArray(16)
@@ -1398,6 +1399,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 uContrastHandle = GLES20.glGetUniformLocation(programId, "uContrast")
                 uSaturationHandle = GLES20.glGetUniformLocation(programId, "uSaturation")
                 uWashedOutHandle = GLES20.glGetUniformLocation(programId, "uWashedOut")
+                uBrillianceHandle = GLES20.glGetUniformLocation(programId, "uBrilliance")
                 uFilmicOutputHandle = GLES20.glGetUniformLocation(programId, "uFilmicOutput")
 
                 vertexBuffer = ByteBuffer.allocateDirect(4 * 3 * 4)
@@ -1676,6 +1678,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             GLES20.glUniform1f(uContrastHandle, cfg.contrast)
             GLES20.glUniform1f(uSaturationHandle, cfg.saturation)
             GLES20.glUniform1f(uWashedOutHandle, cfg.washedOut)
+            GLES20.glUniform1f(uBrillianceHandle, cfg.brilliance.coerceIn(-1f, 1f))
 
             val isGraded = (!cfg.selectedLut.isOff || cfg.colorProfile != CinemaColorProfile.NATIVE)
             val isHdrProfile = (cfg.colorProfile == CinemaColorProfile.HLG10 || cfg.colorProfile == CinemaColorProfile.HLG_2)
@@ -1831,6 +1834,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             uniform float uContrast;
             uniform float uSaturation;
             uniform float uWashedOut;
+            uniform float uBrilliance;
             uniform float uFilmicOutput;
             uniform float uShadows;
             uniform float uHighlights;
@@ -1969,7 +1973,15 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                     deltaLumaCurve = shapedLuma - luma;
                 }
 
-                c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve), 0.0, 1.0);
+                float deltaBrilliance = 0.0;
+                if (abs(uBrilliance) > 0.001) {
+                    float bShadow = uBrilliance * 0.20 * luma * pow(1.0 - luma, 1.8) * 3.5;
+                    float bMidtone = uBrilliance * 0.16 * sin(luma * 3.14159265);
+                    float bHighlight = (luma > 0.70) ? -uBrilliance * 0.12 * pow((luma - 0.70) / 0.30, 1.5) : 0.0;
+                    deltaBrilliance = bShadow + bMidtone + bHighlight;
+                }
+
+                c = clamp(c + vec3(deltaBlacks + deltaShadows + deltaMidtones + deltaHighlights + deltaWhites + deltaShadowRolloff + deltaHighlightRolloff + deltaLumaCurve + deltaBrilliance), 0.0, 1.0);
 
                 // 7. Color Transform / Matrix Cross-Talk
                 if (abs(uColorTransform) > 0.001) {
