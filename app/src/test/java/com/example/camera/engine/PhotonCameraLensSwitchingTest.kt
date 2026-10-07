@@ -494,4 +494,79 @@ class PhotonCameraLensSwitchingTest {
         val cropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.WIDE)
         assertEquals(1.0f, cropAt10, 0.001f)
     }
+
+    @Test
+    fun testPhysicalStreamSwitchDoesNotFakeClamping() {
+        val physicalUltraWide = LensInfo(
+            cameraId = "0",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.ULTRAWIDE,
+            displayName = "0.5x Ultra Wide",
+            focalLengthMm = 2.0f,
+            maxAperture = 2.2f,
+            isLogicalMultiCamera = true,
+            supportsPhysicalStream = true,
+            physicalCameraId = "2",
+            baseZoomRatio = 0.5f,
+            minZoomRatio = 0.5f
+        )
+
+        // Ultra-wide crop calculation at 0.5x must be 1.0x (full native uncropped FOV)
+        val crop05 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.5f, physicalUltraWide.baseZoomRatio, physicalUltraWide.lensType)
+        assertEquals(1.0f, crop05, 0.001f)
+
+        // At 0.75x, digital crop is smoothly interpolated
+        val crop075 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.75f, physicalUltraWide.baseZoomRatio, physicalUltraWide.lensType)
+        assertTrue(crop075 > 1.0f && crop075 < 1.44f)
+
+        // At 0.999x, digital crop reaches exactly 1.44x matching 1x Main FOV limit
+        val crop0999 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.999f, physicalUltraWide.baseZoomRatio, physicalUltraWide.lensType)
+        assertEquals(1.44f, crop0999, 0.001f)
+    }
+
+    @Test
+    fun testSameCameraDeviceResolvesCorrectStrategy() {
+        val mainLens = LensInfo(
+            cameraId = "0",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.WIDE,
+            displayName = "1x Main",
+            focalLengthMm = 5.0f,
+            maxAperture = 1.8f,
+            isPrimaryMain = true,
+            isLogicalMultiCamera = true,
+            baseZoomRatio = 1.0f
+        )
+
+        val physicalUltraWide = LensInfo(
+            cameraId = "0",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.ULTRAWIDE,
+            displayName = "0.5x Ultra Wide",
+            focalLengthMm = 2.0f,
+            maxAperture = 2.2f,
+            isLogicalMultiCamera = true,
+            supportsPhysicalStream = true,
+            physicalCameraId = "2",
+            baseZoomRatio = 0.5f
+        )
+
+        val logicalZoomLens = LensInfo(
+            cameraId = "0",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.WIDE,
+            displayName = "2x Zoom Preset",
+            focalLengthMm = 5.0f,
+            maxAperture = 1.8f,
+            isLogicalMultiCamera = true,
+            supportsPhysicalStream = false,
+            baseZoomRatio = 2.0f
+        )
+
+        val strategyPhysical = CameraDiscovery.resolveSwitchStrategy(mainLens, physicalUltraWide)
+        assertEquals(LensSwitchStrategy.LOGICAL_PHYSICAL_STREAM, strategyPhysical)
+
+        val strategyLogical = CameraDiscovery.resolveSwitchStrategy(mainLens, logicalZoomLens)
+        assertEquals(LensSwitchStrategy.LOGICAL_ZOOM, strategyLogical)
+    }
 }
