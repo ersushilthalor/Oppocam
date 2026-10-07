@@ -135,6 +135,9 @@ class Camera2Engine(private val context: Context) {
     private val _isKeepUltraWideReady = MutableStateFlow(preferences.isKeepUltraWideReady)
     val isKeepUltraWideReady: StateFlow<Boolean> = _isKeepUltraWideReady.asStateFlow()
 
+    private val _isDualVideoLens = MutableStateFlow(preferences.isDualVideoLens)
+    val isDualVideoLens: StateFlow<Boolean> = _isDualVideoLens.asStateFlow()
+
     private val _isAutoSwitchToUltraWide = MutableStateFlow(preferences.isAutoSwitchToUltraWide)
     val isAutoSwitchToUltraWide: StateFlow<Boolean> = _isAutoSwitchToUltraWide.asStateFlow()
 
@@ -234,6 +237,18 @@ class Camera2Engine(private val context: Context) {
         _ultraWideStreamStatus.value = if (enabled) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF
         backgroundHandler?.post {
             if (enabled) {
+                ensureUltraWideSimultaneousReady()
+            } else {
+                releaseUltraWideStandby()
+            }
+        }
+    }
+
+    fun setDualVideoLens(enabled: Boolean) {
+        _isDualVideoLens.value = enabled
+        preferences.isDualVideoLens = enabled
+        backgroundHandler?.post {
+            if (_isKeepUltraWideReady.value) {
                 ensureUltraWideSimultaneousReady()
             } else {
                 releaseUltraWideStandby()
@@ -369,7 +384,13 @@ class Camera2Engine(private val context: Context) {
         }
 
         try {
-            val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
+            val isDualVideoModeActive = _isDualVideoLens.value && (currentMode == CameraMode.PHOTO || currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
+            val optimalSize = if (isDualVideoModeActive) {
+                com.example.camera.dualvideo.engine.DualCameraCapabilityDetector.detectCapability(context, _availableLenses.value)
+                    .supportedResolutions.firstOrNull()?.let { Size(it.width, it.height) } ?: Size(1920, 1080)
+            } else {
+                _previewBufferSize.value ?: Size(1920, 1080)
+            }
             if (ultraWideStandbyImageReader == null) {
                 val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, ImageFormat.YUV_420_888, 2)
                 reader.setOnImageAvailableListener({ r ->
@@ -391,7 +412,7 @@ class Camera2Engine(private val context: Context) {
                 override fun onOpened(camera: CameraDevice) {
                     ultraWideStandbyCameraDevice = camera
                     try {
-                        val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value)
+                        val isVideo = (_isDualVideoLens.value || currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value)
                         val template = if (isVideo) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
                         val builder = camera.createCaptureRequest(template).apply {
                             addTarget(standbySurf)

@@ -728,6 +728,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _instantSwitchState = MutableStateFlow(
         MotorolaInstantSwitchState(
             isKeepUltraWideReady = preferences.isKeepUltraWideReady,
+            isDualVideoLens = preferences.isDualVideoLens,
             isAutoSwitchToUltraWide = preferences.isAutoSwitchToUltraWide,
             isShowUltraWidePreview = preferences.isShowUltraWidePreview,
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
@@ -745,6 +746,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
         engine.setKeepUltraWideReady(enabled)
         showToast(if (enabled) "Keep Ultra Wide Ready: ON" else "Keep Ultra Wide Ready: OFF")
+    }
+
+    fun setDualVideoLens(enabled: Boolean) {
+        preferences.isDualVideoLens = enabled
+        _instantSwitchState.value = _instantSwitchState.value.copy(
+            isDualVideoLens = enabled
+        )
+        engine.setDualVideoLens(enabled)
+        showToast(if (enabled) "Dual Video Lens: ON" else "Dual Video Lens: OFF")
     }
 
     fun setAutoSwitchToUltraWide(enabled: Boolean) {

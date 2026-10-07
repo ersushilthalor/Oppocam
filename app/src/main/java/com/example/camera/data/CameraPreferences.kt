@@ -42,6 +42,7 @@ class CameraPreferences(context: Context) {
         private const val KEY_ULTRA_FAST_SHUTTER_BURST_COUNT = "pref_ultra_fast_shutter_burst_count"
         private const val KEY_TRACKING_LENS = "pref_tracking_lens"
         private const val KEY_KEEP_ULTRAWIDE_READY = "pref_keep_ultrawide_ready"
+        private const val KEY_DUAL_VIDEO_LENS_READY = "pref_dual_video_lens_ready"
         private const val KEY_AUTO_SWITCH_TO_ULTRAWIDE = "pref_auto_switch_to_ultrawide"
         private const val KEY_SHOW_ULTRAWIDE_PREVIEW = "pref_show_ultrawide_preview"
         private const val KEY_KEEP_FRONT_READY = "pref_keep_front_ready"
@@ -181,6 +182,10 @@ class CameraPreferences(context: Context) {
     var isKeepUltraWideReady: Boolean
         get() = prefs.getBoolean(KEY_KEEP_ULTRAWIDE_READY, false)
         set(value) = prefs.edit().putBoolean(KEY_KEEP_ULTRAWIDE_READY, value).apply()
+
+    var isDualVideoLens: Boolean
+        get() = prefs.getBoolean(KEY_DUAL_VIDEO_LENS_READY, false)
+        set(value) = prefs.edit().putBoolean(KEY_DUAL_VIDEO_LENS_READY, value).apply()
 
     var isAutoSwitchToUltraWide: Boolean
         get() = prefs.getBoolean(KEY_AUTO_SWITCH_TO_ULTRAWIDE, false)
