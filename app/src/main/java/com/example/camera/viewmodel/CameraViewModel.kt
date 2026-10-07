@@ -1753,7 +1753,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Smoothly transitions from 1x -> 0.5x:
-     * - Immediately hands over frame source to Ultra-Wide at 0 ms without camera recreation delay.
+     * - Dispatches source-texture handoff to Ultra-Wide at matching 0.999x FOV via preview compositor.
      * - Continuously interpolates zoom from matched 1x FOV (0.999x) down to 0.5x over exactly 0.25s (250 ms).
      */
     fun startSmoothOneXToHalfXTransition(fromZoom: Float = _currentZoom.value, targetZoom: Float = 0.5f) {
@@ -1776,7 +1776,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             preferences.saveLastLens(ultraWideLens)
             preferences.setModeLens(_cameraMode.value, ultraWideLens)
 
-            // Step 0: Instant 0ms handoff to the live Ultra-Wide stream at matching 0.999x FOV
+            // Step 0: Immediate source-texture handoff to the live Ultra-Wide stream at matching 0.999x FOV
             engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = 0.999f)
             _currentZoom.value = 0.999f
             preferences.setModeZoom(_cameraMode.value, 0.999f)

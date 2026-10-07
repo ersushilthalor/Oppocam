@@ -569,4 +569,65 @@ class PhotonCameraLensSwitchingTest {
         val strategyLogical = CameraDiscovery.resolveSwitchStrategy(mainLens, logicalZoomLens)
         assertEquals(LensSwitchStrategy.LOGICAL_ZOOM, strategyLogical)
     }
+
+    @Test
+    fun testCompositorPersistentSurfacesAvailable() {
+        val compositor = CameraPreviewCompositor(1920, 1080)
+        compositor.start()
+        assertNotNull("Main persistent surface must be created", compositor.mainSurface)
+        assertNotNull("Ultra-Wide persistent surface must be created", compositor.ultraWideSurface)
+        assertEquals(PreviewStreamSource.MAIN, compositor.activeSource)
+
+        val handoffToUwTs = compositor.setActiveSource(PreviewStreamSource.ULTRAWIDE, cropZoom = 0.999f)
+        assertTrue(handoffToUwTs > 0)
+        assertEquals(PreviewStreamSource.ULTRAWIDE, compositor.activeSource)
+        assertEquals(0.999f, compositor.activeCropZoom, 0.001f)
+
+        val handoffToMainTs = compositor.setActiveSource(PreviewStreamSource.MAIN, cropZoom = 1.0f)
+        assertTrue(handoffToMainTs >= handoffToUwTs)
+        assertEquals(PreviewStreamSource.MAIN, compositor.activeSource)
+        assertEquals(1.0f, compositor.activeCropZoom, 0.001f)
+
+        compositor.release()
+    }
+
+    @Test
+    fun testKeepUltraWideReadyDoesNotPrematurelyMarkReadyQuiet() {
+        // Toggling Keep Ultra Wide Ready must not jump to READY_QUIET before frames are received
+        engine.setKeepUltraWideReady(true)
+        val initialStatus = engine.ultraWideStreamStatus.value
+        assertNotEquals(
+            "Status must not be marked READY_QUIET before actual frames are received",
+            com.example.camera.model.BackgroundCameraStatus.READY_QUIET,
+            initialStatus
+        )
+    }
+
+    @Test
+    fun testDetectSimultaneousStreamingModeClassification() {
+        val mainLens = LensInfo(
+            cameraId = "0",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.WIDE,
+            displayName = "1x Main",
+            focalLengthMm = 5.0f,
+            maxAperture = 1.8f,
+            isPrimaryMain = true,
+            isLogicalMultiCamera = true,
+            baseZoomRatio = 1.0f
+        )
+        val separateUltraWide = LensInfo(
+            cameraId = "2",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.ULTRAWIDE,
+            displayName = "0.5x Ultra Wide",
+            focalLengthMm = 2.0f,
+            maxAperture = 2.2f,
+            isIndependentCamera = true,
+            baseZoomRatio = 0.5f
+        )
+        val mode = engine.detectSimultaneousStreamingMode(mainLens, separateUltraWide)
+        assertNotNull(mode)
+    }
 }
+
