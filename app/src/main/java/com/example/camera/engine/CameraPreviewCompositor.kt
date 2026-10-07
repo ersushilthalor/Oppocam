@@ -347,6 +347,7 @@ class CameraPreviewCompositor(
                 val disp = eglDisplay
                 val prevSurf = previewEglSurface
                 if (disp != null && prevSurf != null && prevSurf != EGL14.EGL_NO_SURFACE) {
+                    pbufferSurface?.let { EGL14.eglMakeCurrent(disp, it, it, eglContext) }
                     EGL14.eglDestroySurface(disp, prevSurf)
                 }
                 previewEglSurface = null

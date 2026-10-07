@@ -2173,9 +2173,10 @@ class Camera2Engine(private val context: Context) {
                                         activeSessionPhysicalCameraId = targetPhysId
                                         activeSessionLens = lens
 
+                                        val previewSurf = getEffectiveMainPreviewSurface() ?: previewSurface!!
                                         val template = CameraDevice.TEMPLATE_RECORD
                                         val recordBuilder = camera.createCaptureRequest(template).apply {
-                                            addTarget(previewSurface!!)
+                                            addTarget(previewSurf)
                                             addTarget(recSurf)
                                             applyCommonSettings(this)
                                             set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
@@ -2216,7 +2217,7 @@ class Camera2Engine(private val context: Context) {
 
                                         createRecordingCaptureSession(
                                             camera = camera,
-                                            previewSurface = previewSurface!!,
+                                            previewSurface = previewSurf,
                                             recorderSurface = recSurf,
                                             is10Bit = false,
                                             physicalCameraId = targetPhysId,
@@ -2981,16 +2982,16 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun getEffectiveMainPreviewSurface(): Surface? {
-        val surf = previewSurface
-        if (surf != null && surf.isValid) {
-            return surf
-        }
         val comp = previewCompositor
-        if (_isKeepUltraWideReady.value && comp != null && comp.isEglInitialized.get()) {
+        if (comp != null && comp.isEglInitialized.get()) {
             val compMain = comp.mainSurface
             if (compMain != null && compMain.isValid) {
                 return compMain
             }
+        }
+        val surf = previewSurface
+        if (surf != null && surf.isValid) {
+            return surf
         }
         return null
     }
@@ -5709,9 +5710,8 @@ class Camera2Engine(private val context: Context) {
      * Helper to resolve the active preview surface for either Main or Ultra-Wide streams.
      */
     private fun getActivePreviewSurface(): Surface? {
-        if (previewSurface?.isValid == true) return previewSurface
         val comp = previewCompositor
-        if (comp != null) {
+        if (comp != null && comp.isEglInitialized.get()) {
             val s = if (_selectedLens.value?.lensType == LensType.ULTRAWIDE && comp.activeSource == PreviewStreamSource.ULTRAWIDE) {
                 comp.ultraWideSurface
             } else {
@@ -5719,7 +5719,7 @@ class Camera2Engine(private val context: Context) {
             }
             if (s?.isValid == true) return s
         }
-        return null
+        return if (previewSurface?.isValid == true) previewSurface else null
     }
 
     private fun findBestFpsRange(chars: CameraCharacteristics, targetFps: Int): Range<Int>? {
