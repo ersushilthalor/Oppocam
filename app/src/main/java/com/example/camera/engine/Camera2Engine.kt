@@ -1914,7 +1914,7 @@ class Camera2Engine(private val context: Context) {
                         try { previewSurface?.release() } catch (ignored: Throwable) {}
                         previewSurface = Surface(texture)
                     }
-                    val previewSurf = previewSurface!!
+                    val previewSurf = getEffectiveMainPreviewSurface() ?: previewSurface!!
 
                     // Setup ImageReaders for target physical lens
                     setupImageReaders(targetLens.cameraId)
@@ -2966,13 +2966,28 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    private fun getEffectiveMainPreviewSurface(): Surface? {
+        val comp = previewCompositor
+        if (_isKeepUltraWideReady.value && comp != null && comp.isEglInitialized.get()) {
+            val compMain = comp.mainSurface
+            if (compMain != null && compMain.isValid) {
+                return compMain
+            }
+        }
+        val surf = previewSurface
+        if (surf != null && surf.isValid) {
+            return surf
+        }
+        return null
+    }
+
     private fun createCameraCaptureSession(forceLogicalStream: Boolean = false) {
         val camera = cameraDevice ?: run {
             completeLensSwitch()
             return
         }
         val activeLens = _selectedLens.value
-        val previewSurf = previewSurface ?: run {
+        val previewSurf = getEffectiveMainPreviewSurface() ?: run {
             completeLensSwitch()
             return
         }

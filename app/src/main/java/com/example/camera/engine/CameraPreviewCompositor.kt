@@ -71,6 +71,7 @@ class CameraPreviewCompositor(
     private var eglContext: EGLContext? = null
     private var eglConfig: EGLConfig? = null
     private var previewEglSurface: EGLSurface? = null
+    private var pbufferSurface: EGLSurface? = null
 
     private var previewWidth = 0
     private var previewHeight = 0
@@ -119,7 +120,7 @@ class CameraPreviewCompositor(
     var onFirstMainFrameCallback: ((Long) -> Unit)? = null
 
     private val isStarted = AtomicBoolean(false)
-    private val isEglInitialized = AtomicBoolean(false)
+    val isEglInitialized = AtomicBoolean(false)
 
     private val mainTransformMatrix = FloatArray(16)
     private val ultraWideTransformMatrix = FloatArray(16)
@@ -199,7 +200,7 @@ class CameraPreviewCompositor(
             EGL14.EGL_BLUE_SIZE, 8,
             EGL14.EGL_ALPHA_SIZE, 8,
             EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-            EGL_RECORDABLE_ANDROID, 1,
+            EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT or EGL14.EGL_PBUFFER_BIT,
             EGL14.EGL_NONE
         )
 
@@ -226,10 +227,15 @@ class CameraPreviewCompositor(
             EGL14.EGL_NONE
         )
         val pbuffer = EGL14.eglCreatePbufferSurface(display, cfg, pbufferAttribs, 0)
+        pbufferSurface = pbuffer
         EGL14.eglMakeCurrent(display, pbuffer, pbuffer, ctx)
     }
 
     private fun initGL() {
+        Matrix.setIdentityM(mainTransformMatrix, 0)
+        Matrix.setIdentityM(ultraWideTransformMatrix, 0)
+        Matrix.setIdentityM(mvpMatrix, 0)
+
         val vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER)
         val fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER)
         programId = GLES20.glCreateProgram().also {
@@ -347,7 +353,14 @@ class CameraPreviewCompositor(
 
                 if (disp != null && surface != null && surface.isValid) {
                     val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
-                    previewEglSurface = EGL14.eglCreateWindowSurface(disp, eglConfig, surface, surfaceAttribs, 0)
+                    val newSurf = EGL14.eglCreateWindowSurface(disp, eglConfig, surface, surfaceAttribs, 0)
+                    if (newSurf != null && newSurf != EGL14.EGL_NO_SURFACE) {
+                        previewEglSurface = newSurf
+                        Log.i(TAG, "previewEglSurface created successfully ($width x $height)")
+                    } else {
+                        val err = EGL14.eglGetError()
+                        Log.e(TAG, "eglCreateWindowSurface failed with error 0x${Integer.toHexString(err)}")
+                    }
                     renderFrame()
                 }
             } catch (t: Throwable) {
@@ -387,15 +400,11 @@ class CameraPreviewCompositor(
 
     private fun renderFrame() {
         val disp = eglDisplay ?: return
-        val eglSurf = previewEglSurface ?: return
-        if (eglSurf == EGL14.EGL_NO_SURFACE) return
+        val pbuffer = pbufferSurface
+        val targetContextSurf = previewEglSurface.takeIf { it != null && it != EGL14.EGL_NO_SURFACE } ?: pbuffer
+        if (targetContextSurf == null || targetContextSurf == EGL14.EGL_NO_SURFACE) return
 
-        EGL14.eglMakeCurrent(disp, eglSurf, eglSurf, eglContext)
-        GLES20.glViewport(0, 0, previewWidth, previewHeight)
-        GLES20.glClearColor(0f, 0f, 0f, 1f)
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-
-        GLES20.glUseProgram(programId)
+        EGL14.eglMakeCurrent(disp, targetContextSurf, targetContextSurf, eglContext)
 
         val isUw = activeSource == PreviewStreamSource.ULTRAWIDE
         val texId = if (isUw) textureIdUltraWide else textureIdMain
@@ -409,6 +418,16 @@ class CameraPreviewCompositor(
             } catch (ignored: Throwable) {}
         }
 
+        val eglSurf = previewEglSurface ?: return
+        if (eglSurf == EGL14.EGL_NO_SURFACE) return
+
+        EGL14.eglMakeCurrent(disp, eglSurf, eglSurf, eglContext)
+        GLES20.glViewport(0, 0, previewWidth, previewHeight)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+        GLES20.glUseProgram(programId)
+
         // Calculate zoom crop transformation on MVP matrix
         Matrix.setIdentityM(mvpMatrix, 0)
         val zoom = activeCropZoom
@@ -418,7 +437,7 @@ class CameraPreviewCompositor(
             (zoom / 0.5f).coerceIn(1.0f, 2.05f)
         } else {
             // Main wide base is 1.0x.
-            (zoom / 1.0f).coerceIn(1.0f, 10.0f)
+            (zoom / 1.0f).coerceIn(1.0f, 20.0f)
         }
 
         if (cropScale > 1.001f) {
@@ -470,6 +489,8 @@ class CameraPreviewCompositor(
                 if (disp != null) {
                     previewEglSurface?.let { EGL14.eglDestroySurface(disp, it) }
                     previewEglSurface = null
+                    pbufferSurface?.let { EGL14.eglDestroySurface(disp, it) }
+                    pbufferSurface = null
                     eglContext?.let { EGL14.eglDestroyContext(disp, it) }
                     eglContext = null
                     EGL14.eglTerminate(disp)
