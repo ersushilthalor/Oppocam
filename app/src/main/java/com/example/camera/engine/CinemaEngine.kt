@@ -740,24 +740,26 @@ class CinemaEngine(private val context: Context) {
             CinemaColorProfile.S_LOG -> {
                 // Official authentic Sony S-Log transfer function specification:
                 // y = (log10(x + 0.037584) + 1.301449) / 1.701225
-                // Anchors clean black pedestal (0.03) with middle-gray at ~0.38 (38% IRE)
-                if (inVal < 0.005f) {
-                    (6.0f * inVal).coerceIn(0f, 1f)
-                } else {
-                    val sLogBase = (log10(inVal * 0.962416f + 0.037584f) + 1.301449f) / 1.701225f
-                    val blackOffset = (log10(0.037584f) + 1.301449f) / 1.701225f
-                    ((sLogBase - blackOffset) / (1.0f - blackOffset) * 0.96f + 0.04f).coerceIn(0f, 1f)
-                }
+                // Anchors clean black pedestal (~0.04) with middle-gray at ~0.38 (38% IRE)
+                val sLogBase = (log10(inVal * 0.962416f + 0.037584f) + 1.301449f) / 1.701225f
+                val blackOffset = (log10(0.037584f) + 1.301449f) / 1.701225f
+                ((sLogBase - blackOffset) / (1.0f - blackOffset) * 0.96f + 0.04f).coerceIn(0f, 1f)
             }
             CinemaColorProfile.N_LOG -> {
                 // Official authentic Nikon N-Log transfer function specification:
                 // For x < 0.328: y = (650 / 1023) * ((x + 0.0075) / 1.0075)^(1/3)
                 // For x >= 0.328: y = (150 * ln(x) + 619) / 1023
-                if (inVal < 0.328f) {
+                if (inVal >= 0.999f) {
+                    1.0f
+                } else if (inVal < 0.328f) {
                     val norm = ((inVal + 0.0075f) / 1.0075f).pow(1.0f / 3.0f)
                     ((650.0f / 1023.0f) * norm).coerceIn(0f, 1f)
                 } else {
-                    ((150.0f * ln(inVal.coerceAtLeast(0.0001f)) + 619.0f) / 1023.0f).coerceIn(0f, 1f)
+                    val rawNLog = (150.0f * ln(inVal.coerceAtLeast(0.0001f)) + 619.0f) / 1023.0f
+                    val nLogAt1 = 619.0f / 1023.0f
+                    val nLogAt0 = (650.0f / 1023.0f) * (0.0075f / 1.0075f).pow(1.0f / 3.0f)
+                    val scaled = (rawNLog - nLogAt0) / (nLogAt1 - nLogAt0) * (1.0f - nLogAt0) + nLogAt0
+                    scaled.coerceIn(0f, 1f)
                 }
             }
             CinemaColorProfile.HLG10 -> {
@@ -766,55 +768,54 @@ class CinemaEngine(private val context: Context) {
             }
             CinemaColorProfile.HLG_2 -> {
                 // Enhanced HLG 2 profile: Based on HLG, but less flat, more depth, natural contrast, and close to Rec.709
-                val hlgBase = Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
-                if (inVal < 0.083333f) {
-                    // Parabolic shadow toe anchoring deep inky blacks at 0.0 (no milky fog)
-                    val t = inVal / 0.083333f
-                    (0.5f * t.pow(1.35f)).coerceIn(0f, 1f)
+                if (inVal <= 0.001f) {
+                    0.0f
+                } else if (inVal >= 0.999f) {
+                    1.0f
+                } else if (inVal < 0.018f) {
+                    // Inky black toe transition anchored at 0.0
+                    (4.5f * inVal).coerceIn(0f, 1f)
                 } else {
-                    // Midtone and highlight natural S-curve with deep contrast and soft-knee roll-off close to Rec.709
-                    val mid = 0.38f
-                    val contrastFactor = 1.18f
-                    val curved = mid + (hlgBase - mid) * contrastFactor
-                    if (curved > 0.75f) {
-                        val t = (curved - 0.75f) / 0.45f
-                        (0.75f + 0.245f * (1.0f - (1.0f - t.coerceIn(0f, 1f)).pow(2.0f))).coerceIn(0f, 1f)
-                    } else {
-                        curved.coerceIn(0f, 1f)
-                    }
+                    val hlgBase = Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
+                    val rec709Base = (1.099f * inVal.pow(0.45f) - 0.099f).coerceIn(0f, 1f)
+                    // Natural contrast close to Rec.709 with HLG highlight roll-off
+                    val blended = (0.85f * rec709Base + 0.15f * (hlgBase * 0.65f + rec709Base * 0.35f)).coerceIn(0f, 1f)
+                    blended
                 }
             }
             CinemaColorProfile.APPLE_LOG_2 -> {
                 // Official Apple Log 2 transfer function specification:
-                // Piecewise curve with parabolic shadow toe and logarithmic midtone/highlight retention
-                val r0 = -0.05641088f
-                val rt = 0.01f
-                val c = 47.28711236f
-                val beta = 0.00964052f
-                val gamma = 0.08550479f
-                val delta = 0.69336945f
-                val ln2 = 0.69314718056f
-
-                // Map normalized sensor input inVal [0, 1] into scene linear reflection R
-                // inVal = 0.18 maps to R = 0.18 (Apple Log middle gray code value 0.488272)
-                // inVal = 0.0 maps to R = 0.0 (Apple Log black pedestal 0.150477)
-                // Highlights expand smoothly up to 12+ stops dynamic range latitude for color grading
-                val r = if (inVal <= 0.18f) {
-                    inVal
+                if (inVal >= 0.999f) {
+                    1.0f
                 } else {
-                    val t = (inVal - 0.18f) / 0.82f
-                    0.18f + t * (1.0f + 8.5f * t)
-                }
+                    val r0 = -0.05641088f
+                    val rt = 0.01f
+                    val c = 47.28711236f
+                    val beta = 0.00964052f
+                    val gamma = 0.08550479f
+                    val delta = 0.69336945f
+                    val ln2 = 0.69314718056f
 
-                val y = when {
-                    r < r0 -> 0.0f
-                    r < rt -> c * (r - r0) * (r - r0)
-                    else -> {
-                        val log2Val = ln(r + beta) / ln2
-                        gamma * log2Val + delta
+                    val r = if (inVal <= 0.18f) {
+                        inVal
+                    } else {
+                        val t = (inVal - 0.18f) / 0.82f
+                        0.18f + t * (1.0f + 8.5f * t)
                     }
+
+                    val rawY = when {
+                        r < r0 -> 0.0f
+                        r < rt -> c * (r - r0) * (r - r0)
+                        else -> {
+                            val log2Val = ln(r + beta) / ln2
+                            gamma * log2Val + delta
+                        }
+                    }
+                    val yAt0 = c * (0.0f - r0) * (0.0f - r0)
+                    val yAt1 = gamma * (ln(9.68f + beta) / ln2) + delta
+                    val scaled = (rawY - yAt0) / (yAt1 - yAt0) * (1.0f - yAt0) + yAt0
+                    scaled.coerceIn(0f, 1f)
                 }
-                y.coerceIn(0f, 1f)
             }
             CinemaColorProfile.SAMSUNG_APV_LOG -> {
                 // Samsung APV (Advanced Professional Video) Log transfer function:

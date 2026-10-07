@@ -90,7 +90,7 @@ class ProResSoftwareRecordingSession(
         consecutiveErrors.set(0)
         fatalError = null
 
-        val isRec2020 = (colorSpace == CinemaColorSpace.REC_2020) || (colorProfile == CinemaColorProfile.REC_2020)
+        val isRec2020 = (colorSpace == CinemaColorSpace.REC_2020)
         val isHlg = (colorProfile == CinemaColorProfile.HLG10)
 
         val readerW = if (sourceBufferWidth > 0) sourceBufferWidth else width

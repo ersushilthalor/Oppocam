@@ -191,10 +191,12 @@ class Camera2Engine(private val context: Context) {
 
     private var ultraWideStandbyCameraDevice: CameraDevice? = null
     private var ultraWideStandbyCaptureSession: CameraCaptureSession? = null
+    private var ultraWideStandbyImageReader: ImageReader? = null
     private var ultraWideStandbySurfaceTexture: SurfaceTexture? = null
     private var ultraWideStandbySurface: Surface? = null
     private var ultraWideStandbyRequestBuilder: CaptureRequest.Builder? = null
     private val isPreparingUltraWideStandby = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val isUltraWideStreaming = java.util.concurrent.atomic.AtomicBoolean(false)
     private var activeLogicalMultiCamUltraWideConfigured = false
 
     fun setAutoSwitchToUltraWide(enabled: Boolean) {
@@ -261,18 +263,20 @@ class Camera2Engine(private val context: Context) {
             val camera = cameraDevice ?: return
             if (captureSession != null) {
                 val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
-                if (ultraWideStandbySurfaceTexture == null) {
-                    val st = SurfaceTexture(0).apply {
-                        detachFromGLContext()
-                        setDefaultBufferSize(optimalSize.width, optimalSize.height)
-                        setOnFrameAvailableListener({ texture ->
-                            try {
-                                texture.updateTexImage()
-                            } catch (ignored: Throwable) {}
-                        }, backgroundHandler)
-                    }
-                    ultraWideStandbySurfaceTexture = st
-                    ultraWideStandbySurface = Surface(st)
+                if (ultraWideStandbyImageReader == null) {
+                    val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, ImageFormat.YUV_420_888, 2)
+                    reader.setOnImageAvailableListener({ r ->
+                        try {
+                            r.acquireLatestImage()?.close()
+                            if (!isUltraWideStreaming.get()) {
+                                isUltraWideStreaming.set(true)
+                                _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Standby stream confirmed producing live frames on ID ${camera.id}")
+                            }
+                        } catch (ignored: Throwable) {}
+                    }, backgroundHandler)
+                    ultraWideStandbyImageReader = reader
+                    ultraWideStandbySurface = reader.surface
                 }
                 activeLogicalMultiCamUltraWideConfigured = true
                 if (_isCameraReady.value) {
@@ -296,18 +300,20 @@ class Camera2Engine(private val context: Context) {
                 // Pre-warmed CameraDevice already open; configure standby capture session
                 try {
                     val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
-                    if (ultraWideStandbySurfaceTexture == null) {
-                        val st = SurfaceTexture(0).apply {
-                            detachFromGLContext()
-                            setDefaultBufferSize(optimalSize.width, optimalSize.height)
-                            setOnFrameAvailableListener({ texture ->
-                                try {
-                                    texture.updateTexImage()
-                                } catch (ignored: Throwable) {}
-                            }, backgroundHandler)
-                        }
-                        ultraWideStandbySurfaceTexture = st
-                        ultraWideStandbySurface = Surface(st)
+                    if (ultraWideStandbyImageReader == null) {
+                        val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, ImageFormat.YUV_420_888, 2)
+                        reader.setOnImageAvailableListener({ r ->
+                            try {
+                                r.acquireLatestImage()?.close()
+                                if (!isUltraWideStreaming.get()) {
+                                    isUltraWideStreaming.set(true)
+                                    _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Standby stream confirmed producing live frames on ID ${camera.id}")
+                                }
+                            } catch (ignored: Throwable) {}
+                        }, backgroundHandler)
+                        ultraWideStandbyImageReader = reader
+                        ultraWideStandbySurface = reader.surface
                     }
                     val standbySurf = ultraWideStandbySurface!!
                     val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
@@ -329,6 +335,7 @@ class Camera2Engine(private val context: Context) {
                                     ) {
                                         if (!confirmedReady) {
                                             confirmedReady = true
+                                            isUltraWideStreaming.set(true)
                                             _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                                             Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Standby stream confirmed producing live frames on ID ${camera.id}")
                                         }
@@ -363,18 +370,20 @@ class Camera2Engine(private val context: Context) {
 
         try {
             val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
-            if (ultraWideStandbySurfaceTexture == null) {
-                val st = SurfaceTexture(0).apply {
-                    detachFromGLContext()
-                    setDefaultBufferSize(optimalSize.width, optimalSize.height)
-                    setOnFrameAvailableListener({ texture ->
-                        try {
-                            texture.updateTexImage()
-                        } catch (ignored: Throwable) {}
-                    }, backgroundHandler)
-                }
-                ultraWideStandbySurfaceTexture = st
-                ultraWideStandbySurface = Surface(st)
+            if (ultraWideStandbyImageReader == null) {
+                val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, ImageFormat.YUV_420_888, 2)
+                reader.setOnImageAvailableListener({ r ->
+                    try {
+                        r.acquireLatestImage()?.close()
+                        if (!isUltraWideStreaming.get()) {
+                            isUltraWideStreaming.set(true)
+                            _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                            Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Standby stream confirmed producing live frames on ID ${standbyLens.cameraId}")
+                        }
+                    } catch (ignored: Throwable) {}
+                }, backgroundHandler)
+                ultraWideStandbyImageReader = reader
+                ultraWideStandbySurface = reader.surface
             }
             val standbySurf = ultraWideStandbySurface!!
 
@@ -411,6 +420,7 @@ class Camera2Engine(private val context: Context) {
                                         ) {
                                             if (!confirmedReady) {
                                                 confirmedReady = true
+                                                isUltraWideStreaming.set(true)
                                                 _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                                                 Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Ultra Wide camera ID ${camera.id} active and verified streaming simultaneously")
                                             }
@@ -451,6 +461,7 @@ class Camera2Engine(private val context: Context) {
                         ultraWideStandbyCaptureSession = null
                     }
                     isPreparingUltraWideStandby.set(false)
+                    isUltraWideStreaming.set(false)
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
                     if (_isKeepUltraWideReady.value) {
                         scheduleUltraWideReconnect()
@@ -464,6 +475,7 @@ class Camera2Engine(private val context: Context) {
                         ultraWideStandbyCaptureSession = null
                     }
                     isPreparingUltraWideStandby.set(false)
+                    isUltraWideStreaming.set(false)
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
                     Log.w(TAG, "Standby camera open error: $error (scheduling reconnect)")
                     if (_isKeepUltraWideReady.value) {
@@ -484,6 +496,7 @@ class Camera2Engine(private val context: Context) {
     fun releaseUltraWideStandby() {
         ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
         ultraWideReconnectRunnable = null
+        isUltraWideStreaming.set(false)
         try {
             ultraWideStandbyCaptureSession?.stopRepeating()
         } catch (ignored: Throwable) {}
@@ -496,6 +509,11 @@ class Camera2Engine(private val context: Context) {
             ultraWideStandbyCameraDevice?.close()
         } catch (ignored: Throwable) {}
         ultraWideStandbyCameraDevice = null
+
+        try {
+            ultraWideStandbyImageReader?.close()
+        } catch (ignored: Throwable) {}
+        ultraWideStandbyImageReader = null
 
         try {
             ultraWideStandbySurface?.release()
@@ -1278,6 +1296,18 @@ class Camera2Engine(private val context: Context) {
             (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(
                 CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
             ) == true)
+
+        if (lens.lensType == LensType.ULTRAWIDE || targetZoom < 0.95f) {
+            // CONTROL_ZOOM_RATIO genuinely supports < 1.0x ONLY if zoomRange.lower <= 0.55f
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (zoomRange != null && zoomRange.lower <= 0.55f) {
+                    return true
+                }
+            }
+            return false
+        }
+
         if (!isLogicalMulti) {
             return lens.physicalCameraId == null || lens.physicalCameraId == cameraId
         }
@@ -1406,9 +1436,16 @@ class Camera2Engine(private val context: Context) {
                     (currentRunningLens?.lensType == LensType.ULTRAWIDE && lens.lensType == LensType.WIDE) ||
                     (lens.lensType == LensType.WIDE && cameraDevice != null && lens.cameraId != cameraDevice?.id)
 
-            // On the same camera device / logical multi-camera: keep ONE continuous CameraCaptureSession alive
+            // Determine if the switch requires physical Ultra-Wide routing vs logical continuous zoom
             val isSameCameraDevice = (cameraDevice != null && lens.cameraId == cameraDevice?.id)
-            if (isSameCameraDevice && captureSession != null && !_isRecordingVideo.value) {
+            val isPhysicalStreamRequired = (strategy == LensSwitchStrategy.LOGICAL_PHYSICAL_STREAM) ||
+                    (lens.physicalCameraId != null && lens.physicalCameraId != activeSessionPhysicalCameraId)
+            val canUseLogicalContinuousZoom = isSameCameraDevice &&
+                    !isPhysicalStreamRequired &&
+                    canUseLogicalZoomForLens(lens.cameraId, lens, effectiveTargetZoom)
+
+            // On the same camera device / logical multi-camera with genuine continuous zoom support: keep ONE continuous CameraCaptureSession alive
+            if (canUseLogicalContinuousZoom && captureSession != null && !_isRecordingVideo.value) {
                 Log.i(TAG, "[LENS_SWITCH] Seamless continuous transition on open camera ID ${lens.cameraId} to ${lens.lensType} at zoom $effectiveTargetZoom")
                 activeSessionLens = lens
                 _selectedLens.value = lens
@@ -1532,13 +1569,19 @@ class Camera2Engine(private val context: Context) {
                     ultraWideStandbyCameraDevice = oldCam
                     try {
                         val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
-                        if (ultraWideStandbySurfaceTexture == null) {
-                            val st = SurfaceTexture(0).apply {
-                                detachFromGLContext()
-                                setDefaultBufferSize(optimalSize.width, optimalSize.height)
-                            }
-                            ultraWideStandbySurfaceTexture = st
-                            ultraWideStandbySurface = Surface(st)
+                        if (ultraWideStandbyImageReader == null) {
+                            val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, ImageFormat.YUV_420_888, 2)
+                            reader.setOnImageAvailableListener({ r ->
+                                try {
+                                    r.acquireLatestImage()?.close()
+                                    if (!isUltraWideStreaming.get()) {
+                                        isUltraWideStreaming.set(true)
+                                        _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                                    }
+                                } catch (ignored: Throwable) {}
+                            }, backgroundHandler)
+                            ultraWideStandbyImageReader = reader
+                            ultraWideStandbySurface = reader.surface
                         }
                         val standbySurf = ultraWideStandbySurface
                         if (standbySurf != null && standbySurf.isValid) {
@@ -1552,6 +1595,7 @@ class Camera2Engine(private val context: Context) {
                                 object : CameraCaptureSession.StateCallback() {
                                     override fun onConfigured(session: CameraCaptureSession) {
                                         ultraWideStandbyCaptureSession = session
+                                        isUltraWideStreaming.set(true)
                                         _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                                         try {
                                             session.setRepeatingRequest(builder.build(), null, backgroundHandler)
@@ -2291,7 +2335,7 @@ class Camera2Engine(private val context: Context) {
             cinemaEngine.hlg10AutoExposureEngine.reset()
         }
         if (isSoftwareCinemaRecording) {
-            cinemaSoftwareRecorder.updateLiveCinemaConfig(sanitizedConfig, null)
+            cinemaSoftwareRecorder.updateLiveCinemaConfig(sanitizedConfig)
         }
         if (currentMode == CameraMode.CINEMA) {
             updatePreviewAspectRatio()
@@ -3947,11 +3991,14 @@ class Camera2Engine(private val context: Context) {
         val activeLens = activeSessionLens ?: currentLens
         val effectiveTargetLens = targetLens
         val isDifferentCameraDevice = cameraDevice != null && effectiveTargetLens.cameraId != cameraDevice?.id
+        val requiresPhysicalStreamSwitch = (effectiveTargetLens.physicalCameraId != null &&
+                effectiveTargetLens.physicalCameraId != activeSessionPhysicalCameraId) ||
+                !canUseLogicalZoomForLens(effectiveTargetLens.cameraId, effectiveTargetLens, pZoom)
 
-        if (isDifferentCameraDevice) {
+        if (isDifferentCameraDevice || (effectiveTargetLens.lensType != activeLens.lensType && requiresPhysicalStreamSwitch)) {
             selectLens(effectiveTargetLens, preserveZoom = true, targetZoom = pZoom)
         } else {
-            // Same logical/physical device: smoothly update active lens and zoom continuously without tearing down camera session
+            // Same logical/physical device with genuine continuous zoom support: smoothly update active lens and zoom continuously without tearing down camera session
             _selectedLens.value = effectiveTargetLens
             activeSessionLens = effectiveTargetLens
             scheduleZoomPreviewUpdate(immediate = isPresetTap)
@@ -5999,7 +6046,6 @@ class Camera2Engine(private val context: Context) {
                         colorSpace = if (isHlg10Active) CinemaColorSpace.REC_2020 else cinemaConfig.value.colorSpace,
                         isSource10Bit = isCameraSource10Bit,
                         cinemaConfig = cinemaConfig.value,
-                        rec2020Params = null,
                         isFront = isFront,
                         sensorOrientation = sensorOrientation,
                         deviceRotation = currentRot,

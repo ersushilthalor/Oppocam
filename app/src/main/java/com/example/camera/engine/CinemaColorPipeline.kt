@@ -1076,7 +1076,6 @@ object CinemaColorPipeline {
             try {
                 val cstMat = computeCinemaColorMatrix(
                     config = config,
-                    rec2020Params = rec2020Params,
                     includeCreativeLut = includeCreativeLut,
                     forGpuShader = true
                 )
@@ -1167,7 +1166,6 @@ object CinemaColorPipeline {
 
         val fallbackMat = computeCinemaColorMatrix(
             config = config,
-            rec2020Params = rec2020Params,
             includeCreativeLut = includeCreativeLut,
             forGpuShader = false
         )

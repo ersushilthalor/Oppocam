@@ -1430,7 +1430,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                         position(0)
                     }
 
-                updateColorMatrixAndLut(config, rec2020Params)
+                updateColorMatrixAndLut(config)
 
                 val textures = IntArray(1)
                 GLES20.glGenTextures(1, textures, 0)
