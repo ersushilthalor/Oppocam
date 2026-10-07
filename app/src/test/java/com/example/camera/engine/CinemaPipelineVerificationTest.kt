@@ -28,9 +28,9 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
-    fun testRec2020NaturalContrastNoWashedOutPedestal() {
+    fun testSLogProfileCurveAndTechnicalTransform() {
         val config = CinemaConfig(
-            colorProfile = CinemaColorProfile.REC_2020,
+            colorProfile = CinemaColorProfile.S_LOG,
             shadows = 0f,
             highlights = 0f,
             contrast = 0f,
@@ -40,115 +40,78 @@ class CinemaPipelineVerificationTest {
         val curve = cinemaEngine.getTonemapCurve()
         val count = curve.getPointCount(TonemapCurve.CHANNEL_RED)
 
-        // Verify black level: input 0.0f should map to 0.0f without artificial milky pedestal (>0.05f)
+        // S-Log anchors a clean black pedestal around 0.04
         val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, 0)
         assertEquals(0.0f, blackPoint.x, 0.001f)
-        assertTrue("Rec.2020 black point must be true deep black (<=0.01f), got ${blackPoint.y}", blackPoint.y <= 0.01f)
+        assertTrue("S-Log black point should be ~0.04, got ${blackPoint.y}", blackPoint.y in 0.02f..0.08f)
 
-        // Verify middle-grey (x=0.5, y ≈ 0.71 on BT.2020 0.45 power law) is in natural photographic range
-        val midPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, count / 2)
-        assertTrue("Rec.2020 mid-tone should have natural filmic gamma, got ${midPoint.y}", midPoint.y in 0.50f..0.80f)
+        // S-Log middle grey (x=0.18) is around 0.38
+        val midIdx = (count * 0.18f).toInt()
+        val midPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, midIdx)
+        assertTrue("S-Log mid-tone should be around ~0.38, got ${midPoint.y}", midPoint.y in 0.30f..0.50f)
 
-        // Verify highlights reach full range
+        // Technical transform matrix
+        val matrix = CinemaColorPipeline.computeCinemaColorMatrix(config)
+        assertNotNull("S-Log must produce a non-null ColorMatrix", matrix)
+    }
+
+    @Test
+    fun testNLogProfileCurveAndTechnicalTransform() {
+        val config = CinemaConfig(
+            colorProfile = CinemaColorProfile.N_LOG,
+            shadows = 0f,
+            highlights = 0f,
+            contrast = 0f,
+            exposure = 0f
+        )
+        cinemaEngine.updateConfig(config)
+        val curve = cinemaEngine.getTonemapCurve()
+        val count = curve.getPointCount(TonemapCurve.CHANNEL_RED)
+
+        // N-Log anchors black floor
+        val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, 0)
+        assertEquals(0.0f, blackPoint.x, 0.001f)
+        assertTrue("N-Log black point should be non-negative, got ${blackPoint.y}", blackPoint.y in 0.0f..0.15f)
+
+        // Peak white reaches full range
         val whitePoint = curve.getPoint(TonemapCurve.CHANNEL_RED, count - 1)
         assertEquals(1.0f, whitePoint.x, 0.001f)
         assertEquals(1.0f, whitePoint.y, 0.01f)
+
+        val matrix = CinemaColorPipeline.computeCinemaColorMatrix(config)
+        assertNotNull("N-Log must produce a non-null ColorMatrix", matrix)
     }
 
     @Test
-    fun testRec2020AutoTonePrioritiesNeverDarkensSceneForSky() {
-        val engine = Rec2020AutoToneEngine()
-
-        // 1. Simulate intense sunny outdoor daylight (EV100 = 15.0)
-        for (i in 0 until 40) {
-            engine.processSceneIllumination(ev100 = 15.0f, hasFace = false)
-        }
-        val outdoorParams = engine.currentParams.value
-
-        // Priority 1: Overall scene/subject exposure - NEVER darken scene just to save sky!
-        assertTrue("Outdoor exposure must never be negative, got ${outdoorParams.exposure}", outdoorParams.exposure >= 0.0f)
-        // Priority 2: Shadow detail must be lifted in high-contrast outdoor light
-        assertTrue("Shadows should be lifted in daylight, got ${outdoorParams.shadows}", outdoorParams.shadows >= 0.40f)
-        // Priority 4 & 5: Highlight roll-off shoulder protects clouds smoothly
-        assertTrue("Highlight shoulder should be active, got ${outdoorParams.highlights}", outdoorParams.highlights >= 0.60f)
-        assertTrue("Sky protection should be active", outdoorParams.skyProtectionActive)
-
-        // 2. Simulate indoor room lighting (EV100 = 7.0)
-        for (i in 0 until 40) {
-            engine.processSceneIllumination(ev100 = 7.0f, hasFace = false)
-        }
-        val indoorParams = engine.currentParams.value
-
-        // Indoor exposure remains positive and balanced
-        assertTrue("Indoor exposure should be natural, got ${indoorParams.exposure}", indoorParams.exposure in 0.0f..0.20f)
-        // Indoor shadows need less aggressive lift
-        assertTrue("Indoor shadows should be natural, got ${indoorParams.shadows}", indoorParams.shadows < outdoorParams.shadows)
-        assertFalse("Sky protection should be inactive indoors", indoorParams.skyProtectionActive)
-    }
-
-    @Test
-    fun testRec2020NoRedPinkArtifactsAndMonotonicCurves() {
-        val engine = Rec2020AutoToneEngine()
-        // Run with aggressive daylight highlights
-        for (i in 0 until 30) {
-            engine.processSceneIllumination(ev100 = 14.5f, hasFace = true, maxFaceArea = 150_000)
-        }
-
-        val curve = engine.getTonemapCurve(64)
-        val count = curve.getPointCount(TonemapCurve.CHANNEL_RED)
-        assertEquals(64, count)
-
-        var prevY = -0.001f
-        for (i in 0 until count) {
-            val ptR = curve.getPoint(TonemapCurve.CHANNEL_RED, i)
-            val ptG = curve.getPoint(TonemapCurve.CHANNEL_GREEN, i)
-            val ptB = curve.getPoint(TonemapCurve.CHANNEL_BLUE, i)
-
-            // Red, Green, Blue MUST be strictly identical across all 64 points (eliminates false color & pink/red tint)
-            assertEquals("Red and Green tonemap must match at point $i", ptR.y, ptG.y, 0.0001f)
-            assertEquals("Red and Blue tonemap must match at point $i", ptR.y, ptB.y, 0.0001f)
-
-            // Transfer curve MUST be monotonically non-decreasing (no dips or kinks in highlight shoulder)
-            assertTrue("Curve must be monotonic at point $i: ${ptR.y} >= $prevY", ptR.y >= prevY - 0.0001f)
-            prevY = ptR.y
-        }
-
-        // Peak white strictly reaches 1.0 (no dingy gray clamping)
-        val peakPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, count - 1)
-        assertEquals(1.0f, peakPoint.y, 0.001f)
-
-        // Inky black strictly at 0.0
-        val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, 0)
-        assertEquals(0.0f, blackPoint.y, 0.0001f)
-    }
-
-    @Test
-    fun testRec2020PreviewColorMatrixNeutralWhitePreservation() {
-        val params = Rec2020AutoToneParams(
-            exposure = 0.15f,
-            highlights = 0.75f,
-            shadows = 0.50f,
-            contrast = 0.05f,
-            fadeout = 0.60f
+    fun testHlg2ProfileCurveAndTechnicalTransform() {
+        val config = CinemaConfig(
+            colorProfile = CinemaColorProfile.HLG_2,
+            shadows = 0f,
+            highlights = 0f,
+            contrast = 0f,
+            exposure = 0f
         )
-        val matrix = Rec2020AutoToneEngine.computePreviewColorMatrix(params)
-        val arr = matrix.array
+        cinemaEngine.updateConfig(config)
+        val curve = cinemaEngine.getTonemapCurve()
+        val count = curve.getPointCount(TonemapCurve.CHANNEL_RED)
 
-        // Row 0: Red output, Row 1: Green output, Row 2: Blue output
-        val row0Sum = arr[0] + arr[1] + arr[2]
-        val row1Sum = arr[5] + arr[6] + arr[7]
-        val row2Sum = arr[10] + arr[11] + arr[12]
+        // HLG 2 has inky black anchored at 0.0 without milky pedestal lift
+        val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, 0)
+        assertEquals(0.0f, blackPoint.x, 0.001f)
+        assertTrue("HLG 2 black point must be inky (<=0.01f), got ${blackPoint.y}", blackPoint.y <= 0.01f)
 
-        // Rows must sum to identical luminance scale (neutral white preservation, zero color shift on white clouds)
-        assertEquals("Row 0 and Row 1 luminance weight sum must match", row0Sum, row1Sum, 0.001f)
-        assertEquals("Row 0 and Row 2 luminance weight sum must match", row0Sum, row2Sum, 0.001f)
+        // HLG 2 mid-tone has natural contrast close to Rec.709
+        val midIdx = (count * 0.18f).toInt()
+        val midPoint = curve.getPoint(TonemapCurve.CHANNEL_RED, midIdx)
+        assertTrue("HLG 2 mid-tone should have natural contrast, got ${midPoint.y}", midPoint.y in 0.20f..0.45f)
 
-        // Offsets on Red, Green, Blue channels must be strictly identical (zero DC color tint)
-        val offR = arr[4]
-        val offG = arr[9]
-        val offB = arr[14]
-        assertEquals("Channel offsets must be identical across R, G, B", offR, offG, 0.001f)
-        assertEquals("Channel offsets must be identical across R, G, B", offR, offB, 0.001f)
+        // Peak white reaches full range
+        val whitePoint = curve.getPoint(TonemapCurve.CHANNEL_RED, count - 1)
+        assertEquals(1.0f, whitePoint.x, 0.001f)
+        assertEquals(1.0f, whitePoint.y, 0.01f)
+
+        val matrix = CinemaColorPipeline.computeCinemaColorMatrix(config)
+        assertNotNull("HLG 2 must produce a non-null ColorMatrix", matrix)
     }
 
     @Test
@@ -202,14 +165,14 @@ class CinemaPipelineVerificationTest {
     @Test
     fun testCinematicLutsBakeAndColorSeparation() {
         val configUnbaked = CinemaConfig(
-            colorProfile = CinemaColorProfile.FLAT_LOG,
+            colorProfile = CinemaColorProfile.S_LOG,
             selectedLut = CinematicLut.BLOCKBUSTER,
             isBakeLutToOutput = false
         )
         assertFalse("LUT should not be baked into file if isBakeLutToOutput is false", configUnbaked.shouldBakeLut)
 
         val configBaked = CinemaConfig(
-            colorProfile = CinemaColorProfile.FLAT_LOG,
+            colorProfile = CinemaColorProfile.S_LOG,
             selectedLut = CinematicLut.BLOCKBUSTER,
             isBakeLutToOutput = true
         )
@@ -323,7 +286,7 @@ class CinemaPipelineVerificationTest {
     @Test
     fun testWashedOutSliderReducesFlatPedestalAndRestoresContrast() {
         val flatConfig = CinemaConfig(
-            colorProfile = CinemaColorProfile.FLAT_LOG,
+            colorProfile = CinemaColorProfile.APPLE_LOG_2,
             washedOut = 0.0f
         )
         cinemaEngine.updateConfig(flatConfig)
@@ -332,7 +295,7 @@ class CinemaPipelineVerificationTest {
 
         // Washed out slider at 1.0 should significantly lower black level / pedestal to eliminate hazy look
         val punchyConfig = CinemaConfig(
-            colorProfile = CinemaColorProfile.FLAT_LOG,
+            colorProfile = CinemaColorProfile.APPLE_LOG_2,
             washedOut = 1.0f
         )
         cinemaEngine.updateConfig(punchyConfig)
@@ -397,7 +360,7 @@ class CinemaPipelineVerificationTest {
                 height = height,
                 fps = 24,
                 isAudioEnabled = true,
-                colorProfile = CinemaColorProfile.REC_2020,
+                colorProfile = CinemaColorProfile.HLG10,
                 colorSpace = CinemaColorSpace.REC_2020
             )
             session.start()
@@ -529,9 +492,11 @@ class CinemaPipelineVerificationTest {
         assertTrue("ProRes must be in supportedCodecs", detection.supportedCodecs.contains(CinemaCodec.PRORES))
 
         val caps = cinemaEngine.capabilities
-        // HLG10 and HDR Log profiles must always be available
+        // HLG10 and S-Log profiles must always be available
         assertTrue("HLG10 must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.HLG10))
-        assertTrue("HDR Log must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.HDR_LOG))
+        assertTrue("S-Log must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.S_LOG))
+        assertTrue("N-Log must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.N_LOG))
+        assertTrue("HLG 2 must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.HLG_2))
 
         // On devices without hardware 10-bit, standard codecs (H.264/H.265) hide 10-bit
         if (!caps.supportsEndToEnd10Bit) {
@@ -546,9 +511,9 @@ class CinemaPipelineVerificationTest {
     }
 
     @Test
-    fun testHdrLogProfileNaturalContrastAndHighlightLatitude() {
+    fun testAppleLog2ProfileNaturalContrastAndHighlightLatitude() {
         val config = CinemaConfig(
-            colorProfile = CinemaColorProfile.HDR_LOG,
+            colorProfile = CinemaColorProfile.APPLE_LOG_2,
             colorSpace = CinemaColorSpace.REC_709,
             shadows = 0f,
             highlights = 0f,
@@ -559,16 +524,16 @@ class CinemaPipelineVerificationTest {
         val curve = cinemaEngine.getTonemapCurve()
         assertNotNull(curve)
 
-        // 1. Inky black point: x=0.0 maps strictly to 0.0 (no milky pedestal lift)
+        // 1. Black point
         val blackPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, 0)
         assertEquals(0.0f, blackPoint.x, 0.001f)
-        assertEquals("HDR Log must anchor strictly at 0.0f black level", 0.0f, blackPoint.y, 0.001f)
+        assertTrue("Apple Log 2 black level should be bounded", blackPoint.y in 0.0f..0.20f)
 
-        // 2. Middle gray (x=0.18): natural contrast, not flat/washed-out
+        // 2. Middle gray (x=0.18): natural contrast
         val count = curve.getPointCount(TonemapCurve.CHANNEL_GREEN)
         val midIdx = (count * 0.18f).toInt()
         val midPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, midIdx)
-        assertTrue("HDR Log midtone should have natural non-flat contrast, got ${midPoint.y}", midPoint.y in 0.15f..0.40f)
+        assertTrue("Apple Log 2 midtone should have natural contrast, got ${midPoint.y}", midPoint.y in 0.15f..0.60f)
 
         // 3. Highlight shoulder (x > 0.5): rolls off smoothly up to 1.0 without hard clipping
         val highPoint = curve.getPoint(TonemapCurve.CHANNEL_GREEN, count - 1)
@@ -577,11 +542,9 @@ class CinemaPipelineVerificationTest {
 
         // 4. Viewfinder ColorMatrix
         val matrix = CinemaColorPipeline.computeCinemaColorMatrix(config)
-        assertNotNull("HDR Log must produce a non-null ColorMatrix for live viewfinder", matrix)
+        assertNotNull("Apple Log 2 must produce a non-null ColorMatrix for live viewfinder", matrix)
         val arr = matrix!!.array
         assertTrue("Contrast diagonal must be >= 1.0", arr[0] >= 1.0f)
-        // Zero pedestal offset
-        assertEquals(0.0f, arr[4], 0.001f)
     }
 
     @Test
@@ -1778,7 +1741,7 @@ class CinemaPipelineVerificationTest {
         // Requirements 5, 6, 7, 8:
         // Log/CST -> 3D LUT -> tonal/color grading controls -> output transform/gamma
         val config = CinemaConfig(
-            colorProfile = CinemaColorProfile.FLAT_LOG,
+            colorProfile = CinemaColorProfile.S_LOG,
             selectedLut = CinematicLut.BLOCKBUSTER,
             lutIntensity = 0.75f,
             exposure = 0.5f,

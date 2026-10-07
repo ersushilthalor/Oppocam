@@ -100,12 +100,11 @@ object CinemaColorPipeline {
      */
     fun hasActiveTransform(
         config: CinemaConfig?,
-        rec2020Params: Rec2020AutoToneParams? = null,
         includeCreativeLut: Boolean = true
     ): Boolean {
         if (config == null) return false
         if (config.hasColorFineTuning) return true
-        if (computeCinemaColorMatrix(config, rec2020Params, includeCreativeLut, forGpuShader = false) != null) {
+        if (computeCinemaColorMatrix(config, includeCreativeLut, forGpuShader = false) != null) {
             return true
         }
         if (config.shadows != 0.0f || config.highlights != 0.0f || config.vibrance != 0.0f) {
@@ -178,7 +177,6 @@ object CinemaColorPipeline {
      */
     fun computeCinemaColorMatrix(
         config: CinemaConfig?,
-        rec2020Params: Rec2020AutoToneParams? = null,
         includeCreativeLut: Boolean = true,
         forGpuShader: Boolean = false
     ): ColorMatrix? {
@@ -190,8 +188,8 @@ object CinemaColorPipeline {
         // =========================================================================
         // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
         // =========================================================================
-        if (config.logBitDepth != LogBitDepth.OFF || config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG || config.colorProfile != CinemaColorProfile.NATIVE) {
-            val technicalTransform = computeTechnicalInputTransform(config.colorProfile, rec2020Params)
+        if (config.logBitDepth != LogBitDepth.OFF || config.colorProfile != CinemaColorProfile.NATIVE) {
+            val technicalTransform = computeTechnicalInputTransform(config.colorProfile)
             if (technicalTransform != null) {
                 masterMatrix.postConcat(technicalTransform)
                 hasTransform = true
@@ -240,17 +238,16 @@ object CinemaColorPipeline {
      * Linearizes log profiles, anchors lifted black pedestals, and normalizes middle-grey.
      */
     private fun computeTechnicalInputTransform(
-        profile: CinemaColorProfile,
-        rec2020Params: Rec2020AutoToneParams?
+        profile: CinemaColorProfile
     ): ColorMatrix? {
         return when (profile) {
-            CinemaColorProfile.FLAT_LOG -> {
-                // Flat Log Technical Transform:
-                // Normalizes lifted black pedestal (-14f offset), expands compressed log midtones
-                // with 18% middle-grey pivot (contrast 1.16x), and restores sensor chroma latitude (1.14x sat)
-                val c = 1.16f
-                val pivot = 128f
-                val pedestalOffset = -14f
+            CinemaColorProfile.S_LOG -> {
+                // Sony S-Log Technical Transform:
+                // S-Log has code 90 (0.088) baseline black floor and middle-gray at 0.38 (code 97 in 8-bit).
+                // Technical transform normalizes S-Log black floor (-18f), expands log midtones (1.18x), and restores wide-gamut chroma (1.14x).
+                val c = 1.18f
+                val pivot = 97f
+                val pedestalOffset = -18f
                 val t = (1.0f - c) * pivot + pedestalOffset
                 val mat = ColorMatrix(floatArrayOf(
                     c, 0f, 0f, 0f, t,
@@ -260,6 +257,26 @@ object CinemaColorPipeline {
                 ))
                 val chroma = ColorMatrix()
                 chroma.setSaturation(1.14f)
+                mat.postConcat(chroma)
+                mat
+            }
+
+            CinemaColorProfile.N_LOG -> {
+                // Nikon N-Log Technical Transform:
+                // N-Log has code 128 (0.125) baseline black floor and middle-gray at 0.36 (code 92 in 8-bit).
+                // Technical transform normalizes N-Log pedestal (-22f), expands midtones (1.20x), and restores rich chroma (1.12x).
+                val c = 1.20f
+                val pivot = 92f
+                val pedestalOffset = -22f
+                val t = (1.0f - c) * pivot + pedestalOffset
+                val mat = ColorMatrix(floatArrayOf(
+                    c, 0f, 0f, 0f, t,
+                    0f, c, 0f, 0f, t,
+                    0f, 0f, c, 0f, t,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+                val chroma = ColorMatrix()
+                chroma.setSaturation(1.12f)
                 mat.postConcat(chroma)
                 mat
             }
@@ -303,12 +320,6 @@ object CinemaColorPipeline {
                 mat
             }
 
-            CinemaColorProfile.REC_2020 -> {
-                // REC.2020 Real-Time Auto Tone Control
-                val p = rec2020Params ?: Rec2020AutoToneParams()
-                Rec2020AutoToneEngine.computePreviewColorMatrix(p)
-            }
-
             CinemaColorProfile.HLG10 -> {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR Technical Transform:
                 // - Faithful Rec.2020 wide color gamut primaries with calibrated HLG tone response
@@ -325,6 +336,26 @@ object CinemaColorPipeline {
                 val hlg10Sat = ColorMatrix()
                 hlg10Sat.setSaturation(1.05f) // Natural, accurate Rec.2020 wide-gamut chroma balance
                 mat.postConcat(hlg10Sat)
+                mat
+            }
+
+            CinemaColorProfile.HLG_2 -> {
+                // HLG 2 Technical Transform:
+                // - Anchored black pedestal (0.0f)
+                // - Rich natural contrast (1.14x)
+                // - Rec.709 color space with vibrant, faithful chroma (1.10x)
+                val c = 1.14f
+                val pivot = 128f
+                val t = (1.0f - c) * pivot
+                val mat = ColorMatrix(floatArrayOf(
+                    c, 0f, 0f, 0f, t,
+                    0f, c, 0f, 0f, t,
+                    0f, 0f, c, 0f, t,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+                val chroma = ColorMatrix()
+                chroma.setSaturation(1.10f)
+                mat.postConcat(chroma)
                 mat
             }
 
@@ -349,24 +380,6 @@ object CinemaColorPipeline {
                 mat
             }
 
-            CinemaColorProfile.HDR_LOG -> {
-                // HDR Log Technical Transform:
-                // - Zero pedestal offset (strictly 0.0f): deep inky blacks without washed-out haze
-                // - Natural contrast calibration (1.08x)
-                // - Natural chroma saturation balance (1.08x) retaining rich highlights and shadows
-                val c = 1.08f
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, 0f,
-                    0f, c, 0f, 0f, 0f,
-                    0f, 0f, c, 0f, 0f,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.08f)
-                mat.postConcat(chroma)
-                mat
-            }
-
             CinemaColorProfile.NATIVE -> null
         }
     }
@@ -380,8 +393,6 @@ object CinemaColorPipeline {
         config: CinemaConfig,
         forGpuShader: Boolean = false
     ): ColorMatrix? {
-        if (config.colorProfile == CinemaColorProfile.REC_2020) return null
-
         val gradeMatrix = ColorMatrix()
         var hasPrimary = false
 
@@ -403,8 +414,7 @@ object CinemaColorPipeline {
         }
 
         // 2. Exposure Control (+/-)
-        // Note: For FLAT_LOG, sensor AE manages physical exposure; software exposure applies to others
-        if (config.exposure != 0.0f && config.colorProfile != CinemaColorProfile.FLAT_LOG) {
+        if (config.exposure != 0.0f) {
             val expMultiplier = 2.0f.pow(config.exposure * 0.75f)
             val expMatrix = ColorMatrix(floatArrayOf(
                 expMultiplier, 0f, 0f, 0f, 0f,
@@ -698,7 +708,7 @@ object CinemaColorPipeline {
         val profile = config.colorProfile
         val isGraded = lut != CinematicLut.NONE || profile != CinemaColorProfile.NATIVE
 
-        if (!isGraded || profile == CinemaColorProfile.HLG10 || profile == CinemaColorProfile.HDR_LOG) return null
+        if (!isGraded || profile == CinemaColorProfile.HLG10) return null
 
         // Filmic Output S-curve:
         // Anchors deep inky blacks (-3f) while softly compressing highlights (0.975x)
@@ -739,7 +749,6 @@ object CinemaColorPipeline {
         gIn: Float,
         bIn: Float,
         config: CinemaConfig,
-        rec2020Params: Rec2020AutoToneParams? = null,
         includeCreativeLut: Boolean = true
     ): FloatArray {
         // =========================================================================
@@ -747,7 +756,6 @@ object CinemaColorPipeline {
         // =========================================================================
         val baseMatrix = computeCinemaColorMatrix(
             config = config,
-            rec2020Params = rec2020Params,
             includeCreativeLut = includeCreativeLut,
             forGpuShader = true
         )
@@ -791,7 +799,7 @@ object CinemaColorPipeline {
         // =========================================================================
 
         // 1. Exposure
-        if (config.exposure != 0.0f && config.colorProfile != CinemaColorProfile.FLAT_LOG) {
+        if (config.exposure != 0.0f) {
             val expMultiplier = 2.0f.pow(config.exposure * 0.75f)
             r = (r * expMultiplier).coerceIn(0f, 1f)
             g = (g * expMultiplier).coerceIn(0f, 1f)
@@ -1020,7 +1028,7 @@ object CinemaColorPipeline {
         }
 
         val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
-        val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
+        val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10)
         if (isGraded && !isHdrProfile) {
             val highlightCompression = 0.975f
             val inkyBlackAnchor = -3.5f / 255.0f
@@ -1048,10 +1056,9 @@ object CinemaColorPipeline {
     fun applyToView(
         view: View,
         config: CinemaConfig?,
-        rec2020Params: Rec2020AutoToneParams? = null,
         includeCreativeLut: Boolean = true
     ) {
-        if (!hasActiveTransform(config, rec2020Params, includeCreativeLut) || config == null) {
+        if (!hasActiveTransform(config, includeCreativeLut) || config == null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 try {
                     view.setRenderEffect(null)
@@ -1108,14 +1115,14 @@ object CinemaColorPipeline {
                 shader.setFloatUniform("uLutIntensity", lutIntensity)
 
                 // Exposure, Contrast, Saturation, WashedOut
-                val exposure = if (config.colorProfile != CinemaColorProfile.FLAT_LOG) config.exposure else 0f
+                val exposure = config.exposure
                 shader.setFloatUniform("uExposure", exposure)
                 shader.setFloatUniform("uContrast", config.contrast)
                 shader.setFloatUniform("uSaturation", config.saturation)
                 shader.setFloatUniform("uWashedOut", config.washedOut)
 
                 val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
-                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
+                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10)
                 val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
                 shader.setFloatUniform("uFilmicOutput", filmicOutput)
 

@@ -85,11 +85,16 @@ class ExampleUnitTest {
 
     @Test
     fun testCinemaColorProfilesExactSet() {
-        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "FLAT_LOG", "REC_2020", "HLG10", "HDR_LOG", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
+        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "S_LOG", "N_LOG", "HLG10", "HLG_2", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
         val actualProfiles = com.example.camera.model.CinemaColorProfile.entries.map { it.name }.toSet()
         assertEquals(expectedProfiles, actualProfiles)
-        assertFalse("Old HLG must be completely removed", actualProfiles.contains("HLG"))
+        assertFalse("FLAT_LOG must be completely removed", actualProfiles.contains("FLAT_LOG"))
+        assertFalse("HDR_LOG must be completely removed", actualProfiles.contains("HDR_LOG"))
+        assertFalse("REC_2020 must be completely removed as a profile", actualProfiles.contains("REC_2020"))
+        assertTrue("S_LOG must exist", actualProfiles.contains("S_LOG"))
+        assertTrue("N_LOG must exist", actualProfiles.contains("N_LOG"))
         assertTrue("HLG10 must exist", actualProfiles.contains("HLG10"))
+        assertTrue("HLG_2 must exist", actualProfiles.contains("HLG_2"))
     }
 
     @Test

@@ -42,7 +42,6 @@ import com.example.camera.ui.components.FrostedGlassBox
 fun CinemaSettingsWindow(
     config: CinemaConfig,
     capabilities: CinemaHardwareCapabilities,
-    rec2020AutoToneParams: com.example.camera.engine.Rec2020AutoToneParams? = null,
     onConfigChange: (CinemaConfig) -> Unit,
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier

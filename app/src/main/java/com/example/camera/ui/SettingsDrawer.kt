@@ -1201,10 +1201,10 @@ private fun CinemaSettingsPage(
                 description = "Logarithmic & HDR curves preserve maximum dynamic range for color grading. Native provides iPhone-style natural processing.",
                 options = listOf(
                     CinemaColorProfile.NATIVE to "Native",
-                    CinemaColorProfile.FLAT_LOG to "Flat Log",
-                    CinemaColorProfile.HDR_LOG to "HDR Log",
-                    CinemaColorProfile.REC_2020 to "Rec.2020",
+                    CinemaColorProfile.S_LOG to "S-Log",
+                    CinemaColorProfile.N_LOG to "N-Log",
                     CinemaColorProfile.HLG10 to "HLG10 HDR",
+                    CinemaColorProfile.HLG_2 to "HLG 2",
                     CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
                     CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log",
                     CinemaColorProfile.PROCESSED_JPEG to "Processed JPEG"
@@ -1219,13 +1219,6 @@ private fun CinemaSettingsPage(
                                 colorSpace = CinemaColorSpace.REC_2020,
                                 logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
                                 codec = if (cinemaConfig.codec == CinemaCodec.H264 && cinemaCapabilities.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else cinemaConfig.codec
-                            )
-                        }
-                        CinemaColorProfile.HDR_LOG -> {
-                            cinemaConfig.copy(
-                                colorProfile = CinemaColorProfile.HDR_LOG,
-                                colorSpace = CinemaColorSpace.REC_2020,
-                                logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8
                             )
                         }
                         else -> cinemaConfig.copy(colorProfile = profile)

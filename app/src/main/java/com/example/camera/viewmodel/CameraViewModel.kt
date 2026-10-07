@@ -155,7 +155,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // Cinema / Pro Video Mode State & Panel visibility
     val cinemaConfig: StateFlow<CinemaConfig> = engine.cinemaConfig
     val cinemaCapabilities: StateFlow<CinemaHardwareCapabilities> = engine.cinemaCapabilities
-    val rec2020AutoToneParams: StateFlow<com.example.camera.engine.Rec2020AutoToneParams> = engine.rec2020AutoToneParams
     val capabilities: StateFlow<HardwareCapabilities> = engine.capabilities
     private val _isCinemaSettingsOpen = MutableStateFlow(false)
     val isCinemaSettingsOpen: StateFlow<Boolean> = _isCinemaSettingsOpen.asStateFlow()
@@ -218,12 +217,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 colorSpace = CinemaColorSpace.REC_2020,
                 logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
                 codec = if (current.codec == CinemaCodec.H264 && cinemaCapabilities.value.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else current.codec
-            )
-        } else if (profile == CinemaColorProfile.HDR_LOG) {
-            current.copy(
-                colorProfile = CinemaColorProfile.HDR_LOG,
-                colorSpace = CinemaColorSpace.REC_2020,
-                logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8
             )
         } else {
             current.copy(colorProfile = profile)

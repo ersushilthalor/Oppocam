@@ -56,8 +56,7 @@ object CinemaVideoProcessor {
         inputFile: File,
         outputFile: File,
         config: CinemaConfig,
-        orientationDegrees: Int,
-        rec2020Params: Rec2020AutoToneParams? = null
+        orientationDegrees: Int
     ): File {
         if (!inputFile.exists() || inputFile.length() <= 0L) {
             Log.w(TAG, "Input file does not exist or is empty: ${inputFile.absolutePath}")
@@ -67,12 +66,10 @@ object CinemaVideoProcessor {
         val includeLut = config.isBakeLutToOutput
         val hasGrading = CinemaColorPipeline.hasActiveTransform(
             config = config,
-            rec2020Params = rec2020Params,
             includeCreativeLut = includeLut
         )
         val colorMatrix = CinemaColorPipeline.computeCinemaColorMatrix(
             config = config,
-            rec2020Params = rec2020Params,
             includeCreativeLut = includeLut,
             forGpuShader = true
         )
@@ -531,14 +528,14 @@ object CinemaVideoProcessor {
                                 GLES20.glUniform1i(sTextureHandle, 0)
                                 GLES20.glUniform1i(sLutTextureHandle, 1)
 
-                                val exposure = if (config.colorProfile != CinemaColorProfile.FLAT_LOG) config.exposure else 0f
+                                val exposure = config.exposure
                                 GLES20.glUniform1f(uExposureHandle, exposure)
                                 GLES20.glUniform1f(uContrastHandle, config.contrast)
                                 GLES20.glUniform1f(uSaturationHandle, config.saturation)
                                 GLES20.glUniform1f(uWashedOutHandle, config.washedOut)
 
                                 val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
-                                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HDR_LOG)
+                                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2)
                                 val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
                                 GLES20.glUniform1f(uFilmicOutputHandle, filmicOutput)
 

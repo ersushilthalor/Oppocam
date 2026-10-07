@@ -97,7 +97,6 @@ fun Viewfinder(
     videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
     selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
     customVideoPipelineConfig: com.example.camera.videopipeline.CustomVideoPipelineConfig? = null,
-    rec2020AutoToneParams: com.example.camera.engine.Rec2020AutoToneParams? = null,
     proSaturation: Float = 0f,
     proContrast: Float = 1.0f,
     proHighlights: Float = 0f,
@@ -637,7 +636,6 @@ fun Viewfinder(
                             com.example.camera.engine.CinemaColorPipeline.applyToView(
                                 view = textureView,
                                 config = effectiveConfig,
-                                rec2020Params = rec2020AutoToneParams,
                                 includeCreativeLut = effectiveConfig?.isLutPreviewEnabled ?: true
                             )
                             textureView.invalidate()
@@ -743,7 +741,8 @@ fun Viewfinder(
                 // Clean Cinematic LUT Active Badge (Omitted when LOG profile is selected)
                 val isLogProfile = cinemaConfig?.let {
                     it.colorProfile in listOf(
-                        com.example.camera.model.CinemaColorProfile.FLAT_LOG,
+                        com.example.camera.model.CinemaColorProfile.S_LOG,
+                        com.example.camera.model.CinemaColorProfile.N_LOG,
                         com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
                         com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
                     ) || it.isLogMode

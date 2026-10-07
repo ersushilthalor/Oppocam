@@ -156,8 +156,6 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     @Volatile
     private var currentCinemaConfig: CinemaConfig? = null
     @Volatile
-    private var currentRec2020Params: Rec2020AutoToneParams? = null
-    @Volatile
     private var currentLutSize: Float = 17f
     @Volatile
     private var currentUse3DLut: Float = 0f
@@ -197,7 +195,6 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         colorSpace: com.example.camera.model.CinemaColorSpace = com.example.camera.model.CinemaColorSpace.REC_709,
         isSource10Bit: Boolean = false,
         cinemaConfig: CinemaConfig? = null,
-        rec2020Params: Rec2020AutoToneParams? = null,
         isFront: Boolean = false,
         sensorOrientation: Int = 90,
         deviceRotation: Int = 0,
@@ -242,7 +239,6 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         currentNormWidth = safeWidth
         currentNormHeight = safeHeight
         currentCinemaConfig = cinemaConfig
-        currentRec2020Params = rec2020Params
         firstFramePtsNs = -1L
         isPaused.set(false)
         totalPausedDurationNs = 0L
@@ -381,7 +377,6 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 normWidth = safeWidth,
                 normHeight = safeHeight,
                 config = cinemaConfig,
-                rec2020Params = rec2020Params,
                 sourceBufferWidth = sourceBufferWidth,
                 sourceBufferHeight = sourceBufferHeight
             )
@@ -1286,12 +1281,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private val matrixValues = FloatArray(9)
     private val finalTexMatrix = FloatArray(16)
 
-    fun updateLiveCinemaConfig(newConfig: CinemaConfig, newRec2020Params: Rec2020AutoToneParams?) {
+    fun updateLiveCinemaConfig(newConfig: CinemaConfig) {
         currentCinemaConfig = newConfig
-        currentRec2020Params = newRec2020Params
         glHandler?.post {
             try {
-                updateColorMatrixAndLut(newConfig, newRec2020Params)
+                updateColorMatrixAndLut(newConfig)
             } catch (t: Throwable) {
                 Log.w(TAG, "Error updating live color matrix and LUT in shader", t)
             }
@@ -1303,7 +1297,6 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         normWidth: Int,
         normHeight: Int,
         config: CinemaConfig?,
-        rec2020Params: Rec2020AutoToneParams?,
         sourceBufferWidth: Int = 0,
         sourceBufferHeight: Int = 0
     ): Surface {
@@ -1484,11 +1477,10 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         return cameraInputSurface ?: throw IllegalStateException("Camera input surface was null after setup")
     }
 
-    private fun updateColorMatrixAndLut(config: CinemaConfig?, rec2020Params: Rec2020AutoToneParams?) {
+    private fun updateColorMatrixAndLut(config: CinemaConfig?) {
         val includeLut = config?.isBakeLutToOutput ?: true
         val colorMatrix = CinemaColorPipeline.computeCinemaColorMatrix(
             config = config,
-            rec2020Params = rec2020Params,
             includeCreativeLut = includeLut,
             forGpuShader = true
         )
@@ -1679,14 +1671,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             GLES20.glUniform1i(sLutTextureHandle, 1)
 
             val cfg = currentCinemaConfig ?: CinemaConfig()
-            val exposure = if (cfg.colorProfile != CinemaColorProfile.FLAT_LOG) cfg.exposure else 0f
+            val exposure = cfg.exposure
             GLES20.glUniform1f(uExposureHandle, exposure)
             GLES20.glUniform1f(uContrastHandle, cfg.contrast)
             GLES20.glUniform1f(uSaturationHandle, cfg.saturation)
             GLES20.glUniform1f(uWashedOutHandle, cfg.washedOut)
 
             val isGraded = (!cfg.selectedLut.isOff || cfg.colorProfile != CinemaColorProfile.NATIVE)
-            val isHdrProfile = (cfg.colorProfile == CinemaColorProfile.HLG10 || cfg.colorProfile == CinemaColorProfile.HDR_LOG)
+            val isHdrProfile = (cfg.colorProfile == CinemaColorProfile.HLG10 || cfg.colorProfile == CinemaColorProfile.HLG_2)
             val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
             GLES20.glUniform1f(uFilmicOutputHandle, filmicOutput)
 

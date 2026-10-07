@@ -67,10 +67,10 @@ enum class CinemaColorProfile(
     val gammaName: String
 ) {
     NATIVE("Native", "iPhone-style natural video processing with true-to-life colors, balanced sky/ground, and intelligent shadow recovery", "Native"),
-    FLAT_LOG("Flat", "Logarithmic dynamic range curve for color grading", "Flat Log"),
-    HDR_LOG("HDR Log", "High Dynamic Range Log profile preserving extended highlight latitude and shadow details with natural contrast", "HDR Log"),
-    REC_2020("Rec.2020", "ITU-R BT.2020 wide color gamut transfer curve", "BT.2020"),
+    S_LOG("S-Log", "Original authentic Sony S-Log wide dynamic range logarithmic transfer curve", "S-Log"),
+    N_LOG("N-Log", "Original authentic Nikon N-Log 12-stop transfer curve with balanced shadow-to-highlight roll-off", "N-Log"),
     HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10"),
+    HLG_2("HLG 2", "Enhanced Hybrid Log-Gamma with natural contrast, deep tonal depth, and balanced Rec.709 color rendering", "HLG 2"),
     APPLE_LOG_2("Apple Log 2", "Apple Log 2 wide-gamut log transfer curve with extended highlight latitude and parabolic shadow retention", "Apple Log 2"),
     SAMSUNG_APV_LOG("Samsung APV Log", "Samsung Advanced Professional Video (APV) Log profile with high-efficiency mastering curve, wide dynamic range, and clean shadow-to-highlight roll-off", "Samsung APV Log"),
     PROCESSED_JPEG("Processed JPEG", "Smartphone JPEG photo technical transform with natural contrast and saturation", "Processed JPEG")
@@ -218,10 +218,10 @@ data class CinemaHardwareCapabilities(
     val supportedCodecs: List<CinemaCodec> = listOf(CinemaCodec.H265, CinemaCodec.H264),
     val supportedColorProfiles: List<CinemaColorProfile> = listOf(
         CinemaColorProfile.NATIVE,
-        CinemaColorProfile.FLAT_LOG,
-        CinemaColorProfile.HDR_LOG,
-        CinemaColorProfile.REC_2020,
+        CinemaColorProfile.S_LOG,
+        CinemaColorProfile.N_LOG,
         CinemaColorProfile.HLG10,
+        CinemaColorProfile.HLG_2,
         CinemaColorProfile.APPLE_LOG_2,
         CinemaColorProfile.SAMSUNG_APV_LOG,
         CinemaColorProfile.PROCESSED_JPEG

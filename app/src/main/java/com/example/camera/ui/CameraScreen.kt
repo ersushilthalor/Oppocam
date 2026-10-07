@@ -173,7 +173,6 @@ fun CameraScreen(
 
     val cinemaConfig by viewModel.cinemaConfig.collectAsStateWithLifecycle()
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
-    val rec2020AutoToneParams by viewModel.rec2020AutoToneParams.collectAsStateWithLifecycle()
     val isCinemaSettingsOpen by viewModel.isCinemaSettingsOpen.collectAsStateWithLifecycle()
     val isLogProfileWindowOpen by viewModel.isLogProfileWindowOpen.collectAsStateWithLifecycle()
     val isLutWindowOpen by viewModel.isLutWindowOpen.collectAsStateWithLifecycle()
@@ -369,7 +368,6 @@ fun CameraScreen(
                 videoAdjustments = videoAdjustments,
                 selectedVideoPipeline = selectedVideoPipeline,
                 customVideoPipelineConfig = customVideoPipelineConfig,
-                rec2020AutoToneParams = rec2020AutoToneParams,
                 proSaturation = proSaturation,
                 proContrast = proContrast,
                 proHighlights = proHighlights,
@@ -947,7 +945,6 @@ fun CameraScreen(
             CinemaSettingsWindow(
                 config = cinemaConfig,
                 capabilities = cinemaCapabilities,
-                rec2020AutoToneParams = rec2020AutoToneParams,
                 onConfigChange = { updatedConfig ->
                     viewModel.updateCinemaConfig(updatedConfig)
                 },

@@ -43,12 +43,13 @@ fun LogProfileFloatingWindow(
     val profiles = remember {
         listOf(
             CinemaColorProfile.NATIVE to "Natural",
-            CinemaColorProfile.FLAT_LOG to "Flat Log",
-            CinemaColorProfile.HDR_LOG to "HDR Log",
-            CinemaColorProfile.REC_2020 to "Rec.2020",
+            CinemaColorProfile.S_LOG to "S-Log",
+            CinemaColorProfile.N_LOG to "N-Log",
             CinemaColorProfile.HLG10 to "HLG10",
+            CinemaColorProfile.HLG_2 to "HLG 2",
             CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
-            CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV"
+            CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV",
+            CinemaColorProfile.PROCESSED_JPEG to "Photo JPEG"
         )
     }
 

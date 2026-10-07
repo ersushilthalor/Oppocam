@@ -349,7 +349,6 @@ enum class ColorProfile(val title: String, val isFlat: Boolean) {
     STANDARD("Standard", false),
     VIBRANT("Vibrant", false),
     NATURAL("Natural", false),
-    FLAT_LOG("Flat / Log", true),
     MONOCHROME("B&W Monochrome", false)
 }
 

@@ -151,7 +151,8 @@ fun CinemaAssistOverlays(
 
         // 4. Cinema Pipeline Status Badge (Omitted when LOG Profile is selected to keep viewfinder completely free of LOG text overlays)
         val isLogProfile = cinemaConfig.colorProfile in listOf(
-            com.example.camera.model.CinemaColorProfile.FLAT_LOG,
+            com.example.camera.model.CinemaColorProfile.S_LOG,
+            com.example.camera.model.CinemaColorProfile.N_LOG,
             com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
             com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
         ) || cinemaConfig.isLogMode
