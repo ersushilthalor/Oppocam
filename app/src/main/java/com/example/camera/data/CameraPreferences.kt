@@ -57,7 +57,24 @@ class CameraPreferences(context: Context) {
         private const val KEY_MOTION_PHOTO_ENABLED = "pref_motion_photo_enabled"
         private const val KEY_MOTION_PHOTO_DURATION = "pref_motion_photo_duration"
         private const val KEY_VIEWFINDER_CORNER_RADIUS = "pref_viewfinder_corner_radius"
+        private const val KEY_LENS_SWITCH_POINT_MM = "pref_lens_switch_point_mm"
     }
+
+    var lensSwitchPointMm: Float
+        get() = prefs.getFloat(
+            KEY_LENS_SWITCH_POINT_MM,
+            com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
+        ).coerceIn(
+            com.example.camera.engine.CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
+            com.example.camera.engine.CameraOpticalCalibration.MAX_SWITCH_POINT_MM
+        )
+        set(value) = prefs.edit().putFloat(
+            KEY_LENS_SWITCH_POINT_MM,
+            value.coerceIn(
+                com.example.camera.engine.CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
+                com.example.camera.engine.CameraOpticalCalibration.MAX_SWITCH_POINT_MM
+            )
+        ).apply()
 
     var viewfinderCornerRadiusDp: Int
         get() = prefs.getInt(KEY_VIEWFINDER_CORNER_RADIUS, 0).coerceIn(0, 48)

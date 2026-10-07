@@ -156,9 +156,10 @@ fun HorizontalRulerZoomSlider(
             .testTag("horizontal_ruler_zoom_slider"),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 1. Live Zoom Indicator (formatted to 1 decimal place e.g. "5.0 x")
+        // 1. Live Zoom Indicator (formatted to 1 decimal place e.g. "5.0 x  •  115mm")
+        val focalLengthMm = com.example.camera.engine.CameraOpticalCalibration.zoomToFocalLengthMm(activeZoom).roundToInt()
         Text(
-            text = "%.1f x".format(activeZoom),
+            text = "%.1f x  •  %dmm".format(activeZoom, focalLengthMm),
             color = Color(0xFFFFD54F),
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold,

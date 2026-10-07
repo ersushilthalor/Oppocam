@@ -47,20 +47,108 @@ object CameraOpticalCalibration {
      */
     const val DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM = 16.0f
     const val DEFAULT_MAIN_EQUIVALENT_FOCAL_MM = 23.0f
+    const val MIN_SWITCH_POINT_MM = 23.0f
+    const val MAX_SWITCH_POINT_MM = 85.0f
+    const val DEFAULT_SWITCH_POINT_MM = 23.0f
 
     /**
-     * Calculates the crop limit required for Ultra-Wide (~16mm equivalent) to reach 1x Main-lens FOV (~23mm equivalent):
-     * cropLimit = mainEquivalentFocalMm / uwEquivalentFocalMm ≈ 23 / 16 ≈ 1.4375x (≈ 1.44x).
-     *
-     * Based on actual focal-length/FOV relationship, not an arbitrary zoom multiplier.
+     * Converts a UI zoom level (where 1.0x = 23mm Main lens) to effective focal length in mm.
+     * - 0.5x UI zoom -> 16.0mm (native uncropped Ultra-Wide)
+     * - 1.0x UI zoom -> 23.0mm (native uncropped Main)
+     * - Linear interpolation between 0.5x and 1.0x (16mm to 23mm)
+     * - For zoom >= 1.0x -> zoom * 23.0mm (e.g. 1.39x -> 32mm, 1.74x -> 40mm, 2.17x -> 50mm, 3.70x -> 85mm)
+     */
+    fun zoomToFocalLengthMm(
+        zoom: Float,
+        uwFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
+        mainFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+    ): Float {
+        return if (zoom <= 1.0f) {
+            val t = ((zoom - 0.5f) / 0.5f).coerceIn(0f, 1f)
+            uwFocalMm + t * (mainFocalMm - uwFocalMm)
+        } else {
+            zoom * mainFocalMm
+        }
+    }
+
+    /**
+     * Converts an effective focal length in mm to UI zoom level.
+     * - 16.0mm -> 0.5x
+     * - 23.0mm -> 1.0x
+     * - 32.0mm -> 32 / 23 ≈ 1.3913x
+     * - 40.0mm -> 40 / 23 ≈ 1.7391x
+     * - 50.0mm -> 50 / 23 ≈ 2.1739x
+     * - 85.0mm -> 85 / 23 ≈ 3.6957x
+     */
+    fun focalLengthMmToZoom(
+        focalMm: Float,
+        uwFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
+        mainFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+    ): Float {
+        return if (focalMm <= mainFocalMm) {
+            val t = ((focalMm - uwFocalMm) / (mainFocalMm - uwFocalMm)).coerceIn(0f, 1f)
+            0.5f + t * 0.5f
+        } else {
+            focalMm / mainFocalMm
+        }
+    }
+
+    /**
+     * Calculates the exact UI zoom threshold at which the lens switch point occurs.
+     */
+    fun switchPointToZoom(
+        switchPointMm: Float,
+        mainFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+    ): Float {
+        val clamped = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
+        return clamped / mainFocalMm
+    }
+
+    /**
+     * Ultra-wide crop = Switch Point ÷ 16mm
+     * Automatically calculates the required digital crop factor on Ultra-wide at the switch point:
+     * - 23mm -> 23 / 16 = 1.4375x (1.44x)
+     * - 32mm -> 32 / 16 = 2.00x
+     * - 40mm -> 40 / 16 = 2.50x
+     * - 50mm -> 50 / 16 = 3.125x (3.13x)
+     * - 85mm -> 85 / 16 = 5.3125x (5.31x)
+     */
+    fun calculateUltraWideCropForSwitchPoint(
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
+        uwFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+    ): Float {
+        val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
+        val baseUw = if (uwFocalMm > 0f) uwFocalMm else DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+        return ((clampedSwitch / baseUw) * 100f).roundToInt() / 100f
+    }
+
+    /**
+     * Main crop = Switch Point ÷ 23mm
+     * Automatically calculates the required digital crop factor on Main at the switch point:
+     * - 23mm -> 23 / 23 = 1.00x
+     * - 32mm -> 32 / 23 = 1.3913x (1.39x)
+     * - 40mm -> 40 / 23 = 1.7391x (1.74x)
+     * - 50mm -> 50 / 23 = 2.1739x (2.17x)
+     * - 85mm -> 85 / 23 = 3.6957x (3.70x)
+     */
+    fun calculateMainCropForSwitchPoint(
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
+        mainFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+    ): Float {
+        val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
+        val baseMain = if (mainFocalMm > 0f) mainFocalMm else DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+        return ((clampedSwitch / baseMain) * 100f).roundToInt() / 100f
+    }
+
+    /**
+     * Calculates the crop limit required for Ultra-Wide (~16mm equivalent) to reach Main-lens FOV:
+     * cropLimit = switchPointMm / uwEquivalentFocalMm.
      */
     fun calculateUltraWideCropLimit(
         uwEquivalentFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
         mainEquivalentFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
     ): Float {
-        val uwEq = if (uwEquivalentFocalMm in 10f..20f) uwEquivalentFocalMm else DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
-        val mainEq = if (mainEquivalentFocalMm in 21f..32f) mainEquivalentFocalMm else DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
-        return ((mainEq / uwEq) * 100f).roundToInt() / 100f
+        return calculateUltraWideCropForSwitchPoint(mainEquivalentFocalMm, uwEquivalentFocalMm)
     }
 
     /**
@@ -138,20 +226,24 @@ object CameraOpticalCalibration {
         lensBaseRatio: Float,
         lensType: LensType,
         uwEquivalentFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
-        mainEquivalentFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+        mainEquivalentFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM,
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM
     ): Float {
         val base = if (lensType == LensType.ULTRAWIDE) 0.5f else (if (lensBaseRatio > 0.1f) lensBaseRatio else 1.0f)
+        val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
+        val maxUwCrop = calculateUltraWideCropForSwitchPoint(clampedSwitch, uwEquivalentFocalMm)
+
+        val switchZoom = switchPointToZoom(clampedSwitch, mainEquivalentFocalMm)
+
         return when (lensType) {
             LensType.ULTRAWIDE -> {
-                val maxCrop = calculateUltraWideCropLimit(uwEquivalentFocalMm, mainEquivalentFocalMm)
                 if (uiZoom <= 0.5f) {
                     1.0f
                 } else {
-                    // Maximum zoom on Ultra-wide is 0.999x; at 0.999x the crop reaches exactly maxCrop matching 1x Main FOV
-                    val clampedUi = uiZoom.coerceIn(0.5f, 0.999f)
-                    val t = ((clampedUi - 0.5f) / (0.999f - 0.5f)).coerceIn(0f, 1f)
-                    val crop = 1.0f + t * (maxCrop - 1.0f)
-                    crop.coerceIn(1.0f, maxCrop)
+                    val upperZoom = if (clampedSwitch <= 23.0f) 0.999f else switchZoom
+                    val t = ((uiZoom - 0.5f) / (upperZoom - 0.5f)).coerceIn(0f, 1f)
+                    val crop = 1.0f + t * (maxUwCrop - 1.0f)
+                    if (t >= 0.998f) maxUwCrop else crop.coerceIn(1.0f, maxUwCrop)
                 }
             }
             LensType.WIDE -> {
@@ -167,8 +259,9 @@ object CameraOpticalCalibration {
     }
 
     /**
-     * Hysteresis-aware lens selection during continuous zoom dragging.
-     * Prevents rapid back-and-forth lens switching when dragging near boundary thresholds.
+     * Hysteresis-aware lens selection during continuous zoom dragging based on user-selected Switch Point.
+     * At or above the Switch Point threshold (Switch Point / 23mm): switches to Main (or Telephoto).
+     * Strictly below the Switch Point threshold: uses Ultra-wide if available.
      */
     fun resolveTargetLensType(
         currentLensType: LensType,
@@ -176,22 +269,24 @@ object CameraOpticalCalibration {
         hasUltraWide: Boolean,
         hasTelephoto2x: Boolean,
         hasTelephoto3x: Boolean,
-        isPresetTap: Boolean
+        isPresetTap: Boolean,
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM
     ): LensType {
-        // Ultra-wide is strictly prohibited at >= 1.000x.
-        // At exactly 1.000x and above, the camera MUST use native Main/Wide FOV (or Telephoto).
-        // The maximum Ultra-wide zoom is 0.999x.
-        if (targetZoom >= 1.000f) {
+        val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
+        val switchZoom = switchPointToZoom(clampedSwitch, DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+
+        // At or above the dynamic switch point zoom threshold, target Main (Wide) or Telephoto lens
+        if (targetZoom >= switchZoom) {
             return when {
-                targetZoom >= 2.8f && hasTelephoto3x && (isPresetTap || currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) -> LensType.TELEPHOTO_3X
-                targetZoom >= 1.8f && hasTelephoto2x && (isPresetTap || currentLensType == LensType.TELEPHOTO || targetZoom >= 2.15f) -> LensType.TELEPHOTO
-                currentLensType == LensType.TELEPHOTO && targetZoom >= 1.85f -> LensType.TELEPHOTO
-                currentLensType == LensType.TELEPHOTO_3X && targetZoom >= 2.85f -> LensType.TELEPHOTO_3X
+                targetZoom >= 2.8f && hasTelephoto3x && (isPresetTap || currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) && switchZoom <= 2.8f -> LensType.TELEPHOTO_3X
+                targetZoom >= 1.8f && hasTelephoto2x && (isPresetTap || currentLensType == LensType.TELEPHOTO || targetZoom >= 2.15f) && switchZoom <= 1.8f -> LensType.TELEPHOTO
+                currentLensType == LensType.TELEPHOTO && targetZoom >= 1.85f && switchZoom <= 1.85f -> LensType.TELEPHOTO
+                currentLensType == LensType.TELEPHOTO_3X && targetZoom >= 2.85f && switchZoom <= 2.85f -> LensType.TELEPHOTO_3X
                 else -> LensType.WIDE
             }
         }
 
-        // Strictly below 1.000x (up to 0.999x):
+        // Strictly below the switch point: use Ultra-wide if available
         return if (hasUltraWide) LensType.ULTRAWIDE else LensType.WIDE
     }
 }

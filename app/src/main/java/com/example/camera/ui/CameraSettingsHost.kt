@@ -89,6 +89,7 @@ fun CameraSettingsHost(
     val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
     val activePipelinePreset by viewModel.activePipelinePreset.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
+    val lensSwitchPointMm by viewModel.lensSwitchPointMm.collectAsStateWithLifecycle()
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
@@ -243,6 +244,8 @@ fun CameraSettingsHost(
         onOpenGalleryChooser = onOpenGalleryChooser,
         viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
         onViewfinderCornerRadiusChange = { viewModel.setViewfinderCornerRadius(it) },
+        lensSwitchPointMm = lensSwitchPointMm,
+        onLensSwitchPointChange = { viewModel.setLensSwitchPointMm(it) },
         onDismiss = onDismiss
     )
 }

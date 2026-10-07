@@ -217,6 +217,8 @@ fun SettingsDrawer(
     onOpenGalleryChooser: () -> Unit = {},
     viewfinderCornerRadiusDp: Int = 0,
     onViewfinderCornerRadiusChange: (Int) -> Unit = {},
+    lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
+    onLensSwitchPointChange: (Float) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -456,6 +458,8 @@ fun SettingsDrawer(
                             onLensSelected = onLensSelected,
                             onForceDeepScan = onForceDeepScan,
                             instantSwitchState = instantSwitchState,
+                            lensSwitchPointMm = lensSwitchPointMm,
+                            onLensSwitchPointChange = onLensSwitchPointChange,
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
                             onDualVideoLensToggle = onDualVideoLensToggle,
                             onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
@@ -2041,6 +2045,8 @@ private fun CameraLensSettingsPage(
     onLensSelected: (LensInfo) -> Unit,
     onForceDeepScan: () -> Unit,
     instantSwitchState: MotorolaInstantSwitchState,
+    lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
+    onLensSwitchPointChange: (Float) -> Unit = {},
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onDualVideoLensToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
@@ -2067,6 +2073,13 @@ private fun CameraLensSettingsPage(
                 description = "Detected ${availableLenses.size} optical camera sensors on this device.",
                 actionText = "RE-SCAN",
                 onClick = onForceDeepScan
+            )
+        }
+
+        item {
+            SwitchPointSettingCard(
+                switchPointMm = lensSwitchPointMm,
+                onSwitchPointChange = onLensSwitchPointChange
             )
         }
 
@@ -2170,6 +2183,177 @@ private fun CameraLensSettingsPage(
                 selectedOption = viewfinderResolution,
                 onOptionSelected = onViewfinderResolutionSelected
             )
+        }
+    }
+}
+
+@Composable
+private fun SwitchPointSettingCard(
+    switchPointMm: Float,
+    onSwitchPointChange: (Float) -> Unit
+) {
+    val roundedFocal = switchPointMm.roundToInt().coerceIn(23, 85)
+    val uwCrop = (roundedFocal.toFloat() / 16.0f * 100f).roundToInt() / 100f
+    val mainCrop = (roundedFocal.toFloat() / 23.0f * 100f).roundToInt() / 100f
+
+    val isDefaultOriginal = roundedFocal == 23
+    val displayValue = if (isDefaultOriginal) "23mm (Original)" else "${roundedFocal}mm"
+
+    val presets = listOf(
+        23 to "23mm (Original)",
+        28 to "28mm",
+        32 to "32mm",
+        40 to "40mm",
+        50 to "50mm",
+        60 to "60mm",
+        85 to "85mm"
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("setting_lens_switch_point_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Cameraswitch,
+                            contentDescription = null,
+                            tint = Color(0xFFFFD54F),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Switch Point",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Lens handoff: Ultra-Wide (16mm) → Main (23mm)",
+                            color = Color.White.copy(alpha = 0.55f),
+                            fontSize = 11.5.sp
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFFFD54F).copy(alpha = 0.18f))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = displayValue,
+                        color = Color(0xFFFFD54F),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Real-time crop calculation and active value readout banner
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF26262E))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Ultra-wide: ${String.format(java.util.Locale.US, "%.2f", uwCrop)}× crop",
+                    color = Color(0xFF64FFDA),
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "Main: ${String.format(java.util.Locale.US, "%.2f", mainCrop)}× crop",
+                    color = Color(0xFFFFD54F),
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Continuous Slider 23mm -> 85mm
+            Slider(
+                value = roundedFocal.toFloat(),
+                onValueChange = { onSwitchPointChange(it.roundToInt().toFloat()) },
+                valueRange = 23f..85f,
+                steps = 61,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color(0xFFFFD54F),
+                    activeTrackColor = Color(0xFFFFD54F),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.18f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("slider_lens_switch_point")
+            )
+
+            // Preset Quick Selection Chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                presets.forEach { (presetFocal, label) ->
+                    val isSelected = roundedFocal == presetFocal
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onSwitchPointChange(presetFocal.toFloat()) },
+                        label = {
+                            Text(
+                                text = label,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFFFD54F),
+                            selectedLabelColor = Color.Black,
+                            containerColor = Color.White.copy(alpha = 0.08f),
+                            labelColor = Color.White
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = isSelected,
+                            borderColor = Color.White.copy(alpha = 0.15f),
+                            selectedBorderColor = Color(0xFFFFD54F)
+                        ),
+                        modifier = Modifier.testTag("chip_switch_point_$presetFocal")
+                    )
+                }
+            }
         }
     }
 }
@@ -4053,6 +4237,8 @@ fun CameraSettingsScreen(
             viewModel.setBeforeAfterOpen(true)
         },
         instantSwitchState = instantSwitchState,
+        lensSwitchPointMm = instantSwitchState.switchPointMm,
+        onLensSwitchPointChange = { viewModel.setLensSwitchPointMm(it) },
         onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
         onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },

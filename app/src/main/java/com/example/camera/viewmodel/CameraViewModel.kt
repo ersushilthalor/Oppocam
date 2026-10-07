@@ -734,10 +734,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             isShowUltraWidePreview = preferences.isShowUltraWidePreview,
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
-            ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF
+            ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF,
+            switchPointMm = preferences.lensSwitchPointMm
         )
     )
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
+
+    val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
+
+    fun setLensSwitchPointMm(switchPointMm: Float) {
+        val clamped = switchPointMm.coerceIn(
+            CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
+            CameraOpticalCalibration.MAX_SWITCH_POINT_MM
+        )
+        preferences.lensSwitchPointMm = clamped
+        _instantSwitchState.update { it.copy(switchPointMm = clamped) }
+        engine.setLensSwitchPointMm(clamped)
+        val uwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(clamped)
+        val mainCrop = CameraOpticalCalibration.calculateMainCropForSwitchPoint(clamped)
+        showToast("Switch Point: ${clamped.toInt()}mm (UW ${String.format(java.util.Locale.US, "%.2f", uwCrop)}×, Main ${String.format(java.util.Locale.US, "%.2f", mainCrop)}×)")
+    }
 
     fun setKeepUltraWideReady(enabled: Boolean) {
         preferences.isKeepUltraWideReady = enabled
@@ -1729,10 +1745,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val startTime = android.os.SystemClock.uptimeMillis()
             val frameIntervalMs = 16L // ~60 FPS continuous sub-step updates
 
-            // If starting downward transition into Ultra-Wide (< 1.0x) from >= 0.95x, perform immediate FOV-matched handoff
-            if (endZ < 1.000f && startZ >= 0.95f && ultraWideLens != null && currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
+            val switchPoint = engine.lensSwitchPointMm.value
+            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+
+            // If starting downward transition into Ultra-Wide (< switchZoom) from >= switchZoom * 0.95f, perform immediate FOV-matched handoff
+            if (endZ < switchZoom && startZ >= (switchZoom * 0.95f) && ultraWideLens != null && currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
                 if (engine.selectedLens.value?.lensType != LensType.ULTRAWIDE) {
-                    engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = 0.999f)
+                    val prepZoom = (switchZoom - 0.001f).coerceAtLeast(0.5f)
+                    engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = prepZoom)
                     preferences.lastFacing = ultraWideLens.facing
                     preferences.saveLastLens(ultraWideLens)
                     preferences.setModeLens(_cameraMode.value, ultraWideLens)
@@ -1762,7 +1782,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         hasUltraWide = ultraWideLens != null,
                         hasTelephoto2x = tele2xLens != null,
                         hasTelephoto3x = tele3xLens != null,
-                        isPresetTap = false
+                        isPresetTap = false,
+                        switchPointMm = switchPoint
                     )
                     val stepLens = when (targetType) {
                         LensType.ULTRAWIDE -> ultraWideLens ?: mainWideLens
@@ -1795,7 +1816,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     hasUltraWide = ultraWideLens != null,
                     hasTelephoto2x = tele2xLens != null,
                     hasTelephoto3x = tele3xLens != null,
-                    isPresetTap = true
+                    isPresetTap = true,
+                    switchPointMm = switchPoint
                 )
                 when (finalTargetType) {
                     LensType.ULTRAWIDE -> ultraWideLens ?: mainWideLens

@@ -629,5 +629,158 @@ class PhotonCameraLensSwitchingTest {
         val mode = engine.detectSimultaneousStreamingMode(mainLens, separateUltraWide)
         assertNotNull(mode)
     }
+
+    @Test
+    fun testSwitchPointDefault23mmAndPersistence() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        assertEquals(23.0f, prefs.lensSwitchPointMm, 0.001f)
+        assertEquals(23.0f, engine.lensSwitchPointMm.value, 0.001f)
+
+        engine.setLensSwitchPointMm(32.0f)
+        assertEquals(32.0f, engine.lensSwitchPointMm.value, 0.001f)
+        assertEquals(32.0f, prefs.lensSwitchPointMm, 0.001f)
+
+        engine.setLensSwitchPointMm(50.0f)
+        assertEquals(50.0f, engine.lensSwitchPointMm.value, 0.001f)
+        assertEquals(50.0f, prefs.lensSwitchPointMm, 0.001f)
+
+        // Clamping to 23mm..85mm
+        engine.setLensSwitchPointMm(15.0f)
+        assertEquals(23.0f, engine.lensSwitchPointMm.value, 0.001f)
+
+        engine.setLensSwitchPointMm(100.0f)
+        assertEquals(85.0f, engine.lensSwitchPointMm.value, 0.001f)
+    }
+
+    @Test
+    fun testDynamicSwitchPointCalculatesRequiredDigitalCrops() {
+        // Ultra-wide crop = Switch Point ÷ 16mm
+        // Main crop = Switch Point ÷ 23mm
+
+        // Default: 23mm (Original)
+        assertEquals(1.44f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(23.0f), 0.01f)
+        assertEquals(1.00f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(23.0f), 0.01f)
+
+        // Switch Point 32mm -> UW 2.00x, Main 1.39x
+        assertEquals(2.00f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(32.0f), 0.01f)
+        assertEquals(1.39f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(32.0f), 0.01f)
+
+        // Switch Point 40mm -> UW 2.50x, Main 1.74x
+        assertEquals(2.50f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(40.0f), 0.01f)
+        assertEquals(1.74f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(40.0f), 0.01f)
+
+        // Switch Point 50mm -> UW 3.13x, Main 2.17x
+        assertEquals(3.13f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(50.0f), 0.01f)
+        assertEquals(2.17f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(50.0f), 0.01f)
+
+        // Switch Point 85mm -> UW 5.31x, Main 3.70x
+        assertEquals(5.31f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(85.0f), 0.01f)
+        assertEquals(3.70f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(85.0f), 0.01f)
+    }
+
+    @Test
+    fun testDynamicLensSwitchAtExactSwitchPointFocalLength() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+
+        // Set Switch Point to 32mm
+        viewModel.setLensSwitchPointMm(32.0f)
+        assertEquals(32.0f, viewModel.lensSwitchPointMm.value, 0.001f)
+
+        val switchZoom32 = CameraOpticalCalibration.switchPointToZoom(32.0f) // ~1.3913x
+
+        // Below switch point (e.g. 28mm -> ~1.217x): must remain on Ultra-Wide
+        val lensBelow32 = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = 1.20f,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = false,
+            switchPointMm = 32.0f
+        )
+        assertEquals(LensType.ULTRAWIDE, lensBelow32)
+
+        // At exact switch point (~1.3913x): must switch to Main lens (WIDE)
+        val lensAt32 = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = switchZoom32,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = false,
+            switchPointMm = 32.0f
+        )
+        assertEquals(LensType.WIDE, lensAt32)
+
+        // Crop factors at handoff point produce identical effective focal lengths (32mm)
+        val uwCropAt32 = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+            uiZoom = switchZoom32,
+            lensBaseRatio = 0.5f,
+            lensType = LensType.ULTRAWIDE,
+            switchPointMm = 32.0f
+        )
+        assertEquals(2.00f, uwCropAt32, 0.01f)
+        val effectiveUwFocal = 16.0f * uwCropAt32
+        assertEquals(32.0f, effectiveUwFocal, 0.2f)
+
+        val mainCropAt32 = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+            uiZoom = switchZoom32,
+            lensBaseRatio = 1.0f,
+            lensType = LensType.WIDE,
+            switchPointMm = 32.0f
+        )
+        assertEquals(1.39f, mainCropAt32, 0.01f)
+        val effectiveMainFocal = 23.0f * mainCropAt32
+        assertEquals(32.0f, effectiveMainFocal, 0.2f)
+    }
+
+    @Test
+    fun testDynamicSwitchPoint50mmHandoffMaintainsContinuity() {
+        val switchPoint = 50.0f
+        val switchZoom50 = CameraOpticalCalibration.switchPointToZoom(switchPoint) // ~2.1739x
+
+        // At 40mm (zoom ~1.739x): stays on Ultra-Wide
+        val targetAt40mm = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = 1.70f,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = false,
+            switchPointMm = switchPoint
+        )
+        assertEquals(LensType.ULTRAWIDE, targetAt40mm)
+
+        // At exact 50mm switch point (zoom ~2.1739x): switches to Main
+        val targetAt50mm = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = switchZoom50,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = false,
+            switchPointMm = switchPoint
+        )
+        assertEquals(LensType.WIDE, targetAt50mm)
+
+        // Verify UW crop is 3.13x and Main crop is 2.17x
+        val uwCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+            uiZoom = switchZoom50,
+            lensBaseRatio = 0.5f,
+            lensType = LensType.ULTRAWIDE,
+            switchPointMm = switchPoint
+        )
+        assertEquals(3.13f, uwCrop, 0.01f)
+
+        val mainCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+            uiZoom = switchZoom50,
+            lensBaseRatio = 1.0f,
+            lensType = LensType.WIDE,
+            switchPointMm = switchPoint
+        )
+        assertEquals(2.17f, mainCrop, 0.01f)
+    }
 }
 

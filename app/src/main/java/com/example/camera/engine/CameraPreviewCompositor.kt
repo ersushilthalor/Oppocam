@@ -105,6 +105,9 @@ class CameraPreviewCompositor(
         private set
 
     @Volatile
+    var switchPointMm: Float = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
+
+    @Volatile
     var firstUltraWideFrameTimestamp: Long = 0L
         private set
 
@@ -432,12 +435,19 @@ class CameraPreviewCompositor(
         Matrix.setIdentityM(mvpMatrix, 0)
         val zoom = activeCropZoom
         val cropScale = if (isUw) {
-            // Ultra-Wide base is 0.5x. Matching 1x Main FOV corresponds to 0.999 / 0.5 = 1.998x magnification.
-            // As zoom transitions down to 0.5x, cropScale smoothly drops to 1.0x (full uncropped Ultra-Wide sensor).
-            (zoom / 0.5f).coerceIn(1.0f, 2.05f)
+            CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                uiZoom = zoom,
+                lensBaseRatio = 0.5f,
+                lensType = com.example.camera.model.LensType.ULTRAWIDE,
+                switchPointMm = switchPointMm
+            )
         } else {
-            // Main wide base is 1.0x.
-            (zoom / 1.0f).coerceIn(1.0f, 20.0f)
+            CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                uiZoom = zoom,
+                lensBaseRatio = 1.0f,
+                lensType = com.example.camera.model.LensType.WIDE,
+                switchPointMm = switchPointMm
+            )
         }
 
         if (cropScale > 1.001f) {

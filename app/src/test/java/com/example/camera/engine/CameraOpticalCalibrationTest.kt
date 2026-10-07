@@ -212,4 +212,41 @@ class CameraOpticalCalibrationTest {
         )
         assertEquals(LensType.ULTRAWIDE, lensFor05x)
     }
+
+    @Test
+    fun testSwitchPointCropCalculationsMatchUserSpecifications() {
+        // Ultra-wide crop = Switch Point ÷ 16mm
+        // Main crop = Switch Point ÷ 23mm
+
+        // 32mm: UW 2.00x, Main 1.39x
+        assertEquals(2.00f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(32.0f), 0.01f)
+        assertEquals(1.39f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(32.0f), 0.01f)
+
+        // 40mm: UW 2.50x, Main 1.74x
+        assertEquals(2.50f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(40.0f), 0.01f)
+        assertEquals(1.74f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(40.0f), 0.01f)
+
+        // 50mm: UW 3.13x, Main 2.17x
+        assertEquals(3.13f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(50.0f), 0.01f)
+        assertEquals(2.17f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(50.0f), 0.01f)
+
+        // 85mm: UW 5.31x, Main 3.70x
+        assertEquals(5.31f, CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(85.0f), 0.01f)
+        assertEquals(3.70f, CameraOpticalCalibration.calculateMainCropForSwitchPoint(85.0f), 0.01f)
+    }
+
+    @Test
+    fun testFocalLengthAndZoomConversions() {
+        assertEquals(16.0f, CameraOpticalCalibration.zoomToFocalLengthMm(0.5f), 0.1f)
+        assertEquals(23.0f, CameraOpticalCalibration.zoomToFocalLengthMm(1.0f), 0.1f)
+        assertEquals(32.0f, CameraOpticalCalibration.zoomToFocalLengthMm(32.0f / 23.0f), 0.1f)
+        assertEquals(50.0f, CameraOpticalCalibration.zoomToFocalLengthMm(50.0f / 23.0f), 0.1f)
+        assertEquals(85.0f, CameraOpticalCalibration.zoomToFocalLengthMm(85.0f / 23.0f), 0.1f)
+
+        assertEquals(0.5f, CameraOpticalCalibration.focalLengthMmToZoom(16.0f), 0.01f)
+        assertEquals(1.0f, CameraOpticalCalibration.focalLengthMmToZoom(23.0f), 0.01f)
+        assertEquals(1.39f, CameraOpticalCalibration.focalLengthMmToZoom(32.0f), 0.01f)
+        assertEquals(2.17f, CameraOpticalCalibration.focalLengthMmToZoom(50.0f), 0.01f)
+        assertEquals(3.70f, CameraOpticalCalibration.focalLengthMmToZoom(85.0f), 0.01f)
+    }
 }

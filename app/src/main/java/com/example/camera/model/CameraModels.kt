@@ -594,7 +594,8 @@ data class MotorolaInstantSwitchState(
     val activeStandbyLens: LensType? = null,
     val switchLatencyEstimateMs: Int = 15,
     val lastMeasuredLatencyMs: Long = 0L,
-    val statusMessage: String = "Motorola Instant Switching Ready"
+    val statusMessage: String = "Motorola Instant Switching Ready",
+    val switchPointMm: Float = 23.0f
 )
 
 /**

@@ -144,6 +144,22 @@ class Camera2Engine(private val context: Context) {
     private val _isAutoMacroActive = MutableStateFlow(false)
     val isAutoMacroActive: StateFlow<Boolean> = _isAutoMacroActive.asStateFlow()
 
+    // Dynamic Lens Switch Point Setting (23mm to 85mm)
+    private val _lensSwitchPointMm = MutableStateFlow(preferences.lensSwitchPointMm)
+    val lensSwitchPointMm: StateFlow<Float> = _lensSwitchPointMm.asStateFlow()
+
+    fun setLensSwitchPointMm(switchPointMm: Float) {
+        val clamped = switchPointMm.coerceIn(
+            CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
+            CameraOpticalCalibration.MAX_SWITCH_POINT_MM
+        )
+        _lensSwitchPointMm.value = clamped
+        preferences.lensSwitchPointMm = clamped
+        previewCompositor?.switchPointMm = clamped
+        // Re-evaluate zoom and lens targeting with newly calibrated crops
+        setZoom(_currentZoom.value, isPresetTap = false)
+    }
+
     var onLensSwitchCompletedListener: ((LensInfo, Float) -> Unit)? = null
     private val lensSwitchListeners = java.util.concurrent.CopyOnWriteArrayList<(LensInfo, Float) -> Unit>()
 
@@ -3937,7 +3953,8 @@ class Camera2Engine(private val context: Context) {
                 lensBaseRatio = lens.baseZoomRatio,
                 lensType = lens.lensType,
                 uwEquivalentFocalMm = uwEqFocal,
-                mainEquivalentFocalMm = CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+                mainEquivalentFocalMm = CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM,
+                switchPointMm = _lensSwitchPointMm.value
             )
 
             val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
@@ -3958,7 +3975,7 @@ class Camera2Engine(private val context: Context) {
                         digitalCrop
                     }
                     val maxAllowedZoom = if (lens.lensType == LensType.ULTRAWIDE && (!isLogicalMulti || isRunningOnPhysicalStream)) {
-                        CameraOpticalCalibration.calculateUltraWideCropLimit(uwEqFocal, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+                        CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
                     } else {
                         zoomRange.upper
                     }
@@ -3985,7 +4002,7 @@ class Camera2Engine(private val context: Context) {
             // Fallback for devices without CONTROL_ZOOM_RATIO or legacy hardware: precise SCALER_CROP_REGION
             val maxDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
             val safeMaxZoom = if (lens.lensType == LensType.ULTRAWIDE) {
-                CameraOpticalCalibration.calculateUltraWideCropLimit(uwEqFocal, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+                CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
             } else {
                 maxOf(maxDigitalZoom, lens.maxZoomRatio, 20.0f)
             }
@@ -4117,6 +4134,8 @@ class Camera2Engine(private val context: Context) {
         val hasTele2x = backLenses.any { it.lensType == LensType.TELEPHOTO && it.isPhysical }
         val hasTele3x = backLenses.any { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
 
+        val switchPoint = _lensSwitchPointMm.value
+        val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
         val referenceLensType = (activeSessionLens ?: currentLens).lensType
         val targetType = CameraOpticalCalibration.resolveTargetLensType(
             currentLensType = referenceLensType,
@@ -4124,12 +4143,13 @@ class Camera2Engine(private val context: Context) {
             hasUltraWide = hasUltraWide,
             hasTelephoto2x = hasTele2x,
             hasTelephoto3x = hasTele3x,
-            isPresetTap = isPresetTap
+            isPresetTap = isPresetTap,
+            switchPointMm = switchPoint
         )
 
         val targetLens: LensInfo = when (targetType) {
             LensType.ULTRAWIDE -> {
-                if (clampedZoom >= 1.0f) {
+                if (clampedZoom >= switchZoom) {
                     mainWideLens ?: currentLens
                 } else {
                     ultraWideLens ?: mainWideLens ?: currentLens
