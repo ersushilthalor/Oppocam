@@ -285,12 +285,20 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun scheduleUltraWideReconnect(delayMs: Long = 1500L) {
+    private var ultraWideReconnectCount = 0
+    private val MAX_ULTRAWIDE_RECONNECT = 1
+
+    private fun scheduleUltraWideReconnect(delayMs: Long = 2000L) {
+        if (ultraWideReconnectCount >= MAX_ULTRAWIDE_RECONNECT) {
+            _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
+            return
+        }
         ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
         val runnable = Runnable {
             if (_isKeepUltraWideReady.value && _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_BACK) {
                 if (ultraWideStandbyCameraDevice == null && !isPreparingUltraWideStandby.get()) {
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Reopening/reconnecting background ultra-wide camera...")
+                    ultraWideReconnectCount++
+                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Reopening background camera (attempt $ultraWideReconnectCount)...")
                     ensureUltraWideSimultaneousReady()
                 }
             }
@@ -302,6 +310,7 @@ class Camera2Engine(private val context: Context) {
     fun setKeepUltraWideReady(enabled: Boolean) {
         _isKeepUltraWideReady.value = enabled
         preferences.isKeepUltraWideReady = enabled
+        ultraWideReconnectCount = 0
         _ultraWideStreamStatus.value = if (enabled) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF
         backgroundHandler?.post {
             if (enabled) {
@@ -343,32 +352,24 @@ class Camera2Engine(private val context: Context) {
         val dualMode = detectSimultaneousStreamingMode(mainLens, ultraWideLens)
         Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Detected dual streaming mode: $dualMode (main=${mainLens.cameraId}, uw=${ultraWideLens.cameraId}, phys=${ultraWideLens.physicalCameraId})")
 
+        if (dualMode == DualStreamingMode.NONE) {
+            Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Device HAL does not advertise simultaneous physical or concurrent streams; activating fastest fallback.")
+            _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
+            return
+        }
+
         initPreviewCompositorIfNeeded()
         val comp = previewCompositor
 
         // 1. Same logical camera device (multi-camera stream)
-        if (dualMode == DualStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL || standbyLens.cameraId == currentLens.cameraId) {
+        if (dualMode == DualStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
             val camera = cameraDevice ?: return
             if (captureSession != null) {
                 if (activeLogicalMultiCamUltraWideConfigured && isUltraWideStreaming.get()) {
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                     Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Logical multi-camera Ultra-Wide stream active and confirmed streaming on ID ${camera.id}")
-                    return
-                }
-                // If session is already open but dual physical streams were not configured, request reconfigure to add both physical outputs
-                if (!activeLogicalMultiCamUltraWideConfigured && !isConfiguringSession && comp != null) {
-                    _ultraWideStreamStatus.value = BackgroundCameraStatus.PREPARING
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Reconfiguring logical multi-camera session to bind persistent dual physical outputs")
-                    reconfigureSession()
-                    return
                 }
             }
-            return
-        }
-
-        if (dualMode == DualStreamingMode.NONE) {
-            Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Device HAL does not advertise simultaneous physical or concurrent streams; activating fastest fallback.")
-            _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
             return
         }
 
@@ -1109,7 +1110,8 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun startBackgroundThread() {
-        if (backgroundThread == null) {
+        if (backgroundThread == null || backgroundThread?.isAlive == false) {
+            try { backgroundThread?.quitSafely() } catch (_: Throwable) {}
             backgroundThread = HandlerThread("Camera2Background").apply {
                 uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, throwable ->
                     Log.e(TAG, "Uncaught exception on Camera2Background: ${thread.name}", throwable)
