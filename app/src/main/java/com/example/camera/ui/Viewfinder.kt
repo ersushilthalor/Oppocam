@@ -291,24 +291,18 @@ fun Viewfinder(
         val currentDollyFocusX by rememberUpdatedState(dollyCropState?.focusNormX ?: 0.5f)
         val currentDollyFocusY by rememberUpdatedState(dollyCropState?.focusNormY ?: 0.5f)
 
-        // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame
+        // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame.
+        // In portrait orientation, viewfinder always spans 100% full screen width (no side black bars),
+        // matching native Google Pixel and Samsung Camera layouts.
         val isLandscapeContainer = containerWidth > containerHeight
         val (targetWidth, targetHeight) = if (isLandscapeContainer) {
-            val maxW = containerWidth
-            val maxH = containerHeight
-            if (maxH * targetRatio <= maxW) {
-                (maxH * targetRatio) to maxH
-            } else {
-                maxW to (maxW / targetRatio)
-            }
+            val h = containerHeight
+            val w = (h * targetRatio).coerceAtMost(containerWidth)
+            w to h
         } else {
-            val maxW = containerWidth
-            val maxH = containerHeight
-            if (maxW * targetRatio <= maxH) {
-                maxW to (maxW * targetRatio)
-            } else {
-                (maxH / targetRatio) to maxH
-            }
+            val w = containerWidth
+            val h = w * targetRatio
+            w to h
         }
 
         Box(
