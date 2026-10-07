@@ -249,10 +249,6 @@ class Camera2Engine(private val context: Context) {
                     if (matches) return DualStreamingMode.CONCURRENT_DEVICES
                 } catch (ignored: Throwable) {}
             }
-            val allIds = try { mgr.cameraIdList.toSet() } catch (_: Throwable) { emptySet() }
-            if (allIds.contains(mainLens.cameraId) && allIds.contains(ultraWideLens.cameraId)) {
-                return DualStreamingMode.CONCURRENT_DEVICES
-            }
             return DualStreamingMode.NONE
         }
     }
@@ -2983,16 +2979,16 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun getEffectiveMainPreviewSurface(): Surface? {
+        val surf = previewSurface
+        if (surf != null && surf.isValid) {
+            return surf
+        }
         val comp = previewCompositor
         if (_isKeepUltraWideReady.value && comp != null && comp.isEglInitialized.get()) {
             val compMain = comp.mainSurface
             if (compMain != null && compMain.isValid) {
                 return compMain
             }
-        }
-        val surf = previewSurface
-        if (surf != null && surf.isValid) {
-            return surf
         }
         return null
     }
@@ -5711,6 +5707,7 @@ class Camera2Engine(private val context: Context) {
      * Helper to resolve the active preview surface for either Main or Ultra-Wide streams.
      */
     private fun getActivePreviewSurface(): Surface? {
+        if (previewSurface?.isValid == true) return previewSurface
         val comp = previewCompositor
         if (comp != null) {
             val s = if (_selectedLens.value?.lensType == LensType.ULTRAWIDE && comp.activeSource == PreviewStreamSource.ULTRAWIDE) {
@@ -5720,7 +5717,7 @@ class Camera2Engine(private val context: Context) {
             }
             if (s?.isValid == true) return s
         }
-        return if (previewSurface?.isValid == true) previewSurface else null
+        return null
     }
 
     private fun findBestFpsRange(chars: CameraCharacteristics, targetFps: Int): Range<Int>? {
