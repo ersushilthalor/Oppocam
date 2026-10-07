@@ -504,7 +504,7 @@ fun BottomControlBar(
                                         )
                                     }
                                 }
-                                CameraMode.VIDEO, CameraMode.CINEMA, CameraMode.DUAL_VIDEO -> {
+                                CameraMode.VIDEO, CameraMode.CINEMA -> {
                                     if (isRecordingVideo) {
                                         Box(
                                             modifier = Modifier
@@ -655,15 +655,6 @@ fun BottomControlBar(
                                             onSetManualProOpen(false)
                                             onModeSelected(CameraMode.AI_SUBJECT_TRACKING)
                                         }
-                                    ),
-                                    PixelModeEntry(
-                                        tag = "mode_dual_video",
-                                        label = "Dual Video",
-                                        isSelected = cameraMode == CameraMode.DUAL_VIDEO,
-                                        onSelect = {
-                                            onSetManualProOpen(false)
-                                            onModeSelected(CameraMode.DUAL_VIDEO)
-                                        }
                                     )
                                 )
                             }
@@ -721,7 +712,7 @@ fun BottomControlBar(
                             // Non-Pixel UI Templates: preserve original mode carousel behavior
                             val modesToDisplay = remember(layoutConfig.visibleModes) {
                                 val filtered = layoutConfig.visibleModes.filter {
-                                    it == CameraMode.PHOTO || it == CameraMode.PORTRAIT || it == CameraMode.VIDEO || it == CameraMode.MORE || it == CameraMode.DUAL_VIDEO
+                                    it == CameraMode.PHOTO || it == CameraMode.PORTRAIT || it == CameraMode.VIDEO || it == CameraMode.MORE
                                 }
                                 if (filtered.isEmpty()) {
                                     listOf(CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.VIDEO, CameraMode.MORE)
@@ -730,7 +721,7 @@ fun BottomControlBar(
                                 }
                             }
 
-                            val isMoreModeActive = (cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.PORTRAIT && cameraMode != CameraMode.VIDEO && cameraMode != CameraMode.DUAL_VIDEO)
+                            val isMoreModeActive = (cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.PORTRAIT && cameraMode != CameraMode.VIDEO)
 
                             LaunchedEffect(cameraMode) {
                                 val targetMode = if (isMoreModeActive) CameraMode.MORE else cameraMode

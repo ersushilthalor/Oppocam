@@ -59,6 +59,11 @@ import kotlin.math.min
 
 private const val TAG = "Camera2Engine"
 
+enum class PreviewStreamSource {
+    MAIN,
+    ULTRAWIDE
+}
+
 class Camera2Engine(private val context: Context) {
 
     private val cameraManager: CameraManager? =
@@ -135,9 +140,6 @@ class Camera2Engine(private val context: Context) {
     private val _isKeepUltraWideReady = MutableStateFlow(preferences.isKeepUltraWideReady)
     val isKeepUltraWideReady: StateFlow<Boolean> = _isKeepUltraWideReady.asStateFlow()
 
-    private val _isDualVideoLens = MutableStateFlow(preferences.isDualVideoLens)
-    val isDualVideoLens: StateFlow<Boolean> = _isDualVideoLens.asStateFlow()
-
     private val _isAutoSwitchToUltraWide = MutableStateFlow(preferences.isAutoSwitchToUltraWide)
     val isAutoSwitchToUltraWide: StateFlow<Boolean> = _isAutoSwitchToUltraWide.asStateFlow()
 
@@ -155,7 +157,6 @@ class Camera2Engine(private val context: Context) {
         )
         _lensSwitchPointMm.value = clamped
         preferences.lensSwitchPointMm = clamped
-        previewCompositor?.switchPointMm = clamped
         // Re-evaluate zoom and lens targeting with newly calibrated crops
         setZoom(_currentZoom.value, isPresetTap = false)
     }
@@ -208,7 +209,6 @@ class Camera2Engine(private val context: Context) {
     )
     val ultraWideStreamStatus: StateFlow<BackgroundCameraStatus> = _ultraWideStreamStatus.asStateFlow()
 
-    private var previewCompositor: CameraPreviewCompositor? = null
     private var ultraWideStandbyCameraDevice: CameraDevice? = null
     private var ultraWideStandbyCaptureSession: CameraCaptureSession? = null
     private var ultraWideStandbyImageReader: ImageReader? = null
@@ -251,49 +251,6 @@ class Camera2Engine(private val context: Context) {
             }
             return DualStreamingMode.NONE
         }
-    }
-
-    private fun initPreviewCompositorIfNeeded() {
-        if (previewCompositor == null) {
-            val optSize = _previewBufferSize.value ?: Size(1920, 1080)
-            val comp = CameraPreviewCompositor(optSize.width, optSize.height)
-            comp.switchPointMm = _lensSwitchPointMm.value
-            comp.targetAspectRatio = _previewAspectRatio.value
-            comp.sensorOrientation = _sensorOrientation.value
-            comp.displayRotationDegrees = getDeviceRotationDegrees()
-            val lens = _selectedLens.value
-            if (lens != null) {
-                comp.isFrontCamera = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
-                if (lens.lensType == LensType.ULTRAWIDE && lens.equivalent35mmFocalMm > 0f) {
-                    comp.uwEquivalentFocalMm = lens.equivalent35mmFocalMm
-                }
-            }
-            comp.onFirstUltraWideFrameCallback = { ts ->
-                isUltraWideStreaming.set(true)
-                _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
-                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] First Ultra-Wide frame arrived at $ts ms -> READY_QUIET")
-            }
-            comp.start()
-            previewCompositor = comp
-            previewSurface?.let { surf ->
-                comp.setOutputSurface(surf, optSize.width, optSize.height, getDeviceRotationDegrees())
-            }
-        }
-    }
-
-    private fun updateCompositorBufferGeometry(optimalSize: Size, targetRatio: Float) {
-        val lens = _selectedLens.value
-        val chars = lens?.let { getCharacteristics(it.cameraId) }
-        val sensorOrient = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: _sensorOrientation.value
-        val isFront = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-        previewCompositor?.reconfigureBuffers(
-            bufWidth = optimalSize.width,
-            bufHeight = optimalSize.height,
-            targetRatio = targetRatio,
-            sensorOrientation = sensorOrient,
-            displayRotation = getDeviceRotationDegrees(),
-            isFront = isFront
-        )
     }
 
     fun setAutoSwitchToUltraWide(enabled: Boolean) {
@@ -347,18 +304,6 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    fun setDualVideoLens(enabled: Boolean) {
-        _isDualVideoLens.value = enabled
-        preferences.isDualVideoLens = enabled
-        backgroundHandler?.post {
-            if (_isKeepUltraWideReady.value) {
-                ensureUltraWideSimultaneousReady()
-            } else {
-                releaseUltraWideStandby()
-            }
-        }
-    }
-
     fun ensureUltraWideSimultaneousReady() {
         if (!_isKeepUltraWideReady.value) return
         val currentLens = _selectedLens.value ?: return
@@ -384,9 +329,6 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
-        initPreviewCompositorIfNeeded()
-        val comp = previewCompositor
-
         // 1. Same logical camera device (multi-camera stream)
         if (dualMode == DualStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL) {
             val camera = cameraDevice ?: return
@@ -404,14 +346,14 @@ class Camera2Engine(private val context: Context) {
             val camera = ultraWideStandbyCameraDevice!!
             if (camera.id == standbyLens.cameraId) {
                 if (ultraWideStandbyCaptureSession != null) {
-                    if (isUltraWideStreaming.get() && (comp?.firstUltraWideFrameTimestamp ?: 0L) > 0L) {
+                    if (isUltraWideStreaming.get()) {
                         _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                     }
                     return
                 }
                 // Pre-warmed CameraDevice already open; configure standby capture session
                 try {
-                    val standbySurf = comp?.ultraWideSurface ?: run {
+                    val standbySurf = run {
                         val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
                         if (ultraWideStandbyImageReader == null) {
                             val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, ImageFormat.YUV_420_888, 2)
@@ -486,7 +428,7 @@ class Camera2Engine(private val context: Context) {
         }
 
         try {
-            val standbySurf = comp?.ultraWideSurface ?: run {
+            val standbySurf = run {
                 val optimalSize = _previewBufferSize.value ?: Size(1920, 1080)
                 if (ultraWideStandbyImageReader == null) {
                     val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, ImageFormat.YUV_420_888, 2)
@@ -510,7 +452,7 @@ class Camera2Engine(private val context: Context) {
                 override fun onOpened(camera: CameraDevice) {
                     ultraWideStandbyCameraDevice = camera
                     try {
-                        val isVideo = (_isDualVideoLens.value || currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value)
+                        val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value)
                         val template = if (isVideo) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
                         val builder = camera.createCaptureRequest(template).apply {
                             addTarget(standbySurf)
@@ -1374,7 +1316,7 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun getOptimalPreviewSize(cameraId: String? = null, targetRatio: Float = getTargetAspectRatioForMode(currentMode)): Size {
-        val streamRatio = if (currentMode == CameraMode.CINEMA || currentMode == CameraMode.VIDEO || currentMode == CameraMode.DUAL_VIDEO) {
+        val streamRatio = if (currentMode == CameraMode.CINEMA || currentMode == CameraMode.VIDEO) {
             16f / 9f
         } else {
             targetRatio
@@ -1586,40 +1528,6 @@ class Camera2Engine(private val context: Context) {
             }
 
             if (_isKeepUltraWideReady.value && isSwitchBetweenMainAndUW) {
-                val comp = previewCompositor
-                val isDualReady = (_ultraWideStreamStatus.value == BackgroundCameraStatus.READY_QUIET || isUltraWideStreaming.get())
-                if (comp != null && isDualReady) {
-                    val targetSource = if (lens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
-                    val handoffTs = comp.setActiveSource(targetSource, cropZoom = effectiveTargetZoom)
-
-                    val curCamId = cameraDevice?.id ?: "0"
-                    val targetCamId = if (lens.lensType == LensType.ULTRAWIDE && ultraWideStandbyCameraDevice != null) {
-                        ultraWideStandbyCameraDevice?.id ?: curCamId
-                    } else if (lens.lensType == LensType.WIDE && cameraDevice != null) {
-                        cameraDevice?.id ?: curCamId
-                    } else {
-                        curCamId
-                    }
-                    val physId = lens.physicalCameraId
-                    val firstUwTs = comp.firstUltraWideFrameTimestamp
-
-                    Log.i(
-                        TAG,
-                        "[LENS_SWITCH] Selected lens: ${lens.displayName}, current CameraDevice ID: $curCamId, target CameraDevice ID: $targetCamId, physicalCameraId: $physId, streams concurrent: true, active session reused: true, createCaptureSession called: false, first Ultra-Wide frame timestamp: $firstUwTs ms, source-texture handoff timestamp: $handoffTs ms"
-                    )
-
-                    activeSessionLens = lens
-                    _selectedLens.value = lens
-                    _displayedPreviewSource.value = targetSource
-                    _targetLens.value = lens
-                    activeSessionPhysicalCameraId = lens.physicalCameraId
-
-                    scheduleZoomPreviewUpdate(immediate = true)
-                    completeLensSwitch(lens)
-                    isSwitchingLens.set(false)
-                    return
-                }
-
                 val prewarmedCamera = ultraWideStandbyCameraDevice
                 if (prewarmedCamera != null && prewarmedCamera.id == lens.cameraId) {
                     Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Fast handover using pre-warmed CameraDevice ID ${lens.cameraId} for ${lens.lensType}")
@@ -2353,7 +2261,6 @@ class Camera2Engine(private val context: Context) {
         _previewAspectRatio.value = newRatio
         val optimalSize = getOptimalPreviewSize(_selectedLens.value?.cameraId, newRatio)
         _previewBufferSize.value = optimalSize
-        updateCompositorBufferGeometry(optimalSize, newRatio)
         previewSurfaceTexture?.let { texture ->
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
@@ -2587,7 +2494,6 @@ class Camera2Engine(private val context: Context) {
             }
             val optimalSize = if (isBufMatching && currentBuf != null) currentBuf else getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
             _previewBufferSize.value = optimalSize
-            updateCompositorBufferGeometry(optimalSize, targetRatio)
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
             texture.setDefaultBufferSize(cameraW, cameraH)
@@ -2597,11 +2503,6 @@ class Camera2Engine(private val context: Context) {
                 previewSurface = Surface(texture)
             }
 
-            initPreviewCompositorIfNeeded()
-            val effW = if (width > 0) width else cameraW
-            val effH = if (height > 0) height else cameraH
-            previewCompositor?.setOutputSurface(previewSurface, effW, effH, getDeviceRotationDegrees())
-
             if (prevTexture != texture || cameraDevice == null) {
                 if (_isCameraInitialized.value) {
                     startCamera()
@@ -2610,7 +2511,6 @@ class Camera2Engine(private val context: Context) {
                 reconfigureSession()
             }
         } else {
-            previewCompositor?.setOutputSurface(null, 0, 0)
             closeCamera()
         }
     }
@@ -3020,13 +2920,6 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun getEffectiveMainPreviewSurface(): Surface? {
-        val comp = previewCompositor
-        if (comp != null && comp.isEglInitialized.get()) {
-            val compMain = comp.mainSurface
-            if (compMain != null && compMain.isValid) {
-                return compMain
-            }
-        }
         val surf = previewSurface
         if (surf != null && surf.isValid) {
             return surf
@@ -3144,23 +3037,6 @@ class Camera2Engine(private val context: Context) {
                 previewConfig.setPhysicalCameraId(activeLens.physicalCameraId)
                 outputConfigs.add(previewConfig)
 
-                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                val mainLens = backLenses.firstOrNull { it.isPrimaryMain } ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
-                val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical } ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-                val dualMode = detectSimultaneousStreamingMode(mainLens, ultraWideLens)
-                val comp = previewCompositor
-                val canBindBothPhysicalOutputs = _isKeepUltraWideReady.value &&
-                        dualMode == DualStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
-                        ultraWideLens?.physicalCameraId != null &&
-                        comp?.ultraWideSurface != null
-
-                if (canBindBothPhysicalOutputs) {
-                    val uwSurf = comp!!.ultraWideSurface!!
-                    val uwConfig = android.hardware.camera2.params.OutputConfiguration(uwSurf)
-                    uwConfig.setPhysicalCameraId(ultraWideLens.physicalCameraId)
-                    outputConfigs.add(uwConfig)
-                }
-
                 imageReaderJpeg?.surface?.let {
                     val jpegConfig = android.hardware.camera2.params.OutputConfiguration(it)
                     jpegConfig.setPhysicalCameraId(activeLens.physicalCameraId)
@@ -3197,9 +3073,6 @@ class Camera2Engine(private val context: Context) {
                 val template = CameraDevice.TEMPLATE_PREVIEW
                 val builder = camera.createCaptureRequest(template).apply {
                     addTarget(previewSurf)
-                    if (canBindBothPhysicalOutputs && comp?.ultraWideSurface != null) {
-                        addTarget(comp.ultraWideSurface!!)
-                    }
                     applyCommonSettings(this)
                 }
                 synchronized(previewRequestLock) {
@@ -3227,10 +3100,6 @@ class Camera2Engine(private val context: Context) {
                                     }
                                 }
                                 _isCameraReady.value = true
-                                if (canBindBothPhysicalOutputs) {
-                                    activeLogicalMultiCamUltraWideConfigured = true
-                                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Bound persistent dual physical outputs to single logical multi-cam session (active=${activeLens.physicalCameraId}, uw=${ultraWideLens?.physicalCameraId})")
-                                }
                                 CameraPerformanceMonitor.start()
                                 completeLensSwitch(_selectedLens.value)
                                 if (_isKeepUltraWideReady.value) {
@@ -3246,13 +3115,7 @@ class Camera2Engine(private val context: Context) {
                             if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                             onSessionConfigurationFinished()
                             activeSessionPhysicalCameraId = null
-                            if (canBindBothPhysicalOutputs) {
-                                activeLogicalMultiCamUltraWideConfigured = false
-                                _ultraWideStreamStatus.value = BackgroundCameraStatus.FALLBACK_TURBO
-                                Log.w(TAG, "[KEEP_ULTRAWIDE_READY] HAL rejected simultaneous physical outputs, falling back")
-                            } else {
-                                Log.w(TAG, "Physical capture session failed, falling back to logical session")
-                            }
+                            Log.w(TAG, "Physical capture session failed, falling back to logical session")
                             createCameraCaptureSession(forceLogicalStream = true)
                         }
                     }
@@ -4121,7 +3984,6 @@ class Camera2Engine(private val context: Context) {
         currentZoom = clampedZoom
         _currentZoom.value = clampedZoom
         preferences.currentZoom = clampedZoom
-        previewCompositor?.setCropZoom(clampedZoom)
 
         // If front selfie camera, apply digital zoom on active stream,
         // or switch to rear lens if user explicitly tapped a rear zoom preset (.5x or 1x)
@@ -4192,23 +4054,6 @@ class Camera2Engine(private val context: Context) {
             pendingZoomPresetTapWhileSwitching = isPresetTap
             pendingLensWhileSwitching = targetLens
             return
-        }
-
-        // Instant optical source handoff via preview compositor when Keep Ultra Wide Ready is streaming
-        if (_isKeepUltraWideReady.value && previewCompositor != null && (isUltraWideStreaming.get() || _ultraWideStreamStatus.value == BackgroundCameraStatus.READY_QUIET)) {
-            val desiredSource = if (targetLens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
-            if (_displayedPreviewSource.value != desiredSource) {
-                _displayedPreviewSource.value = desiredSource
-                previewCompositor?.setActiveSource(desiredSource, cropZoom = pZoom)
-                _selectedLens.value = targetLens
-                scheduleZoomPreviewUpdate(immediate = isPresetTap)
-                return
-            } else {
-                previewCompositor?.setCropZoom(pZoom)
-                _selectedLens.value = targetLens
-                scheduleZoomPreviewUpdate(immediate = isPresetTap)
-                return
-            }
         }
 
         val activeLens = activeSessionLens ?: currentLens
@@ -5747,15 +5592,6 @@ class Camera2Engine(private val context: Context) {
      * Helper to resolve the active preview surface for either Main or Ultra-Wide streams.
      */
     private fun getActivePreviewSurface(): Surface? {
-        val comp = previewCompositor
-        if (comp != null && comp.isEglInitialized.get()) {
-            val s = if (_selectedLens.value?.lensType == LensType.ULTRAWIDE && comp.activeSource == PreviewStreamSource.ULTRAWIDE) {
-                comp.ultraWideSurface
-            } else {
-                comp.mainSurface
-            }
-            if (s?.isValid == true) return s
-        }
         return if (previewSurface?.isValid == true) previewSurface else null
     }
 

@@ -420,7 +420,7 @@ fun TopControlBar(
                         }
                     }
                 }
-                CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING, CameraMode.DUAL_VIDEO -> {
+                CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> {
                     Box(
                         modifier = Modifier
                             .height(34.dp)
@@ -576,7 +576,7 @@ fun TopControlBar(
                         )
                     }
                 }
-                CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING, CameraMode.DUAL_VIDEO -> {
+                CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> {
                     Box(
                         modifier = Modifier
                             .height(34.dp)

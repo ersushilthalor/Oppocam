@@ -10,7 +10,6 @@ enum class CameraMode(val title: String) {
     VIDEO("Video"),
     CINEMA("Pro Video"),
     NIGHT("Night"),
-    DUAL_VIDEO("Dual Video"),
     MORE("More"),
     AI_SUBJECT_TRACKING("AI Tracking")
 }
@@ -581,7 +580,6 @@ enum class BackgroundCameraStatus(val label: String, val shortDesc: String) {
 
 data class MotorolaInstantSwitchState(
     val isKeepUltraWideReady: Boolean = false,
-    val isDualVideoLens: Boolean = false,
     val isAutoSwitchToUltraWide: Boolean = false,
     val isAutoMacroActive: Boolean = false,
     val isShowUltraWidePreview: Boolean = false,

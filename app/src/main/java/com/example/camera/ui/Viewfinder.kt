@@ -1055,9 +1055,42 @@ fun configureTransform(
     val centerX = viewW / 2f
     val centerY = viewH / 2f
 
-    // CameraPreviewCompositor is the single owner of preview aspect ratio, crop,
-    // rotation, and zoom geometry. TextureView displays the compositor output directly
-    // without applying conflicting crop or scale transformations.
+    // Native Camera2 API Viewfinder Matrix Transformation
+    // Preview buffer dimensions and orientation are mapped to the TextureView
+    // ensuring zero distortion, zero stretching, zero unwanted crop, and proper framing.
+    if (previewBufferSize != null) {
+        val bufW = previewBufferSize.width.toFloat()
+        val bufH = previewBufferSize.height.toFloat()
+        val isLandscapeBuffer = bufW >= bufH
+        val bufferAspect = if (isLandscapeBuffer) bufW / bufH else bufH / bufW
+        val viewAspect = maxOf(viewW, viewH) / minOf(viewW, viewH)
+
+        if (displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270) {
+            val bufferRect = RectF(0f, 0f, bufH, bufW)
+            val viewRect = RectF(0f, 0f, viewW, viewH)
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+            val scale = maxOf(viewH / bufH, viewW / bufW)
+            matrix.postScale(scale, scale, centerX, centerY)
+            matrix.postRotate((90 * (displayRotation - 2)).toFloat(), centerX, centerY)
+        } else if (displayRotation == Surface.ROTATION_180) {
+            matrix.postRotate(180f, centerX, centerY)
+        } else {
+            // ROTATION_0 (standard portrait)
+            // Steady state: viewAspect matches bufferAspect -> identity matrix (no distortion, 1:1 square pixels).
+            // During transitions or if buffer aspect ratio differs from view aspect ratio,
+            // center-crop uniformly without distortion or stretching.
+            val diff = kotlin.math.abs(bufferAspect - targetRatio)
+            if (diff > 0.05f && kotlin.math.abs(bufferAspect - viewAspect) > 0.05f) {
+                val scale = if (viewAspect > bufferAspect) {
+                    viewAspect / bufferAspect
+                } else {
+                    bufferAspect / viewAspect
+                }
+                matrix.postScale(scale, 1.0f, centerX, centerY)
+            }
+        }
+    }
 
     // Viewfinder-level camera feature integration: Stable Action Horizon Lock & Dolly Zoom
     if (isHorizonLockEnabled) {

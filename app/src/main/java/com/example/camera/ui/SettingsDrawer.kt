@@ -203,7 +203,6 @@ fun SettingsDrawer(
     onOpenBeforeAfter: () -> Unit = {},
     instantSwitchState: MotorolaInstantSwitchState = MotorolaInstantSwitchState(),
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
-    onDualVideoLensToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit = {},
     onKeepFrontCameraReadyToggle: (Boolean) -> Unit = {},
@@ -461,7 +460,6 @@ fun SettingsDrawer(
                             lensSwitchPointMm = lensSwitchPointMm,
                             onLensSwitchPointChange = onLensSwitchPointChange,
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
-                            onDualVideoLensToggle = onDualVideoLensToggle,
                             onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
                             onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
                             onKeepFrontCameraReadyToggle = onKeepFrontCameraReadyToggle,
@@ -2048,7 +2046,6 @@ private fun CameraLensSettingsPage(
     lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
     onLensSwitchPointChange: (Float) -> Unit = {},
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
-    onDualVideoLensToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
     onKeepFrontCameraReadyToggle: (Boolean) -> Unit,
@@ -2091,18 +2088,6 @@ private fun CameraLensSettingsPage(
                 onCheckedChange = onKeepUltraWideReadyToggle,
                 tag = "toggle_keep_ultrawide_ready"
             )
-        }
-
-        if (instantSwitchState.isKeepUltraWideReady) {
-            item {
-                SettingsSwitchCard(
-                    title = "Dual Video Lens",
-                    description = "Maintain background Ultra-Wide camera active using Dual Video pipeline for instant 0 ms switching in Photo, Video, and Pro Video modes.",
-                    isChecked = instantSwitchState.isDualVideoLens,
-                    onCheckedChange = onDualVideoLensToggle,
-                    tag = "toggle_dual_video_lens"
-                )
-            }
         }
 
         item {

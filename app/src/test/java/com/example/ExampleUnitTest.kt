@@ -161,9 +161,9 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun testDualVideoModePresent() {
+    fun testDualVideoModeRemoved() {
         val modes = com.example.camera.model.CameraMode.entries.map { it.name }
-        assertTrue("DUAL_VIDEO should exist in CameraMode", modes.contains("DUAL_VIDEO"))
+        assertFalse("DUAL_VIDEO should not exist in CameraMode", modes.contains("DUAL_VIDEO"))
     }
 
     @Test

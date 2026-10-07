@@ -571,27 +571,6 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
-    fun testCompositorPersistentSurfacesAvailable() {
-        val compositor = CameraPreviewCompositor(1920, 1080)
-        compositor.start()
-        assertNotNull("Main persistent surface must be created", compositor.mainSurface)
-        assertNotNull("Ultra-Wide persistent surface must be created", compositor.ultraWideSurface)
-        assertEquals(PreviewStreamSource.MAIN, compositor.activeSource)
-
-        val handoffToUwTs = compositor.setActiveSource(PreviewStreamSource.ULTRAWIDE, cropZoom = 0.999f)
-        assertTrue(handoffToUwTs > 0)
-        assertEquals(PreviewStreamSource.ULTRAWIDE, compositor.activeSource)
-        assertEquals(0.999f, compositor.activeCropZoom, 0.001f)
-
-        val handoffToMainTs = compositor.setActiveSource(PreviewStreamSource.MAIN, cropZoom = 1.0f)
-        assertTrue(handoffToMainTs >= handoffToUwTs)
-        assertEquals(PreviewStreamSource.MAIN, compositor.activeSource)
-        assertEquals(1.0f, compositor.activeCropZoom, 0.001f)
-
-        compositor.release()
-    }
-
-    @Test
     fun testKeepUltraWideReadyDoesNotPrematurelyMarkReadyQuiet() {
         // Toggling Keep Ultra Wide Ready must not jump to READY_QUIET before frames are received
         engine.setKeepUltraWideReady(true)

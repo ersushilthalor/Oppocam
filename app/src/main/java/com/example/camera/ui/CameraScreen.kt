@@ -124,26 +124,6 @@ fun CameraScreen(
         return
     }
 
-    if (cameraMode == CameraMode.DUAL_VIDEO) {
-        val allAvailableLenses by viewModel.engine.availableLenses.collectAsStateWithLifecycle()
-        BackHandler {
-            viewModel.setCameraMode(CameraMode.PHOTO)
-        }
-        com.example.camera.dualvideo.ui.DualVideoScreen(
-            availableLenses = allAvailableLenses,
-            onBack = {
-                viewModel.setCameraMode(CameraMode.PHOTO)
-            },
-            onOpenGallery = { uri ->
-                if (uri != null) {
-                    com.example.camera.gallery.GalleryLauncher.openMedia(context, uri, isVideo = true)
-                } else {
-                    viewModel.openGallery(context)
-                }
-            }
-        )
-        return
-    }
     val capabilities by viewModel.engine.capabilities.collectAsStateWithLifecycle()
     val selectedPhotoResolution by viewModel.engine.selectedPhotoResolution.collectAsStateWithLifecycle()
     val selectedVideoResolution by viewModel.engine.selectedVideoResolution.collectAsStateWithLifecycle()
@@ -1135,10 +1115,6 @@ fun CameraScreen(
                 onSelectAiSubjectTracking = {
                     viewModel.setMoreModesOpen(false)
                     viewModel.setCameraMode(CameraMode.AI_SUBJECT_TRACKING)
-                },
-                onSelectDualVideo = {
-                    viewModel.setMoreModesOpen(false)
-                    viewModel.setCameraMode(CameraMode.DUAL_VIDEO)
                 },
                 onOpenSettings = {
                     viewModel.setMoreModesOpen(false)
