@@ -481,6 +481,50 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
+    fun testKeepUltraWideReadyEnablesSmoothTransitionBetweenHalfXAndOneX() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (ultraWideLens != null && mainLens != null) {
+            // Enable instant switch / keep ultra wide ready
+            viewModel.setKeepUltraWideReady(true)
+            assertTrue("isKeepUltraWideReady must be enabled", viewModel.engine.isKeepUltraWideReady.value)
+
+            // 1. From 1.0x, tapping 0.5x preset initiates smooth continuous zoom transition down
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            assertEquals(1.0f, viewModel.currentZoom.value, 0.001f)
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            assertTrue("Zoom must smoothly transition down towards 0.5x", viewModel.currentZoom.value <= 1.0f && viewModel.currentZoom.value >= 0.5f)
+            // Initial handoff at 0.999x must immediately set active stream to ultra wide
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+
+            // 2. From 0.5x, tapping 1.0x preset initiates smooth continuous zoom transition up
+            viewModel.engine.selectLens(ultraWideLens)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.currentZoom.value, 0.001f)
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            assertTrue("Zoom must smoothly transition up towards 1.0x", viewModel.currentZoom.value >= 0.5f && viewModel.currentZoom.value <= 1.0f)
+            // While zooming up, stream stays on ultra wide until handoff at 1.0x
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+
+            // 3. Selecting lens via selectLens() also performs smooth transition
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            viewModel.selectLens(ultraWideLens)
+            assertTrue("Selecting ultra-wide must trigger smooth transition down", viewModel.currentZoom.value <= 1.0f && viewModel.currentZoom.value >= 0.5f)
+
+            // 4. Verify engine instant lens switching remains intact
+            viewModel.engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+            assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
+            viewModel.engine.selectLens(ultraWideLens, preserveZoom = false, targetZoom = 0.5f)
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+        }
+    }
+
+    @Test
     fun testOpticalCalibrationAtPointNineNineNineMatchesOneXMainCropLimit() {
         // At 0.5x on Ultra-Wide: 1.0x digital crop (full uncropped sensor)
         val cropAt05 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.5f, 0.5f, LensType.ULTRAWIDE)
