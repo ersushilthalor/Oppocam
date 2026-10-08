@@ -1287,7 +1287,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun selectLens(lens: LensInfo) {
+    fun selectLens(lens: LensInfo, instant: Boolean = false) {
         val currentLens = engine.selectedLens.value
         val currentZ = _currentZoom.value
 
@@ -1302,9 +1302,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val isDifferentLens = currentLens == null || currentLens.id != lens.id || currentLens.lensType != lens.lensType
         val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.05f
 
-        if (isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
-            // Smooth continuous sub-step interpolation across complete range to target lens
-            startContinuousZoomTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens)
+        if (!instant && isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
+            // Smooth continuous sub-step interpolation across complete range to target lens (0.5s duration)
+            startContinuousZoomTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens, durationMs = 500L)
             val lensDesc = when (lens.lensType) {
                 LensType.ULTRAWIDE -> "0.5x Ultra-Wide"
                 LensType.WIDE -> "1x Main"
@@ -1315,6 +1315,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             showToast("Switched to $lensDesc Lens")
             return
+        }
+
+        if (instant) {
+            zoomTransitionJob?.cancel()
+            zoomTransitionJob = null
         }
 
         engine.selectLens(lens)
@@ -1623,17 +1628,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Unified continuous zoom interpolation system.
-     * Smoothly transitions between any two zoom values over exactly 250 ms (0.25s) using continuous
-     * sub-step interpolation with a smooth sinusoidal / ease-in-out curve.
+     * Smoothly transitions between any two zoom values over exactly 500 ms (0.5s) using continuous
+     * sub-step interpolation with a smooth sinusoidal ease-in-out curve:
+     * - Starts slow
+     * - Becomes faster in the middle
+     * - Slows down smoothly at the end
+     * - No jumps, steps, snapping, or predefined zoom-value jumps
+     * The entire transition always takes exactly 0.5s regardless of zoom distance (1x->2x, 1x->3x, 1x->5x, 0.5x->1x).
+     * Continuous floating-point interpolation from current to target zoom.
      * Synchronizes physical lens switching and digital crop at the exact sub-step threshold where the zoom
      * crosses the optical boundary (e.g., 0.5x <-> 1.0x at 1.000x / 0.999x, 1.0x <-> 2.0x at 1.8x, etc.),
-     * with no discrete 0.1x steps.
+     * with no discrete steps. Instant switching between physical lenses remains independent and instant.
      */
     fun startContinuousZoomTransition(
         fromZoom: Float,
         targetZoom: Float,
         targetLens: LensInfo? = null,
-        durationMs: Long = 250L
+        durationMs: Long = 500L
     ) {
         zoomTransitionJob?.cancel()
         zoomTransitionJob = viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -1693,9 +1704,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     break
                 }
 
-                // Smooth continuous interpolation curve across the complete zoom range (sinusoidal ease-in-out)
+                // Smooth continuous ease-in-out curve across the complete zoom range:
+                // - Starts slow
+                // - Becomes faster in the middle
+                // - Slows down smoothly at the end
+                // - Continuous floating-point interpolation with no jumps, steps, or fixed intermediate values
                 val rawProgress = (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                val progress = ((1.0 - kotlin.math.cos(rawProgress * Math.PI)) / 2.0).toFloat()
+                val progress = ((1.0 - kotlin.math.cos(rawProgress.toDouble() * Math.PI)) / 2.0).toFloat()
                 val currentZ = startZ + (endZ - startZ) * progress
 
                 _currentZoom.value = currentZ
@@ -1739,15 +1754,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun startSmoothHalfXToOneXTransition(fromZoom: Float = _currentZoom.value) {
-        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = 1.0f)
+        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = 1.0f, durationMs = 500L)
     }
 
     fun startSmoothOneXToHalfXTransition(fromZoom: Float = _currentZoom.value, targetZoom: Float = 0.5f) {
-        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = targetZoom)
+        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = targetZoom, durationMs = 500L)
     }
 
     fun startSmoothLensTransition(fromZoom: Float, targetZoom: Float, targetLens: LensInfo? = null) {
-        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = targetZoom, targetLens = targetLens)
+        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = targetZoom, targetLens = targetLens, durationMs = 500L)
     }
 
     fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
