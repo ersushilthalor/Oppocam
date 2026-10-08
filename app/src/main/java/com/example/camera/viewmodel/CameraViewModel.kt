@@ -1669,10 +1669,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val switchPoint = engine.lensSwitchPointMm.value
             val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
 
+            val resolvedDestinationLens = targetLens ?: when {
+                endZ < switchZoom -> ultraWideLens
+                endZ >= 2.8f && tele3xLens != null -> tele3xLens
+                endZ >= 1.8f && tele2xLens != null -> tele2xLens
+                else -> mainWideLens
+            } ?: engine.resolvedTargetLens.value
+
             if (kotlin.math.abs(endZ - startZ) < 0.001f) {
                 _currentZoom.value = endZ
                 preferences.setModeZoom(_cameraMode.value, endZ)
-                val destLens = targetLens ?: if (endZ < switchZoom) ultraWideLens else mainWideLens
+                val destLens = resolvedDestinationLens
                 if (destLens != null && !engine.isRunningOnLens(destLens)) {
                     engine.selectLens(destLens, preserveZoom = true, targetZoom = endZ)
                 } else {
@@ -1715,7 +1722,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 preferences.setModeZoom(_cameraMode.value, currentZ)
 
                 // Continuous zoom update advancing smoothly without artificial clamping or discrete holds
-                engine.setZoom(currentZ, isPresetTap = false)
+                // Passes isContinuousTransition = true so physical lens handoffs are synchronized within the timeline
+                engine.setZoom(currentZ, isPresetTap = false, isContinuousTransition = true)
 
                 if (isFinal) {
                     break
@@ -1725,25 +1733,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 delay(sleepTime)
             }
 
-            // Cleanly finalize at exact destination zoom & lens
+            // Cleanly finalize at exact destination zoom & lens without sudden late switch
             _currentZoom.value = endZ
             preferences.setModeZoom(_cameraMode.value, endZ)
 
-            val resolvedDestinationLens = targetLens ?: when {
-                endZ < switchZoom -> ultraWideLens
-                endZ >= 2.8f && tele3xLens != null -> tele3xLens
-                endZ >= 1.8f && tele2xLens != null -> tele2xLens
-                else -> mainWideLens
-            } ?: engine.resolvedTargetLens.value
-
-            if (resolvedDestinationLens != null && !engine.isRunningOnLens(resolvedDestinationLens)) {
-                engine.selectLens(resolvedDestinationLens, preserveZoom = true, targetZoom = endZ)
+            if (resolvedDestinationLens != null) {
                 preferences.lastFacing = resolvedDestinationLens.facing
                 preferences.saveLastLens(resolvedDestinationLens)
                 preferences.setModeLens(_cameraMode.value, resolvedDestinationLens)
+                if (!engine.isRunningOnLens(resolvedDestinationLens) && engine.targetLens.value?.id != resolvedDestinationLens.id) {
+                    engine.selectLens(resolvedDestinationLens, preserveZoom = true, targetZoom = endZ)
+                }
             }
 
-            engine.setZoom(endZ, isPresetTap = false)
+            engine.setZoom(endZ, isPresetTap = false, isContinuousTransition = false)
             zoomTransitionJob = null
         }
     }

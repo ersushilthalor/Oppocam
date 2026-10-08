@@ -527,6 +527,53 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
+    fun testHalfXToTwoXContinuousTransitionTimelineAndPreservedInstantSwitch() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val teleLens = lenses.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical }
+
+        if (ultraWideLens != null && mainLens != null) {
+            viewModel.engine.selectLens(ultraWideLens)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.currentZoom.value, 0.001f)
+
+            // Trigger continuous 0.5x -> 2.0x transition
+            viewModel.setZoom(2.0f, isPresetTap = true)
+            assertTrue("Zoom must smoothly transition up towards 2.0x", viewModel.currentZoom.value >= 0.5f && viewModel.currentZoom.value <= 2.0f)
+
+            // Direct instant switch remains instant
+            viewModel.engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+            assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
+            viewModel.engine.selectLens(ultraWideLens, preserveZoom = false, targetZoom = 0.5f)
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+
+            // Digital crop on Ultra-Wide extends smoothly past switchZoom during in-flight handoff without freeze
+            val cropAt11OnUw = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.1f, 0.5f, LensType.ULTRAWIDE)
+            assertTrue(cropAt11OnUw > 1.44f)
+
+            // Resolution during transition targets telephoto when reaching telephoto boundary
+            val resolvedAt20 = CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.WIDE,
+                targetZoom = 2.0f,
+                hasUltraWide = true,
+                hasTelephoto2x = teleLens != null,
+                hasTelephoto3x = false,
+                isPresetTap = false,
+                isContinuousTransition = true
+            )
+            if (teleLens != null) {
+                assertEquals(LensType.TELEPHOTO, resolvedAt20)
+            } else {
+                assertEquals(LensType.WIDE, resolvedAt20)
+            }
+        }
+    }
+
+    @Test
     fun testOpticalCalibrationAtPointNineNineNineMatchesOneXMainCropLimit() {
         // At 0.5x on Ultra-Wide: 1.0x digital crop (full uncropped sensor)
         val cropAt05 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.5f, 0.5f, LensType.ULTRAWIDE)

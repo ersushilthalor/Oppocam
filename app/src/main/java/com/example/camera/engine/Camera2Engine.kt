@@ -1937,7 +1937,7 @@ class Camera2Engine(private val context: Context) {
         pendingZoomPresetTapWhileSwitching = false
 
         if (nextZoom != null) {
-            val effectiveZoom = maxOf(currentZoom, nextZoom)
+            val effectiveZoom = nextZoom
             currentZoom = effectiveZoom
             _currentZoom.value = effectiveZoom
             preferences.currentZoom = effectiveZoom
@@ -4611,7 +4611,9 @@ class Camera2Engine(private val context: Context) {
                         digitalCrop
                     }
                     val maxAllowedZoom = if (lens.lensType == LensType.ULTRAWIDE && (!isLogicalMulti || isRunningOnPhysicalStream)) {
-                        CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
+                        val baseUwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
+                        val switchZ = CameraOpticalCalibration.switchPointToZoom(_lensSwitchPointMm.value)
+                        baseUwCrop * (effectiveUiZoom / switchZ).coerceAtLeast(1.0f)
                     } else {
                         zoomRange.upper
                     }
@@ -4714,7 +4716,7 @@ class Camera2Engine(private val context: Context) {
     /**
      * Set Zoom (.5x to 10x) with seamless automatic lens switching and hysteresis
      */
-    fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
+    fun setZoom(zoom: Float, isPresetTap: Boolean = false, isContinuousTransition: Boolean = false) {
         val currentLens = _selectedLens.value ?: return
 
         val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
@@ -4781,7 +4783,8 @@ class Camera2Engine(private val context: Context) {
             hasTelephoto2x = hasTele2x,
             hasTelephoto3x = hasTele3x,
             isPresetTap = isPresetTap,
-            switchPointMm = switchPoint
+            switchPointMm = switchPoint,
+            isContinuousTransition = isContinuousTransition
         )
 
         val targetLens: LensInfo = when (targetType) {

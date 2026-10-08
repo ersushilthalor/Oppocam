@@ -239,11 +239,14 @@ object CameraOpticalCalibration {
             LensType.ULTRAWIDE -> {
                 if (uiZoom <= 0.5f) {
                     1.0f
-                } else {
-                    val upperZoom = switchZoom
-                    val t = ((uiZoom - 0.5f) / (upperZoom - 0.5f)).coerceIn(0f, 1f)
+                } else if (uiZoom <= switchZoom) {
+                    val t = ((uiZoom - 0.5f) / (switchZoom - 0.5f).coerceAtLeast(0.001f)).coerceIn(0f, 1f)
                     val crop = 1.0f + t * (maxUwCrop - 1.0f)
                     crop.coerceIn(1.0f, maxUwCrop)
+                } else {
+                    // Continuous extension beyond switchZoom during in-flight lens handoff:
+                    // scale proportionally so effective FOV matches Main lens at uiZoom with zero freeze or scale jump
+                    maxUwCrop * (uiZoom / switchZoom)
                 }
             }
             LensType.WIDE -> {
@@ -271,16 +274,18 @@ object CameraOpticalCalibration {
         hasTelephoto2x: Boolean,
         hasTelephoto3x: Boolean,
         isPresetTap: Boolean,
-        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
+        isContinuousTransition: Boolean = false
     ): LensType {
         val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
         val switchZoom = switchPointToZoom(clampedSwitch, DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
 
         // At or above the dynamic switch point zoom threshold, target Main (Wide) or Telephoto lens
         if (targetZoom >= switchZoom) {
+            val isDirectOrTransition = isPresetTap || isContinuousTransition
             return when {
-                targetZoom >= 2.8f && hasTelephoto3x && (isPresetTap || currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) && switchZoom <= 2.8f -> LensType.TELEPHOTO_3X
-                targetZoom >= 1.8f && hasTelephoto2x && (isPresetTap || currentLensType == LensType.TELEPHOTO || targetZoom >= 2.15f) && switchZoom <= 1.8f -> LensType.TELEPHOTO
+                targetZoom >= 2.8f && hasTelephoto3x && (isDirectOrTransition || currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) && switchZoom <= 2.8f -> LensType.TELEPHOTO_3X
+                targetZoom >= 1.8f && hasTelephoto2x && (isDirectOrTransition || currentLensType == LensType.TELEPHOTO || targetZoom >= 2.15f) && switchZoom <= 1.8f -> LensType.TELEPHOTO
                 currentLensType == LensType.TELEPHOTO && targetZoom >= 1.85f && switchZoom <= 1.85f -> LensType.TELEPHOTO
                 currentLensType == LensType.TELEPHOTO_3X && targetZoom >= 2.85f && switchZoom <= 2.85f -> LensType.TELEPHOTO_3X
                 else -> LensType.WIDE
