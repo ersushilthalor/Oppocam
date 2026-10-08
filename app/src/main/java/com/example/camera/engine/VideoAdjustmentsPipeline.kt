@@ -163,6 +163,250 @@ object VideoAdjustmentsPipeline {
         }
     """.trimIndent()
 
+    /**
+     * Unified OpenGL ES 2.0 Fragment Shader Code for real-time live video recording & preview split.
+     * Evaluates the identical mathematical adjustments completely on GPU hardware with zero CPU allocations.
+     * If adjustments are default (uBypassAdjustments == 1), executes single texture2D lookup with negligible overhead.
+     */
+    val GLES_VIDEO_ADJUSTMENTS_FRAGMENT_SHADER: String = """
+        #extension GL_OES_EGL_image_external : require
+        precision highp float;
+        varying vec2 vTextureCoord;
+        uniform samplerExternalOES sTexture;
+        uniform vec2 uResolution;
+        uniform float uTime;
+        uniform int uBypassAdjustments;
+
+        uniform float uExposure;
+        uniform float uTonality;
+        uniform float uContrast;
+        uniform float uSaturation;
+        uniform float uColorVibrance;
+        uniform float uHighlights;
+        uniform float uShadows;
+        uniform float uTemperature;
+        uniform float uTint;
+        uniform float uClarity;
+        uniform float uSharpness;
+
+        uniform float uCurveBlacks;
+        uniform float uCurveShadows;
+        uniform float uCurveMidtones;
+        uniform float uCurveHighlights;
+        uniform float uCurveWhites;
+
+        uniform float uColorBalanceR;
+        uniform float uColorBalanceG;
+        uniform float uColorBalanceB;
+
+        uniform float uVignette;
+        uniform float uGrain;
+        uniform float uSoftLight;
+        uniform float uBloom;
+        uniform float uFlash;
+        uniform float uHalation;
+        uniform float uMicroContrast;
+
+        void main() {
+            vec4 color = texture2D(sTexture, vTextureCoord);
+            if (uBypassAdjustments == 1) {
+                gl_FragColor = color;
+                return;
+            }
+
+            vec3 rgb = color.rgb;
+            vec2 uv = (uResolution.x > 0.0 && uResolution.y > 0.0) ? vTextureCoord : vec2(0.5, 0.5);
+
+            // Clarity / Sharpness / MicroContrast convolution
+            if (abs(uClarity) > 0.001 || uSharpness > 0.001 || uMicroContrast > 0.001) {
+                vec2 texel = vec2(1.0 / max(uResolution.x, 1.0), 1.0 / max(uResolution.y, 1.0));
+                vec3 cUp = texture2D(sTexture, vTextureCoord + vec2(0.0, -texel.y)).rgb;
+                vec3 cDown = texture2D(sTexture, vTextureCoord + vec2(0.0, texel.y)).rgb;
+                vec3 cLeft = texture2D(sTexture, vTextureCoord + vec2(-texel.x, 0.0)).rgb;
+                vec3 cRight = texture2D(sTexture, vTextureCoord + vec2(texel.x, 0.0)).rgb;
+                vec3 laplacian = (cUp + cDown + cLeft + cRight) * 0.25 - rgb;
+                float totalSharpness = (uSharpness * 0.006) + (uClarity * 0.005) + (uMicroContrast * 0.005);
+                rgb = clamp(rgb - laplacian * totalSharpness, 0.0, 1.0);
+            }
+
+            // 1. Rec.709 Luminance for accurate tonal separation
+            float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+
+            // 2. Luminance-based Tonal Masks (Smoothstep parabolic masks)
+            float shadowT = 1.0 - smoothstep(0.0, 0.50, luma);
+            float shadowMask = shadowT * shadowT;
+            float totalShadows = uShadows + uCurveShadows;
+            float shadowAdjustment = (totalShadows / 100.0) * 0.35 * shadowMask;
+
+            float hlT = smoothstep(0.45, 1.0, luma);
+            float hlMask = hlT * hlT;
+            float totalHighlights = uHighlights + uCurveHighlights;
+            float hlAdjustment = (totalHighlights / 100.0) * 0.35 * hlMask;
+
+            float blackT = 1.0 - smoothstep(0.0, 0.25, luma);
+            float blackAdjustment = (uCurveBlacks / 100.0) * 0.25 * (blackT * blackT);
+
+            float whiteT = smoothstep(0.75, 1.0, luma);
+            float whiteAdjustment = (uCurveWhites / 100.0) * 0.25 * (whiteT * whiteT);
+
+            float midDist = abs(luma - 0.5);
+            float midMask = clamp(1.0 - 4.0 * midDist * midDist, 0.0, 1.0);
+            float midAdjustment = (uCurveMidtones / 100.0) * 0.25 * midMask;
+
+            rgb += vec3(shadowAdjustment + hlAdjustment + blackAdjustment + whiteAdjustment + midAdjustment);
+
+            // 3. Tonality
+            rgb += vec3((uTonality / 100.0) * 0.10);
+
+            // 4. Exposure
+            if (abs(uExposure) > 0.001) {
+                rgb *= pow(2.0, uExposure * 0.45);
+            }
+
+            // 5. Contrast
+            if (abs(uContrast) > 0.001) {
+                float c = 1.0 + (uContrast / 100.0) * 0.65;
+                rgb = (rgb - 0.5) * c + 0.5;
+            }
+
+            // 6. White Balance (Temperature & Tint)
+            if (abs(uTemperature) > 0.001 || abs(uTint) > 0.001) {
+                float tFactor = (uTemperature / 100.0) * 0.22;
+                float tintFactor = (uTint / 100.0) * 0.18;
+                rgb.r *= (1.0 + tFactor) * (1.0 + tintFactor * 0.5);
+                rgb.g *= (1.0 - tintFactor);
+                rgb.b *= (1.0 - tFactor) * (1.0 + tintFactor * 0.5);
+            }
+
+            // 7. Saturation & Vibrance
+            float totalSat = uSaturation + (uColorVibrance * 0.65);
+            if (abs(totalSat) > 0.001) {
+                float newLuma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+                float s = max(0.0, 1.0 + (totalSat / 100.0));
+                rgb = mix(vec3(newLuma), rgb, s);
+            }
+
+            // 8. Color Balance (R-C, G-M, B-Y)
+            rgb.r += (uColorBalanceR / 100.0) * 0.08;
+            rgb.g += (uColorBalanceG / 100.0) * 0.08;
+            rgb.b += (uColorBalanceB / 100.0) * 0.08;
+
+            // 9. Spatial: Vignette
+            if (uVignette > 0.001) {
+                float d = length(uv - 0.5);
+                float vFactor = 1.0 - smoothstep(0.35, 0.85, d) * (uVignette / 100.0) * 0.92;
+                rgb *= vFactor;
+            }
+
+            // 10. Spatial: Film Grain
+            if (uGrain > 0.001) {
+                float noise = (fract(sin(dot(uv * 1234.56 + uTime, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * (uGrain / 100.0) * 0.16;
+                rgb = clamp(rgb + vec3(noise), 0.0, 1.0);
+            }
+
+            // 11. Spatial: Soft Light
+            if (uSoftLight > 0.001) {
+                vec3 softGlow = vec3(0.98, 0.95, 0.90) * (uSoftLight / 100.0) * 0.12;
+                rgb = clamp(rgb + softGlow, 0.0, 1.0);
+            }
+
+            // 12. Spatial: Bloom, Halation, Flash
+            if (uBloom > 0.001) {
+                float bDist = length(uv - vec2(0.5, 0.42));
+                float bFactor = (1.0 - smoothstep(0.0, 0.65, bDist)) * (uBloom / 100.0) * 0.15;
+                rgb += vec3(1.0, 0.85, 0.3) * bFactor;
+            }
+            if (uHalation > 0.001) {
+                float hDist = length(uv - 0.5);
+                float hFactor = smoothstep(0.35, 0.85, hDist) * (uHalation / 100.0) * 0.15;
+                rgb.r += hFactor;
+            }
+            if (uFlash > 0.001) {
+                float yDist = abs(uv.y - 0.48);
+                float fStreak = (1.0 - smoothstep(0.0, 0.03, yDist)) * (uFlash / 100.0) * 0.35;
+                rgb += vec3(0.6, 0.8, 1.0) * fStreak;
+            }
+
+            gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);
+        }
+    """.trimIndent()
+
+    class VideoAdjustmentsShaderHandles(programId: Int) {
+        val uBypassAdjustmentsHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uBypassAdjustments")
+        val uResolutionHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uResolution")
+        val uTimeHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uTime")
+        val uExposureHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uExposure")
+        val uTonalityHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uTonality")
+        val uContrastHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uContrast")
+        val uSaturationHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uSaturation")
+        val uColorVibranceHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uColorVibrance")
+        val uHighlightsHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uHighlights")
+        val uShadowsHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uShadows")
+        val uTemperatureHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uTemperature")
+        val uTintHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uTint")
+        val uClarityHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uClarity")
+        val uSharpnessHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uSharpness")
+        val uCurveBlacksHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uCurveBlacks")
+        val uCurveShadowsHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uCurveShadows")
+        val uCurveMidtonesHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uCurveMidtones")
+        val uCurveHighlightsHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uCurveHighlights")
+        val uCurveWhitesHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uCurveWhites")
+        val uColorBalanceRHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uColorBalanceR")
+        val uColorBalanceGHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uColorBalanceG")
+        val uColorBalanceBHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uColorBalanceB")
+        val uVignetteHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uVignette")
+        val uGrainHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uGrain")
+        val uSoftLightHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uSoftLight")
+        val uBloomHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uBloom")
+        val uFlashHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uFlash")
+        val uHalationHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uHalation")
+        val uMicroContrastHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uMicroContrast")
+    }
+
+    fun bindUniforms(
+        handles: VideoAdjustmentsShaderHandles,
+        adjustments: VideoAdjustments?,
+        width: Int,
+        height: Int,
+        timeSec: Float
+    ) {
+        if (adjustments == null || adjustments.isDefault) {
+            android.opengl.GLES20.glUniform1i(handles.uBypassAdjustmentsHandle, 1)
+            return
+        }
+
+        android.opengl.GLES20.glUniform1i(handles.uBypassAdjustmentsHandle, 0)
+        android.opengl.GLES20.glUniform2f(handles.uResolutionHandle, width.toFloat().coerceAtLeast(1f), height.toFloat().coerceAtLeast(1f))
+        android.opengl.GLES20.glUniform1f(handles.uTimeHandle, timeSec % 100.0f)
+        android.opengl.GLES20.glUniform1f(handles.uExposureHandle, adjustments.exposure)
+        android.opengl.GLES20.glUniform1f(handles.uTonalityHandle, adjustments.tonality)
+        android.opengl.GLES20.glUniform1f(handles.uContrastHandle, adjustments.contrast)
+        android.opengl.GLES20.glUniform1f(handles.uSaturationHandle, adjustments.saturation)
+        android.opengl.GLES20.glUniform1f(handles.uColorVibranceHandle, adjustments.colorVibrance)
+        android.opengl.GLES20.glUniform1f(handles.uHighlightsHandle, adjustments.highlights)
+        android.opengl.GLES20.glUniform1f(handles.uShadowsHandle, adjustments.shadows)
+        android.opengl.GLES20.glUniform1f(handles.uTemperatureHandle, adjustments.temperature)
+        android.opengl.GLES20.glUniform1f(handles.uTintHandle, adjustments.tint)
+        android.opengl.GLES20.glUniform1f(handles.uClarityHandle, adjustments.clarity)
+        android.opengl.GLES20.glUniform1f(handles.uSharpnessHandle, adjustments.sharpness)
+        android.opengl.GLES20.glUniform1f(handles.uCurveBlacksHandle, adjustments.curveBlacks)
+        android.opengl.GLES20.glUniform1f(handles.uCurveShadowsHandle, adjustments.curveShadows)
+        android.opengl.GLES20.glUniform1f(handles.uCurveMidtonesHandle, adjustments.curveMidtones)
+        android.opengl.GLES20.glUniform1f(handles.uCurveHighlightsHandle, adjustments.curveHighlights)
+        android.opengl.GLES20.glUniform1f(handles.uCurveWhitesHandle, adjustments.curveWhites)
+        android.opengl.GLES20.glUniform1f(handles.uColorBalanceRHandle, adjustments.colorBalanceR)
+        android.opengl.GLES20.glUniform1f(handles.uColorBalanceGHandle, adjustments.colorBalanceG)
+        android.opengl.GLES20.glUniform1f(handles.uColorBalanceBHandle, adjustments.colorBalanceB)
+        android.opengl.GLES20.glUniform1f(handles.uVignetteHandle, adjustments.vignette)
+        val totalGrain = adjustments.grain + adjustments.textureFilmGrain
+        android.opengl.GLES20.glUniform1f(handles.uGrainHandle, totalGrain)
+        android.opengl.GLES20.glUniform1f(handles.uSoftLightHandle, adjustments.lightFxSoftLight)
+        android.opengl.GLES20.glUniform1f(handles.uBloomHandle, adjustments.lightFxBloom)
+        android.opengl.GLES20.glUniform1f(handles.uFlashHandle, adjustments.lightFxFlash)
+        android.opengl.GLES20.glUniform1f(handles.uHalationHandle, adjustments.textureHalation)
+        android.opengl.GLES20.glUniform1f(handles.uMicroContrastHandle, adjustments.textureMicroContrast)
+    }
+
     val isGpuShaderSupported: Boolean
         get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
@@ -184,15 +428,19 @@ object VideoAdjustmentsPipeline {
             return
         }
 
-        val matrix = computeColorMatrix(adjustments)
-        if (matrix != null) {
-            val paint = fallbackPaint ?: Paint().also { fallbackPaint = it }
-            paint.colorFilter = ColorMatrixColorFilter(matrix)
-            view.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            applyGpuShader(view, adjustments)
         } else {
-            view.setLayerType(View.LAYER_TYPE_NONE, null)
+            val matrix = computeColorMatrix(adjustments)
+            if (matrix != null) {
+                val paint = fallbackPaint ?: Paint().also { fallbackPaint = it }
+                paint.colorFilter = ColorMatrixColorFilter(matrix)
+                view.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+            } else {
+                view.setLayerType(View.LAYER_TYPE_NONE, null)
+            }
+            view.invalidate()
         }
-        view.invalidate()
     }
 
     private var currentAttachedView: java.lang.ref.WeakReference<View>? = null

@@ -52,13 +52,25 @@ class DualCameraRecordingRelay(
     private val customPipelineRecorder: CustomVideoPipelineRecorder? = null,
     private val sensorOrientation: Int = 90,
     private val deviceRotation: Int = 0,
-    private val isFront: Boolean = false
+    private val isFront: Boolean = false,
+    private val previewTargetSurface: Surface? = null,
+    private val previewWidth: Int = 0,
+    private val previewHeight: Int = 0,
+    initialAdjustments: com.example.camera.model.VideoAdjustments? = null
 ) {
     companion object {
         private const val TAG = "DualCamRecRelay"
         private const val EGL_RECORDABLE_ANDROID = 0x3142
         private const val EGL_GL_COLORSPACE_KHR = 0x309D
         private const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
+    }
+
+    @Volatile
+    var currentVideoAdjustments: com.example.camera.model.VideoAdjustments = initialAdjustments ?: com.example.camera.model.VideoAdjustments()
+        private set
+
+    fun updateVideoAdjustments(adjustments: com.example.camera.model.VideoAdjustments) {
+        currentVideoAdjustments = adjustments
     }
 
     @Volatile
@@ -82,9 +94,16 @@ class DualCameraRecordingRelay(
     private var eglDisplay: EGLDisplay? = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext? = EGL14.EGL_NO_CONTEXT
     private var eglSurface: EGLSurface? = EGL14.EGL_NO_SURFACE
+    private var eglPreviewSurface: EGLSurface? = EGL14.EGL_NO_SURFACE
     private var programId: Int = 0
+    private var vadjHandles: VideoAdjustmentsPipeline.VideoAdjustmentsShaderHandles? = null
     private var mainOesTexId: Int = 0
     private var ultraWideOesTexId: Int = 0
+
+    val isRelayPreviewActive: Boolean
+        get() = (eglPreviewSurface != null && eglPreviewSurface != EGL14.EGL_NO_SURFACE)
+
+    fun hasPreviewSurface(): Boolean = isRelayPreviewActive
 
     private var uMVPMatrixHandle: Int = -1
     private var uSTMatrixHandle: Int = -1
@@ -397,6 +416,21 @@ class DualCameraRecordingRelay(
         }
         eglSurface = surface
 
+        if (previewTargetSurface != null && previewTargetSurface.isValid) {
+            try {
+                val prevSurf = EGL14.eglCreateWindowSurface(display, chosenConfig, previewTargetSurface, surfaceAttribs, 0)
+                if (prevSurf != null && prevSurf != EGL14.EGL_NO_SURFACE) {
+                    eglPreviewSurface = prevSurf
+                    Log.i(TAG, "Created EGL preview surface for real-time video adjustments preview")
+                } else {
+                    eglPreviewSurface = EGL14.EGL_NO_SURFACE
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed creating EGL surface for previewTargetSurface: ${t.message}")
+                eglPreviewSurface = EGL14.EGL_NO_SURFACE
+            }
+        }
+
         if (!EGL14.eglMakeCurrent(display, surface, surface, context)) {
             throw IllegalStateException("eglMakeCurrent failed")
         }
@@ -413,17 +447,10 @@ class DualCameraRecordingRelay(
             }
         """.trimIndent()
 
-        val fragmentShader = """
-            #extension GL_OES_EGL_image_external : require
-            precision highp float;
-            varying vec2 vTextureCoord;
-            uniform samplerExternalOES sTexture;
-            void main() {
-                gl_FragColor = texture2D(sTexture, vTextureCoord);
-            }
-        """.trimIndent()
+        val fragmentShader = VideoAdjustmentsPipeline.GLES_VIDEO_ADJUSTMENTS_FRAGMENT_SHADER
 
         programId = createProgram(vertexShader, fragmentShader)
+        vadjHandles = VideoAdjustmentsPipeline.VideoAdjustmentsShaderHandles(programId)
         uMVPMatrixHandle = GLES20.glGetUniformLocation(programId, "uMVPMatrix")
         uSTMatrixHandle = GLES20.glGetUniformLocation(programId, "uSTMatrix")
         aPositionHandle = GLES20.glGetAttribLocation(programId, "aPosition")
@@ -574,6 +601,18 @@ class DualCameraRecordingRelay(
                 GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
                 GLES20.glUniform1i(sTextureHandle, 0)
 
+                val frameTimeSec = ((candidatePtsNs - recordingStartMonotonicNs).toFloat() / 1_000_000_000f)
+                val handles = vadjHandles
+                if (handles != null) {
+                    VideoAdjustmentsPipeline.bindUniforms(
+                        handles = handles,
+                        adjustments = currentVideoAdjustments,
+                        width = outW,
+                        height = outH,
+                        timeSec = frameTimeSec
+                    )
+                }
+
                 val activeTexId = if (isUltraWide) ultraWideOesTexId else mainOesTexId
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
                 GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, activeTexId)
@@ -602,6 +641,70 @@ class DualCameraRecordingRelay(
                     relayedFrameCount.incrementAndGet()
                 } else {
                     Log.w(TAG, "eglSwapBuffers returned false")
+                }
+
+                // Split identical GPU processed frame directly to Preview Surface
+                val prevSurf = eglPreviewSurface
+                if (prevSurf != null && prevSurf != EGL14.EGL_NO_SURFACE) {
+                    try {
+                        if (EGL14.eglMakeCurrent(display, prevSurf, prevSurf, context)) {
+                            val pW = if (previewWidth > 0) previewWidth else outW
+                            val pH = if (previewHeight > 0) previewHeight else outH
+                            GLES20.glViewport(0, 0, pW, pH)
+                            GLES20.glClearColor(0f, 0f, 0f, 1f)
+                            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                            GLES20.glUseProgram(programId)
+
+                            val previewTexMatrix = FloatArray(16)
+                            computeCameraTexMatrix(
+                                stMatrix = stMatrix,
+                                isFront = isFrontFacing,
+                                sensorOrientation = cameraSensorOrientation,
+                                deviceRotation = activeDeviceRotation,
+                                viewportWidth = pW,
+                                viewportHeight = pH,
+                                camBufferWidth = if (isUltraWide) ultraWideBufferW else mainBufferW,
+                                camBufferHeight = if (isUltraWide) ultraWideBufferH else mainBufferH,
+                                outMatrix = previewTexMatrix
+                            )
+
+                            GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
+                            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, previewTexMatrix, 0)
+                            GLES20.glUniform1i(sTextureHandle, 0)
+
+                            if (handles != null) {
+                                VideoAdjustmentsPipeline.bindUniforms(
+                                    handles = handles,
+                                    adjustments = currentVideoAdjustments,
+                                    width = pW,
+                                    height = pH,
+                                    timeSec = frameTimeSec
+                                )
+                            }
+
+                            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, activeTexId)
+
+                            if (vb != null && tb != null && aPositionHandle >= 0 && aTextureCoordHandle >= 0) {
+                                vb.position(0)
+                                GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vb)
+                                GLES20.glEnableVertexAttribArray(aPositionHandle)
+
+                                tb.position(0)
+                                GLES20.glVertexAttribPointer(aTextureCoordHandle, 2, GLES20.GL_FLOAT, false, 0, tb)
+                                GLES20.glEnableVertexAttribArray(aTextureCoordHandle)
+
+                                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+                                GLES20.glDisableVertexAttribArray(aPositionHandle)
+                                GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
+                            }
+
+                            EGL14.eglSwapBuffers(display, prevSurf)
+                        }
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Error swapping preview EGL surface: ${t.message}")
+                    }
                 }
             }
         } catch (t: Throwable) {
@@ -761,6 +864,11 @@ class DualCameraRecordingRelay(
                         if (surface != null && surface != EGL14.EGL_NO_SURFACE) {
                             try { EGL14.eglDestroySurface(display, surface) } catch (_: Throwable) {}
                             eglSurface = EGL14.EGL_NO_SURFACE
+                        }
+                        val prevSurface = eglPreviewSurface
+                        if (prevSurface != null && prevSurface != EGL14.EGL_NO_SURFACE) {
+                            try { EGL14.eglDestroySurface(display, prevSurface) } catch (_: Throwable) {}
+                            eglPreviewSurface = EGL14.EGL_NO_SURFACE
                         }
                         val context = eglContext
                         if (context != null && context != EGL14.EGL_NO_CONTEXT) {

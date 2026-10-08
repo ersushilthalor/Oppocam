@@ -90,6 +90,7 @@ fun Viewfinder(
     isLutPreviewEnabled: Boolean = false,
     cinemaConfig: CinemaConfig? = null,
     videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
+    isGpuRelayPreviewActive: Boolean = false,
     selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
     customVideoPipelineConfig: com.example.camera.videopipeline.CustomVideoPipelineConfig? = null,
     proSaturation: Float = 0f,
@@ -602,6 +603,11 @@ fun Viewfinder(
                                 com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                                 com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToView(textureView, selectedVideoPipeline)
                                 return@AndroidView
+                            } else if (isGpuRelayPreviewActive) {
+                                // Real-time GPU relay split is actively rendering identical processed frames directly into preview surface
+                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                                return@AndroidView
                             } else {
                                 com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                 com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
@@ -911,6 +917,11 @@ fun Viewfinder(
                                 if (selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
                                     com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                                     com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToView(textureView, selectedVideoPipeline)
+                                    return@AndroidView
+                                } else if (isGpuRelayPreviewActive) {
+                                    // Real-time GPU relay split is actively rendering identical processed frames directly into preview surface
+                                    com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                    com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                                     return@AndroidView
                                 } else {
                                     com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)

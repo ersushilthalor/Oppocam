@@ -115,6 +115,12 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var pendingSourceSwitchClockSync: Boolean = false
     @Volatile
     private var activeFps: Int = 30
+    @Volatile
+    private var currentVideoAdjustments: com.example.camera.model.VideoAdjustments = com.example.camera.model.VideoAdjustments()
+
+    fun updateVideoAdjustments(adjustments: com.example.camera.model.VideoAdjustments) {
+        currentVideoAdjustments = adjustments
+    }
 
     fun setActiveStreamSource(source: PreviewStreamSource) {
         if (activeStreamSource != source) {
@@ -1750,14 +1756,18 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             GLES20.glUniform1i(sLutTextureHandle, 1)
 
             val cfg = currentCinemaConfig ?: CinemaConfig()
-            val exposure = cfg.exposure
+            val vadj = currentVideoAdjustments
+            val exposure = cfg.exposure + (vadj.exposure * 0.45f)
+            val contrast = (cfg.contrast + (vadj.contrast / 100f) * 0.65f).coerceIn(-1f, 1.5f)
+            val satBoost = (vadj.saturation + vadj.colorVibrance * 0.65f) / 100f
+            val saturation = (cfg.saturation * (1f + satBoost)).coerceAtLeast(0f)
             GLES20.glUniform1f(uExposureHandle, exposure)
-            GLES20.glUniform1f(uContrastHandle, cfg.contrast)
-            GLES20.glUniform1f(uSaturationHandle, cfg.saturation)
+            GLES20.glUniform1f(uContrastHandle, contrast)
+            GLES20.glUniform1f(uSaturationHandle, saturation)
             GLES20.glUniform1f(uWashedOutHandle, cfg.washedOut)
             GLES20.glUniform1f(uBrillianceHandle, cfg.brilliance.coerceIn(-1f, 1f))
 
-            val isGraded = (!cfg.selectedLut.isOff || cfg.colorProfile != CinemaColorProfile.NATIVE)
+            val isGraded = (!cfg.selectedLut.isOff || cfg.colorProfile != CinemaColorProfile.NATIVE || !vadj.isDefault)
             val isHdrProfile = (cfg.colorProfile == CinemaColorProfile.HLG10 || cfg.colorProfile == CinemaColorProfile.HLG_2)
             val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
             GLES20.glUniform1f(uFilmicOutputHandle, filmicOutput)
@@ -1766,9 +1776,12 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             GLES20.glUniform1f(uLutSizeHandle, currentLutSize)
             GLES20.glUniform1f(uLutIntensityHandle, currentLutIntensity)
 
-            GLES20.glUniform1f(uShadowsHandle, cfg.shadows.coerceIn(-1f, 1f))
-            GLES20.glUniform1f(uHighlightsHandle, cfg.highlights.coerceIn(-1f, 1f))
-            GLES20.glUniform1f(uVibranceHandle, cfg.vibrance.coerceIn(-1f, 1f))
+            val effShadows = (cfg.shadows + (vadj.shadows + vadj.curveShadows) / 100f * 0.8f).coerceIn(-1f, 1f)
+            val effHighlights = (cfg.highlights + (vadj.highlights + vadj.curveHighlights) / 100f * 0.8f).coerceIn(-1f, 1f)
+            val effVibrance = (cfg.vibrance + vadj.colorVibrance / 100f * 0.7f).coerceIn(-1f, 1f)
+            GLES20.glUniform1f(uShadowsHandle, effShadows)
+            GLES20.glUniform1f(uHighlightsHandle, effHighlights)
+            GLES20.glUniform1f(uVibranceHandle, effVibrance)
             GLES20.glUniform1f(
                 uVibrantGreenIntensityHandle,
                 CinemaColorPipeline.getVibrantGreenLutIntensity(cfg, cfg.isBakeLutToOutput)
@@ -1776,8 +1789,10 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
             // 18 Cinema Color Fine-Tuning Uniforms
             GLES20.glUniform2f(uTexelSizeHandle, 1.0f / currentNormWidth.toFloat(), 1.0f / currentNormHeight.toFloat())
-            GLES20.glUniform1f(uTemperatureHandle, cfg.temperature.coerceIn(-1f, 1f))
-            GLES20.glUniform1f(uTintHandle, cfg.tint.coerceIn(-1f, 1f))
+            val effTemp = (cfg.temperature + vadj.temperature / 100f * 0.6f).coerceIn(-1f, 1f)
+            val effTint = (cfg.tint + vadj.tint / 100f * 0.6f).coerceIn(-1f, 1f)
+            GLES20.glUniform1f(uTemperatureHandle, effTemp)
+            GLES20.glUniform1f(uTintHandle, effTint)
             GLES20.glUniform1f(uWhitesHandle, cfg.whites.coerceIn(-1f, 1f))
             GLES20.glUniform1f(uBlacksHandle, cfg.blacks.coerceIn(-1f, 1f))
             GLES20.glUniform1f(uMidtonesHandle, cfg.midtones.coerceIn(-1f, 1f))

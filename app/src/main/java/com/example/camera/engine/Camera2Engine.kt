@@ -1214,6 +1214,15 @@ class Camera2Engine(private val context: Context) {
     var colorProfile: ColorProfile = ColorProfile.STANDARD
     var isAudioEnabled: Boolean = true
     var currentVideoAdjustments: com.example.camera.model.VideoAdjustments = com.example.camera.model.VideoAdjustments()
+        set(value) {
+            field = value
+            dualCameraRecordingRelay?.updateVideoAdjustments(value)
+            cinemaSoftwareRecorder.updateVideoAdjustments(value)
+        }
+
+    private val _isGpuRelayPreviewActive = MutableStateFlow(false)
+    val isGpuRelayPreviewActive: StateFlow<Boolean> = _isGpuRelayPreviewActive.asStateFlow()
+
     var currentZoom: Float = 1.0f
     private val _currentZoom = MutableStateFlow(1.0f)
     val currentZoomState: StateFlow<Float> = _currentZoom.asStateFlow()
@@ -6458,6 +6467,7 @@ class Camera2Engine(private val context: Context) {
         isStoppingRecording.set(false)
         _isRecordingVideo.value = false
         _isRecordingPaused.value = false
+        _isGpuRelayPreviewActive.value = false
         isSoftwareCinemaRecording = false
         isCustomPipelineRecording = false
         videoTimerJob?.cancel()
@@ -7225,24 +7235,34 @@ class Camera2Engine(private val context: Context) {
                     if (isFront) 270 else 90
                 }
 
-                if (_isKeepUltraWideReady.value &&
+                val isKeepUwReadyBack = _isKeepUltraWideReady.value &&
                     lens.facing == CameraCharacteristics.LENS_FACING_BACK &&
                     uwLensForRec != null &&
-                    mainLensForRec != null) {
-                    val relay = DualCameraRecordingRelay(
-                        encoderTargetSurface = recorderSurface,
-                        bufferWidth = finalRecordWidth,
-                        bufferHeight = finalRecordHeight,
-                        fps = targetFps,
-                        is10Bit = is10BitSession,
-                        initialSource = initialStreamSource,
-                        cinemaRecorder = if (isSoftwareCinema) cinemaSoftwareRecorder else null,
-                        customPipelineRecorder = if (isCustomPipelineRecording) customPipelineRecorder else null,
-                        sensorOrientation = sensorOrient,
-                        deviceRotation = currentRot,
-                        isFront = isFront
-                    )
-                    if (relay.isRelayReady) {
+                    mainLensForRec != null
+
+                // Initialize DualCameraRecordingRelay as the live GPU processing surface:
+                // Camera2 Surface -> GPU/EGL relay -> VideoAdjustments shader -> split to:
+                // 1. Preview surface (viewfinder)
+                // 2. MediaRecorder input surface (encoder)
+                val relay = DualCameraRecordingRelay(
+                    encoderTargetSurface = recorderSurface,
+                    bufferWidth = finalRecordWidth,
+                    bufferHeight = finalRecordHeight,
+                    fps = targetFps,
+                    is10Bit = is10BitSession,
+                    initialSource = initialStreamSource,
+                    cinemaRecorder = if (isSoftwareCinema) cinemaSoftwareRecorder else null,
+                    customPipelineRecorder = if (isCustomPipelineRecording) customPipelineRecorder else null,
+                    sensorOrientation = sensorOrient,
+                    deviceRotation = currentRot,
+                    isFront = isFront,
+                    previewTargetSurface = previewSurf,
+                    previewWidth = viewfinderWidth,
+                    previewHeight = viewfinderHeight,
+                    initialAdjustments = currentVideoAdjustments
+                )
+                if (relay.isRelayReady) {
+                    if (isKeepUwReadyBack && uwLensForRec != null && mainLensForRec != null) {
                         // Configure input camera buffer sizes based on sensor capabilities.
                         // If Ultra-Wide sensor is 8MP (e.g. 4:3), Relay's computeCameraTexMatrix uniformly center-crops it
                         // to 16:9 / 9:16 and outputs a pristine 4K (2160x3840) frame without distortion or stretching.
@@ -7271,11 +7291,13 @@ class Camera2Engine(private val context: Context) {
                         if (bestMainSize != null) {
                             relay.updateInputBufferSize(isUltraWide = false, bestMainSize.width, bestMainSize.height)
                         }
-
-                        dualCameraRecordingRelay = relay
-                    } else {
-                        relay.release()
                     }
+
+                    dualCameraRecordingRelay = relay
+                    _isGpuRelayPreviewActive.value = relay.isRelayPreviewActive
+                } else {
+                    relay.release()
+                    _isGpuRelayPreviewActive.value = false
                 }
 
                 val activeLensRecorderSurface = dualCameraRecordingRelay?.getRecorderSurfaceForLens(lens) ?: recorderSurface
@@ -7866,6 +7888,7 @@ class Camera2Engine(private val context: Context) {
         logicalMultiCamDualRecSurfacesConfigured = false
         val activeRelay = dualCameraRecordingRelay
         dualCameraRecordingRelay = null
+        _isGpuRelayPreviewActive.value = false
         _isRecordingVideo.value = false
         _isRecordingPaused.value = false
         videoTimerJob?.cancel()
