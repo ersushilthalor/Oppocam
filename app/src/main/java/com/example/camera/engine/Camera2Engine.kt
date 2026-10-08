@@ -1937,9 +1937,10 @@ class Camera2Engine(private val context: Context) {
         pendingZoomPresetTapWhileSwitching = false
 
         if (nextZoom != null) {
-            currentZoom = nextZoom
-            _currentZoom.value = nextZoom
-            preferences.currentZoom = nextZoom
+            val effectiveZoom = maxOf(currentZoom, nextZoom)
+            currentZoom = effectiveZoom
+            _currentZoom.value = effectiveZoom
+            preferences.currentZoom = effectiveZoom
         }
 
         isSwitchingLens.set(false)
@@ -4562,17 +4563,33 @@ class Camera2Engine(private val context: Context) {
             val effectiveUiZoom = currentZoom
 
             // Digital Crop calculation calibrated from actual sensor FOV
+            val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+            val mainLens = backLenses.firstOrNull { it.isPrimaryMain }
+                ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
+            val uwLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+                ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+
             val uwEqFocal = if (lens.lensType == LensType.ULTRAWIDE && lens.equivalent35mmFocalMm > 0f) {
                 lens.equivalent35mmFocalMm
+            } else if (uwLens != null && uwLens.equivalent35mmFocalMm > 0f) {
+                uwLens.equivalent35mmFocalMm
             } else {
                 CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
             }
+
+            val mainEqFocal = if (mainLens != null && mainLens.equivalent35mmFocalMm > 0f) {
+                mainLens.equivalent35mmFocalMm
+            } else {
+                CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+            }
+
             val digitalCrop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
                 uiZoom = effectiveUiZoom,
                 lensBaseRatio = lens.baseZoomRatio,
                 lensType = lens.lensType,
                 uwEquivalentFocalMm = uwEqFocal,
-                mainEquivalentFocalMm = CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM,
+                mainEquivalentFocalMm = mainEqFocal,
                 switchPointMm = _lensSwitchPointMm.value
             )
 
@@ -4779,11 +4796,12 @@ class Camera2Engine(private val context: Context) {
         _targetLens.value = targetLens
 
         if (isSwitchingLens.get()) {
-            // Coalesce rapid zoom requests while lens switch is in progress;
-            // completeLensSwitch() will apply the latest zoom and lens when the switch finishes.
+            // Lens switch is in progress internally: coalesce target metadata
+            // but do NOT freeze or pause the continuous zoom timeline on the active stream.
             pendingZoomWhileSwitching = pZoom
             pendingZoomPresetTapWhileSwitching = isPresetTap
             pendingLensWhileSwitching = targetLens
+            scheduleZoomPreviewUpdate(immediate = isPresetTap)
             return
         }
 

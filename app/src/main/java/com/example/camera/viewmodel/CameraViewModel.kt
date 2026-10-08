@@ -1700,31 +1700,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             while (isActive) {
                 val now = android.os.SystemClock.uptimeMillis()
                 val elapsed = now - startTime
-                if (elapsed >= durationMs) {
-                    break
-                }
+                val isFinal = elapsed >= durationMs
 
                 // Smooth continuous ease-in-out curve across the complete zoom range:
                 // - Starts slow
                 // - Becomes faster in the middle
                 // - Slows down smoothly at the end
                 // - Continuous floating-point interpolation with no jumps, steps, or fixed intermediate values
-                val rawProgress = (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                val rawProgress = if (isFinal) 1f else (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
                 val progress = ((1.0 - kotlin.math.cos(rawProgress.toDouble() * Math.PI)) / 2.0).toFloat()
-                val currentZ = startZ + (endZ - startZ) * progress
+                val currentZ = if (isFinal) endZ else (startZ + (endZ - startZ) * progress)
 
                 _currentZoom.value = currentZ
                 preferences.setModeZoom(_cameraMode.value, currentZ)
 
-                // Continuous zoom update smoothly matching FOV without discrete steps or artificial clamping
-                val zoomForEngine = if (endZ < switchZoom) {
-                    currentZ.coerceAtMost(switchZoom)
-                } else if (startZ < switchZoom && endZ <= switchZoom) {
-                    currentZ.coerceAtMost(switchZoom)
-                } else {
-                    currentZ
+                // Continuous zoom update advancing smoothly without artificial clamping or discrete holds
+                engine.setZoom(currentZ, isPresetTap = false)
+
+                if (isFinal) {
+                    break
                 }
-                engine.setZoom(zoomForEngine, isPresetTap = false)
 
                 val sleepTime = (frameIntervalMs - (android.os.SystemClock.uptimeMillis() - now)).coerceAtLeast(2L)
                 delay(sleepTime)
@@ -1748,7 +1743,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 preferences.setModeLens(_cameraMode.value, resolvedDestinationLens)
             }
 
-            engine.setZoom(endZ, isPresetTap = true)
+            engine.setZoom(endZ, isPresetTap = false)
             zoomTransitionJob = null
         }
     }
