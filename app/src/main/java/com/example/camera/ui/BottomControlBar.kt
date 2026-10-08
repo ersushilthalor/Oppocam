@@ -1219,8 +1219,12 @@ fun MasterZoomCapsule(
                             else -> if (preset % 1.0f == 0f) "${preset.toInt()}" else "%.1f".format(preset)
                         }
 
-                        val displayText = if (isActive && (currentZoom - preset).absoluteValue >= 0.25f) {
-                            "%.1fx".format(currentZoom)
+                        val displayText = if (isActive && (currentZoom - preset).absoluteValue >= 0.05f) {
+                            if (currentZoom < 2.0f) {
+                                String.format(java.util.Locale.US, "%.2fx", currentZoom)
+                            } else {
+                                String.format(java.util.Locale.US, "%.1fx", currentZoom)
+                            }
                         } else {
                             label
                         }

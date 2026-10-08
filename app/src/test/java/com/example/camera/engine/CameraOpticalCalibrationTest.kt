@@ -115,9 +115,9 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
-        // Hysteresis buffer holds WIDE during downward drag from WIDE above (1.0 - 0.04) = 0.96x
+        // Continuous .5x <-> 1x transition: below 1.0x smoothly resolves to Ultra-wide in both directions
         assertEquals(
-            LensType.WIDE,
+            LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
                 currentLensType = LensType.WIDE,
                 targetZoom = 0.999f,
@@ -127,7 +127,7 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
-        // Preset tap at 0.999x immediately selects ULTRAWIDE without drag hysteresis
+        // Preset tap at 0.999x immediately selects ULTRAWIDE
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
@@ -163,10 +163,9 @@ class CameraOpticalCalibrationTest {
             )
         )
 
-        // When currently on Wide (Main):
-        // Above 0.96x (1.0x - 0.04x buffer), dragging down stays on Wide due to hysteresis
+        // When dragging down from Wide below 1.0x: smoothly transitions to Ultra-wide with zero deadzone
         assertEquals(
-            LensType.WIDE,
+            LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
                 currentLensType = LensType.WIDE,
                 targetZoom = 0.98f,
@@ -176,7 +175,7 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
-        // Preset tap at 0.98x immediately selects Ultra-Wide without hysteresis
+        // Preset tap at 0.98x immediately selects Ultra-Wide
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
@@ -188,7 +187,7 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = true
             )
         )
-        // Below 0.96x (e.g. 0.95x), drag transitions to Ultra-Wide
+        // Below 1.0x (e.g. 0.95x), drag transitions to Ultra-Wide
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
@@ -329,5 +328,46 @@ class CameraOpticalCalibrationTest {
             switchPointMm = switch50mm
         )
         assertEquals(LensType.WIDE, lensAt23Under50)
+    }
+
+    @Test
+    fun testContinuousFloatZoomInterpolationNoSnapping() {
+        val testZooms = listOf(0.50f, 0.51f, 0.523f, 0.537f, 0.551f, 0.60f, 0.75f, 0.90f, 0.95f, 0.99f, 0.999f, 1.0f)
+        var prevCrop = 0f
+
+        for (z in testZooms) {
+            val crop = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                uiZoom = z,
+                lensBaseRatio = 0.5f,
+                lensType = LensType.ULTRAWIDE
+            )
+            assertTrue("Crop must strictly increase as zoom increases: z=$z, crop=$crop, prevCrop=$prevCrop", crop >= prevCrop)
+            assertTrue("Crop must be within 1.0x and 1.44x: $crop", crop in 1.0f..1.4401f)
+            prevCrop = crop
+        }
+    }
+
+    @Test
+    fun testBoundaryFovContinuityBetweenUltraWideAndMain() {
+        // At 1.0x boundary, Ultra-Wide with crop limit matches Main Wide 1.0x FOV
+        val uwCropAt1x = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 0.5f, LensType.ULTRAWIDE)
+        val mainCropAt1x = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.WIDE)
+
+        // Ultra-Wide base is 16mm, Main base is 23mm
+        // Effective focal length:
+        val effectiveFocalUw = 16.0f * uwCropAt1x
+        val effectiveFocalMain = 23.0f * mainCropAt1x
+        assertEquals("Effective focal length at 1.0x boundary must match", effectiveFocalMain, effectiveFocalUw, 0.1f)
+
+        // Bidirectional resolution: 0.5x -> 1.0x and 1.0x -> 0.5x use exact same boundary
+        val lensUpAt0999 = CameraOpticalCalibration.resolveTargetLensType(LensType.ULTRAWIDE, 0.999f, true, false, false, false)
+        val lensDownAt0999 = CameraOpticalCalibration.resolveTargetLensType(LensType.WIDE, 0.999f, true, false, false, false)
+        assertEquals("Both directions must target Ultra-Wide at 0.999x", LensType.ULTRAWIDE, lensUpAt0999)
+        assertEquals("Both directions must target Ultra-Wide at 0.999x", LensType.ULTRAWIDE, lensDownAt0999)
+
+        val lensUpAt10 = CameraOpticalCalibration.resolveTargetLensType(LensType.ULTRAWIDE, 1.000f, true, false, false, false)
+        val lensDownAt10 = CameraOpticalCalibration.resolveTargetLensType(LensType.WIDE, 1.000f, true, false, false, false)
+        assertEquals("Both directions must target Wide at 1.000x", LensType.WIDE, lensUpAt10)
+        assertEquals("Both directions must target Wide at 1.000x", LensType.WIDE, lensDownAt10)
     }
 }

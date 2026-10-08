@@ -1679,8 +1679,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // zoom out is handled entirely on the Ultra-Wide sensor with no optical jumps or stream interruptions.
             if (endZ < switchZoom && startZ in (switchZoom * 0.95f)..(switchZoom * 1.15f) && ultraWideLens != null && currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
                 if (engine.selectedLens.value?.lensType != LensType.ULTRAWIDE) {
-                    val prepZoom = (switchZoom - 0.001f).coerceAtLeast(0.5f)
-                    engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = prepZoom)
+                    engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = startZ)
                     preferences.lastFacing = ultraWideLens.facing
                     preferences.saveLastLens(ultraWideLens)
                     preferences.setModeLens(_cameraMode.value, ultraWideLens)
@@ -1702,14 +1701,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _currentZoom.value = currentZ
                 preferences.setModeZoom(_cameraMode.value, currentZ)
 
-                // Continuous zoom update:
-                // - When transitioning down into Ultra-Wide (< switchZoom), keep zoom on Ultra-Wide stream (< switchZoom)
-                //   to prevent premature switching back to Main lens during the downward transition.
-                // - When transitioning up from Ultra-Wide up to 1.0x, smoothly zoom on Ultra-Wide up to switch boundary.
+                // Continuous zoom update smoothly matching FOV without discrete steps or artificial clamping
                 val zoomForEngine = if (endZ < switchZoom) {
-                    currentZ.coerceAtMost(switchZoom - 0.001f)
+                    currentZ.coerceAtMost(switchZoom)
                 } else if (startZ < switchZoom && endZ <= switchZoom) {
-                    currentZ.coerceAtMost(switchZoom - 0.001f)
+                    currentZ.coerceAtMost(switchZoom)
                 } else {
                     currentZ
                 }

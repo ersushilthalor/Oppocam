@@ -158,9 +158,7 @@ fun Viewfinder(
 
 
     LaunchedEffect(currentZoom) {
-        if (abs(currentZoom - currentScale) > 0.05f) {
-            currentScale = currentZoom
-        }
+        currentScale = currentZoom
     }
 
     val targetRatioCalc = when (cameraMode) {

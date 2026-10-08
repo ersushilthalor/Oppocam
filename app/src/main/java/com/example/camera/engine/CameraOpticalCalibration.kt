@@ -240,10 +240,10 @@ object CameraOpticalCalibration {
                 if (uiZoom <= 0.5f) {
                     1.0f
                 } else {
-                    val upperZoom = if (clampedSwitch <= 23.0f) 0.999f else switchZoom
+                    val upperZoom = switchZoom
                     val t = ((uiZoom - 0.5f) / (upperZoom - 0.5f)).coerceIn(0f, 1f)
                     val crop = 1.0f + t * (maxUwCrop - 1.0f)
-                    if (t >= 0.998f) maxUwCrop else crop.coerceIn(1.0f, maxUwCrop)
+                    crop.coerceIn(1.0f, maxUwCrop)
                 }
             }
             LensType.WIDE -> {
@@ -262,6 +262,7 @@ object CameraOpticalCalibration {
      * Hysteresis-aware lens selection during continuous zoom dragging based on user-selected Switch Point.
      * At or above the Switch Point threshold (Switch Point / 23mm): switches to Main (or Telephoto).
      * Strictly below the Switch Point threshold: uses Ultra-wide if available.
+     * 0.5x <-> 1.0x transition uses the exact same continuous mapping and boundary in both directions.
      */
     fun resolveTargetLensType(
         currentLensType: LensType,
@@ -274,20 +275,6 @@ object CameraOpticalCalibration {
     ): LensType {
         val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
         val switchZoom = switchPointToZoom(clampedSwitch, DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
-        val hysteresisBuffer = if (isPresetTap) 0f else 0.04f * switchZoom
-
-        // During continuous dragging down from WIDE or Telephoto, stay on WIDE down to (switchZoom - hysteresisBuffer)
-        if (!isPresetTap && (currentLensType == LensType.WIDE || currentLensType == LensType.TELEPHOTO || currentLensType == LensType.TELEPHOTO_3X)) {
-            if (targetZoom >= (switchZoom - hysteresisBuffer)) {
-                return when {
-                    targetZoom >= 2.8f && hasTelephoto3x && (currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) && switchZoom <= 2.8f -> LensType.TELEPHOTO_3X
-                    targetZoom >= 1.8f && hasTelephoto2x && (currentLensType == LensType.TELEPHOTO || targetZoom >= 2.15f) && switchZoom <= 1.8f -> LensType.TELEPHOTO
-                    currentLensType == LensType.TELEPHOTO && targetZoom >= 1.85f && switchZoom <= 1.85f -> LensType.TELEPHOTO
-                    currentLensType == LensType.TELEPHOTO_3X && targetZoom >= 2.85f && switchZoom <= 2.85f -> LensType.TELEPHOTO_3X
-                    else -> LensType.WIDE
-                }
-            }
-        }
 
         // At or above the dynamic switch point zoom threshold, target Main (Wide) or Telephoto lens
         if (targetZoom >= switchZoom) {
@@ -300,7 +287,7 @@ object CameraOpticalCalibration {
             }
         }
 
-        // Strictly below the switch point: use Ultra-wide if available
+        // Strictly below the switch point: use Ultra-wide if available (no deadzone or frozen FOV below switchZoom)
         return if (hasUltraWide) LensType.ULTRAWIDE else LensType.WIDE
     }
 
