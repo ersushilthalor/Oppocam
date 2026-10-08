@@ -1,7 +1,9 @@
 package com.example.camera.engine
 
 import android.content.Context
+import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
 import androidx.test.core.app.ApplicationProvider
 import com.example.camera.model.LensInfo
 import com.example.camera.model.LensType
@@ -1072,6 +1074,112 @@ class PhotonCameraLensSwitchingTest {
         relay.release()
         encoderSurf.release()
         encoderSt.release()
+    }
+
+    @Test
+    fun testMainStandbyStreamPrewarmedWithConfiguredSwitchPointCrop() {
+        engine.detectHardwareLenses()
+        val lenses = engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        assertNotNull("Main lens should be detected", mainLens)
+
+        // 1. Verify calculateStandbyCropRatio correctly prewarms Main standby stream for all switch points
+        engine.setLensSwitchPointMm(23.0f)
+        assertEquals(1.00f, engine.calculateStandbyCropRatio(mainLens!!), 0.01f)
+
+        engine.setLensSwitchPointMm(32.0f)
+        assertEquals(1.39f, engine.calculateStandbyCropRatio(mainLens), 0.01f)
+
+        engine.setLensSwitchPointMm(40.0f)
+        assertEquals(1.74f, engine.calculateStandbyCropRatio(mainLens), 0.01f)
+
+        engine.setLensSwitchPointMm(50.0f)
+        assertEquals(2.17f, engine.calculateStandbyCropRatio(mainLens), 0.01f)
+
+        engine.setLensSwitchPointMm(85.0f)
+        assertEquals(3.70f, engine.calculateStandbyCropRatio(mainLens), 0.01f)
+
+        if (ultraWideLens != null) {
+            engine.setLensSwitchPointMm(23.0f)
+            assertEquals(1.44f, engine.calculateStandbyCropRatio(ultraWideLens), 0.01f)
+
+            engine.setLensSwitchPointMm(40.0f)
+            assertEquals(2.50f, engine.calculateStandbyCropRatio(ultraWideLens), 0.01f)
+        }
+
+        // 2. Verify CaptureRequest builder has prewarmed crop applied
+        val constructor = CaptureRequest.Builder::class.java.getDeclaredConstructor()
+        constructor.isAccessible = true
+
+        val chars = engine.getCharacteristics(mainLens.cameraId)
+        val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
+
+        // Switch point 23mm -> 1.00x crop
+        engine.setLensSwitchPointMm(23.0f)
+        val builder23 = constructor.newInstance()
+        engine.applySynchronizedStandbySettingsForTest(builder23, mainLens)
+        val cropRegion23 = builder23.get(CaptureRequest.SCALER_CROP_REGION)
+        assertNotNull("Crop region should be set on builder", cropRegion23)
+        assertEquals("At 23mm, Main standby crop matches full sensor width (1.0x)", sensorRect.width(), cropRegion23!!.width())
+
+        // Switch point 40mm -> ~1.74x crop (~40/23 = 1.739x)
+        engine.setLensSwitchPointMm(40.0f)
+        val builder40 = constructor.newInstance()
+        engine.applySynchronizedStandbySettingsForTest(builder40, mainLens)
+        val cropRegion40 = builder40.get(CaptureRequest.SCALER_CROP_REGION)
+        assertNotNull("Crop region should be set for 40mm", cropRegion40)
+        val expectedWidth40 = (sensorRect.width() / 1.74f).toInt()
+        assertEquals(
+            "At 40mm switch point, Main standby stream must be prewarmed with 1.74x crop",
+            expectedWidth40.toDouble(),
+            cropRegion40!!.width().toDouble(),
+            2.0
+        )
+
+        // Switch point 32mm -> 1.39x crop
+        engine.setLensSwitchPointMm(32.0f)
+        val builder32 = constructor.newInstance()
+        engine.applySynchronizedStandbySettingsForTest(builder32, mainLens)
+        val cropRegion32 = builder32.get(CaptureRequest.SCALER_CROP_REGION)
+        val expectedWidth32 = (sensorRect.width() / 1.39f).toInt()
+        assertEquals(
+            "At 32mm switch point, Main standby stream must be prewarmed with 1.39x crop",
+            expectedWidth32.toDouble(),
+            cropRegion32!!.width().toDouble(),
+            2.0
+        )
+
+        // Switch point 50mm -> 2.17x crop
+        engine.setLensSwitchPointMm(50.0f)
+        val builder50 = constructor.newInstance()
+        engine.applySynchronizedStandbySettingsForTest(builder50, mainLens)
+        val cropRegion50 = builder50.get(CaptureRequest.SCALER_CROP_REGION)
+        val expectedWidth50 = (sensorRect.width() / 2.17f).toInt()
+        assertEquals(
+            "At 50mm switch point, Main standby stream must be prewarmed with 2.17x crop",
+            expectedWidth50.toDouble(),
+            cropRegion50!!.width().toDouble(),
+            2.0
+        )
+
+        // Ultra-Wide standby stream at 40mm switch point -> 2.50x crop
+        if (ultraWideLens != null) {
+            engine.setLensSwitchPointMm(40.0f)
+            val uwChars = engine.getCharacteristics(ultraWideLens.cameraId)
+            val uwSensorRect = uwChars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
+            val builderUw40 = constructor.newInstance()
+            engine.applySynchronizedStandbySettingsForTest(builderUw40, ultraWideLens)
+            val cropUw40 = builderUw40.get(CaptureRequest.SCALER_CROP_REGION)
+            assertNotNull(cropUw40)
+            val expectedUwWidth = (uwSensorRect.width() / 2.50f).toInt()
+            assertEquals(
+                "Ultra-Wide standby stream at 40mm switch point must be prewarmed with 2.50x crop",
+                expectedUwWidth.toDouble(),
+                cropUw40!!.width().toDouble(),
+                2.0
+            )
+        }
     }
 }
 

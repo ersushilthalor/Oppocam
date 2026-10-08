@@ -159,6 +159,7 @@ class Camera2Engine(private val context: Context) {
         preferences.lensSwitchPointMm = clamped
         // Re-evaluate zoom and lens targeting with newly calibrated crops
         setZoom(_currentZoom.value, isPresetTap = false)
+        syncStandbyStreamSettings()
     }
 
     var onLensSwitchCompletedListener: ((LensInfo, Float) -> Unit)? = null
@@ -506,6 +507,20 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
+     * Calculates the exact digital crop ratio required for the standby lens at the configured lens-switch point.
+     * Ultra-Wide: Switch Point ÷ 16mm (e.g. 1.44x at 23mm, 2.50x at 40mm)
+     * Main: Switch Point ÷ 23mm (e.g. 1.00x at 23mm, 1.74x at 40mm)
+     */
+    internal fun calculateStandbyCropRatio(standbyLens: LensInfo): Float {
+        return if (standbyLens.lensType == LensType.ULTRAWIDE) {
+            val uwEqFocal = if (standbyLens.equivalent35mmFocalMm > 0f) standbyLens.equivalent35mmFocalMm else CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+            CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
+        } else {
+            CameraOpticalCalibration.calculateMainCropForSwitchPoint(_lensSwitchPointMm.value, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+        }
+    }
+
+    /**
      * Applies synchronized 3A (AE/AWB/AF), Pro manual exposure, FPS, and base optical crop
      * to the standby stream's CaptureRequest.Builder so both Main and Ultra-Wide streams
      * remain continuously converged at the same exposure, color balance, and frame rate.
@@ -576,32 +591,26 @@ class Camera2Engine(private val context: Context) {
                         CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
                     )
                 }
+            }
 
-                // Keep standby lens FOV-matched to 1.0x Main (approx 1.44x crop factor for Ultra-Wide)
-                // so switching to Ultra-Wide is instant with zero FOV pop or jump.
-                val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                val targetStandbyRatio = if (standbyLens.lensType == LensType.ULTRAWIDE) {
-                    val uwEqFocal = if (standbyLens.equivalent35mmFocalMm > 0f) standbyLens.equivalent35mmFocalMm else CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
-                    CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
-                } else {
-                    1.0f
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
-                    if (zoomRange != null) {
-                        builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetStandbyRatio.coerceIn(zoomRange.lower, zoomRange.upper))
-                    }
-                }
-                if (sensorRect != null) {
-                    val extraScale = targetStandbyRatio.coerceAtLeast(1.0f)
-                    val cropW = (sensorRect.width() / extraScale).toInt().coerceIn(1, sensorRect.width())
-                    val cropH = (sensorRect.height() / extraScale).toInt().coerceIn(1, sensorRect.height())
-                    val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
-                    val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
-                    val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
-                    builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
+            // Keep standby lens FOV-matched to the configured lens switch point
+            // (e.g. 1.44x crop factor for Ultra-Wide at 23mm, or 1.74x crop factor for Main at 40mm)
+            // so switching between Main and Ultra-Wide is instant with zero FOV pop or jump.
+            val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
+            val targetStandbyRatio = calculateStandbyCropRatio(standbyLens)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && chars != null) {
+                val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (zoomRange != null) {
+                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetStandbyRatio.coerceIn(zoomRange.lower, zoomRange.upper))
                 }
             }
+            val extraScale = targetStandbyRatio.coerceAtLeast(1.0f)
+            val cropW = (sensorRect.width() / extraScale).toInt().coerceIn(1, sensorRect.width())
+            val cropH = (sensorRect.height() / extraScale).toInt().coerceIn(1, sensorRect.height())
+            val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
+            val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
+            val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
+            builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
         } catch (e: Exception) {
             Log.w(TAG, "Error applying synchronized standby settings", e)
         }
@@ -9575,4 +9584,8 @@ class Camera2Engine(private val context: Context) {
     internal fun getActiveRecordingSurfaceForTest(): Surface? = activeRecordingSurface
     internal fun getActivePhysicalCameraIdForTest(): String? = activeSessionPhysicalCameraId
     internal fun getActiveRecordingStreamConfigForTest(): ActiveRecordingStreamConfig? = activeRecordingStreamConfig
+    internal fun getStandbyRequestBuilderForTest(): CaptureRequest.Builder? = ultraWideStandbyRequestBuilder
+    internal fun applySynchronizedStandbySettingsForTest(builder: CaptureRequest.Builder, standbyLens: LensInfo) {
+        applySynchronizedStandbySettings(builder, standbyLens)
+    }
 }
