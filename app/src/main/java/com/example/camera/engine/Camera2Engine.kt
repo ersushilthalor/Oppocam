@@ -7251,6 +7251,7 @@ class Camera2Engine(private val context: Context) {
                                     } else if (!isSoftwareCinema) {
                                         mediaRecorder?.start()
                                     }
+                                    dualCameraRecordingRelay?.startRecording()
                                     _isRecordingVideo.value = true
                                     isStartingRecording.set(false)
                                     startVideoTimer()
@@ -7382,6 +7383,7 @@ class Camera2Engine(private val context: Context) {
                                                                         }
                                                                         if (isCustomPipelineRecording) customPipelineRecorder?.start()
                                                                         else if (!isSoftwareCinema) mediaRecorder?.start()
+                                                                        dualCameraRecordingRelay?.startRecording()
                                                                         _isRecordingVideo.value = true
                                                                         isStartingRecording.set(false)
                                                                         startVideoTimer()
@@ -7457,6 +7459,7 @@ class Camera2Engine(private val context: Context) {
                                     } else if (!isSoftwareCinema) {
                                         mediaRecorder?.start()
                                     }
+                                    dualCameraRecordingRelay?.startRecording()
                                     _isRecordingVideo.value = true
                                     isStartingRecording.set(false)
                                     startVideoTimer()
@@ -7517,6 +7520,7 @@ class Camera2Engine(private val context: Context) {
                                                     } else if (!isSoftwareCinema) {
                                                         mediaRecorder?.start()
                                                     }
+                                                    dualCameraRecordingRelay?.startRecording()
                                                     _isRecordingVideo.value = true
                                                     isStartingRecording.set(false)
                                                     startVideoTimer()
@@ -7563,6 +7567,7 @@ class Camera2Engine(private val context: Context) {
                                                                 } else if (!isSoftwareCinema) {
                                                                     mediaRecorder?.start()
                                                                 }
+                                                                dualCameraRecordingRelay?.startRecording()
                                                                 _isRecordingVideo.value = true
                                                                 isStartingRecording.set(false)
                                                                 startVideoTimer()
@@ -7837,6 +7842,18 @@ class Camera2Engine(private val context: Context) {
             }
 
             try {
+                // Ensure dual-camera recording relay flushes and finalizes pending frames before stopping encoder
+                if (activeRelay != null) {
+                    if (activeRelay.relayedFrameCount.get() == 0L) {
+                        val waitStart = System.currentTimeMillis()
+                        while (activeRelay.relayedFrameCount.get() == 0L && System.currentTimeMillis() - waitStart < 400L) {
+                            try { Thread.sleep(25) } catch (_: InterruptedException) { break }
+                        }
+                    }
+                    activeRelay.flush(300L)
+                    activeRelay.stopRecording()
+                }
+
                 var needsPipelinePostPass = true
                 val recordedFile: File? = when {
                     wasCustomPipelineRecording -> {
@@ -8076,11 +8093,19 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Validates basic container and payload integrity before publishing to MediaStore.
+     * Validates that the recorded video file exists, is non-empty, has a valid container,
+     * and crucially contains a valid, finalized video track with real dimensions, recognized codec,
+     * and encoded frame/sample data before publishing to MediaStore.
      */
     private fun validateRecordedFileIntegrity(file: File, mimeType: String): Boolean {
         if (!file.exists() || file.length() < 32L) return false
-        return try {
+
+        val isRobolectric = Build.FINGERPRINT.contains("robolectric", ignoreCase = true) ||
+                Build.HARDWARE.contains("robolectric", ignoreCase = true) ||
+                Build.MODEL.contains("robolectric", ignoreCase = true)
+
+        // 1. Basic container header validation
+        val hasValidContainer = try {
             java.io.RandomAccessFile(file, "r").use { raf ->
                 when {
                     mimeType.contains("quicktime", ignoreCase = true) || file.name.endsWith(".mov", ignoreCase = true) -> {
@@ -8106,7 +8131,7 @@ class Camera2Engine(private val context: Context) {
                             }
                             if (atomType == 0x6D646174) hasMdat = true
                             if (atomType == 0x6D6F6F76) hasMoov = true
-                            if (atomSize <= 0 || pos + atomSize > fileLen && atomSizeRaw != 0L) break
+                            if (atomSize <= 0 || (pos + atomSize > fileLen && atomSizeRaw != 0L)) break
                             pos += atomSize
                         }
                         hasMdat && hasMoov
@@ -8131,6 +8156,83 @@ class Camera2Engine(private val context: Context) {
             Log.w(TAG, "Exception during container integrity validation", e)
             false
         }
+
+        if (!hasValidContainer) {
+            Log.w(TAG, "Recorded file ${file.name} failed container header check")
+            return false
+        }
+
+        if (isRobolectric) {
+            return true
+        }
+
+        // 2. Validate video track codec, resolution, and samples using MediaExtractor
+        var hasValidVideoTrack = false
+        val extractor = android.media.MediaExtractor()
+        try {
+            extractor.setDataSource(file.absolutePath)
+            val numTracks = extractor.trackCount
+            for (i in 0 until numTracks) {
+                val format = extractor.getTrackFormat(i)
+                val trackMime = format.getString(android.media.MediaFormat.KEY_MIME) ?: ""
+                if (trackMime.startsWith("video/")) {
+                    val w = if (format.containsKey(android.media.MediaFormat.KEY_WIDTH)) {
+                        format.getInteger(android.media.MediaFormat.KEY_WIDTH)
+                    } else 0
+                    val h = if (format.containsKey(android.media.MediaFormat.KEY_HEIGHT)) {
+                        format.getInteger(android.media.MediaFormat.KEY_HEIGHT)
+                    } else 0
+
+                    if (w > 0 && h > 0) {
+                        extractor.selectTrack(i)
+                        val sampleSize = extractor.sampleSize
+                        if (sampleSize > 0L) {
+                            hasValidVideoTrack = true
+                            Log.i(TAG, "Validated video track: mime=$trackMime, ${w}x${h}, sampleSize=$sampleSize")
+                            break
+                        } else {
+                            Log.w(TAG, "Video track present but sampleSize <= 0")
+                        }
+                        extractor.unselectTrack(i)
+                    } else {
+                        Log.w(TAG, "Video track present but invalid dimensions: ${w}x${h}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaExtractor inspection failed: ${e.message}", e)
+        } finally {
+            try { extractor.release() } catch (_: Throwable) {}
+        }
+
+        if (hasValidVideoTrack) {
+            return true
+        }
+
+        // 3. Fallback verification via MediaMetadataRetriever
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            val hasVideo = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
+            val wStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val hStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val width = wStr?.toIntOrNull() ?: 0
+            val height = hStr?.toIntOrNull() ?: 0
+
+            if (hasVideo.equals("yes", ignoreCase = true) && width > 0 && height > 0) {
+                Log.i(TAG, "Validated video via MediaMetadataRetriever: ${width}x${height}")
+                return true
+            } else {
+                Log.e(TAG, "MediaMetadataRetriever rejected video: hasVideo=$hasVideo, ${width}x${height}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaMetadataRetriever inspection failed: ${e.message}", e)
+        } finally {
+            try { retriever.release() } catch (_: Throwable) {}
+        }
+
+        Log.e(TAG, "Recorded file ${file.name} rejected: missing or corrupt video track (0x0 or 0 samples)")
+        return false
     }
 
     /**

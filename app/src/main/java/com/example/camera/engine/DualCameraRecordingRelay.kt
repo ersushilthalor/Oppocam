@@ -109,13 +109,14 @@ class DualCameraRecordingRelay(
         private set
 
     // Monotonic timeline synchronization state
-    private var firstFramePtsNs: Long = -1L
     private var lastOutputPtsNs: Long = -1L
     private var pauseStartNs: Long = 0L
     private var totalPausedDurationNs: Long = 0L
     private var streamClockOffsetNs: Long = 0L
     @Volatile
     private var pendingClockSyncOnSwitch: Boolean = false
+    private val isStreamingActive = AtomicBoolean(true)
+    private var recordingStartMonotonicNs: Long = 0L
 
     @Volatile
     var isRelayReady: Boolean = false
@@ -131,6 +132,41 @@ class DualCameraRecordingRelay(
 
     init {
         prepare()
+    }
+
+    fun startRecording() {
+        lastOutputPtsNs = -1L
+        recordingStartMonotonicNs = System.nanoTime()
+        isStreamingActive.set(true)
+        Log.i(TAG, "[RECORDING_RELAY] Streaming to encoder active at $recordingStartMonotonicNs")
+    }
+
+    fun stopRecording() {
+        isStreamingActive.set(false)
+        Log.i(TAG, "[RECORDING_RELAY] Streaming to encoder stopped (relayedFrames=${relayedFrameCount.get()})")
+    }
+
+    fun hasRelayedFrames(): Boolean = relayedFrameCount.get() > 0L
+
+    fun flush(timeoutMs: Long = 500L) {
+        val handler = glHandler ?: return
+        val latch = CountDownLatch(1)
+        handler.post {
+            try {
+                val display = eglDisplay
+                val surface = eglSurface
+                if (display != null && display != EGL14.EGL_NO_DISPLAY &&
+                    surface != null && surface != EGL14.EGL_NO_SURFACE) {
+                    GLES20.glFinish()
+                }
+            } catch (_: Throwable) {
+            } finally {
+                latch.countDown()
+            }
+        }
+        try {
+            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {}
     }
 
     private fun prepare() {
@@ -317,7 +353,19 @@ class DualCameraRecordingRelay(
                 EGL_RECORDABLE_ANDROID, 1,
                 EGL14.EGL_NONE
             )
-            if (!EGL14.eglChooseConfig(display, attribs8Bit, 0, configs, 0, 1, numConfigs, 0) || numConfigs[0] == 0) {
+            configChosen = EGL14.eglChooseConfig(display, attribs8Bit, 0, configs, 0, 1, numConfigs, 0) && numConfigs[0] > 0
+            if (!configChosen) {
+                val fallbackAttribs = intArrayOf(
+                    EGL14.EGL_RED_SIZE, 8,
+                    EGL14.EGL_GREEN_SIZE, 8,
+                    EGL14.EGL_BLUE_SIZE, 8,
+                    EGL14.EGL_ALPHA_SIZE, 8,
+                    EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                    EGL14.EGL_NONE
+                )
+                configChosen = EGL14.eglChooseConfig(display, fallbackAttribs, 0, configs, 0, 1, numConfigs, 0) && numConfigs[0] > 0
+            }
+            if (!configChosen || configs[0] == null) {
                 throw IllegalStateException("eglChooseConfig failed")
             }
         }
@@ -453,78 +501,90 @@ class DualCameraRecordingRelay(
             return
         }
 
-        if (isPaused.get()) return
+        if (isPaused.get() || !isStreamingActive.get()) return
 
         val expectedSource = if (isUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
         if (activeSource != expectedSource) {
             return
         }
 
+        if (!encoderTargetSurface.isValid) return
+
         try {
             st.getTransformMatrix(stMatrix)
-            val rawTimestampNs = st.timestamp.takeIf { it > 0L } ?: System.nanoTime()
-            if (firstFramePtsNs < 0L) {
-                firstFramePtsNs = rawTimestampNs
+            val nowNs = System.nanoTime()
+            if (recordingStartMonotonicNs == 0L) {
+                recordingStartMonotonicNs = nowNs
             }
 
-            val frameIntervalNs = (1_000_000_000L / fps.coerceAtLeast(1))
-            var candidatePtsNs = rawTimestampNs - firstFramePtsNs - totalPausedDurationNs + streamClockOffsetNs
+            // Presentation timestamp calculation:
+            // Use monotonic nanoseconds aligned with System.nanoTime(), matching the
+            // audio clock (SYSTEM_TIME_MONOTONIC) used by MediaRecorder / AudioRecord / MediaMuxer.
+            val frameIntervalNs = 1_000_000_000L / fps.coerceAtLeast(1)
+            var candidatePtsNs = nowNs - totalPausedDurationNs
 
-            if (pendingClockSyncOnSwitch) {
-                pendingClockSyncOnSwitch = false
-                if (lastOutputPtsNs >= 0L) {
-                    val expectedNextPtsNs = lastOutputPtsNs + frameIntervalNs
-                    // If the newly switched camera sensor uses a different timestamp epoch or has a >200ms delta,
-                    // align its offset seamlessly to the ongoing video timeline.
-                    if (kotlin.math.abs(candidatePtsNs - expectedNextPtsNs) > 200_000_000L) {
-                        streamClockOffsetNs += (expectedNextPtsNs - candidatePtsNs)
-                        candidatePtsNs = expectedNextPtsNs
-                    }
+            if (lastOutputPtsNs > 0L) {
+                if (candidatePtsNs <= lastOutputPtsNs) {
+                    candidatePtsNs = lastOutputPtsNs + 1_000_000L.coerceAtLeast(frameIntervalNs / 4)
                 }
-            }
-
-            if (candidatePtsNs < 0L) candidatePtsNs = 0L
-            if (lastOutputPtsNs >= 0L && candidatePtsNs <= lastOutputPtsNs) {
-                candidatePtsNs = lastOutputPtsNs + 1_000_000L
+            } else {
+                candidatePtsNs = candidatePtsNs.coerceAtLeast(recordingStartMonotonicNs)
             }
             lastOutputPtsNs = candidatePtsNs
 
-            val outW = max(bufferWidth, bufferHeight).coerceAtLeast(320)
-            val outH = min(bufferWidth, bufferHeight).coerceAtLeast(240)
-            GLES20.glViewport(0, 0, outW, outH)
-            GLES20.glUseProgram(programId)
-
-            GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
-            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, relayTexMatrix, 0)
-            GLES20.glUniform1i(sTextureHandle, 0)
-
-            val activeTexId = if (isUltraWide) ultraWideOesTexId else mainOesTexId
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, activeTexId)
-
-            val vb = vertexBuffer
-            val tb = texCoordBuffer
-            if (vb != null && tb != null && aPositionHandle >= 0 && aTextureCoordHandle >= 0) {
-                vb.position(0)
-                GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vb)
-                GLES20.glEnableVertexAttribArray(aPositionHandle)
-
-                tb.position(0)
-                GLES20.glVertexAttribPointer(aTextureCoordHandle, 2, GLES20.GL_FLOAT, false, 0, tb)
-                GLES20.glEnableVertexAttribArray(aTextureCoordHandle)
-
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-
-                GLES20.glDisableVertexAttribArray(aPositionHandle)
-                GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
-            }
-
             val display = eglDisplay
             val surface = eglSurface
-            if (display != null && surface != null && display != EGL14.EGL_NO_DISPLAY && surface != EGL14.EGL_NO_SURFACE) {
+            val context = eglContext
+            if (display != null && surface != null && context != null &&
+                display != EGL14.EGL_NO_DISPLAY && surface != EGL14.EGL_NO_SURFACE && context != EGL14.EGL_NO_CONTEXT) {
+                if (EGL14.eglGetCurrentContext() != context || EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) != surface) {
+                    EGL14.eglMakeCurrent(display, surface, surface, context)
+                }
+
+                val outW = max(bufferWidth, bufferHeight).coerceAtLeast(320)
+                val outH = min(bufferWidth, bufferHeight).coerceAtLeast(240)
+                GLES20.glViewport(0, 0, outW, outH)
+                GLES20.glClearColor(0f, 0f, 0f, 1f)
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                GLES20.glUseProgram(programId)
+
+                // Combine Camera2 SurfaceTexture transform with vertical flip
+                val finalTexMatrix = FloatArray(16)
+                Matrix.multiplyMM(finalTexMatrix, 0, stMatrix, 0, relayTexMatrix, 0)
+
+                GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
+                GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
+                GLES20.glUniform1i(sTextureHandle, 0)
+
+                val activeTexId = if (isUltraWide) ultraWideOesTexId else mainOesTexId
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, activeTexId)
+
+                val vb = vertexBuffer
+                val tb = texCoordBuffer
+                if (vb != null && tb != null && aPositionHandle >= 0 && aTextureCoordHandle >= 0) {
+                    vb.position(0)
+                    GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vb)
+                    GLES20.glEnableVertexAttribArray(aPositionHandle)
+
+                    tb.position(0)
+                    GLES20.glVertexAttribPointer(aTextureCoordHandle, 2, GLES20.GL_FLOAT, false, 0, tb)
+                    GLES20.glEnableVertexAttribArray(aTextureCoordHandle)
+
+                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+                    GLES20.glDisableVertexAttribArray(aPositionHandle)
+                    GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
+                }
+
+                GLES20.glFinish()
                 EGLExt.eglPresentationTimeANDROID(display, surface, candidatePtsNs)
-                EGL14.eglSwapBuffers(display, surface)
-                relayedFrameCount.incrementAndGet()
+                val swapped = EGL14.eglSwapBuffers(display, surface)
+                if (swapped) {
+                    relayedFrameCount.incrementAndGet()
+                } else {
+                    Log.w(TAG, "eglSwapBuffers returned false")
+                }
             }
         } catch (t: Throwable) {
             Log.w(TAG, "Error relaying recording frame: ${t.message}")

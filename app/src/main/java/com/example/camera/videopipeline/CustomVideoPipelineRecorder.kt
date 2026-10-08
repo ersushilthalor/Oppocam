@@ -124,6 +124,16 @@ class CustomVideoPipelineRecorder(
     private var audioTrackIndex = -1
     private var hasAudioTrack = false
 
+    private data class QueuedSample(
+        val buffer: ByteBuffer,
+        val info: MediaCodec.BufferInfo
+    )
+    private val pendingVideoSamples = mutableListOf<QueuedSample>()
+    private val pendingAudioSamples = mutableListOf<QueuedSample>()
+    private val videoFramesEncodedCount = AtomicInteger(0)
+    private var videoFormatStartTime: Long = 0L
+    private var baseVideoPtsUs: Long = -1L
+
     private val isRecording = AtomicBoolean(false)
     private val isPaused = AtomicBoolean(false)
     @Volatile private var pauseStartNs: Long = 0L
@@ -666,6 +676,7 @@ class CustomVideoPipelineRecorder(
                 synchronized(muxerLock) {
                     if (!isMuxerStarted) {
                         videoTrackIndex = mediaMuxer?.addTrack(encoder.outputFormat) ?: -1
+                        videoFormatStartTime = System.currentTimeMillis()
                         checkStartMuxerLocked()
                     }
                 }
@@ -676,18 +687,41 @@ class CustomVideoPipelineRecorder(
                 }
                 if (bufferInfo.size > 0 && encodedData != null) {
                     synchronized(muxerLock) {
+                        if (baseVideoPtsUs < 0) {
+                            baseVideoPtsUs = bufferInfo.presentationTimeUs
+                        }
+                        var ptsUs = bufferInfo.presentationTimeUs - baseVideoPtsUs
+                        if (ptsUs < 0) ptsUs = 0
+                        if (lastVideoPtsUs >= 0L && ptsUs <= lastVideoPtsUs) {
+                            ptsUs = lastVideoPtsUs + 1000L
+                        }
+                        bufferInfo.presentationTimeUs = ptsUs
+                        lastVideoPtsUs = ptsUs
+
                         if (isMuxerStarted && videoTrackIndex >= 0) {
-                            if (bufferInfo.presentationTimeUs <= lastVideoPtsUs) {
-                                bufferInfo.presentationTimeUs = lastVideoPtsUs + 1000L
-                            }
-                            lastVideoPtsUs = bufferInfo.presentationTimeUs
                             encodedData.position(bufferInfo.offset)
                             encodedData.limit(bufferInfo.offset + bufferInfo.size)
                             try {
                                 mediaMuxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                                videoFramesEncodedCount.incrementAndGet()
                             } catch (t: Throwable) {
                                 Log.w(TAG, "writeSampleData video warning: ${t.message}")
                             }
+                        } else {
+                            // Queue sample until MediaMuxer starts
+                            try {
+                                val dup = ByteBuffer.allocateDirect(bufferInfo.size)
+                                encodedData.position(bufferInfo.offset)
+                                encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                dup.put(encodedData)
+                                dup.flip()
+                                val copyInfo = MediaCodec.BufferInfo().apply {
+                                    set(0, bufferInfo.size, bufferInfo.presentationTimeUs, bufferInfo.flags)
+                                }
+                                if (pendingVideoSamples.size < 90) {
+                                    pendingVideoSamples.add(QueuedSample(dup, copyInfo))
+                                }
+                            } catch (_: Throwable) {}
                         }
                     }
                 }
@@ -798,6 +832,20 @@ class CustomVideoPipelineRecorder(
                             try {
                                 mediaMuxer?.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
                             } catch (_: Throwable) {}
+                        } else {
+                            try {
+                                val dup = ByteBuffer.allocateDirect(bufferInfo.size)
+                                encodedData.position(bufferInfo.offset)
+                                encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                dup.put(encodedData)
+                                dup.flip()
+                                val copyInfo = MediaCodec.BufferInfo().apply {
+                                    set(0, bufferInfo.size, bufferInfo.presentationTimeUs, bufferInfo.flags)
+                                }
+                                if (pendingAudioSamples.size < 90) {
+                                    pendingAudioSamples.add(QueuedSample(dup, copyInfo))
+                                }
+                            } catch (_: Throwable) {}
                         }
                     }
                 }
@@ -816,12 +864,43 @@ class CustomVideoPipelineRecorder(
 
     private fun checkStartMuxerLocked() {
         if (isMuxerStarted) return
+        val muxer = mediaMuxer ?: return
         val videoReady = videoTrackIndex >= 0
-        val audioReady = !hasAudioTrack || audioTrackIndex >= 0
-        if (videoReady && audioReady) {
+        val isAudioPending = hasAudioTrack && audioEncoder != null && audioTrackIndex < 0
+        val now = System.currentTimeMillis()
+        if (videoFormatStartTime == 0L && videoReady) {
+            videoFormatStartTime = now
+        }
+        val audioTimedOut = videoFormatStartTime > 0L && (now - videoFormatStartTime > 600L)
+        val canStart = videoReady && (!isAudioPending || audioTimedOut)
+
+        if (canStart) {
             try {
-                mediaMuxer?.start()
+                muxer.start()
                 isMuxerStarted = true
+                Log.d(TAG, "MediaMuxer started successfully (videoTrack=$videoTrackIndex, audioTrack=$audioTrackIndex, audioTimedOut=$audioTimedOut)")
+
+                // Flush pending queued video samples
+                for (s in pendingVideoSamples) {
+                    try {
+                        muxer.writeSampleData(videoTrackIndex, s.buffer, s.info)
+                        videoFramesEncodedCount.incrementAndGet()
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Error writing queued video sample", t)
+                    }
+                }
+                pendingVideoSamples.clear()
+
+                if (audioTrackIndex >= 0) {
+                    for (s in pendingAudioSamples) {
+                        try {
+                            muxer.writeSampleData(audioTrackIndex, s.buffer, s.info)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "Error writing queued audio sample", t)
+                        }
+                    }
+                    pendingAudioSamples.clear()
+                }
                 muxerLock.notifyAll()
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to start MediaMuxer", t)
@@ -849,9 +928,7 @@ class CustomVideoPipelineRecorder(
         if (handler != null) {
             handler.post {
                 try {
-                    if (renderedFrameCount.get() > 0) {
-                        drainVideoEncoder(endOfStream = true)
-                    }
+                    drainVideoEncoder(endOfStream = true)
                 } catch (t: Throwable) {
                     Log.w(TAG, "Error draining video encoder on stop: ${t.message}")
                 } finally {
@@ -869,6 +946,12 @@ class CustomVideoPipelineRecorder(
         } catch (_: Throwable) {}
         glThread = null
         glHandler = null
+
+        if (videoFramesEncodedCount.get() == 0) {
+            Log.e(TAG, "CustomVideoPipelineRecorder produced 0 video frames; rejecting output file")
+            try { outputFile.delete() } catch (_: Throwable) {}
+            return null
+        }
 
         return outputFile.takeIf { it.exists() && it.length() > 0L }
     }

@@ -491,8 +491,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 try {
                     muxer.start()
                     isMuxerStarted = true
+                    var foundKeyframe = false
                     for (s in pendingVideoSamples) {
-                        try { muxer.writeSampleData(videoTrackIndex, s.buffer, s.info) } catch (ignored: Exception) {}
+                        if (!foundKeyframe && (s.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
+                            foundKeyframe = true
+                        }
+                        if (foundKeyframe) {
+                            try { muxer.writeSampleData(videoTrackIndex, s.buffer, s.info) } catch (ignored: Exception) {}
+                        }
                     }
                     pendingVideoSamples.clear()
                     if (audioTrackIndex >= 0) {
@@ -1250,12 +1256,18 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                     isMuxerStarted = true
                     Log.d(TAG, "MediaMuxer successfully started (videoTrack=$videoTrackIndex, audioTrack=$audioTrackIndex, audioTimedOut=$audioTimedOut)")
 
-                    // Flush pending queued video samples
+                    // Flush pending queued video samples starting from the first keyframe
+                    var foundKeyframe = false
                     for (s in pendingVideoSamples) {
-                        try {
-                            muxer.writeSampleData(videoTrackIndex, s.buffer, s.info)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Error flushing queued video sample", e)
+                        if (!foundKeyframe && (s.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
+                            foundKeyframe = true
+                        }
+                        if (foundKeyframe) {
+                            try {
+                                muxer.writeSampleData(videoTrackIndex, s.buffer, s.info)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Error flushing queued video sample", e)
+                            }
                         }
                     }
                     pendingVideoSamples.clear()
@@ -1809,6 +1821,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             val display = eglDisplay
             val surface = eglSurface
             if (display != null && surface != null) {
+                GLES20.glFinish()
                 EGLExt.eglPresentationTimeANDROID(display, surface, adjustedPtsNs)
                 EGL14.eglSwapBuffers(display, surface)
             }
