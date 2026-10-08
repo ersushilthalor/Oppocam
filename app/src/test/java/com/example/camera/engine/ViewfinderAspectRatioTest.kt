@@ -32,9 +32,8 @@ class ViewfinderAspectRatioTest {
 
     @Test
     fun testTargetAspectRatioForModes() {
-        // Photo, Portrait, and Night modes must strictly maintain 4:3 ratio
+        // Photo and Night modes must strictly maintain 4:3 ratio
         assertEquals(4f / 3f, engine.getTargetAspectRatioForMode(CameraMode.PHOTO), 0.001f)
-        assertEquals(4f / 3f, engine.getTargetAspectRatioForMode(CameraMode.PORTRAIT), 0.001f)
         assertEquals(4f / 3f, engine.getTargetAspectRatioForMode(CameraMode.NIGHT), 0.001f)
 
         // Video and Cinema modes must strictly maintain 16:9 ratio

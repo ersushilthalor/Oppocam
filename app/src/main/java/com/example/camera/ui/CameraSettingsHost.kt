@@ -83,7 +83,6 @@ fun CameraSettingsHost(
     val manualShutterSpeedNs by viewModel.manualShutterSpeedNs.collectAsStateWithLifecycle()
     val focusMode by viewModel.focusMode.collectAsStateWithLifecycle()
     val manualFocusDistance by viewModel.manualFocusDistance.collectAsStateWithLifecycle()
-    val portraitConfig by viewModel.portraitConfig.collectAsStateWithLifecycle()
     val selectedPhotoFilter by viewModel.selectedPhotoFilter.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
@@ -167,7 +166,6 @@ fun CameraSettingsHost(
         manualShutterSpeedNs = manualShutterSpeedNs,
         focusMode = focusMode,
         manualFocusDistance = manualFocusDistance,
-        portraitConfig = portraitConfig,
         selectedPhotoFilter = selectedPhotoFilter,
         onVideoCodecSelected = { viewModel.setVideoCodec(it) },
         onJpegQualitySelected = { viewModel.setJpegQuality(it) },
@@ -188,7 +186,6 @@ fun CameraSettingsHost(
         onManualShutterSpeedChange = { viewModel.setManualShutterSpeed(it) },
         onFocusModeChange = { viewModel.setFocusMode(it) },
         onManualFocusDistanceChange = { viewModel.setManualFocusDistance(it) },
-        onPortraitConfigChange = { viewModel.setPortraitConfig(it) },
         onPhotoFilterSelected = { viewModel.setPhotoFilter(it) },
         onResetAllSettings = { viewModel.resetAllSettings() },
         uiCustomizationState = uiCustomizationState,

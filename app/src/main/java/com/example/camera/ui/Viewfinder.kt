@@ -58,10 +58,7 @@ import androidx.compose.ui.layout.ContentScale
 import android.graphics.Bitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.cinedepth.pro.ui.BlurPreviewParams
-import com.cinedepth.pro.ui.LensEffect
 import com.cinedepth.pro.ui.blur.DepthBlurEngine
-import com.example.camera.model.BokehStyle
 import com.example.camera.model.CameraMode
 import com.example.camera.model.CinemaColorProfile
 import com.example.camera.model.CinemaConfig
@@ -69,7 +66,6 @@ import com.example.camera.model.CinematicLut
 import com.example.camera.model.GridType
 import com.example.camera.model.LogBitDepth
 import com.example.camera.model.PhotoFilter
-import com.example.camera.model.PortraitConfig
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -93,7 +89,6 @@ fun Viewfinder(
     activeLut: CinematicLut? = null,
     isLutPreviewEnabled: Boolean = false,
     cinemaConfig: CinemaConfig? = null,
-    portraitConfig: PortraitConfig? = null,
     videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
     selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
     customVideoPipelineConfig: com.example.camera.videopipeline.CustomVideoPipelineConfig? = null,
@@ -139,75 +134,7 @@ fun Viewfinder(
     var liveDepthColormapBmp by remember { mutableStateOf<Bitmap?>(null) }
     var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
 
-    val isLivePortraitDepthActive = cameraMode == CameraMode.PORTRAIT &&
-            portraitConfig != null &&
-            portraitConfig.virtualApertureEnabled &&
-            (portraitConfig.liveAperturePreviewEnabled || portraitConfig.showDepthPreview)
 
-    LaunchedEffect(
-        isLivePortraitDepthActive,
-        portraitConfig?.simulatedAperture,
-        portraitConfig?.blurStrength,
-        portraitConfig?.bokehStyle,
-        portraitConfig?.showDepthPreview,
-        portraitConfig?.focusPointX,
-        portraitConfig?.focusPointY
-    ) {
-        if (!isLivePortraitDepthActive || portraitConfig == null) {
-            liveVirtualAperturePreviewBmp = null
-            liveDepthColormapBmp = null
-            return@LaunchedEffect
-        }
-        while (true) {
-            val tv = textureViewInstance
-            if (tv != null && tv.isAvailable && tv.width > 32 && tv.height > 32) {
-                val sampleH = 256
-                val sampleW = ((tv.width.toFloat() / tv.height.toFloat()) * sampleH).toInt().coerceIn(144, 384)
-                val frame = try {
-                    tv.getBitmap(sampleW, sampleH)
-                } catch (_: Throwable) {
-                    null
-                }
-                if (frame != null) {
-                    try {
-                        val lensEffect = when (portraitConfig.bokehStyle) {
-                            BokehStyle.NATURAL_ROUND -> LensEffect.Classic
-                            BokehStyle.SOFT_ELLIPTICAL -> LensEffect.Anamorphic
-                            BokehStyle.POLYGONAL_APERTURE -> LensEffect.Hexagon
-                            BokehStyle.LIGHT_SOURCE -> LensEffect.Bloom
-                            BokehStyle.ZEISS_SWIRL -> LensEffect.Bubble
-                            BokehStyle.LEICA_3D_POP -> LensEffect.Creamy
-                        }
-                        val blurScale = (portraitConfig.blurStrength / 100f).coerceIn(0.05f, 1.0f)
-                        val previewParams = BlurPreviewParams(
-                            blurStrength = blurScale,
-                            focusDepth = 64f,
-                            lensEffect = lensEffect,
-                            edgeSoftness = 0.35f,
-                            edgeExpand = 0.22f,
-                            edgeRefine = 0.50f,
-                            blurFalloff = 0.70f
-                        )
-                        val result = DepthBlurEngine.renderDepthAware(
-                            source = frame,
-                            params = previewParams,
-                            depthEstimator = depthEstimator,
-                            overrideDepth = null,
-                            fastContourMatte = true
-                        )
-                        liveVirtualAperturePreviewBmp = result.bitmap
-                        liveDepthColormapBmp = result.depthMapBitmap
-                    } catch (_: Throwable) {
-                        liveVirtualAperturePreviewBmp = null
-                        liveDepthColormapBmp = null
-                    } finally {
-                        frame.recycle()
-                    }
-                }
-            }
-            delay(140L)
-        }
-    }
 
     LaunchedEffect(currentZoom) {
         if (abs(currentZoom - currentScale) > 0.05f) {
@@ -216,7 +143,7 @@ fun Viewfinder(
     }
 
     val targetRatioCalc = when (cameraMode) {
-        CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f
+        CameraMode.PHOTO, CameraMode.NIGHT -> 4f / 3f
         CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
         CameraMode.VIDEO -> 16f / 9f
         else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
@@ -270,11 +197,11 @@ fun Viewfinder(
         val containerWidth = maxWidth
         val containerHeight = maxHeight
 
-        // Native viewfinder uses 3:4 portrait frame for Photo, Portrait, Pro, and Night modes,
-        // mode-specific aspect ratio for Cinema mode, and 9:16 portrait frame for Video mode.
-        val isFourThree = (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.PORTRAIT || cameraMode == CameraMode.NIGHT)
+        // Native viewfinder uses 3:4 frame for Photo, Pro, and Night modes,
+        // mode-specific aspect ratio for Cinema mode, and 9:16 frame for Video mode.
+        val isFourThree = (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.NIGHT)
         val targetRatio = when (cameraMode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f
+            CameraMode.PHOTO, CameraMode.NIGHT -> 4f / 3f
             CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
             CameraMode.VIDEO -> 16f / 9f
             else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
@@ -634,31 +561,6 @@ fun Viewfinder(
                             )
                             textureView.invalidate()
                             return@AndroidView
-                        } else if (cameraMode == CameraMode.PORTRAIT && portraitConfig != null) {
-                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
-                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                            val style = portraitConfig.selectedStyle
-                            if (style.isZeissOptical) {
-                                // Real ZEISS T* anti-reflective micro-contrast & deep clean blacks
-                                val zeissMat = android.graphics.ColorMatrix(floatArrayOf(
-                                    1.05f, 0.01f, -0.01f, 0f, -2f,
-                                    0.01f, 1.04f, -0.01f, 0f, -2f,
-                                    -0.01f, -0.01f, 1.03f, 0f, -1f,
-                                    0f, 0f, 0f, 1f, 0f
-                                ))
-                                colorMatrix.postConcat(zeissMat)
-                                hasFilter = true
-                            } else if (style.isLeicaOptical) {
-                                // Real Leica 3D Pop: Rich organic midtones, velvety blacks, authentic European skin tonality
-                                val leicaMat = android.graphics.ColorMatrix(floatArrayOf(
-                                    1.06f, -0.01f, -0.01f, 0f, -3f,
-                                    -0.01f, 1.05f, -0.01f, 0f, -3f,
-                                    -0.01f, -0.01f, 1.04f, 0f, -2f,
-                                    0f, 0f, 0f, 1f, 0f
-                                ))
-                                colorMatrix.postConcat(leicaMat)
-                                hasFilter = true
-                            }
                         } else if (cameraMode == CameraMode.VIDEO) {
                             if (selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
                                 com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
@@ -712,26 +614,6 @@ fun Viewfinder(
                         }
                 )
 
-                // Real-Time Photon Virtual Aperture / AI Depth Map Preview Overlay (Exclusively in Portrait Mode when verified AI model is active)
-                if (cameraMode == CameraMode.PORTRAIT && isLivePortraitDepthActive && portraitConfig != null) {
-                    val displayBmp = if (portraitConfig.showDepthPreview && liveDepthColormapBmp != null) {
-                        liveDepthColormapBmp
-                    } else if (portraitConfig.liveAperturePreviewEnabled) {
-                        liveVirtualAperturePreviewBmp
-                    } else null
-
-                    if (displayBmp != null && !displayBmp.isRecycled) {
-                        Image(
-                            bitmap = displayBmp.asImageBitmap(),
-                            contentDescription = "Real-time Virtual Aperture Preview",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("portrait_virtual_aperture_live_preview")
-                        )
-                    }
-                }
-
                 // Clean Cinematic LUT Active Badge (Omitted when LOG profile is selected)
                 val isLogProfile = cinemaConfig?.let {
                     it.colorProfile in listOf(
@@ -767,36 +649,6 @@ fun Viewfinder(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = displayLabel.uppercase(),
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.6.sp
-                            )
-                        }
-                    }
-                } else if (cameraMode == CameraMode.PORTRAIT && portraitConfig != null && (portraitConfig.selectedStyle.isZeissOptical || portraitConfig.selectedStyle.isLeicaOptical)) {
-                    val style = portraitConfig.selectedStyle
-                    val badgeColor = if (style.isZeissOptical) Color(0xFF0070D2) else Color(0xFFE00000)
-                    val badgeName = if (style.isZeissOptical) "ZEISS T*" else "LEICA"
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(10.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xDD0D0F18))
-                            .border(1.dp, badgeColor.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 9.dp, vertical = 5.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(badgeColor)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "$badgeName • ${style.title}".uppercase(),
                                 color = Color.White,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -1026,7 +878,7 @@ fun CameraGridOverlay(
  * - Matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
  * - Uniform center scaling (Math.max(scaleX, scaleY)) around (centerX, centerY)
  * - Sensor orientation handling (90°/270°) and display rotation
- * - Seamless mode switching between 4:3 (Photo/Portrait/Night) and 16:9 (Video/Cinema)
+ * - Seamless mode switching between 4:3 (Photo/Night) and 16:9 (Video/Cinema)
  *   without temporary stretching, distortion, squashing, wrong crop, or flickering
  * - Compatible with Stable Action Horizon Lock & Dolly Zoom pipelines
  */

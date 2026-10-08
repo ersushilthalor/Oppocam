@@ -646,7 +646,6 @@ fun LivePreviewCanvas(
                     TopControlItem.DOLLY_ZOOM -> Icons.Outlined.CenterFocusStrong
                     TopControlItem.VIDEO_ADJUSTMENTS -> Icons.Outlined.Tune
                     TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
-                    TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                     TopControlItem.PIPELINE -> Icons.Outlined.Tune
                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
@@ -1141,10 +1140,10 @@ fun ModeSelectorEditor(
         }
 
         item {
-            Text("Main Carousel Modes (Photo, Portrait, Video, More). All other modes are organized inside More Modes.", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
+            Text("Main Carousel Modes (Photo, Video, More). All other modes are organized inside More Modes.", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
         }
 
-        val primaryCarouselModes = listOf(CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.VIDEO, CameraMode.MORE)
+        val primaryCarouselModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE)
         items(primaryCarouselModes) { mode ->
             val isVisible = config.visibleModes.contains(mode)
             Surface(
@@ -1683,7 +1682,6 @@ fun TopBarControlsEditor(
                                             TopControlItem.EV -> Icons.Filled.Exposure
                                             TopControlItem.SETTINGS -> Icons.Outlined.Settings
                                             TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
-                                            TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
                                             TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                             else -> Icons.Outlined.Tune
                                         },
@@ -1731,7 +1729,6 @@ fun TopBarControlsEditor(
                                                     TopControlItem.EV -> Icons.Filled.Exposure
                                                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
                                                     TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
-                                                    TopControlItem.PORTRAIT_STYLE -> Icons.Default.FaceRetouchingNatural
                                                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                                     else -> Icons.Outlined.Tune
                                                 },

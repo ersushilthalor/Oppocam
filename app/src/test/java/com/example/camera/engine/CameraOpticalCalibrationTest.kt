@@ -115,6 +115,19 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
+        // Hysteresis buffer holds WIDE during downward drag from WIDE above (1.0 - 0.04) = 0.96x
+        assertEquals(
+            LensType.WIDE,
+            CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.WIDE,
+                targetZoom = 0.999f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = false
+            )
+        )
+        // Preset tap at 0.999x immediately selects ULTRAWIDE without drag hysteresis
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
@@ -123,7 +136,7 @@ class CameraOpticalCalibrationTest {
                 hasUltraWide = true,
                 hasTelephoto2x = false,
                 hasTelephoto3x = false,
-                isPresetTap = false
+                isPresetTap = true
             )
         )
         // At 1.0x and above, transitions to Wide
@@ -151,9 +164,9 @@ class CameraOpticalCalibrationTest {
         )
 
         // When currently on Wide (Main):
-        // Above 1.0x stays on Wide, transitions to Ultra-Wide below 1.0x
+        // Above 0.96x (1.0x - 0.04x buffer), dragging down stays on Wide due to hysteresis
         assertEquals(
-            LensType.ULTRAWIDE,
+            LensType.WIDE,
             CameraOpticalCalibration.resolveTargetLensType(
                 currentLensType = LensType.WIDE,
                 targetZoom = 0.98f,
@@ -163,6 +176,19 @@ class CameraOpticalCalibrationTest {
                 isPresetTap = false
             )
         )
+        // Preset tap at 0.98x immediately selects Ultra-Wide without hysteresis
+        assertEquals(
+            LensType.ULTRAWIDE,
+            CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.WIDE,
+                targetZoom = 0.98f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = true
+            )
+        )
+        // Below 0.96x (e.g. 0.95x), drag transitions to Ultra-Wide
         assertEquals(
             LensType.ULTRAWIDE,
             CameraOpticalCalibration.resolveTargetLensType(
@@ -248,5 +274,60 @@ class CameraOpticalCalibrationTest {
         assertEquals(1.39f, CameraOpticalCalibration.focalLengthMmToZoom(32.0f), 0.01f)
         assertEquals(2.17f, CameraOpticalCalibration.focalLengthMmToZoom(50.0f), 0.01f)
         assertEquals(3.70f, CameraOpticalCalibration.focalLengthMmToZoom(85.0f), 0.01f)
+    }
+
+    @Test
+    fun testCustomSwitchPointDeterminesLensSwitchPoint() {
+        // At user-selected 32mm (~1.39x switch point):
+        val switch32mm = 32.0f
+        val switchZoom32 = 32.0f / 23.0f // ~1.3913x
+
+        // Below switch point (e.g. 1.2x) -> Ultra-wide
+        val lensAt12 = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = 1.20f,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = true,
+            switchPointMm = switch32mm
+        )
+        assertEquals(LensType.ULTRAWIDE, lensAt12)
+
+        // At or above switch point (e.g. 1.40x) -> Main Wide
+        val lensAt14 = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = 1.40f,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = true,
+            switchPointMm = switch32mm
+        )
+        assertEquals(LensType.WIDE, lensAt14)
+
+        // At user-selected 50mm (~2.17x switch point):
+        val switch50mm = 50.0f
+        val lensAt20Under50 = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = 2.00f,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = true,
+            switchPointMm = switch50mm
+        )
+        assertEquals(LensType.ULTRAWIDE, lensAt20Under50)
+
+        val lensAt23Under50 = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = 2.30f,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = true,
+            switchPointMm = switch50mm
+        )
+        assertEquals(LensType.WIDE, lensAt23Under50)
     }
 }

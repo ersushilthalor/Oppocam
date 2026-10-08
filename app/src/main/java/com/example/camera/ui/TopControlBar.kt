@@ -121,14 +121,10 @@ fun TopControlBar(
     cinemaConfig: CinemaConfig = CinemaConfig(),
     isAudioEnabled: Boolean = true,
     onAudioToggle: () -> Unit = {},
-    portraitAperture: String = "f/1.8",
-    onPortraitApertureClick: () -> Unit = {},
-    onPortraitStyleClick: () -> Unit = {},
     onPhotoFilterClick: () -> Unit = {},
     activePhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL,
     onPipelineClick: () -> Unit = {},
     isPipelineActive: Boolean = false,
-    selectedPortraitStyle: PortraitStyle = PortraitStyle.NATURAL,
     onCinemaSettingsClick: () -> Unit = {},
     onCinemaEvChange: (Int) -> Unit = {},
     isEvOpen: Boolean = false,
@@ -293,42 +289,6 @@ fun TopControlBar(
                         )
                     }
                 }
-                CameraMode.PORTRAIT -> {
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, accentColor, RoundedCornerShape(17.dp))
-                            .clickable { onPortraitApertureClick() }
-                            .padding(horizontal = 12.dp)
-                            .testTag("portrait_aperture_pill"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                text = "f",
-                                color = accentColor,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Serif
-                            )
-                            Text(
-                                text = portraitAperture,
-                                color = accentColor,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
-                }
                 CameraMode.VIDEO -> {
                     val resLabel = when {
                         videoResolution?.width == 3840 || videoResolution?.height == 3840 -> "4K"
@@ -491,39 +451,6 @@ fun TopControlBar(
                             maxLines = 1,
                             softWrap = false
                         )
-                    }
-                }
-                CameraMode.PORTRAIT -> {
-                    val portraitAccent = Color(0xFFFF8A65)
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, portraitAccent.copy(alpha = 0.6f), RoundedCornerShape(17.dp))
-                            .clickable { onPortraitStyleClick() }
-                            .padding(horizontal = 10.dp)
-                            .testTag("portrait_style_pill"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.FaceRetouchingNatural,
-                                contentDescription = "Portrait Style",
-                                tint = portraitAccent,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = selectedPortraitStyle.displayName.uppercase(),
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
                     }
                 }
                 CameraMode.VIDEO -> {
@@ -710,22 +637,7 @@ fun TopControlBar(
         }
 
 
-        val portraitStyleButton = @Composable {
-            IconButton(
-                onClick = onPortraitStyleClick,
-                modifier = Modifier
-                    .size(buttonSize)
-                    .topControlStyle(layoutConfig, activeColor = Color(0xFFFF8A65))
-                    .testTag("portrait_style_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.FaceRetouchingNatural,
-                    contentDescription = "Portrait Style",
-                    tint = Color(0xFFFF8A65),
-                    modifier = Modifier.size(iconSize)
-                )
-            }
-        }
+
 
         val logButton = @Composable {
             val isLogActive = cinemaConfig.colorProfile != CinemaColorProfile.NATIVE || cinemaConfig.logBitDepth != LogBitDepth.OFF
@@ -934,7 +846,6 @@ fun TopControlBar(
                     TopControlItem.DOLLY_ZOOM -> dollyZoomButton()
                     TopControlItem.VIDEO_ADJUSTMENTS -> videoAdjustmentsButton()
                     TopControlItem.MOTION_PHOTO -> motionPhotoButton()
-                    TopControlItem.PORTRAIT_STYLE -> portraitStyleButton()
                     TopControlItem.PIPELINE -> pipelineButton()
                     TopControlItem.SETTINGS -> settingsButton()
                 }

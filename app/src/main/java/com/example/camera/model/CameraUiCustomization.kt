@@ -147,7 +147,6 @@ enum class TopControlItem(val id: String, val label: String) {
     DOLLY_ZOOM("dolly_zoom", "Dolly Zoom"),
     VIDEO_ADJUSTMENTS("video_adjustments", "Video Adjustments"),
     MOTION_PHOTO("motion_photo", "Motion Photo"),
-    PORTRAIT_STYLE("portrait_style", "Portrait Style"),
     STABILIZATION("stabilization", "Video Stabilization (OFF/EIS/EIS+)"),
     PIPELINE("pipeline", "Custom Pipeline"),
     SETTINGS("settings", "Settings Gear")
@@ -156,7 +155,6 @@ enum class TopControlItem(val id: String, val label: String) {
 data class ModeLayoutConfig(
     val visibleModes: List<CameraMode> = listOf(
         CameraMode.PHOTO,
-        CameraMode.PORTRAIT,
         CameraMode.VIDEO,
         CameraMode.MORE
     ),
@@ -209,7 +207,7 @@ data class ModeLayoutConfig(
         return topIconPositions[item] ?: when (item) {
             TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
             TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
-            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PORTRAIT_STYLE, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
+            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
         }
     }
 
@@ -329,7 +327,7 @@ data class ModeLayoutConfig(
             }
             if (visibleModesList.isEmpty()) {
                 visibleModesList.addAll(listOf(
-                    CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.VIDEO, CameraMode.MORE
+                    CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE
                 ))
             }
 
@@ -592,23 +590,6 @@ object CameraUiTemplates {
                 ),
                 hiddenTopControls = emptySet()
             )
-            CameraMode.PORTRAIT -> baseConfig.copy(
-                topControlsOrder = listOf(
-                    TopControlItem.FLASH,
-                    TopControlItem.TIMER,
-                    TopControlItem.RESOLUTION,
-                    TopControlItem.PORTRAIT_STYLE,
-                    TopControlItem.SETTINGS
-                ),
-                topIconPositions = mapOf(
-                    TopControlItem.FLASH to TopIconPosition.LEFT,
-                    TopControlItem.TIMER to TopIconPosition.LEFT,
-                    TopControlItem.RESOLUTION to TopIconPosition.CENTER,
-                    TopControlItem.PORTRAIT_STYLE to TopIconPosition.RIGHT,
-                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
-                ),
-                hiddenTopControls = emptySet()
-            )
             else -> baseConfig
         }
     }
@@ -618,7 +599,6 @@ object CameraUiTemplates {
             UiTemplateType.STOCK_PIXEL -> ModeLayoutConfig(
                 visibleModes = listOf(
                     CameraMode.PHOTO,
-                    CameraMode.PORTRAIT,
                     CameraMode.NIGHT,
                     CameraMode.VIDEO,
                     CameraMode.CINEMA,

@@ -51,7 +51,7 @@ import kotlin.math.roundToInt
  * 1. Floating Master Zoom Capsule directly over the viewfinder: [0.5] [(1x)] [2] [3]
  * 2. Solid Pure Black Bottom Panel:
  *    - Shutter row: [Gallery]  [Shutter Button]  [Flip Camera]
- *    - Mode carousel: [PHOTO ●]  [PORTRAIT]  [VIDEO]  [CINEMA]  [MORE]
+ *    - Mode carousel: [PHOTO ●]  [VIDEO]  [CINEMA]  [MORE]
  */
 @Composable
 fun BottomControlBar(
@@ -486,24 +486,7 @@ fun BottomControlBar(
                                         }
                                     }
                                 }
-                                CameraMode.PORTRAIT -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(shutterSize * 0.8f)
-                                            .scale(buttonScale)
-                                            .clip(CircleShape)
-                                            .background(Color.White)
-                                            .border(2.5.dp, accentColor, CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(shutterSize * 0.2f)
-                                                .clip(CircleShape)
-                                                .background(accentColor)
-                                        )
-                                    }
-                                }
+
                                 CameraMode.VIDEO, CameraMode.CINEMA -> {
                                     if (isRecordingVideo) {
                                         Box(
@@ -578,7 +561,7 @@ fun BottomControlBar(
                         val modeScrollState = rememberScrollState()
                         if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.PIXEL_PILL) {
                             // Pixel UI Template:
-                            // First Icon (Photo Modes): Photo, Portrait, Night, Pro Manual
+                            // First Icon (Photo Modes): Photo, Night, Pro Manual
                             // Second Icon (Video and Special Modes): Video, Cinema, AI Subject Tracing
                             // "More" option is completely removed from the Pixel UI template.
                             data class PixelModeEntry(
@@ -597,15 +580,6 @@ fun BottomControlBar(
                                         onSelect = {
                                             onSetManualProOpen(false)
                                             onModeSelected(CameraMode.PHOTO)
-                                        }
-                                    ),
-                                    PixelModeEntry(
-                                        tag = "mode_portrait",
-                                        label = "Portrait",
-                                        isSelected = cameraMode == CameraMode.PORTRAIT,
-                                        onSelect = {
-                                            onSetManualProOpen(false)
-                                            onModeSelected(CameraMode.PORTRAIT)
                                         }
                                     ),
                                     PixelModeEntry(
@@ -712,16 +686,16 @@ fun BottomControlBar(
                             // Non-Pixel UI Templates: preserve original mode carousel behavior
                             val modesToDisplay = remember(layoutConfig.visibleModes) {
                                 val filtered = layoutConfig.visibleModes.filter {
-                                    it == CameraMode.PHOTO || it == CameraMode.PORTRAIT || it == CameraMode.VIDEO || it == CameraMode.MORE
+                                    it == CameraMode.PHOTO || it == CameraMode.VIDEO || it == CameraMode.MORE
                                 }
                                 if (filtered.isEmpty()) {
-                                    listOf(CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.VIDEO, CameraMode.MORE)
+                                    listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE)
                                 } else {
                                     filtered
                                 }
                             }
 
-                            val isMoreModeActive = (cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.PORTRAIT && cameraMode != CameraMode.VIDEO)
+                            val isMoreModeActive = (cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.VIDEO)
 
                             LaunchedEffect(cameraMode) {
                                 val targetMode = if (isMoreModeActive) CameraMode.MORE else cameraMode
@@ -979,7 +953,7 @@ fun BottomControlBar(
                                 modifier = Modifier.padding(3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // First Icon (Photo Modes): Photo, Portrait, Night, Pro Manual
+                                // First Icon (Photo Modes): Photo, Night, Pro Manual
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(18.dp))

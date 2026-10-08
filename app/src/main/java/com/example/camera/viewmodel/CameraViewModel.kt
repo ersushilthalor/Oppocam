@@ -13,7 +13,6 @@ import androidx.lifecycle.viewModelScope
 import com.example.camera.data.CameraPreferences
 import com.example.camera.engine.Camera2Engine
 import com.example.camera.engine.CameraOpticalCalibration
-import com.example.camera.engine.PortraitProcessor
 import com.example.camera.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,7 +37,6 @@ enum class ProControlTab(val label: String) {
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
 
     val engine = Camera2Engine(application.applicationContext)
-    private val portraitProcessor by lazy { PortraitProcessor(application.applicationContext) }
     private val preferences = CameraPreferences(application.applicationContext)
 
     val lastCapturedMedia: StateFlow<CapturedMedia?> = engine.lastCapturedMedia
@@ -54,7 +52,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = engine.hybridStabilizationConfig
 
     private val _selectedAspectRatio = MutableStateFlow(
-        if (preferences.cameraMode == CameraMode.PHOTO || preferences.cameraMode == CameraMode.PORTRAIT || preferences.cameraMode == CameraMode.NIGHT) {
+        if (preferences.cameraMode == CameraMode.PHOTO || preferences.cameraMode == CameraMode.NIGHT) {
             CameraAspectRatio.RATIO_4_3
         } else {
             CameraAspectRatio.RATIO_9_16
@@ -71,23 +69,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val videoDurationSeconds: StateFlow<Int> = engine.videoDurationSeconds
     val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = engine.selectedVideoPipeline
 
-    // Portrait Mode Controls & Pipeline State
-    private val _portraitConfig = MutableStateFlow(preferences.getModePortraitConfig(preferences.cameraMode))
-    val portraitConfig: StateFlow<PortraitConfig> = _portraitConfig.asStateFlow()
-
-    private val _portraitProcessingState = MutableStateFlow(PortraitProcessingState())
-    val portraitProcessingState: StateFlow<PortraitProcessingState> = _portraitProcessingState.asStateFlow()
-
     // Photo Filter State
     private val _selectedPhotoFilter = MutableStateFlow(preferences.getModePhotoFilter(preferences.cameraMode))
     val selectedPhotoFilter: StateFlow<PhotoFilter> = _selectedPhotoFilter.asStateFlow()
 
     private val _isPhotoFilterBarOpen = MutableStateFlow(false)
     val isPhotoFilterBarOpen: StateFlow<Boolean> = _isPhotoFilterBarOpen.asStateFlow()
-
-    // Portrait Style State
-    private val _isPortraitStyleBarOpen = MutableStateFlow(false)
-    val isPortraitStyleBarOpen: StateFlow<Boolean> = _isPortraitStyleBarOpen.asStateFlow()
 
     // UI Customization State
     private val _uiCustomizationState = MutableStateFlow(preferences.uiCustomizationState)
@@ -148,10 +135,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // Mirror Selfie (Save selfie as previewed without flipping)
     private val _saveSelfieAsPreviewed = MutableStateFlow(preferences.saveSelfieAsPreviewed)
     val saveSelfieAsPreviewed: StateFlow<Boolean> = _saveSelfieAsPreviewed.asStateFlow()
-
-    // Portrait Settings Window Open/Close
-    private val _isPortraitSettingsOpen = MutableStateFlow(false)
-    val isPortraitSettingsOpen: StateFlow<Boolean> = _isPortraitSettingsOpen.asStateFlow()
 
     // Cinema / Pro Video Mode State & Panel visibility
     val cinemaConfig: StateFlow<CinemaConfig> = engine.cinemaConfig
@@ -289,10 +272,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             showVideoResolution = current.showVideoResolution,
             showVideoFps = current.showVideoFps,
             showVideoStabilization = current.showVideoStabilization,
-            showPortraitApertureBlur = current.showPortraitApertureBlur,
-            showPortraitBokehStyle = current.showPortraitBokehStyle,
-            showPortraitBeautySkin = current.showPortraitBeautySkin,
-            showPortraitOpticalDepth = current.showPortraitOpticalDepth,
             showCinemaColorProfile = current.showCinemaColorProfile,
             showCinemaLutControls = current.showCinemaLutControls,
             showCinemaResolutionFps = current.showCinemaResolutionFps,
@@ -890,11 +869,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // Background Sequential Queue for Portrait Processing
-    // Strictly queues portrait captures sequentially to prevent duplicate processing,
-    // memory spikes, and crashes during rapid multi-photo captures.
-    private val portraitProcessingChannel = Channel<Pair<Bitmap, PortraitConfig>>(capacity = 10)
-
     // Toast/Feedback banner
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
@@ -1052,11 +1026,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // Restore initial mode aspect ratio:
         // - Photo mode: fixed 3:4
-        // - Portrait mode: fixed 3:4
         // - Night mode: fixed 3:4
         // - Cinema mode: mode-specific cinema aspect ratio (16:9, IMAX, Cinematic)
         // - All other modes: fixed 9:16
-        if (initialMode == CameraMode.PHOTO || initialMode == CameraMode.PORTRAIT || initialMode == CameraMode.NIGHT) {
+        if (initialMode == CameraMode.PHOTO || initialMode == CameraMode.NIGHT) {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
             engine.setPreviewAspectRatio(4f / 3f)
         } else if (initialMode == CameraMode.CINEMA) {
@@ -1102,43 +1075,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 preferences.setModeZoom(_cameraMode.value, zoom)
             }
         }
-
-        // Sequential background portrait processor
-        // Processes portrait jobs safely one by one in the background without UI blocking,
-        // memory spikes, or duplicate processing crashes.
-        viewModelScope.launch(Dispatchers.Default) {
-            for ((bitmap, config) in portraitProcessingChannel) {
-                try {
-                    val uri = portraitProcessor.processAndSavePortrait(
-                        orientedBitmap = bitmap,
-                        config = config
-                    )
-                    if (uri != null) {
-                        withContext(Dispatchers.Main) {
-                            engine.setLastCapturedMedia(uri)
-                            showToast("Portrait saved to DCIM/Camera")
-                            engine.updateStorageStats()
-                        }
-                    } else {
-                        withContext(Dispatchers.Main) {
-                            showToast("Portrait processing failed")
-                        }
-                    }
-                } catch (t: Throwable) {
-                    Log.e("CameraViewModel", "Error in background portrait processing", t)
-                } finally {
-                    try {
-                        if (!bitmap.isRecycled) {
-                            bitmap.recycle()
-                        }
-                    } catch (ignored: Exception) {}
-                }
-            }
-        }
-    }
-
-    fun setPortraitSettingsOpen(isOpen: Boolean) {
-        _isPortraitSettingsOpen.value = isOpen
     }
 
     fun toggleSaveSelfieAsPreviewed() {
@@ -1170,10 +1106,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.cameraMode = mode
 
         // 3. Immediately synchronize aspect ratio:
-        // Photo, Portrait, Night, and Pro modes strictly keep 3:4 aspect ratio.
+        // Photo, Night, and Pro modes strictly keep 3:4 aspect ratio.
         // Cinema mode uses selected cinema aspect ratio (16:9, IMAX, Cinematic).
         // Video mode keeps 9:16 aspect ratio.
-        if (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT || mode == CameraMode.NIGHT) {
+        if (mode == CameraMode.PHOTO || mode == CameraMode.NIGHT) {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
             engine.setPreviewAspectRatio(4f / 3f)
         } else if (mode == CameraMode.CINEMA) {
@@ -1326,9 +1262,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mColorProfile = preferences.getModeColorProfile(mode)
         _colorProfile.value = mColorProfile
         engine.colorProfile = mColorProfile
-
-        val mPortraitConfig = preferences.getModePortraitConfig(mode)
-        _portraitConfig.value = mPortraitConfig
 
         val mNightConfig = preferences.getModeNightConfig(mode)
         _nightConfig.value = mNightConfig
@@ -2060,12 +1993,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _focusRingPoint.value = point
         engine.triggerFocusAndMeter(normX, normY, isLock)
 
-        if (_cameraMode.value == CameraMode.PORTRAIT) {
-            _portraitConfig.update {
-                it.copy(focusPointX = normX, focusPointY = normY)
-            }
-        }
-
         if (!isLock) {
             focusDismissJob?.cancel()
             focusDismissJob = viewModelScope.launch {
@@ -2231,52 +2158,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun setPortraitBlurStrength(strength: Float) {
-        _portraitConfig.update { it.copy(blurStrength = strength) }
-        preferences.portraitBlurStrength = strength
-        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
-    }
-
-    fun setPortraitAperture(aperture: String) {
-        _portraitConfig.update { it.copy(simulatedAperture = aperture) }
-        preferences.portraitAperture = aperture
-        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
-        showToast("Aperture: $aperture")
-    }
-
-    fun setPortraitBokehStyle(style: BokehStyle) {
-        _portraitConfig.update { it.copy(bokehStyle = style) }
-        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
-        showToast("Bokeh: ${style.label}")
-    }
-
-    fun togglePortraitFaceEnhancement() {
-        val next = !_portraitConfig.value.faceEnhancement
-        _portraitConfig.update { it.copy(faceEnhancement = next) }
-        showToast("Face Enhancement: ${if (next) "ON" else "OFF"}")
-    }
-
-    fun togglePortraitSkinTone() {
-        val next = !_portraitConfig.value.skinToneCorrection
-        _portraitConfig.update { it.copy(skinToneCorrection = next) }
-        showToast("Skin Tone Correction: ${if (next) "ON" else "OFF"}")
-    }
-
-    fun toggleOpticalBlurGuided() {
-        val next = !_portraitConfig.value.opticalBlurGuided
-        _portraitConfig.update { it.copy(opticalBlurGuided = next) }
-        preferences.portraitOpticalBlurGuided = next
-        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
-        showToast("Optical Blur Guidance: ${if (next) "ON" else "OFF"}")
-    }
-
-    fun setOpticalBlurGuided(enabled: Boolean) {
-        _portraitConfig.update { it.copy(opticalBlurGuided = enabled) }
-        preferences.portraitOpticalBlurGuided = enabled
-        preferences.setModePortraitConfig(_cameraMode.value, _portraitConfig.value)
-        showToast("Optical Blur Guidance: ${if (enabled) "ON" else "OFF"}")
-    }
-
     fun setSelectedPhotoFilter(filter: PhotoFilter) {
         _selectedPhotoFilter.value = filter
         engine.selectedPhotoFilter = filter
@@ -2291,23 +2172,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isPhotoFilterBarOpen.value = open
     }
 
-    fun setSelectedPortraitStyle(style: PortraitStyle) {
-        _portraitConfig.update { it.copy(selectedStyle = style) }
-        showToast("Portrait Style: ${style.displayName}")
-    }
-
-    fun togglePortraitStyleBar() {
-        _isPortraitStyleBarOpen.value = !_isPortraitStyleBarOpen.value
-    }
-
-    fun setPortraitStyleBarOpen(open: Boolean) {
-        _isPortraitStyleBarOpen.value = open
-    }
-
     fun onMainActionButtonClick() {
         when (_cameraMode.value) {
             CameraMode.PHOTO, CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> triggerPhotoCapture()
-            CameraMode.PORTRAIT -> triggerPortraitCapture()
             CameraMode.VIDEO, CameraMode.CINEMA -> triggerVideoCapture()
             CameraMode.NIGHT -> triggerNightCapture()
         }
@@ -2347,45 +2214,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } else {
                 showToast("Failed to save photo")
-            }
-        }
-    }
-
-    private fun triggerPortraitCapture() {
-        if (engine.isCapturing.value) return
-
-        val timerSeconds = _timerMode.value.seconds
-        if (timerSeconds > 0) {
-            timerJob?.cancel()
-            timerJob = viewModelScope.launch {
-                for (remaining in timerSeconds downTo 1) {
-                    _activeTimerCountdown.value = remaining
-                    delay(1000)
-                }
-                _activeTimerCountdown.value = null
-                executePortraitCapture()
-            }
-        } else {
-            executePortraitCapture()
-        }
-    }
-
-    private fun executePortraitCapture() {
-        com.example.camera.sound.CameraSoundManager.playShutter()
-        engine.captureStillBitmap { capturedBitmap ->
-            if (capturedBitmap == null) {
-                showToast("Portrait capture failed")
-                return@captureStillBitmap
-            }
-
-            // Immediately return to camera viewfinder and process in the background.
-            // No progress or loading UI is shown.
-            val config = _portraitConfig.value
-            val result = portraitProcessingChannel.trySend(Pair(capturedBitmap, config))
-            if (!result.isSuccess) {
-                viewModelScope.launch(Dispatchers.Default) {
-                    portraitProcessingChannel.send(Pair(capturedBitmap, config))
-                }
             }
         }
     }
@@ -2667,13 +2495,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setAiAutoFramingEnabled(enabled: Boolean) = setAutoFramingEnabled(enabled)
-
-    fun setPortraitConfig(config: PortraitConfig) {
-        _portraitConfig.value = config
-        preferences.portraitBlurStrength = config.blurStrength
-        preferences.portraitAperture = config.simulatedAperture
-        preferences.setModePortraitConfig(_cameraMode.value, config)
-    }
 
     fun setPhotoFilter(filter: PhotoFilter) {
         _selectedPhotoFilter.value = filter

@@ -50,7 +50,6 @@ import kotlin.math.roundToInt
 enum class SettingsPage(val title: String, val subtitle: String, val icon: ImageVector) {
     PHOTO("Photo Settings", "Resolutions, HDR, RAW & 50MP", Icons.Outlined.CameraAlt),
     CUSTOM_PIPELINE("Custom Pipeline Settings", "Rec.2020 Natural Log • 38 ISP Controls", Icons.Outlined.Tune),
-    DEPTH_PROCESSING("Depth Processing", "Depth Anything V2, MediaSWLF-I & Virtual Aperture", Icons.Outlined.Layers),
     VIDEO("Video Settings", "Resolution, Frame Rate, Codec & Bitrate", Icons.Outlined.Videocam),
     CINEMA("Pro Video Settings", "Resolution, FPS, Bitrate, Codec, Noise Reduction, Sharpness, Log & LUTs", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
@@ -138,7 +137,6 @@ fun SettingsDrawer(
     manualShutterSpeedNs: Long? = null,
     focusMode: FocusMode = FocusMode.CONTINUOUS,
     manualFocusDistance: Float = 0.0f,
-    portraitConfig: PortraitConfig = PortraitConfig(),
     selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL,
     // Callbacks
     onVideoCodecSelected: (String) -> Unit = {},
@@ -160,7 +158,6 @@ fun SettingsDrawer(
     onManualShutterSpeedChange: (Long?) -> Unit = {},
     onFocusModeChange: (FocusMode) -> Unit = {},
     onManualFocusDistanceChange: (Float) -> Unit = {},
-    onPortraitConfigChange: (PortraitConfig) -> Unit = {},
     onPhotoFilterSelected: (PhotoFilter) -> Unit = {},
     onResetAllSettings: () -> Unit = {},
     // UI Customization callbacks
@@ -387,10 +384,6 @@ fun SettingsDrawer(
                                     else com.example.camera.videopipeline.VideoPipelineType.NORMAL
                                 )
                             }
-                        )
-                        SettingsPage.DEPTH_PROCESSING -> DepthProcessingSettingsPage(
-                            portraitConfig = portraitConfig,
-                            onPortraitConfigChange = onPortraitConfigChange
                         )
                         SettingsPage.VIDEO -> VideoSettingsPage(
                             selectedVideoPipeline = selectedVideoPipeline,
@@ -2897,7 +2890,7 @@ private fun UiLayoutSettingsPage(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Scale the size of all floating settings windows (Video, Portrait, Pro Video, Pipeline).",
+                                text = "Scale the size of all floating settings windows (Video, Pro Video, Pipeline).",
                                 color = Color.White.copy(alpha = 0.6f),
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -3253,49 +3246,6 @@ private fun UiLayoutSettingsPage(
                         checked = floatingWindowAppearance.showVideoAdjustmentsEffects,
                         onCheckedChange = {
                             onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoAdjustmentsEffects = it))
-                        }
-                    )
-
-                    HorizontalDivider(
-                        color = Color.White.copy(alpha = 0.08f),
-                        modifier = Modifier.padding(vertical = 10.dp)
-                    )
-
-                    // Portrait Floating Window Section
-                    Text(
-                        text = "PORTRAIT FLOATING WINDOW",
-                        color = Color(0xFFFFD54F),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 0.8.sp
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    FloatingContentToggleRow(
-                        label = "Simulated Aperture & Blur Strength",
-                        checked = floatingWindowAppearance.showPortraitApertureBlur,
-                        onCheckedChange = {
-                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitApertureBlur = it))
-                        }
-                    )
-                    FloatingContentToggleRow(
-                        label = "Bokeh Lens Styles (Creamy / Swirly / Anamorphic)",
-                        checked = floatingWindowAppearance.showPortraitBokehStyle,
-                        onCheckedChange = {
-                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitBokehStyle = it))
-                        }
-                    )
-                    FloatingContentToggleRow(
-                        label = "Portrait Skin Retouching & Beauty",
-                        checked = floatingWindowAppearance.showPortraitBeautySkin,
-                        onCheckedChange = {
-                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitBeautySkin = it))
-                        }
-                    )
-                    FloatingContentToggleRow(
-                        label = "Optical Depth & Edge Precision",
-                        checked = floatingWindowAppearance.showPortraitOpticalDepth,
-                        onCheckedChange = {
-                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showPortraitOpticalDepth = it))
                         }
                     )
 
@@ -4073,7 +4023,6 @@ fun CameraSettingsScreen(
     val manualShutterSpeedNs by viewModel.manualShutterSpeedNs.collectAsStateWithLifecycle()
     val focusMode by viewModel.focusMode.collectAsStateWithLifecycle()
     val manualFocusDistance by viewModel.manualFocusDistance.collectAsStateWithLifecycle()
-    val portraitConfig by viewModel.portraitConfig.collectAsStateWithLifecycle()
     val selectedPhotoFilter by viewModel.selectedPhotoFilter.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
@@ -4154,7 +4103,6 @@ fun CameraSettingsScreen(
         manualShutterSpeedNs = manualShutterSpeedNs,
         focusMode = focusMode,
         manualFocusDistance = manualFocusDistance,
-        portraitConfig = portraitConfig,
         selectedPhotoFilter = selectedPhotoFilter,
         onVideoCodecSelected = { viewModel.setVideoCodec(it) },
         onJpegQualitySelected = { viewModel.setJpegQuality(it) },
@@ -4175,7 +4123,6 @@ fun CameraSettingsScreen(
         onManualShutterSpeedChange = { viewModel.setManualShutterSpeed(it) },
         onFocusModeChange = { viewModel.setFocusMode(it) },
         onManualFocusDistanceChange = { viewModel.setManualFocusDistance(it) },
-        onPortraitConfigChange = { viewModel.setPortraitConfig(it) },
         onPhotoFilterSelected = { viewModel.setPhotoFilter(it) },
         onResetAllSettings = { viewModel.resetAllSettings() },
         uiCustomizationState = uiCustomizationState,

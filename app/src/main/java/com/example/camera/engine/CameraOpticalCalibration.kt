@@ -274,6 +274,20 @@ object CameraOpticalCalibration {
     ): LensType {
         val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
         val switchZoom = switchPointToZoom(clampedSwitch, DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+        val hysteresisBuffer = if (isPresetTap) 0f else 0.04f * switchZoom
+
+        // During continuous dragging down from WIDE or Telephoto, stay on WIDE down to (switchZoom - hysteresisBuffer)
+        if (!isPresetTap && (currentLensType == LensType.WIDE || currentLensType == LensType.TELEPHOTO || currentLensType == LensType.TELEPHOTO_3X)) {
+            if (targetZoom >= (switchZoom - hysteresisBuffer)) {
+                return when {
+                    targetZoom >= 2.8f && hasTelephoto3x && (currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) && switchZoom <= 2.8f -> LensType.TELEPHOTO_3X
+                    targetZoom >= 1.8f && hasTelephoto2x && (currentLensType == LensType.TELEPHOTO || targetZoom >= 2.15f) && switchZoom <= 1.8f -> LensType.TELEPHOTO
+                    currentLensType == LensType.TELEPHOTO && targetZoom >= 1.85f && switchZoom <= 1.85f -> LensType.TELEPHOTO
+                    currentLensType == LensType.TELEPHOTO_3X && targetZoom >= 2.85f && switchZoom <= 2.85f -> LensType.TELEPHOTO_3X
+                    else -> LensType.WIDE
+                }
+            }
+        }
 
         // At or above the dynamic switch point zoom threshold, target Main (Wide) or Telephoto lens
         if (targetZoom >= switchZoom) {

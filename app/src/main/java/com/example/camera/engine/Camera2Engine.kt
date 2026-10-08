@@ -1309,7 +1309,7 @@ class Camera2Engine(private val context: Context) {
 
     fun getTargetAspectRatioForMode(mode: CameraMode = currentMode): Float {
         return when (mode) {
-            CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.NIGHT -> 4f / 3f // Fixed 3:4 portrait (sensor landscape 4:3)
+            CameraMode.PHOTO, CameraMode.NIGHT -> 4f / 3f // Fixed 3:4 portrait (sensor landscape 4:3)
             CameraMode.CINEMA -> cinemaConfig.value.aspectRatio.ratioValue
             else -> 16f / 9f // Fixed 9:16 portrait (sensor landscape 16:9)
         }
@@ -2242,15 +2242,15 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Switch between Photo, Portrait, Video & Cinema modes smoothly without closing hardware device
+     * Switch between Photo, Video & Cinema modes smoothly without closing hardware device
      */
     fun setMode(mode: CameraMode) {
         if (currentMode == mode && _previewBufferSize.value != null) return
         val previousMode = currentMode
         val oldRatio = getTargetAspectRatioForMode(previousMode)
         val newRatio = getTargetAspectRatioForMode(mode)
-        val was43 = (previousMode == CameraMode.PHOTO || previousMode == CameraMode.PORTRAIT || previousMode == CameraMode.NIGHT)
-        val is43 = (mode == CameraMode.PHOTO || mode == CameraMode.PORTRAIT || mode == CameraMode.NIGHT)
+        val was43 = (previousMode == CameraMode.PHOTO || previousMode == CameraMode.NIGHT)
+        val is43 = (mode == CameraMode.PHOTO || mode == CameraMode.NIGHT)
         val wasMore = (previousMode == CameraMode.MORE)
         if (_isRecordingVideo.value) {
             stopVideoRecording()
@@ -2754,7 +2754,7 @@ class Camera2Engine(private val context: Context) {
             (it.width.toLong() * it.height.toLong()) <= maxStandardPixels
         }.ifEmpty { sixteenNineSizes }
 
-        val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.PORTRAIT || currentMode == CameraMode.NIGHT)
+        val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.NIGHT)
 
         return when {
             isPhotoOrPortrait -> {
@@ -3785,8 +3785,8 @@ class Camera2Engine(private val context: Context) {
             cinemaEngine.applyToCaptureRequest(builder)
         }
 
-        // Hardware face detection for Dolly Zoom and Portrait
-        if ((_isDollyZoomActive.value && currentMode == CameraMode.VIDEO) || currentMode == CameraMode.PORTRAIT) {
+        // Hardware face detection for Dolly Zoom
+        if (_isDollyZoomActive.value && currentMode == CameraMode.VIDEO) {
             val lens = activeSessionLens ?: _selectedLens.value
             val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
             val faceModes = chars?.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES) ?: intArrayOf()
@@ -3988,8 +3988,10 @@ class Camera2Engine(private val context: Context) {
         // If front selfie camera, apply digital zoom on active stream,
         // or switch to rear lens if user explicitly tapped a rear zoom preset (.5x or 1x)
         if (currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT) {
-            if (isPresetTap && (clampedZoom < 0.95f || clampedZoom in 0.95f..1.1f)) {
-                val backTarget = if (clampedZoom < 0.95f) {
+            val switchPoint = _lensSwitchPointMm.value
+            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+            if (isPresetTap && clampedZoom < (switchZoom * 1.1f)) {
+                val backTarget = if (clampedZoom < switchZoom) {
                     ultraWideLens
                 } else {
                     mainWideLens
@@ -4027,23 +4029,13 @@ class Camera2Engine(private val context: Context) {
         )
 
         val targetLens: LensInfo = when (targetType) {
-            LensType.ULTRAWIDE -> {
-                if (clampedZoom >= switchZoom) {
-                    mainWideLens ?: currentLens
-                } else {
-                    ultraWideLens ?: mainWideLens ?: currentLens
-                }
-            }
+            LensType.ULTRAWIDE -> ultraWideLens ?: mainWideLens ?: currentLens
             LensType.TELEPHOTO -> backLenses.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical } ?: mainWideLens ?: currentLens
             LensType.TELEPHOTO_3X -> backLenses.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical } ?: mainWideLens ?: currentLens
             else -> mainWideLens ?: currentLens
         }
 
-        val pZoom = if (isPresetTap) {
-            if (clampedZoom in 0.95f..1.05f && (targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE)) 1.0f else clampedZoom
-        } else {
-            clampedZoom
-        }
+        val pZoom = clampedZoom
 
         _targetLens.value = targetLens
 
@@ -5577,12 +5569,12 @@ class Camera2Engine(private val context: Context) {
                     request: CaptureRequest,
                     result: TotalCaptureResult
                 ) {
-                    Log.d(TAG, "Portrait still frame capture triggered")
+                    Log.d(TAG, "Still frame capture triggered")
                 }
             }, backgroundHandler)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error capturing still bitmap for portrait", e)
+            Log.e(TAG, "Error capturing still bitmap", e)
             _isCapturing.value = false
             onBitmapCaptured(null)
         }

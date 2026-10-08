@@ -30,9 +30,6 @@ class CameraPreferences(context: Context) {
         private const val KEY_WHITE_BALANCE = "pref_white_balance"
         private const val KEY_FOCUS_MODE = "pref_focus_mode"
         private const val KEY_LAST_FACING = "pref_last_facing"
-        private const val KEY_PORTRAIT_BLUR = "pref_portrait_blur"
-        private const val KEY_PORTRAIT_APERTURE = "pref_portrait_aperture"
-        private const val KEY_PORTRAIT_OPTICAL_BLUR_GUIDED = "pref_portrait_optical_blur_guided"
         private const val KEY_SAVE_SELFIE_AS_PREVIEWED = "pref_save_selfie_as_previewed"
         private const val KEY_VIEWFINDER_RESOLUTION = "pref_viewfinder_resolution"
         private const val KEY_REFOCUS_PHOTO_ENABLED = "pref_refocus_photo_enabled"
@@ -150,10 +147,6 @@ class CameraPreferences(context: Context) {
             showVideoResolution = prefs.getBoolean("fw_show_video_res", true),
             showVideoFps = prefs.getBoolean("fw_show_video_fps", true),
             showVideoStabilization = prefs.getBoolean("fw_show_video_stab", true),
-            showPortraitApertureBlur = prefs.getBoolean("fw_show_portrait_aperture", true),
-            showPortraitBokehStyle = prefs.getBoolean("fw_show_portrait_bokeh", true),
-            showPortraitBeautySkin = prefs.getBoolean("fw_show_portrait_beauty", true),
-            showPortraitOpticalDepth = prefs.getBoolean("fw_show_portrait_optical", true),
             showCinemaColorProfile = prefs.getBoolean("fw_show_cinema_profile", true),
             showCinemaLutControls = prefs.getBoolean("fw_show_cinema_lut", true),
             showCinemaResolutionFps = prefs.getBoolean("fw_show_cinema_res_fps", true),
@@ -177,10 +170,6 @@ class CameraPreferences(context: Context) {
             .putBoolean("fw_show_video_res", config.showVideoResolution)
             .putBoolean("fw_show_video_fps", config.showVideoFps)
             .putBoolean("fw_show_video_stab", config.showVideoStabilization)
-            .putBoolean("fw_show_portrait_aperture", config.showPortraitApertureBlur)
-            .putBoolean("fw_show_portrait_bokeh", config.showPortraitBokehStyle)
-            .putBoolean("fw_show_portrait_beauty", config.showPortraitBeautySkin)
-            .putBoolean("fw_show_portrait_optical", config.showPortraitOpticalDepth)
             .putBoolean("fw_show_cinema_profile", config.showCinemaColorProfile)
             .putBoolean("fw_show_cinema_lut", config.showCinemaLutControls)
             .putBoolean("fw_show_cinema_res_fps", config.showCinemaResolutionFps)
@@ -381,18 +370,6 @@ class CameraPreferences(context: Context) {
     var lastFacing: Int
         get() = prefs.getInt(KEY_LAST_FACING, android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK)
         set(value) = prefs.edit().putInt(KEY_LAST_FACING, value).apply()
-
-    var portraitBlurStrength: Float
-        get() = prefs.getFloat(KEY_PORTRAIT_BLUR, 60f)
-        set(value) = prefs.edit().putFloat(KEY_PORTRAIT_BLUR, value).apply()
-
-    var portraitAperture: String
-        get() = prefs.getString(KEY_PORTRAIT_APERTURE, "f/1.4") ?: "f/1.4"
-        set(value) = prefs.edit().putString(KEY_PORTRAIT_APERTURE, value).apply()
-
-    var portraitOpticalBlurGuided: Boolean
-        get() = prefs.getBoolean(KEY_PORTRAIT_OPTICAL_BLUR_GUIDED, true)
-        set(value) = prefs.edit().putBoolean(KEY_PORTRAIT_OPTICAL_BLUR_GUIDED, value).apply()
 
     var saveSelfieAsPreviewed: Boolean
         get() = prefs.getBoolean(KEY_SAVE_SELFIE_AS_PREVIEWED, true)
@@ -1398,41 +1375,6 @@ class CameraPreferences(context: Context) {
     fun getModePhotoFilter(mode: CameraMode): PhotoFilter {
         val name = prefs.getString(modeKey(mode, "filter"), null) ?: return selectedPhotoFilter
         return try { PhotoFilter.valueOf(name) } catch (e: Exception) { selectedPhotoFilter }
-    }
-
-    fun setModePortraitConfig(mode: CameraMode, config: PortraitConfig) {
-        portraitBlurStrength = config.blurStrength
-        portraitAperture = config.simulatedAperture
-        portraitOpticalBlurGuided = config.opticalBlurGuided
-        prefs.edit()
-            .putFloat(modeKey(mode, "portrait_blur"), config.blurStrength)
-            .putString(modeKey(mode, "portrait_aperture"), config.simulatedAperture)
-            .putBoolean(modeKey(mode, "portrait_optical_blur_guided"), config.opticalBlurGuided)
-            .putBoolean(modeKey(mode, "portrait_virtual_aperture"), config.virtualApertureEnabled)
-            .putBoolean(modeKey(mode, "portrait_live_aperture_preview"), config.liveAperturePreviewEnabled)
-            .putBoolean(modeKey(mode, "portrait_show_depth_preview"), config.showDepthPreview)
-            .putString(modeKey(mode, "portrait_bokeh_style"), config.bokehStyle.name)
-            .apply()
-    }
-
-    fun getModePortraitConfig(mode: CameraMode): PortraitConfig {
-        val blur = prefs.getFloat(modeKey(mode, "portrait_blur"), portraitBlurStrength)
-        val ap = prefs.getString(modeKey(mode, "portrait_aperture"), portraitAperture) ?: portraitAperture
-        val opticalGuided = prefs.getBoolean(modeKey(mode, "portrait_optical_blur_guided"), portraitOpticalBlurGuided)
-        val vaEnabled = prefs.getBoolean(modeKey(mode, "portrait_virtual_aperture"), true)
-        val livePreview = prefs.getBoolean(modeKey(mode, "portrait_live_aperture_preview"), true)
-        val depthPreview = prefs.getBoolean(modeKey(mode, "portrait_show_depth_preview"), false)
-        val bokehName = prefs.getString(modeKey(mode, "portrait_bokeh_style"), BokehStyle.NATURAL_ROUND.name)
-        val bokeh = try { BokehStyle.valueOf(bokehName ?: BokehStyle.NATURAL_ROUND.name) } catch (_: Exception) { BokehStyle.NATURAL_ROUND }
-        return PortraitConfig(
-            blurStrength = blur,
-            simulatedAperture = ap,
-            bokehStyle = bokeh,
-            opticalBlurGuided = opticalGuided,
-            virtualApertureEnabled = vaEnabled,
-            liveAperturePreviewEnabled = livePreview,
-            showDepthPreview = depthPreview
-        )
     }
 
     fun setModeNightConfig(mode: CameraMode, config: NightConfig) {

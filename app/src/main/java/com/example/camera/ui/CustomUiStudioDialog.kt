@@ -1033,7 +1033,6 @@ private fun SimulatedModeSelectorBar(
     fontFamily: androidx.compose.ui.text.font.FontFamily
 ) {
     val modes = listOf(
-        CameraMode.PORTRAIT,
         CameraMode.PHOTO,
         CameraMode.VIDEO,
         CameraMode.NIGHT

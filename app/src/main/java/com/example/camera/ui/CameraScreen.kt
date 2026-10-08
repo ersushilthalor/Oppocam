@@ -138,9 +138,6 @@ fun CameraScreen(
     val isCapturing by viewModel.engine.isCapturing.collectAsStateWithLifecycle()
     val lastCapturedMedia by viewModel.engine.lastCapturedMedia.collectAsStateWithLifecycle()
 
-    val portraitConfig by viewModel.portraitConfig.collectAsStateWithLifecycle()
-    val portraitProcessingState by viewModel.portraitProcessingState.collectAsStateWithLifecycle()
-    val isPortraitSettingsOpen by viewModel.isPortraitSettingsOpen.collectAsStateWithLifecycle()
     val saveSelfieAsPreviewed by viewModel.saveSelfieAsPreviewed.collectAsStateWithLifecycle()
     val photoMegapixelMode by viewModel.photoMegapixelMode.collectAsStateWithLifecycle()
     val isRefocusPhotoEnabled by viewModel.isRefocusPhotoEnabled.collectAsStateWithLifecycle()
@@ -238,7 +235,6 @@ fun CameraScreen(
 
     val selectedPhotoFilter by viewModel.selectedPhotoFilter.collectAsStateWithLifecycle()
     val isPhotoFilterBarOpen by viewModel.isPhotoFilterBarOpen.collectAsStateWithLifecycle()
-    val isPortraitStyleBarOpen by viewModel.isPortraitStyleBarOpen.collectAsStateWithLifecycle()
 
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
 
@@ -295,10 +291,9 @@ fun CameraScreen(
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
 
-    val isAnyWindowOpen = isPhotoFilterBarOpen || isPortraitStyleBarOpen ||
+    val isAnyWindowOpen = isPhotoFilterBarOpen ||
             isCinemaSettingsOpen || isLogProfileWindowOpen || isLutWindowOpen ||
             isManualProOpen || isMoreModesOpen ||
-            (cameraMode == CameraMode.PORTRAIT && isPortraitSettingsOpen) ||
             isVideoSettingsPanelOpen || isCustomVideoPipelineSettingsOpen ||
             isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
@@ -344,7 +339,6 @@ fun CameraScreen(
                 activeLut = cinemaConfig.selectedLut,
                 isLutPreviewEnabled = cinemaConfig.isLutPreviewEnabled,
                 cinemaConfig = cinemaConfig,
-                portraitConfig = portraitConfig,
                 videoAdjustments = videoAdjustments,
                 selectedVideoPipeline = selectedVideoPipeline,
                 customVideoPipelineConfig = customVideoPipelineConfig,
@@ -630,14 +624,10 @@ fun CameraScreen(
             videoFps = videoFps,
             photoMegapixelMode = photoMegapixelMode,
             cinemaConfig = cinemaConfig,
-            portraitAperture = portraitConfig.simulatedAperture,
-            onPortraitApertureClick = { viewModel.setPortraitSettingsOpen(!isPortraitSettingsOpen) },
             onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
             activePhotoFilter = selectedPhotoFilter,
             onPipelineClick = { viewModel.togglePipelinePresetFloatingWindow() },
             isPipelineActive = isCustomPipelineEnabled,
-            selectedPortraitStyle = portraitConfig.selectedStyle,
-            onPortraitStyleClick = { viewModel.togglePortraitStyleBar() },
             onCinemaSettingsClick = { viewModel.toggleCinemaSettings() },
             onLogClick = { viewModel.toggleLogProfileWindow() },
             isLogWindowOpen = isLogProfileWindowOpen,
@@ -789,9 +779,8 @@ fun CameraScreen(
         }
 
         // 3. Manual Pro Control Bar (Cleanly positioned ABOVE shutter button and bottom controls)
-        if (cameraMode != CameraMode.PORTRAIT) {
-            ManualProControlBar(
-                isOpen = isManualProOpen,
+        ManualProControlBar(
+            isOpen = isManualProOpen,
                 activeTab = activeProTab,
                 capabilities = capabilities,
                 exposureCompensation = exposureCompensation,
@@ -831,60 +820,6 @@ fun CameraScreen(
                     .align(Alignment.BottomCenter)
                     .padding(bottom = shutterAreaHeightDp + 12.dp)
             )
-        }
-
-        // 3b. Dedicated Portrait Mode AI Controls Panel
-        AnimatedVisibility(
-            visible = cameraMode == CameraMode.PORTRAIT && isPortraitSettingsOpen,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 215.dp)
-        ) {
-            PortraitControlBar(
-                config = portraitConfig,
-                processingState = portraitProcessingState,
-                onBlurStrengthChanged = { viewModel.setPortraitBlurStrength(it) },
-                onApertureSelected = { viewModel.setPortraitAperture(it) },
-                onBokehStyleSelected = { viewModel.setPortraitBokehStyle(it) },
-                onToggleFaceEnhancement = { viewModel.togglePortraitFaceEnhancement() },
-                onToggleSkinTone = { viewModel.togglePortraitSkinTone() },
-                onToggleOpticalBlurGuided = { viewModel.toggleOpticalBlurGuided() },
-                onPortraitConfigChanged = { viewModel.setPortraitConfig(it) },
-                onClose = { viewModel.setPortraitSettingsOpen(false) },
-                modifier = Modifier.padding(horizontal = 12.dp)
-            )
-        }
-
-        // 3c. Floating 'f' button in Portrait Mode
-        if (cameraMode == CameraMode.PORTRAIT) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 220.dp)
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .background(if (isPortraitSettingsOpen) Color(0xFFFFD54F) else Color(0xD91E1E24))
-                    .border(
-                        width = 1.5.dp,
-                        color = if (isPortraitSettingsOpen) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.35f),
-                        shape = CircleShape
-                    )
-                    .clickable { viewModel.setPortraitSettingsOpen(!isPortraitSettingsOpen) }
-                    .testTag("portrait_f_button"),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "f",
-                    color = if (isPortraitSettingsOpen) Color.Black else Color(0xFFFFD54F),
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif
-                )
-            }
-        }
 
         // 3d0. Dedicated Video Adjustments Panel
         AnimatedVisibility(
@@ -1062,22 +997,6 @@ fun CameraScreen(
                 onDismiss = {
                     viewModel.setPipelinePresetFloatingWindowOpen(false)
                 }
-            )
-        }
-
-        // 3d3. Portrait Mode Style Selector Bar
-        AnimatedVisibility(
-            visible = cameraMode == CameraMode.PORTRAIT && isPortraitStyleBarOpen,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 215.dp)
-        ) {
-            PortraitStyleSelectorBar(
-                selectedStyle = portraitConfig.selectedStyle,
-                onStyleSelected = { viewModel.setSelectedPortraitStyle(it) },
-                onClose = { viewModel.setPortraitStyleBarOpen(false) }
             )
         }
 
