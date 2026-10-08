@@ -227,6 +227,45 @@ class Camera2Engine(private val context: Context) {
     private var ultraWideStandbySurfaceTexture: SurfaceTexture? = null
     private var ultraWideStandbySurface: Surface? = null
     private var ultraWideStandbyRequestBuilder: CaptureRequest.Builder? = null
+    data class ActiveRecordingStreamConfig(
+        val videoResolution: CameraResolution,
+        val targetFps: Int,
+        val fpsRange: Range<Int>?,
+        val is10Bit: Boolean,
+        val dynamicRangeProfile: Long?,
+        val isVideoStabilizationEnabled: Boolean,
+        val videoStabilizationMode: com.example.camera.model.VideoStabilizationMode,
+        val isOisAllowed: Boolean,
+        val orientationHint: Int,
+        val encoderRotation: Int
+    )
+
+    @Volatile
+    private var dualCameraRecordingRelay: DualCameraRecordingRelay? = null
+    @Volatile
+    private var activeRecordingStreamConfig: ActiveRecordingStreamConfig? = null
+    @Volatile
+    private var standbyConfiguredForRecording: Boolean = false
+    @Volatile
+    private var standbyRecordingSessionFailed: Boolean = false
+    @Volatile
+    private var logicalMultiCamRecordingFailed: Boolean = false
+    @Volatile
+    private var logicalMultiCamDualRecSurfacesConfigured: Boolean = false
+
+    fun getDualCameraRecordingRelay(): DualCameraRecordingRelay? = dualCameraRecordingRelay
+
+    fun isStandbyRecordingPipelineReady(): Boolean {
+        if (!_isKeepUltraWideReady.value) return false
+        if (activeLogicalMultiCamUltraWideConfigured && !logicalMultiCamRecordingFailed && captureSession != null) {
+            return true
+        }
+        val standbyCam = ultraWideStandbyCameraDevice
+        val standbySess = ultraWideStandbyCaptureSession
+        return standbyCam != null && standbySess != null && !standbyRecordingSessionFailed &&
+            (!_isRecordingVideo.value || standbyConfiguredForRecording || activeRecordingStreamConfig == null)
+    }
+
     @Volatile
     private var standbyConfiguredPreviewSize: Size? = null
     @Volatile
@@ -425,9 +464,10 @@ class Camera2Engine(private val context: Context) {
                     val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
                     val uwLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
                         ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-                    if (standbyCam != null && uwLens != null && standbyCam.id == uwLens.cameraId && prevTexture !== texture) {
+                    if (standbyCam != null && uwLens != null && standbyCam.id == uwLens.cameraId && prevTexture !== texture && !_isRecordingVideo.value) {
                         try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
                         ultraWideStandbyCaptureSession = null
+                        standbyConfiguredForRecording = false
                     } else if (activeLogicalMultiCamUltraWideConfigured && prevTexture !== texture && !isConfiguringSession && !_isRecordingVideo.value) {
                         activeLogicalMultiCamUltraWideConfigured = false
                         createCameraCaptureSession()
@@ -473,14 +513,70 @@ class Camera2Engine(private val context: Context) {
     private fun applySynchronizedStandbySettings(builder: CaptureRequest.Builder, standbyLens: LensInfo) {
         try {
             applyCommonSettings(builder)
-            val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value)
-            val targetFps = if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
+            val isRecordingActive = _isRecordingVideo.value || isStartingRecording.get()
+            val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || isRecordingActive)
+            val recConfig = activeRecordingStreamConfig
+            val targetFps = when {
+                isRecordingActive && recConfig != null -> recConfig.targetFps
+                currentMode == CameraMode.CINEMA -> cinemaConfig.value.videoFps
+                else -> videoFps
+            }
+            if (isRecordingActive) {
+                builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+            }
             val chars = getCharacteristics(standbyLens.cameraId)
             if (chars != null) {
-                val fpsRange = findBestFpsRange(chars, if (isVideo) targetFps else 30)
+                val fpsRange = findBestFpsRange(chars, if (isVideo) targetFps else 30) ?: recConfig?.fpsRange
                 if (fpsRange != null) {
                     builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
                 }
+                // Clamp EV compensation safely to standby camera's supported range
+                val evRange = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+                if (evRange != null) {
+                    val evToApply = if (currentMode == CameraMode.CINEMA) {
+                        cinemaConfig.value.exposureCompensation
+                    } else {
+                        exposureCompensationIndex
+                    }
+                    builder.set(
+                        CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
+                        evToApply.coerceIn(evRange.lower, evRange.upper)
+                    )
+                }
+                // Match OIS/EIS stabilization against standby camera's hardware capabilities
+                val oisModes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
+                val standbySupportsOis = oisModes.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON)
+                val effectiveOisAllowed = (if (isRecordingActive && recConfig != null) recConfig.isOisAllowed else isOisAllowed) && standbySupportsOis
+                if (effectiveOisAllowed) {
+                    builder.set(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+                    )
+                } else {
+                    try {
+                        builder.set(
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                        )
+                    } catch (_: Throwable) {}
+                }
+
+                val eisModes = chars.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
+                val standbySupportsEis = eisModes.contains(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON)
+                val stabEnabled = if (isRecordingActive && recConfig != null) recConfig.isVideoStabilizationEnabled else isVideoStabilizationEnabled
+                val stabMode = if (isRecordingActive && recConfig != null) recConfig.videoStabilizationMode else videoStabilizationMode
+                if (isVideo && stabEnabled && stabMode.isEnabled && standbySupportsEis) {
+                    builder.set(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                    )
+                } else {
+                    builder.set(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                    )
+                }
+
                 // Keep standby lens at its clean uncropped optical baseline (1.0x sensor crop)
                 val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -592,12 +688,125 @@ class Camera2Engine(private val context: Context) {
                 return
             }
 
-            val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value)
+            val isRecordingActive = (_isRecordingVideo.value || isStartingRecording.get()) && dualCameraRecordingRelay != null
+            val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || isRecordingActive)
             val targetRatio = getTargetAspectRatioForMode(currentMode)
             val expectedPreviewSize = _previewBufferSize.value ?: getOptimalPreviewSize(standbyLens.cameraId, targetRatio)
             standbyConfiguredPreviewSize = expectedPreviewSize
             standbyConfiguredIsVideoMode = isVideo
 
+            val relay = dualCameraRecordingRelay
+            val standbyRecorderSurf = if (isRecordingActive && relay != null && relay.hasDistinctUltraWideSurface()) {
+                relay.getRecorderSurfaceForLens(standbyLens)
+            } else null
+
+            // When video recording is active, configure the standby session with BOTH the preview surface
+            // AND its dedicated recording surface at the active recording configuration/FPS/dynamic range.
+            if (isRecordingActive && standbyRecorderSurf != null && standbyRecorderSurf.isValid) {
+                val recConfig = activeRecordingStreamConfig
+                val standbyChars = getCharacteristics(standbyLens.cameraId)
+                val standbyMap = standbyChars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val requestedVideoRes = recConfig?.videoResolution ?: (_selectedVideoResolution.value ?: CameraResolution(1920, 1080))
+                val supportedStandbySizes = standbyMap?.getOutputSizes(MediaRecorder::class.java)
+                    ?: standbyMap?.getOutputSizes(SurfaceTexture::class.java)
+                    ?: emptyArray()
+                val matchesRequested = supportedStandbySizes.isEmpty() || supportedStandbySizes.any {
+                    max(it.width, it.height) == max(requestedVideoRes.width, requestedVideoRes.height) &&
+                        min(it.width, it.height) == min(requestedVideoRes.width, requestedVideoRes.height)
+                }
+                val effectiveStandbyVideoSize = if (matchesRequested) {
+                    Size(max(requestedVideoRes.width, requestedVideoRes.height), min(requestedVideoRes.width, requestedVideoRes.height))
+                } else {
+                    val best = supportedStandbySizes
+                        .filter { max(it.width, it.height) <= max(requestedVideoRes.width, requestedVideoRes.height) }
+                        .maxByOrNull { it.width.toLong() * it.height.toLong() }
+                        ?: supportedStandbySizes.firstOrNull()
+                        ?: Size(max(requestedVideoRes.width, requestedVideoRes.height), min(requestedVideoRes.width, requestedVideoRes.height))
+                    Size(max(best.width, best.height), min(best.width, best.height))
+                }
+                relay?.updateInputBufferSize(
+                    isUltraWide = (standbyLens.lensType == LensType.ULTRAWIDE),
+                    width = effectiveStandbyVideoSize.width,
+                    height = effectiveStandbyVideoSize.height
+                )
+
+                val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                    addTarget(standbyPreviewSurf)
+                    addTarget(standbyRecorderSurf)
+                    applySynchronizedStandbySettings(this, standbyLens)
+                    set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                }
+                ultraWideStandbyRequestBuilder = recordBuilder
+
+                val targetPhysId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                    standbyLens.physicalCameraId != null &&
+                    standbyLens.supportsPhysicalStream &&
+                    standbyLens.physicalCameraId != standbyLens.cameraId) {
+                    standbyLens.physicalCameraId
+                } else null
+                val is10BitStandby = recConfig?.is10Bit == true
+
+                var retriedWithoutAdvancedConfig = false
+                val recordingStandbyCallback = object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        if (!_isKeepUltraWideReady.value || ultraWideStandbyCameraDevice != camera) {
+                            try { session.close() } catch (_: Throwable) {}
+                            return
+                        }
+                        ultraWideStandbyCaptureSession = session
+                        standbyConfiguredForRecording = true
+                        standbyRecordingSessionFailed = false
+                        isPreparingUltraWideStandby.set(false)
+                        isUltraWideStreaming.set(true)
+                        _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+
+                        try {
+                            applySynchronizedStandbySettings(recordBuilder, standbyLens)
+                            recordBuilder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                            session.setRepeatingRequest(recordBuilder.build(), standbyCaptureCallback, backgroundHandler)
+                            Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Prewarmed recording-capable standby session active on ID ${camera.id} (${standbyLens.lensType})")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed repeating recording request on standby camera ${camera.id}", e)
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        try { session.close() } catch (_: Throwable) {}
+                        if (!retriedWithoutAdvancedConfig && (is10BitStandby || targetPhysId != null)) {
+                            retriedWithoutAdvancedConfig = true
+                            Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby recording session with 10-bit/physical config rejected; retrying standard recording session")
+                            createRecordingCaptureSession(
+                                camera = camera,
+                                previewSurface = standbyPreviewSurf,
+                                recorderSurface = standbyRecorderSurf,
+                                is10Bit = false,
+                                physicalCameraId = null,
+                                updateActivePhysicalId = false,
+                                callback = this
+                            )
+                            return
+                        }
+                        Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Hardware rejected concurrent recording session on standby camera ${camera.id}; safe recording switch fallback will be used")
+                        standbyConfiguredForRecording = false
+                        standbyRecordingSessionFailed = true
+                        isPreparingUltraWideStandby.set(false)
+                        ultraWideStandbyCaptureSession = null
+                    }
+                }
+
+                createRecordingCaptureSession(
+                    camera = camera,
+                    previewSurface = standbyPreviewSurf,
+                    recorderSurface = standbyRecorderSurf,
+                    is10Bit = is10BitStandby,
+                    physicalCameraId = targetPhysId,
+                    updateActivePhysicalId = false,
+                    callback = recordingStandbyCallback
+                )
+                return
+            }
+
+            standbyConfiguredForRecording = false
             val template = if (isVideo) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
             val builder = camera.createCaptureRequest(template).apply {
                 addTarget(standbyPreviewSurf)
@@ -739,17 +948,21 @@ class Camera2Engine(private val context: Context) {
         }
 
         // 2. Separate Camera Devices (Concurrent or Persistent Dual-Session stream)
+        val isRecordingNow = (_isRecordingVideo.value || isStartingRecording.get()) && dualCameraRecordingRelay != null
         val existingStandbyCam = ultraWideStandbyCameraDevice
         if (existingStandbyCam != null) {
             if (existingStandbyCam.id == standbyLens.cameraId) {
                 val targetRatio = getTargetAspectRatioForMode(currentMode)
                 val expectedPreviewSize = _previewBufferSize.value ?: getOptimalPreviewSize(standbyLens.cameraId, targetRatio)
-                val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value)
+                val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || isRecordingNow)
                 val sizeMatches = standbyConfiguredPreviewSize != null &&
                     max(standbyConfiguredPreviewSize!!.width, standbyConfiguredPreviewSize!!.height) == max(expectedPreviewSize.width, expectedPreviewSize.height) &&
                     min(standbyConfiguredPreviewSize!!.width, standbyConfiguredPreviewSize!!.height) == min(expectedPreviewSize.width, expectedPreviewSize.height)
 
-                if (ultraWideStandbyCaptureSession != null && sizeMatches && standbyConfiguredIsVideoMode == isVideo) {
+                if (ultraWideStandbyCaptureSession != null &&
+                    sizeMatches &&
+                    standbyConfiguredIsVideoMode == isVideo &&
+                    standbyConfiguredForRecording == isRecordingNow) {
                     isUltraWideStreaming.set(true)
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                     syncStandbyStreamSettings()
@@ -855,6 +1068,8 @@ class Camera2Engine(private val context: Context) {
         ultraWideStandbyJpegReader = null
         standbyConfiguredPreviewSize = null
         standbyConfiguredIsVideoMode = false
+        standbyConfiguredForRecording = false
+        standbyRecordingSessionFailed = false
 
         if (ultraWideStandbySurface != null && ultraWideStandbySurface !== ultraWideViewfinderSurface) {
             try {
@@ -1797,18 +2012,34 @@ class Camera2Engine(private val context: Context) {
                     !isPhysicalStreamRequired &&
                     canUseLogicalZoomForLens(lens.cameraId, lens, effectiveTargetZoom)
 
-            // 1. Instant 0ms switch when Keep Ultra Wide Ready is enabled:
-            // Neither close(), stopRepeating(), nor createCameraCaptureSession() is called!
-            if (_isKeepUltraWideReady.value && isSwitchBetweenMainAndUW && !_isRecordingVideo.value) {
+            // 1. Instant 0ms switch when Keep Ultra Wide Ready is enabled (both Photo mode AND active Video recording):
+            // Neither close(), stopRepeating(), openCamera(), nor createCameraCaptureSession() is called!
+            if (_isKeepUltraWideReady.value && isSwitchBetweenMainAndUW) {
+                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+                val primaryMainLens = backLenses.firstOrNull { it.isPrimaryMain }
+                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
+
                 // Case A: Logical multi-camera with simultaneous Main + Physical Ultra-Wide surfaces already active in captureSession
-                if (isSameCameraDevice && captureSession != null && activeLogicalMultiCamUltraWideConfigured) {
+                val isLogicalPrewarmedReady = isSameCameraDevice &&
+                    captureSession != null &&
+                    activeLogicalMultiCamUltraWideConfigured &&
+                    (!_isRecordingVideo.value || !logicalMultiCamRecordingFailed)
+                if (isLogicalPrewarmedReady) {
                     val useUw = (lens.lensType == LensType.ULTRAWIDE)
+                    val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                    if (_isRecordingVideo.value) {
+                        dualCameraRecordingRelay?.setActiveSource(targetSource)
+                        dualCameraRecordingRelay?.getRecorderSurfaceForLens(lens)?.let { surf ->
+                            if (surf.isValid) activeRecordingSurface = surf
+                        }
+                    }
                     _isUsingUltraWideSurface.value = useUw
-                    _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                    _displayedPreviewSource.value = targetSource
                     activeSessionLens = lens
                     _selectedLens.value = lens
-                    activeSessionPhysicalCameraId = if (useUw) lens.physicalCameraId else null
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (source=${_displayedPreviewSource.value})")
+                    activeSessionPhysicalCameraId = if (useUw) lens.physicalCameraId else primaryMainLens?.physicalCameraId
+                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
                     scheduleZoomPreviewUpdate(immediate = true)
                     completeLensSwitch(lens)
                     return
@@ -1816,14 +2047,19 @@ class Camera2Engine(private val context: Context) {
 
                 // Case B: Persistent dual-session across separate CameraDevices (both sessions continuously running)
                 val prewarmedCamera = ultraWideStandbyCameraDevice
-                if (prewarmedCamera != null && prewarmedCamera.id == lens.cameraId) {
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms persistent dual-session switch to CameraDevice ID ${lens.cameraId} (${lens.lensType})")
+                val isStandbyRecordingReady = !_isRecordingVideo.value || (
+                    ultraWideStandbyCaptureSession != null &&
+                        !standbyRecordingSessionFailed &&
+                        (standbyConfiguredForRecording || activeRecordingStreamConfig == null)
+                    )
+                if (prewarmedCamera != null && prewarmedCamera.id == lens.cameraId && isStandbyRecordingReady) {
+                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms persistent dual-session switch to CameraDevice ID ${lens.cameraId} (${lens.lensType}, recording=${_isRecordingVideo.value})")
                     switchUsingPrewarmedStandby(lens, switchGen)
                     return
                 }
 
                 // Case C: Headless / pre-open state where both preview surfaces are prepared at viewfinder resolution
-                if (cameraDevice == null) {
+                if (cameraDevice == null && !_isRecordingVideo.value) {
                     val useUw = (lens.lensType == LensType.ULTRAWIDE)
                     if (useUw) {
                         getOrCreateUltraWidePreviewSurface(lens.cameraId)
@@ -1841,9 +2077,13 @@ class Camera2Engine(private val context: Context) {
             }
 
             // On the same camera device / logical multi-camera with genuine continuous zoom support: keep ONE continuous CameraCaptureSession alive
-            if (canUseLogicalContinuousZoom && captureSession != null && !_isRecordingVideo.value) {
-                Log.i(TAG, "[LENS_SWITCH] Seamless continuous transition on open camera ID ${lens.cameraId} to ${lens.lensType} at zoom $effectiveTargetZoom")
+            if (canUseLogicalContinuousZoom && captureSession != null) {
+                Log.i(TAG, "[LENS_SWITCH] Seamless continuous transition on open camera ID ${lens.cameraId} to ${lens.lensType} at zoom $effectiveTargetZoom (recording=${_isRecordingVideo.value})")
                 val useUw = (lens.lensType == LensType.ULTRAWIDE && _isKeepUltraWideReady.value && activeLogicalMultiCamUltraWideConfigured)
+                val targetSource = if (lens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                if (_isRecordingVideo.value) {
+                    dualCameraRecordingRelay?.setActiveSource(targetSource)
+                }
                 _isUsingUltraWideSurface.value = useUw
                 _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                 activeSessionLens = lens
@@ -1966,8 +2206,17 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 val useUw = (targetLens.lensType == LensType.ULTRAWIDE)
+                val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                if (_isRecordingVideo.value) {
+                    dualCameraRecordingRelay?.setActiveSource(targetSource)
+                    dualCameraRecordingRelay?.getRecorderSurfaceForLens(targetLens)?.let { surf ->
+                        if (surf.isValid) {
+                            activeRecordingSurface = surf
+                        }
+                    }
+                }
                 _isUsingUltraWideSurface.value = useUw
-                _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                _displayedPreviewSource.value = targetSource
                 activeSessionLens = targetLens
                 _selectedLens.value = targetLens
                 activeSessionPhysicalCameraId = targetLens.physicalCameraId
@@ -1975,14 +2224,16 @@ class Camera2Engine(private val context: Context) {
                 isUltraWideStreaming.set(true)
                 _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
 
-                // Immediately apply active zoom/exposure to newly displayed session and keep standby synced
+                // Update capabilities for the newly active lens first, then immediately apply
+                // active zoom, exposure, FPS, stabilization, and color profile to the active session
+                // and keep the standby session synchronized.
+                inspectCapabilities(targetLens.cameraId)
                 scheduleZoomPreviewUpdate(immediate = true)
                 backgroundHandler?.post {
-                    inspectCapabilities(targetLens.cameraId)
                     syncStandbyStreamSettings()
                 }
                 completeLensSwitch(targetLens)
-                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms instant stream swap completed to ${targetLens.lensType} (ID=${targetCam.id}, source=${_displayedPreviewSource.value})")
+                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms instant stream swap completed to ${targetLens.lensType} (ID=${targetCam.id}, recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
                 return
             }
 
@@ -4173,6 +4424,25 @@ class Camera2Engine(private val context: Context) {
             )
         }
 
+        // Preserve video recording capture intent and target FPS range across lens switches & setting updates
+        if (_isRecordingVideo.value) {
+            builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+        }
+        if (isVideoMode) {
+            val activeLens = activeSessionLens ?: _selectedLens.value
+            val activeChars = activeLens?.let { getCharacteristics(it.cameraId) }
+            val recConfig = activeRecordingStreamConfig
+            val desiredFps = when {
+                _isRecordingVideo.value && recConfig != null -> recConfig.targetFps
+                currentMode == CameraMode.CINEMA -> cinemaConfig.value.videoFps
+                else -> videoFps
+            }
+            val matchedRange = activeChars?.let { findBestFpsRange(it, desiredFps) } ?: recConfig?.fpsRange
+            if (matchedRange != null) {
+                builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedRange)
+            }
+        }
+
         // Color profiles, Tonemap, Edge, and Noise Reduction:
         // When a Custom Video Pipeline (iPhone, Samsung, Vivo) is selected in Video Mode,
         // completely bypass the Normal Video pipeline's ColorProfile, Tonemap, Edge, and Noise Reduction
@@ -4509,8 +4779,12 @@ class Camera2Engine(private val context: Context) {
             activeSessionLens = effectiveTargetLens
             if (_isKeepUltraWideReady.value && effectiveTargetLens.facing == CameraCharacteristics.LENS_FACING_BACK) {
                 val useUw = (effectiveTargetLens.lensType == LensType.ULTRAWIDE)
+                val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                if (_isRecordingVideo.value) {
+                    dualCameraRecordingRelay?.setActiveSource(targetSource)
+                }
                 _isUsingUltraWideSurface.value = useUw
-                _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                _displayedPreviewSource.value = targetSource
             }
             scheduleZoomPreviewUpdate(immediate = isPresetTap)
         }
@@ -6061,6 +6335,7 @@ class Camera2Engine(private val context: Context) {
         recorderSurface: Surface?,
         is10Bit: Boolean,
         physicalCameraId: String? = null,
+        updateActivePhysicalId: Boolean = true,
         callback: CameraCaptureSession.StateCallback
     ) {
         val executor = Executor { command -> backgroundHandler?.post(command) ?: command.run() }
@@ -6076,7 +6351,9 @@ class Camera2Engine(private val context: Context) {
                 physicalCameraId != camera.id &&
                 physicalIds.contains(physicalCameraId)
 
-        activeSessionPhysicalCameraId = if (usePhysicalRouting) physicalCameraId else null
+        if (updateActivePhysicalId) {
+            activeSessionPhysicalCameraId = if (usePhysicalRouting) physicalCameraId else null
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && is10Bit && hasSeparateRecorder) {
             try {
@@ -6140,12 +6417,16 @@ class Camera2Engine(private val context: Context) {
                 camera.createCaptureSession(sessionConfig)
                 return
             } catch (e: Exception) {
-                activeSessionPhysicalCameraId = null
+                if (updateActivePhysicalId) {
+                    activeSessionPhysicalCameraId = null
+                }
                 Log.w(TAG, "Failed SessionConfiguration for recording, falling back to createCaptureSession", e)
             }
         }
 
-        activeSessionPhysicalCameraId = null
+        if (updateActivePhysicalId) {
+            activeSessionPhysicalCameraId = null
+        }
         @Suppress("DEPRECATION")
         val surfaces = if (hasSeparateRecorder) {
             listOf(previewSurface, recorderSurface!!)
@@ -6167,6 +6448,15 @@ class Camera2Engine(private val context: Context) {
         isCustomPipelineRecording = false
         videoTimerJob?.cancel()
         activeRecordingSurface = null
+        activeRecordingStreamConfig = null
+        standbyConfiguredForRecording = false
+        standbyRecordingSessionFailed = false
+        logicalMultiCamRecordingFailed = false
+        logicalMultiCamDualRecSurfacesConfigured = false
+        try {
+            dualCameraRecordingRelay?.release()
+        } catch (ignored: Throwable) {}
+        dualCameraRecordingRelay = null
 
         try {
             cinemaSoftwareRecorder.stopRecording()
@@ -6814,19 +7104,316 @@ class Camera2Engine(private val context: Context) {
                 preparedVideoGeometry = preparedGeom
                 recorderSurface = mr.surface
             }
-                activeRecordingSurface = recorderSurface
+                val is10BitSession = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES && has10BitDynamicRange)
+                val targetDynamicProfile: Long? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && is10BitSession) {
+                    val isHlg10 = _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG10
+                    when {
+                        isHlg10 && supportedProfiles.contains(DynamicRangeProfiles.HLG10) -> DynamicRangeProfiles.HLG10
+                        supportedProfiles.contains(DynamicRangeProfiles.HLG10) -> DynamicRangeProfiles.HLG10
+                        supportedProfiles.contains(DynamicRangeProfiles.HDR10) -> DynamicRangeProfiles.HDR10
+                        supportedProfiles.contains(DynamicRangeProfiles.HDR10_PLUS) -> DynamicRangeProfiles.HDR10_PLUS
+                        else -> null
+                    }
+                } else null
+
+                activeRecordingStreamConfig = ActiveRecordingStreamConfig(
+                    videoResolution = videoRes,
+                    targetFps = targetFps,
+                    fpsRange = matchedFpsRange,
+                    is10Bit = is10BitSession,
+                    dynamicRangeProfile = targetDynamicProfile,
+                    isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+                    videoStabilizationMode = videoStabilizationMode,
+                    isOisAllowed = isOisAllowed,
+                    orientationHint = preparedVideoGeometry?.orientationHint ?: 0,
+                    encoderRotation = encoderRotation
+                )
+                standbyConfiguredForRecording = false
+                standbyRecordingSessionFailed = false
+                logicalMultiCamRecordingFailed = false
+                logicalMultiCamDualRecSurfacesConfigured = false
+
+                // Initialize DualCameraRecordingRelay when Keep Ultra Wide Ready is enabled on back cameras
+                // so both Main and Ultra-Wide recording pipelines can stream concurrently without interrupting the encoder.
+                try {
+                    dualCameraRecordingRelay?.release()
+                } catch (_: Throwable) {}
+                dualCameraRecordingRelay = null
+
+                val backLensesForRec = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+                val uwLensForRec = backLensesForRec.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+                    ?: backLensesForRec.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+                val mainLensForRec = backLensesForRec.firstOrNull { it.isPrimaryMain }
+                    ?: backLensesForRec.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                    ?: backLensesForRec.firstOrNull { it.lensType == LensType.WIDE }
+
+                val initialStreamSource = if (lens.lensType == LensType.ULTRAWIDE) {
+                    PreviewStreamSource.ULTRAWIDE
+                } else {
+                    PreviewStreamSource.MAIN
+                }
+
+                if (_isKeepUltraWideReady.value &&
+                    lens.facing == CameraCharacteristics.LENS_FACING_BACK &&
+                    uwLensForRec != null &&
+                    mainLensForRec != null) {
+                    val relay = DualCameraRecordingRelay(
+                        encoderTargetSurface = recorderSurface,
+                        bufferWidth = maxOf(videoRes.width, videoRes.height),
+                        bufferHeight = minOf(videoRes.width, videoRes.height),
+                        fps = targetFps,
+                        is10Bit = is10BitSession,
+                        initialSource = initialStreamSource,
+                        cinemaRecorder = if (isSoftwareCinema) cinemaSoftwareRecorder else null,
+                        customPipelineRecorder = if (isCustomPipelineRecording) customPipelineRecorder else null
+                    )
+                    if (relay.isRelayReady) {
+                        dualCameraRecordingRelay = relay
+                    } else {
+                        relay.release()
+                    }
+                }
+
+                val activeLensRecorderSurface = dualCameraRecordingRelay?.getRecorderSurfaceForLens(lens) ?: recorderSurface
+                activeRecordingSurface = activeLensRecorderSurface
 
                 // Native Camera2 video recording session:
                 // Feeds camera frames to both previewSurface and recorderSurface.
                 backgroundHandler?.post {
                     try {
+                        val dualMode = if (_isKeepUltraWideReady.value && lens.facing == CameraCharacteristics.LENS_FACING_BACK) {
+                            detectSimultaneousStreamingMode(mainLensForRec, uwLensForRec)
+                        } else {
+                            DualStreamingMode.NONE
+                        }
+
+                        // Prewarm standby recording session in parallel when Main and Ultra-Wide are separate CameraDevices
+                        if (_isKeepUltraWideReady.value &&
+                            dualMode != DualStreamingMode.NONE &&
+                            dualMode != DualStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                            dualCameraRecordingRelay?.hasDistinctUltraWideSurface() == true) {
+                            ensureUltraWideSimultaneousReady()
+                        }
+
+                        // Logical Multi-Camera with Physical Sub-Cameras:
+                        // Configure BOTH Main and Ultra-Wide physical streams in the same recording CameraCaptureSession
+                        // so Main <-> Ultra-Wide switching during recording is 0ms without closing or reconfiguring the session.
+                        if (_isKeepUltraWideReady.value &&
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                            dualMode == DualStreamingMode.LOGICAL_MULTI_CAMERA_PHYSICAL &&
+                            mainLensForRec != null &&
+                            uwLensForRec != null &&
+                            mainLensForRec.cameraId == camera.id &&
+                            uwLensForRec.cameraId == camera.id &&
+                            uwLensForRec.physicalCameraId != null &&
+                            uwLensForRec.supportsPhysicalStream) {
+                            val physIds = chars?.physicalCameraIds ?: emptySet()
+                            val uwPhysId = uwLensForRec.physicalCameraId!!
+                            val mainPhysId = mainLensForRec.physicalCameraId?.takeIf {
+                                mainLensForRec.supportsPhysicalStream && physIds.contains(it) && it != camera.id
+                            }
+                            val mainPrevSurf = getOrCreateMainPreviewSurface(camera.id) ?: previewSurf
+                            val uwPrevSurf = getOrCreateUltraWidePreviewSurface(camera.id)
+                            val relay = dualCameraRecordingRelay
+                            val mainRecSurf = relay?.mainRecorderSurface ?: activeLensRecorderSurface
+                            val uwRecSurf = relay?.ultraWideRecorderSurface
+
+                            if (physIds.contains(uwPhysId) && uwPrevSurf != null && uwPrevSurf.isValid && uwPrevSurf !== mainPrevSurf) {
+                                val isUwSelected = (lens.lensType == LensType.ULTRAWIDE)
+                                activeSessionPhysicalCameraId = if (isUwSelected) uwPhysId else mainPhysId
+                                _isUsingUltraWideSurface.value = isUwSelected
+                                _displayedPreviewSource.value = if (isUwSelected) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+
+                                val executor = Executor { cmd -> backgroundHandler?.post(cmd) ?: cmd.run() }
+
+                                fun startEncodersAndCompleteLogicalRecording(
+                                    configuredSession: CameraCaptureSession,
+                                    reqBuilder: CaptureRequest.Builder,
+                                    dualRecConfigured: Boolean
+                                ) {
+                                    captureSession = configuredSession
+                                    activeLogicalMultiCamUltraWideConfigured = true
+                                    logicalMultiCamDualRecSurfacesConfigured = dualRecConfigured
+                                    logicalMultiCamRecordingFailed = false
+                                    isUltraWideStreaming.set(true)
+                                    _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                                    synchronized(previewRequestLock) {
+                                        previewRequestBuilder = reqBuilder
+                                        applyCommonSettings(reqBuilder)
+                                        reqBuilder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                        if (matchedFpsRange != null) {
+                                            reqBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
+                                        }
+                                        configuredSession.setRepeatingRequest(reqBuilder.build(), captureCallback, backgroundHandler)
+                                    }
+                                    if (isCustomPipelineRecording) {
+                                        customPipelineRecorder?.start()
+                                    } else if (!isSoftwareCinema) {
+                                        mediaRecorder?.start()
+                                    }
+                                    _isRecordingVideo.value = true
+                                    isStartingRecording.set(false)
+                                    startVideoTimer()
+                                    if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {
+                                        completeLensSwitch(lens)
+                                    }
+                                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Logical multi-camera dual-physical recording session active on ${camera.id} (dualRec=$dualRecConfigured)")
+                                }
+
+                                fun tryThreeOutputLogicalPhysicalRecording(fallbackToSingleOnFail: () -> Unit) {
+                                    try {
+                                        val mPrevCfg = OutputConfiguration(mainPrevSurf).apply {
+                                            if (mainPhysId != null) setPhysicalCameraId(mainPhysId)
+                                        }
+                                        val uPrevCfg = OutputConfiguration(uwPrevSurf).apply {
+                                            setPhysicalCameraId(uwPhysId)
+                                        }
+                                        val sharedRecCfg = OutputConfiguration(activeLensRecorderSurface).apply {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && targetDynamicProfile != null) {
+                                                dynamicRangeProfile = targetDynamicProfile
+                                            }
+                                        }
+                                        val builder3 = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                            addTarget(mainPrevSurf)
+                                            addTarget(uwPrevSurf)
+                                            addTarget(activeLensRecorderSurface)
+                                            applyCommonSettings(this)
+                                            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                            if (matchedFpsRange != null) {
+                                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
+                                            }
+                                        }
+                                        val sessionCfg3 = SessionConfiguration(
+                                            SessionConfiguration.SESSION_REGULAR,
+                                            listOf(mPrevCfg, uPrevCfg, sharedRecCfg),
+                                            executor,
+                                            object : CameraCaptureSession.StateCallback() {
+                                                override fun onConfigured(s3: CameraCaptureSession) {
+                                                    try {
+                                                        startEncodersAndCompleteLogicalRecording(s3, builder3, dualRecConfigured = false)
+                                                    } catch (e: Exception) {
+                                                        cleanupFailedRecording(onError, "Failed to start logical recording: ${e.message}")
+                                                    }
+                                                }
+                                                override fun onConfigureFailed(s3: CameraCaptureSession) {
+                                                    try { s3.close() } catch (_: Throwable) {}
+                                                    activeLogicalMultiCamUltraWideConfigured = false
+                                                    logicalMultiCamRecordingFailed = true
+                                                    fallbackToSingleOnFail()
+                                                }
+                                            }
+                                        )
+                                        camera.createCaptureSession(sessionCfg3)
+                                    } catch (e: Exception) {
+                                        activeLogicalMultiCamUltraWideConfigured = false
+                                        logicalMultiCamRecordingFailed = true
+                                        fallbackToSingleOnFail()
+                                    }
+                                }
+
+                                // Tier 1 for Logical Multi-Camera: 2 Physical Previews + 2 Physical Recording Surfaces
+                                if (uwRecSurf != null && uwRecSurf.isValid && uwRecSurf !== mainRecSurf) {
+                                    try {
+                                        val mPrevCfg = OutputConfiguration(mainPrevSurf).apply {
+                                            if (mainPhysId != null) setPhysicalCameraId(mainPhysId)
+                                        }
+                                        val uPrevCfg = OutputConfiguration(uwPrevSurf).apply {
+                                            setPhysicalCameraId(uwPhysId)
+                                        }
+                                        val mRecCfg = OutputConfiguration(mainRecSurf).apply {
+                                            if (mainPhysId != null) setPhysicalCameraId(mainPhysId)
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && targetDynamicProfile != null) {
+                                                dynamicRangeProfile = targetDynamicProfile
+                                            }
+                                        }
+                                        val uRecCfg = OutputConfiguration(uwRecSurf).apply {
+                                            setPhysicalCameraId(uwPhysId)
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && targetDynamicProfile != null) {
+                                                dynamicRangeProfile = targetDynamicProfile
+                                            }
+                                        }
+                                        val builder4 = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                            addTarget(mainPrevSurf)
+                                            addTarget(uwPrevSurf)
+                                            addTarget(mainRecSurf)
+                                            addTarget(uwRecSurf)
+                                            applyCommonSettings(this)
+                                            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                            if (matchedFpsRange != null) {
+                                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
+                                            }
+                                        }
+                                        val sessionCfg4 = SessionConfiguration(
+                                            SessionConfiguration.SESSION_REGULAR,
+                                            listOf(mPrevCfg, uPrevCfg, mRecCfg, uRecCfg),
+                                            executor,
+                                            object : CameraCaptureSession.StateCallback() {
+                                                override fun onConfigured(s4: CameraCaptureSession) {
+                                                    try {
+                                                        startEncodersAndCompleteLogicalRecording(s4, builder4, dualRecConfigured = true)
+                                                    } catch (e: Exception) {
+                                                        cleanupFailedRecording(onError, "Failed to start logical dual-physical recording: ${e.message}")
+                                                    }
+                                                }
+                                                override fun onConfigureFailed(s4: CameraCaptureSession) {
+                                                    try { s4.close() } catch (_: Throwable) {}
+                                                    Log.w(TAG, "[KEEP_ULTRAWIDE_READY] 4-output logical physical recording rejected; trying 3-output physical recording session")
+                                                    tryThreeOutputLogicalPhysicalRecording {
+                                                        // Fallback to standard single-stream recording session below
+                                                        val fallbackBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                                            addTarget(previewSurf)
+                                                            addTarget(activeLensRecorderSurface)
+                                                            applyCommonSettings(this)
+                                                            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                                        }
+                                                        synchronized(previewRequestLock) { previewRequestBuilder = fallbackBuilder }
+                                                        createRecordingCaptureSession(
+                                                            camera = camera,
+                                                            previewSurface = previewSurf,
+                                                            recorderSurface = activeLensRecorderSurface,
+                                                            is10Bit = is10BitSession,
+                                                            physicalCameraId = null,
+                                                            callback = object : CameraCaptureSession.StateCallback() {
+                                                                override fun onConfigured(fs: CameraCaptureSession) {
+                                                                    captureSession = fs
+                                                                    try {
+                                                                        synchronized(previewRequestLock) {
+                                                                            fs.setRepeatingRequest(fallbackBuilder.build(), captureCallback, backgroundHandler)
+                                                                        }
+                                                                        if (isCustomPipelineRecording) customPipelineRecorder?.start()
+                                                                        else if (!isSoftwareCinema) mediaRecorder?.start()
+                                                                        _isRecordingVideo.value = true
+                                                                        isStartingRecording.set(false)
+                                                                        startVideoTimer()
+                                                                    } catch (e: Exception) {
+                                                                        cleanupFailedRecording(onError, "Failed to start fallback recording: ${e.message}")
+                                                                    }
+                                                                }
+                                                                override fun onConfigureFailed(fs: CameraCaptureSession) {
+                                                                    cleanupFailedRecording(onError, "Camera hardware failed to configure video capture session")
+                                                                }
+                                                            }
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        )
+                                        camera.createCaptureSession(sessionCfg4)
+                                        return@post
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "4-output logical physical recording setup exception, trying 3-output: ${e.message}")
+                                    }
+                                }
+                            }
+                        }
+
                         val useLogicalZoom = canUseLogicalZoomForLens(camera.id, lens, currentZoom)
                         val targetPhysId = if (useLogicalZoom) null else lens.physicalCameraId
                         activeSessionPhysicalCameraId = targetPhysId
 
                         val recordBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                             addTarget(previewSurf)
-                            addTarget(recorderSurface)
+                            addTarget(activeLensRecorderSurface)
                             applyCommonSettings(this)
                             set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
                             if (matchedFpsRange != null) {
@@ -6894,7 +7481,7 @@ class Camera2Engine(private val context: Context) {
                                         // Build safe fallback capture request: standard FPS, standard template
                                         val safeBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                                             addTarget(previewSurf)
-                                            addTarget(recorderSurface)
+                                            addTarget(activeLensRecorderSurface)
                                             applyCommonSettings(this)
                                             if (!isOisAllowed) {
                                                 try {
@@ -6915,7 +7502,7 @@ class Camera2Engine(private val context: Context) {
                                         }
 
                                         @Suppress("DEPRECATION")
-                                        val fallbackSurfaces = listOf(previewSurf, recorderSurface)
+                                        val fallbackSurfaces = listOf(previewSurf, activeLensRecorderSurface)
                                         camera.createCaptureSession(fallbackSurfaces, object : CameraCaptureSession.StateCallback() {
                                             override fun onConfigured(fallbackSession: CameraCaptureSession) {
                                                 Log.i(TAG, "[RECORDING_SESSION] Fallback video recording session configured successfully")
@@ -6933,6 +7520,9 @@ class Camera2Engine(private val context: Context) {
                                                     _isRecordingVideo.value = true
                                                     isStartingRecording.set(false)
                                                     startVideoTimer()
+                                                    if (_isKeepUltraWideReady.value) {
+                                                        ensureUltraWideSimultaneousReady()
+                                                    }
                                                     if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {
                                                         completeLensSwitch(lens)
                                                     }
@@ -6947,7 +7537,7 @@ class Camera2Engine(private val context: Context) {
                                                 try {
                                                     val previewTemplateBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                                                         addTarget(previewSurf)
-                                                        addTarget(recorderSurface)
+                                                        addTarget(activeLensRecorderSurface)
                                                         applyCommonSettings(this)
                                                         if (!isOisAllowed) {
                                                             try {
@@ -7007,8 +7597,8 @@ class Camera2Engine(private val context: Context) {
                         createRecordingCaptureSession(
                             camera = camera,
                             previewSurface = previewSurf,
-                            recorderSurface = recorderSurface,
-                            is10Bit = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES && has10BitDynamicRange),
+                            recorderSurface = activeLensRecorderSurface,
+                            is10Bit = is10BitSession,
                             physicalCameraId = targetPhysId,
                             callback = sessionCallback
                         )
@@ -7071,6 +7661,9 @@ class Camera2Engine(private val context: Context) {
                     Log.d(TAG, "Quick preview switch: ${e.message}")
                 }
                 createCameraCaptureSession()
+                if (_isKeepUltraWideReady.value) {
+                    ensureUltraWideSimultaneousReady()
+                }
             }
         }
     }
@@ -7083,6 +7676,7 @@ class Camera2Engine(private val context: Context) {
         if (!_isRecordingVideo.value || _isRecordingPaused.value) return
         _isRecordingPaused.value = true
         Log.i(TAG, "pauseVideoRecording called")
+        dualCameraRecordingRelay?.pause()
 
         if (isSoftwareCinemaRecording) {
             cinemaSoftwareRecorder.pause()
@@ -7113,6 +7707,7 @@ class Camera2Engine(private val context: Context) {
         if (!_isRecordingVideo.value || !_isRecordingPaused.value) return
         _isRecordingPaused.value = false
         Log.i(TAG, "resumeVideoRecording called")
+        dualCameraRecordingRelay?.resume()
 
         if (isSoftwareCinemaRecording) {
             cinemaSoftwareRecorder.resume()
@@ -7155,6 +7750,13 @@ class Camera2Engine(private val context: Context) {
 
         sessionRestoredForStop.set(false)
         activeRecordingSurface = null
+        activeRecordingStreamConfig = null
+        standbyConfiguredForRecording = false
+        standbyRecordingSessionFailed = false
+        logicalMultiCamRecordingFailed = false
+        logicalMultiCamDualRecSurfacesConfigured = false
+        val activeRelay = dualCameraRecordingRelay
+        dualCameraRecordingRelay = null
         _isRecordingVideo.value = false
         _isRecordingPaused.value = false
         videoTimerJob?.cancel()
@@ -7292,6 +7894,9 @@ class Camera2Engine(private val context: Context) {
                 notifyComplete(null)
             } finally {
                 restorePreviewSessionImmediate()
+                try {
+                    activeRelay?.release()
+                } catch (ignored: Throwable) {}
                 if (savingVideoJobsCount.decrementAndGet() <= 0) {
                     _isSavingVideo.value = false
                 }
@@ -8618,6 +9223,15 @@ class Camera2Engine(private val context: Context) {
         lastStabilizedCrop = null
         closeCameraCaptureSession()
         releaseUltraWideStandby()
+        activeRecordingStreamConfig = null
+        standbyConfiguredForRecording = false
+        standbyRecordingSessionFailed = false
+        logicalMultiCamRecordingFailed = false
+        logicalMultiCamDualRecSurfacesConfigured = false
+        try {
+            dualCameraRecordingRelay?.release()
+        } catch (ignored: Throwable) {}
+        dualCameraRecordingRelay = null
         _isUsingUltraWideSurface.value = false
         _displayedPreviewSource.value = PreviewStreamSource.MAIN
         _isUsingUltraWideSurface.value = false
@@ -8691,4 +9305,51 @@ class Camera2Engine(private val context: Context) {
         closeCamera()
         stopBackgroundThread()
     }
+
+    internal fun configurePrewarmedDualRecordingStateForTest(
+        activeCam: CameraDevice?,
+        activeSess: CameraCaptureSession?,
+        standbyCam: CameraDevice?,
+        standbySess: CameraCaptureSession?,
+        relay: DualCameraRecordingRelay?,
+        config: ActiveRecordingStreamConfig?,
+        standbyRecordingReady: Boolean = true,
+        standbyFailed: Boolean = false
+    ) {
+        cameraDevice = activeCam
+        captureSession = activeSess
+        ultraWideStandbyCameraDevice = standbyCam
+        ultraWideStandbyCaptureSession = standbySess
+        dualCameraRecordingRelay = relay
+        activeRecordingStreamConfig = config
+        standbyConfiguredForRecording = standbyRecordingReady
+        standbyRecordingSessionFailed = standbyFailed
+        _isRecordingVideo.value = true
+    }
+
+    internal fun configureLogicalPhysicalRecordingStateForTest(
+        logicalCam: CameraDevice?,
+        logicalSess: CameraCaptureSession?,
+        relay: DualCameraRecordingRelay?,
+        config: ActiveRecordingStreamConfig?,
+        logicalDualReady: Boolean = true,
+        logicalFailed: Boolean = false
+    ) {
+        cameraDevice = logicalCam
+        captureSession = logicalSess
+        activeLogicalMultiCamUltraWideConfigured = logicalDualReady
+        logicalMultiCamDualRecSurfacesConfigured = logicalDualReady
+        logicalMultiCamRecordingFailed = logicalFailed
+        dualCameraRecordingRelay = relay
+        activeRecordingStreamConfig = config
+        _isRecordingVideo.value = true
+    }
+
+    internal fun getActiveCameraDeviceForTest(): CameraDevice? = cameraDevice
+    internal fun getActiveCaptureSessionForTest(): CameraCaptureSession? = captureSession
+    internal fun getStandbyCameraDeviceForTest(): CameraDevice? = ultraWideStandbyCameraDevice
+    internal fun getStandbyCaptureSessionForTest(): CameraCaptureSession? = ultraWideStandbyCaptureSession
+    internal fun getActiveRecordingSurfaceForTest(): Surface? = activeRecordingSurface
+    internal fun getActivePhysicalCameraIdForTest(): String? = activeSessionPhysicalCameraId
+    internal fun getActiveRecordingStreamConfigForTest(): ActiveRecordingStreamConfig? = activeRecordingStreamConfig
 }

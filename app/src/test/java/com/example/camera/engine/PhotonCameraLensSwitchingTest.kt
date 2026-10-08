@@ -834,5 +834,200 @@ class PhotonCameraLensSwitchingTest {
             }
         }
     }
+
+    @Test
+    fun testRecordingTimePrewarmedDualSessionInstantSwitchWithoutClosingOrRecreatingSession() {
+        engine.detectHardwareLenses()
+        val lenses = engine.availableLenses.value
+        val hwMain = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val hwUw = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        if (hwMain == null || hwUw == null) return
+
+        // Use separate CameraDevice IDs ("0" for Main, "2" for Ultra-Wide)
+        val mainLens = hwMain.copy(cameraId = "0", isLogicalMultiCamera = false, isIndependentCamera = true)
+        val uwLens = hwUw.copy(cameraId = "2", isLogicalMultiCamera = false, isIndependentCamera = true)
+
+        engine.setKeepUltraWideReady(true)
+        engine.setMode(com.example.camera.model.CameraMode.VIDEO)
+        engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+        engine.exposureCompensationIndex = 3
+        engine.isVideoStabilizationEnabled = true
+        engine.videoFps = 60
+        engine.colorProfile = com.example.camera.model.ColorProfile.NATURAL
+
+        val mainCam = android.hardware.camera2.TestCamera2Factory.TrackingCameraDevice("0")
+        val uwCam = android.hardware.camera2.TestCamera2Factory.TrackingCameraDevice("2")
+        val mainSess = android.hardware.camera2.TestCamera2Factory.TrackingCaptureSession(mainCam)
+        val uwSess = android.hardware.camera2.TestCamera2Factory.TrackingCaptureSession(uwCam)
+
+        val encoderSt = android.graphics.SurfaceTexture(10)
+        val encoderSurf = android.view.Surface(encoderSt)
+        val relay = DualCameraRecordingRelay(
+            encoderTargetSurface = encoderSurf,
+            bufferWidth = 1920,
+            bufferHeight = 1080,
+            fps = 60,
+            is10Bit = false,
+            initialSource = PreviewStreamSource.MAIN
+        )
+        val recConfig = Camera2Engine.ActiveRecordingStreamConfig(
+            videoResolution = com.example.camera.model.CameraResolution(1920, 1080),
+            targetFps = 60,
+            fpsRange = android.util.Range(60, 60),
+            is10Bit = false,
+            dynamicRangeProfile = null,
+            isVideoStabilizationEnabled = true,
+            videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
+            isOisAllowed = true,
+            orientationHint = 90,
+            encoderRotation = 90
+        )
+
+        engine.configurePrewarmedDualRecordingStateForTest(
+            activeCam = mainCam,
+            activeSess = mainSess,
+            standbyCam = uwCam,
+            standbySess = uwSess,
+            relay = relay,
+            config = recConfig,
+            standbyRecordingReady = true,
+            standbyFailed = false
+        )
+
+        assertTrue("Recording pipeline must report ready", engine.isStandbyRecordingPipelineReady())
+        assertTrue("Video recording must be active", engine.isRecordingVideo.value)
+
+        // 1. Switch Main (1x) -> Ultra-Wide (0.5x) during active video recording
+        engine.selectLens(uwLens, preserveZoom = false, targetZoom = 0.5f)
+
+        // Verify sessions were swapped in 0ms without calling stopRepeating() or close()
+        assertFalse("Main CameraDevice must NOT be closed during recording lens switch", mainCam.isClosed)
+        assertFalse("Ultra-Wide CameraDevice must NOT be closed during recording lens switch", uwCam.isClosed)
+        assertFalse("Main CaptureSession must NOT be stopped or closed", mainSess.isStoppedRepeating || mainSess.isClosed)
+        assertFalse("Ultra-Wide CaptureSession must NOT be stopped or closed", uwSess.isStoppedRepeating || uwSess.isClosed)
+        assertSame("Active CameraDevice must now be Ultra-Wide", uwCam, engine.getActiveCameraDeviceForTest())
+        assertSame("Active CaptureSession must now be Ultra-Wide session", uwSess, engine.getActiveCaptureSessionForTest())
+        assertSame("Standby CameraDevice must now be Main", mainCam, engine.getStandbyCameraDeviceForTest())
+        assertSame("Standby CaptureSession must now be Main session", mainSess, engine.getStandbyCaptureSessionForTest())
+        assertEquals("Relay active source must switch to ULTRAWIDE", PreviewStreamSource.ULTRAWIDE, relay.activeSource)
+        assertEquals("Displayed preview source must be ULTRAWIDE", PreviewStreamSource.ULTRAWIDE, engine.displayedPreviewSource.value)
+        assertTrue("isUsingUltraWideSurface must be true", engine.isUsingUltraWideSurface.value)
+        assertSame("Active recording surface must switch to UW recorder surface", relay.ultraWideRecorderSurface, engine.getActiveRecordingSurfaceForTest())
+        assertTrue("Recording must remain continuously active", engine.isRecordingVideo.value)
+        assertEquals("Exposure compensation must be preserved", 3, engine.exposureCompensationIndex)
+        assertEquals("FPS setting must be preserved", 60, engine.videoFps)
+        assertEquals("Color profile must be preserved", com.example.camera.model.ColorProfile.NATURAL, engine.colorProfile)
+        assertTrue("Stabilization must be preserved", engine.isVideoStabilizationEnabled)
+
+        // 2. Switch Ultra-Wide (0.5x) -> Main (1x) during active video recording
+        engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+
+        assertFalse("Main CameraDevice must still NOT be closed", mainCam.isClosed)
+        assertFalse("Ultra-Wide CameraDevice must still NOT be closed", uwCam.isClosed)
+        assertFalse("Main CaptureSession must still NOT be stopped or closed", mainSess.isStoppedRepeating || mainSess.isClosed)
+        assertFalse("Ultra-Wide CaptureSession must still NOT be stopped or closed", uwSess.isStoppedRepeating || uwSess.isClosed)
+        assertSame("Active CameraDevice must be back to Main", mainCam, engine.getActiveCameraDeviceForTest())
+        assertSame("Active CaptureSession must be back to Main session", mainSess, engine.getActiveCaptureSessionForTest())
+        assertSame("Standby CameraDevice must be back to Ultra-Wide", uwCam, engine.getStandbyCameraDeviceForTest())
+        assertSame("Standby CaptureSession must be back to Ultra-Wide session", uwSess, engine.getStandbyCaptureSessionForTest())
+        assertEquals("Relay active source must switch back to MAIN", PreviewStreamSource.MAIN, relay.activeSource)
+        assertEquals("Displayed preview source must be back to MAIN", PreviewStreamSource.MAIN, engine.displayedPreviewSource.value)
+        assertFalse("isUsingUltraWideSurface must be false", engine.isUsingUltraWideSurface.value)
+        assertSame("Active recording surface must switch back to Main recorder surface", relay.mainRecorderSurface, engine.getActiveRecordingSurfaceForTest())
+        assertTrue("Recording must remain continuously active", engine.isRecordingVideo.value)
+
+        relay.release()
+        encoderSurf.release()
+        encoderSt.release()
+    }
+
+    @Test
+    fun testRecordingTimeLogicalPhysicalMultiCameraInstantSwitchWithoutReconfiguringSession() {
+        engine.detectHardwareLenses()
+        val lenses = engine.availableLenses.value
+        val hwMain = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val hwUw = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        if (hwMain == null || hwUw == null) return
+
+        // Both lenses share logical CameraDevice "0" with physical IDs "0" and "2"
+        val mainLens = hwMain.copy(
+            cameraId = "0",
+            isLogicalMultiCamera = true,
+            supportsPhysicalStream = true,
+            physicalCameraId = "0",
+            isIndependentCamera = false
+        )
+        val uwLens = hwUw.copy(
+            cameraId = "0",
+            isLogicalMultiCamera = true,
+            supportsPhysicalStream = true,
+            physicalCameraId = "2",
+            isIndependentCamera = false
+        )
+
+        engine.setKeepUltraWideReady(true)
+        engine.setMode(com.example.camera.model.CameraMode.VIDEO)
+        engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+
+        val logicalCam = android.hardware.camera2.TestCamera2Factory.TrackingCameraDevice("0")
+        val logicalSess = android.hardware.camera2.TestCamera2Factory.TrackingCaptureSession(logicalCam)
+
+        val encoderSt = android.graphics.SurfaceTexture(11)
+        val encoderSurf = android.view.Surface(encoderSt)
+        val relay = DualCameraRecordingRelay(
+            encoderTargetSurface = encoderSurf,
+            bufferWidth = 1920,
+            bufferHeight = 1080,
+            fps = 30,
+            is10Bit = false,
+            initialSource = PreviewStreamSource.MAIN
+        )
+        val recConfig = Camera2Engine.ActiveRecordingStreamConfig(
+            videoResolution = com.example.camera.model.CameraResolution(1920, 1080),
+            targetFps = 30,
+            fpsRange = android.util.Range(30, 30),
+            is10Bit = false,
+            dynamicRangeProfile = null,
+            isVideoStabilizationEnabled = true,
+            videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
+            isOisAllowed = true,
+            orientationHint = 90,
+            encoderRotation = 90
+        )
+
+        engine.configureLogicalPhysicalRecordingStateForTest(
+            logicalCam = logicalCam,
+            logicalSess = logicalSess,
+            relay = relay,
+            config = recConfig,
+            logicalDualReady = true,
+            logicalFailed = false
+        )
+
+        assertTrue("Logical physical recording pipeline must report ready", engine.isStandbyRecordingPipelineReady())
+
+        // Switch Main -> Ultra-Wide on same logical session
+        engine.selectLens(uwLens, preserveZoom = false, targetZoom = 0.5f)
+        assertFalse("Logical CameraDevice must NOT be closed", logicalCam.isClosed)
+        assertFalse("Logical session must NOT be stopped or closed", logicalSess.isStoppedRepeating || logicalSess.isClosed)
+        assertSame("Same logical session must remain active", logicalSess, engine.getActiveCaptureSessionForTest())
+        assertEquals("2", engine.getActivePhysicalCameraIdForTest())
+        assertEquals(PreviewStreamSource.ULTRAWIDE, relay.activeSource)
+        assertEquals(PreviewStreamSource.ULTRAWIDE, engine.displayedPreviewSource.value)
+        assertTrue(engine.isUsingUltraWideSurface.value)
+
+        // Switch Ultra-Wide -> Main on same logical session
+        engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+        assertFalse("Logical CameraDevice must still NOT be closed", logicalCam.isClosed)
+        assertFalse("Logical session must still NOT be stopped or closed", logicalSess.isStoppedRepeating || logicalSess.isClosed)
+        assertSame("Same logical session must remain active", logicalSess, engine.getActiveCaptureSessionForTest())
+        assertEquals(PreviewStreamSource.MAIN, relay.activeSource)
+        assertEquals(PreviewStreamSource.MAIN, engine.displayedPreviewSource.value)
+        assertFalse(engine.isUsingUltraWideSurface.value)
+
+        relay.release()
+        encoderSurf.release()
+        encoderSt.release()
+    }
 }
 

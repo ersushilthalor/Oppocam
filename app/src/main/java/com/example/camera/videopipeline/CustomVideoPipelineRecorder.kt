@@ -78,9 +78,37 @@ class CustomVideoPipelineRecorder(
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
 
     private var oesTextureId: Int = 0
+    private var ultraWideOesTextureId: Int = 0
     private var cameraSurfaceTexture: SurfaceTexture? = null
     var cameraInputSurface: Surface? = null
         private set
+    private var ultraWideSurfaceTexture: SurfaceTexture? = null
+    private var ultraWideInputSurface: Surface? = null
+
+    @Volatile
+    private var activeStreamSource: com.example.camera.engine.PreviewStreamSource = com.example.camera.engine.PreviewStreamSource.MAIN
+    @Volatile
+    private var streamPtsOffsetNs: Long = 0L
+    @Volatile
+    private var pendingSourceSwitchClockSync: Boolean = false
+    private var lastRenderedPtsNs: Long = -1L
+
+    fun setActiveStreamSource(source: com.example.camera.engine.PreviewStreamSource) {
+        if (activeStreamSource != source) {
+            activeStreamSource = source
+            pendingSourceSwitchClockSync = true
+        }
+    }
+
+    fun getMainInputSurface(): Surface? = cameraInputSurface
+
+    fun getUltraWideInputSurface(): Surface? = ultraWideInputSurface
+
+    fun updateUltraWideBufferSize(width: Int, height: Int) {
+        val w = maxOf(width, height).coerceAtLeast(320)
+        val h = minOf(width, height).coerceAtLeast(240)
+        try { ultraWideSurfaceTexture?.setDefaultBufferSize(w, h) } catch (_: Throwable) {}
+    }
 
     private var videoEncoder: MediaCodec? = null
     private var encoderInputSurface: Surface? = null
@@ -332,14 +360,17 @@ class CustomVideoPipelineRecorder(
         aPositionHandle = GLES20.glGetAttribLocation(programId, "aPosition")
         aTextureCoordHandle = GLES20.glGetAttribLocation(programId, "aTextureCoord")
 
-        val textures = IntArray(1)
-        GLES20.glGenTextures(1, textures, 0)
+        val textures = IntArray(2)
+        GLES20.glGenTextures(2, textures, 0)
         oesTextureId = textures[0]
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTextureId)
-        GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR.toFloat())
-        GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR.toFloat())
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        ultraWideOesTextureId = textures[1]
+        for (texId in textures) {
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+            GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR.toFloat())
+            GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR.toFloat())
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        }
 
         val safeW = (width and 1.inv()).coerceAtLeast(320)
         val safeH = (height and 1.inv()).coerceAtLeast(240)
@@ -358,11 +389,20 @@ class CustomVideoPipelineRecorder(
         val st = SurfaceTexture(oesTextureId).apply {
             setDefaultBufferSize(camBufW, camBufH)
             setOnFrameAvailableListener({
-                onCameraFrameAvailable()
+                onCameraFrameAvailable(isUltraWide = false)
             }, glHandler)
         }
         cameraSurfaceTexture = st
         cameraInputSurface = Surface(st)
+
+        val uwSt = SurfaceTexture(ultraWideOesTextureId).apply {
+            setDefaultBufferSize(camBufW, camBufH)
+            setOnFrameAvailableListener({
+                onCameraFrameAvailable(isUltraWide = true)
+            }, glHandler)
+        }
+        ultraWideSurfaceTexture = uwSt
+        ultraWideInputSurface = Surface(uwSt)
 
         Matrix.setIdentityM(mvpMatrix, 0)
         GLES20.glViewport(0, 0, safeW, safeH)
@@ -470,6 +510,9 @@ class CustomVideoPipelineRecorder(
      */
     fun start() {
         firstFramePtsNs = -1L
+        lastRenderedPtsNs = -1L
+        streamPtsOffsetNs = 0L
+        pendingSourceSwitchClockSync = false
         totalPausedDurationNs = 0L
         pauseStartNs = 0L
         isPaused.set(false)
@@ -504,8 +547,8 @@ class CustomVideoPipelineRecorder(
         }
     }
 
-    private fun onCameraFrameAvailable() {
-        val st = cameraSurfaceTexture ?: return
+    private fun onCameraFrameAvailable(isUltraWide: Boolean = false) {
+        val st = (if (isUltraWide) ultraWideSurfaceTexture else cameraSurfaceTexture) ?: return
         try {
             st.updateTexImage()
         } catch (t: Throwable) {
@@ -515,6 +558,10 @@ class CustomVideoPipelineRecorder(
         if (!isRecording.get() || isPaused.get()) {
             return
         }
+        val expectedSource = if (isUltraWide) com.example.camera.engine.PreviewStreamSource.ULTRAWIDE else com.example.camera.engine.PreviewStreamSource.MAIN
+        if (activeStreamSource != expectedSource) {
+            return
+        }
 
         try {
             st.getTransformMatrix(stMatrix)
@@ -522,7 +569,23 @@ class CustomVideoPipelineRecorder(
             if (firstFramePtsNs < 0L) {
                 firstFramePtsNs = rawTimestampNs
             }
-            val adjustedPtsNs = (rawTimestampNs - firstFramePtsNs - totalPausedDurationNs).coerceAtLeast(0L)
+            val frameIntervalNs = 1_000_000_000L / fps.coerceAtLeast(1)
+            var adjustedPtsNs = rawTimestampNs - firstFramePtsNs - totalPausedDurationNs + streamPtsOffsetNs
+            if (pendingSourceSwitchClockSync) {
+                pendingSourceSwitchClockSync = false
+                if (lastRenderedPtsNs >= 0L) {
+                    val expectedNextPtsNs = lastRenderedPtsNs + frameIntervalNs
+                    if (kotlin.math.abs(adjustedPtsNs - expectedNextPtsNs) > 200_000_000L) {
+                        streamPtsOffsetNs += (expectedNextPtsNs - adjustedPtsNs)
+                        adjustedPtsNs = expectedNextPtsNs
+                    }
+                }
+            }
+            adjustedPtsNs = adjustedPtsNs.coerceAtLeast(0L)
+            if (lastRenderedPtsNs >= 0L && adjustedPtsNs <= lastRenderedPtsNs) {
+                adjustedPtsNs = lastRenderedPtsNs + 1_000_000L
+            }
+            lastRenderedPtsNs = adjustedPtsNs
 
             val safeW = (width and 1.inv()).coerceAtLeast(320)
             val safeH = (height and 1.inv()).coerceAtLeast(240)
@@ -553,7 +616,7 @@ class CustomVideoPipelineRecorder(
             }
 
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTextureId)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, if (isUltraWide) ultraWideOesTextureId else oesTextureId)
 
             vertexBuffer.position(0)
             GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vertexBuffer)
@@ -817,6 +880,12 @@ class CustomVideoPipelineRecorder(
         try { cameraSurfaceTexture?.release() } catch (_: Throwable) {}
         cameraSurfaceTexture = null
 
+        try { ultraWideSurfaceTexture?.setOnFrameAvailableListener(null) } catch (_: Throwable) {}
+        try { ultraWideInputSurface?.release() } catch (_: Throwable) {}
+        ultraWideInputSurface = null
+        try { ultraWideSurfaceTexture?.release() } catch (_: Throwable) {}
+        ultraWideSurfaceTexture = null
+
         try { audioRecord?.stop() } catch (_: Throwable) {}
         try { audioRecord?.release() } catch (_: Throwable) {}
         audioRecord = null
@@ -852,6 +921,10 @@ class CustomVideoPipelineRecorder(
                 if (oesTextureId != 0) {
                     GLES20.glDeleteTextures(1, intArrayOf(oesTextureId), 0)
                     oesTextureId = 0
+                }
+                if (ultraWideOesTextureId != 0) {
+                    GLES20.glDeleteTextures(1, intArrayOf(ultraWideOesTextureId), 0)
+                    ultraWideOesTextureId = 0
                 }
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 if (eglSurface != EGL14.EGL_NO_SURFACE) {
