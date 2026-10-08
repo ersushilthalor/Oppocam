@@ -139,6 +139,15 @@ fun Viewfinder(
     var ultraWideTextureViewInstance by remember { mutableStateOf<TextureView?>(null) }
     val currentIsUsingUltraWideSurface by rememberUpdatedState(isUsingUltraWideSurface)
 
+    val uwAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (isUsingUltraWideSurface) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 200,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing
+        ),
+        label = "uw_surface_alpha"
+    )
+
     LaunchedEffect(isUsingUltraWideSurface, textureViewInstance, ultraWideTextureViewInstance) {
         val activeTv = if (isUsingUltraWideSurface) ultraWideTextureViewInstance else textureViewInstance
         if (activeTv != null) {
@@ -479,10 +488,10 @@ fun Viewfinder(
                         }
                     },
                     update = { textureView ->
-                        textureView.alpha = if (isUsingUltraWideSurface) 0f else 1f
-                        textureView.translationZ = if (isUsingUltraWideSurface) 0f else 1f
+                        textureView.alpha = 1f - uwAlpha
+                        textureView.translationZ = if (uwAlpha < 0.5f) 1f else 0f
                         // Sample background blur frame when windows are active
-                        if (!isUsingUltraWideSurface && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
+                        if (uwAlpha < 0.5f && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                             com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                 textureView = textureView,
                                 blurStrength = floatingWindowBlurStrength
@@ -783,9 +792,9 @@ fun Viewfinder(
                             }
                         },
                         update = { textureView ->
-                            textureView.alpha = if (isUsingUltraWideSurface) 1f else 0f
-                            textureView.translationZ = if (isUsingUltraWideSurface) 1f else 0f
-                            if (isUsingUltraWideSurface && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
+                            textureView.alpha = uwAlpha
+                            textureView.translationZ = if (uwAlpha >= 0.5f) 1f else 0f
+                            if (uwAlpha >= 0.5f && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                                 com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                     textureView = textureView,
                                     blurStrength = floatingWindowBlurStrength
@@ -1242,7 +1251,7 @@ fun configureTransform(
                 } else {
                     bufferAspect / viewAspect
                 }
-                matrix.postScale(scale, 1.0f, centerX, centerY)
+                matrix.postScale(scale, scale, centerX, centerY)
             }
         }
     }

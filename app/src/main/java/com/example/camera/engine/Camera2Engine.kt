@@ -577,21 +577,29 @@ class Camera2Engine(private val context: Context) {
                     )
                 }
 
-                // Keep standby lens at its clean uncropped optical baseline (1.0x sensor crop)
+                // Keep standby lens FOV-matched to 1.0x Main (approx 1.44x crop factor for Ultra-Wide)
+                // so switching to Ultra-Wide is instant with zero FOV pop or jump.
                 val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                val targetStandbyRatio = if (standbyLens.lensType == LensType.ULTRAWIDE) {
+                    val uwEqFocal = if (standbyLens.equivalent35mmFocalMm > 0f) standbyLens.equivalent35mmFocalMm else CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+                    CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
+                } else {
+                    1.0f
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                     if (zoomRange != null) {
-                        val baseRatio = if (standbyLens.isLogicalMultiCamera && standbyLens.physicalCameraId == null) {
-                            if (standbyLens.lensType == LensType.ULTRAWIDE) 0.5f else 1.0f
-                        } else {
-                            1.0f
-                        }
-                        builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, baseRatio.coerceIn(zoomRange.lower, zoomRange.upper))
+                        builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetStandbyRatio.coerceIn(zoomRange.lower, zoomRange.upper))
                     }
                 }
                 if (sensorRect != null) {
-                    builder.set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
+                    val extraScale = targetStandbyRatio.coerceAtLeast(1.0f)
+                    val cropW = (sensorRect.width() / extraScale).toInt().coerceIn(1, sensorRect.width())
+                    val cropH = (sensorRect.height() / extraScale).toInt().coerceIn(1, sensorRect.height())
+                    val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
+                    val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
+                    val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
+                    builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
                 }
             }
         } catch (e: Exception) {
@@ -6553,20 +6561,41 @@ class Camera2Engine(private val context: Context) {
                 (maxOf(it.width, it.height) == maxOf(requestedRes.width, requestedRes.height)) &&
                 (minOf(it.width, it.height) == minOf(requestedRes.width, requestedRes.height))
             }
+
+            val is16To9Requested = kotlin.math.abs((maxOf(requestedRes.width, requestedRes.height).toFloat() / minOf(requestedRes.width, requestedRes.height).toFloat()) - (16f / 9f)) < 0.08f
+            val is4KRequested = maxOf(requestedRes.width, requestedRes.height) >= 3840
+
             val videoRes = if (isSupported) {
                 requestedRes
+            } else if (is4KRequested && is16To9Requested) {
+                // When 4K 16:9 / 9:16 is selected, Ultra-Wide must NEVER fall back to 3:4/4:3 just because the sensor is 8MP.
+                // Maintain full 4K 3840x2160 target; relay/recorder crops the native UW stream to 16:9 and outputs full 4K.
+                CameraResolution(3840, 2160)
             } else {
-                val largest = supportedVideoSizes
-                    .filter { maxOf(it.width, it.height) <= 3840 }
-                    .maxByOrNull { it.width * it.height }
-                if (largest != null) {
-                    Log.w(TAG, "[RECORDING] Size ${requestedRes.width}x${requestedRes.height} unsupported for ${lens.lensType}, using ${largest.width}x${largest.height}")
-                    CameraResolution(largest.width, largest.height)
-                } else if (supportedVideoSizes.isNotEmpty()) {
-                    val fallback = supportedVideoSizes.first()
-                    CameraResolution(fallback.width, fallback.height)
+                val matching16to9 = if (is16To9Requested) {
+                    supportedVideoSizes
+                        .filter {
+                            val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                            kotlin.math.abs(r - (16f / 9f)) < 0.08f && maxOf(it.width, it.height) <= 3840
+                        }
+                        .maxByOrNull { it.width.toLong() * it.height.toLong() }
+                } else null
+
+                if (matching16to9 != null) {
+                    CameraResolution(matching16to9.width, matching16to9.height)
                 } else {
-                    CameraResolution(1920, 1080)
+                    val largest = supportedVideoSizes
+                        .filter { maxOf(it.width, it.height) <= 3840 }
+                        .maxByOrNull { it.width * it.height }
+                    if (largest != null) {
+                        Log.w(TAG, "[RECORDING] Size ${requestedRes.width}x${requestedRes.height} unsupported for ${lens.lensType}, using ${largest.width}x${largest.height}")
+                        CameraResolution(largest.width, largest.height)
+                    } else if (supportedVideoSizes.isNotEmpty()) {
+                        val fallback = supportedVideoSizes.first()
+                        CameraResolution(fallback.width, fallback.height)
+                    } else {
+                        CameraResolution(1920, 1080)
+                    }
                 }
             }
 
@@ -6890,8 +6919,8 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 val validatedConfig = DeviceCompatibilityManager.getValidatedVideoConfig(
-                    requestedWidth = videoRes.width,
-                    requestedHeight = videoRes.height,
+                    requestedWidth = finalRecordWidth,
+                    requestedHeight = finalRecordHeight,
                     requestedFps = targetFps,
                     requestedBitrate = bitrate,
                     preferHevc = (cinemaCodec == CinemaCodec.H265),
@@ -6991,12 +7020,44 @@ class Camera2Engine(private val context: Context) {
                     withAudio: Boolean,
                     is10Bit: Boolean
                 ): Boolean {
+                    val reqW = if (isPortraitRecording) minOf(targetW, targetH) else maxOf(targetW, targetH)
+                    val reqH = if (isPortraitRecording) maxOf(targetW, targetH) else minOf(targetW, targetH)
+
+                    // 1. Physically correct upright dimensions (2160x3840 in portrait 9:16, 3840x2160 in landscape 16:9)
+                    // with orientationHint = 0 to avoid conflicting orientationHint + MediaStore rotation metadata.
+                    if (configureAndPrepare(
+                            encoder = encoder,
+                            width = reqW,
+                            height = reqH,
+                            fps = fps,
+                            rate = rate,
+                            withAudio = withAudio,
+                            is10Bit = is10Bit,
+                            orientationHint = 0,
+                            encoderRot = 0
+                        )
+                    ) return true
+
+                    // Fallback without audio
+                    if (withAudio) {
+                        if (configureAndPrepare(
+                                encoder = encoder,
+                                width = reqW,
+                                height = reqH,
+                                fps = fps,
+                                rate = rate,
+                                withAudio = false,
+                                is10Bit = is10Bit,
+                                orientationHint = 0,
+                                encoderRot = 0
+                            )
+                        ) return true
+                    }
+
+                    // Fallback tier: If hardware encoder strictly demands landscape dimensions (maxD x minD)
                     val maxD = maxOf(targetW, targetH)
                     val minD = minOf(targetW, targetH)
-                    val orientHint = getVideoOrientationHint()
-
-                    // Always configure MediaRecorder surface with standard landscape dimensions (matching Camera HAL stream configuration map)
-                    // and rely on hardware orientationHint for upright playback
+                    val fallbackOrientHint = getVideoOrientationHint()
                     if (configureAndPrepare(
                             encoder = encoder,
                             width = maxD,
@@ -7005,12 +7066,11 @@ class Camera2Engine(private val context: Context) {
                             rate = rate,
                             withAudio = withAudio,
                             is10Bit = is10Bit,
-                            orientationHint = orientHint,
+                            orientationHint = fallbackOrientHint,
                             encoderRot = 0
                         )
                     ) return true
 
-                    // Fallback: If withAudio failed, retry without audio immediately
                     if (withAudio) {
                         if (configureAndPrepare(
                                 encoder = encoder,
@@ -7020,7 +7080,7 @@ class Camera2Engine(private val context: Context) {
                                 rate = rate,
                                 withAudio = false,
                                 is10Bit = is10Bit,
-                                orientationHint = orientHint,
+                                orientationHint = fallbackOrientHint,
                                 encoderRot = 0
                             )
                         ) return true
@@ -7153,21 +7213,59 @@ class Camera2Engine(private val context: Context) {
                     PreviewStreamSource.MAIN
                 }
 
+                val sensorOrient = try {
+                    chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isFront) 270 else 90)
+                } catch (_: Exception) {
+                    if (isFront) 270 else 90
+                }
+
                 if (_isKeepUltraWideReady.value &&
                     lens.facing == CameraCharacteristics.LENS_FACING_BACK &&
                     uwLensForRec != null &&
                     mainLensForRec != null) {
                     val relay = DualCameraRecordingRelay(
                         encoderTargetSurface = recorderSurface,
-                        bufferWidth = maxOf(videoRes.width, videoRes.height),
-                        bufferHeight = minOf(videoRes.width, videoRes.height),
+                        bufferWidth = finalRecordWidth,
+                        bufferHeight = finalRecordHeight,
                         fps = targetFps,
                         is10Bit = is10BitSession,
                         initialSource = initialStreamSource,
                         cinemaRecorder = if (isSoftwareCinema) cinemaSoftwareRecorder else null,
-                        customPipelineRecorder = if (isCustomPipelineRecording) customPipelineRecorder else null
+                        customPipelineRecorder = if (isCustomPipelineRecording) customPipelineRecorder else null,
+                        sensorOrientation = sensorOrient,
+                        deviceRotation = currentRot,
+                        isFront = isFront
                     )
                     if (relay.isRelayReady) {
+                        // Configure input camera buffer sizes based on sensor capabilities.
+                        // If Ultra-Wide sensor is 8MP (e.g. 4:3), Relay's computeCameraTexMatrix uniformly center-crops it
+                        // to 16:9 / 9:16 and outputs a pristine 4K (2160x3840) frame without distortion or stretching.
+                        val uwChars = getCharacteristics(uwLensForRec.cameraId)
+                        val uwMap = uwChars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                        val uwSizes = uwMap?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
+                        val bestUwSize = uwSizes.firstOrNull { maxOf(it.width, it.height) == 3840 && minOf(it.width, it.height) == 2160 }
+                            ?: uwSizes.firstOrNull {
+                                val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                                kotlin.math.abs(r - (16f / 9f)) < 0.08f && maxOf(it.width, it.height) <= 3840
+                            }
+                            ?: uwSizes.maxByOrNull { it.width * it.height }
+                        if (bestUwSize != null) {
+                            relay.updateInputBufferSize(isUltraWide = true, bestUwSize.width, bestUwSize.height)
+                        }
+
+                        val mainChars = getCharacteristics(mainLensForRec.cameraId)
+                        val mainMap = mainChars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                        val mainSizes = mainMap?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
+                        val bestMainSize = mainSizes.firstOrNull { maxOf(it.width, it.height) == 3840 && minOf(it.width, it.height) == 2160 }
+                            ?: mainSizes.firstOrNull {
+                                val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                                kotlin.math.abs(r - (16f / 9f)) < 0.08f && maxOf(it.width, it.height) <= 3840
+                            }
+                            ?: mainSizes.maxByOrNull { it.width * it.height }
+                        if (bestMainSize != null) {
+                            relay.updateInputBufferSize(isUltraWide = false, bestMainSize.width, bestMainSize.height)
+                        }
+
                         dualCameraRecordingRelay = relay
                     } else {
                         relay.release()
@@ -8028,24 +8126,47 @@ class Camera2Engine(private val context: Context) {
                 return
             }
 
-            val finalWidth: Int
-            val finalHeight: Int
-            val finalOrientation: Int
+            var finalWidth = 0
+            var finalHeight = 0
+            var finalOrientation = 0
+            var retrieverSuccess = false
 
-            if (isCinema || isCustomPipelineRecording) {
-                finalWidth = preparedVideoGeometry?.width ?: 1920
-                finalHeight = preparedVideoGeometry?.height ?: 1080
-                finalOrientation = 0
-            } else {
-                val geomW = preparedVideoGeometry?.width ?: 1920
-                val geomH = preparedVideoGeometry?.height ?: 1080
-                finalOrientation = lockedOrientationHint
-                if (lockedOrientationHint == 90 || lockedOrientationHint == 270) {
-                    finalWidth = minOf(geomW, geomH)
-                    finalHeight = maxOf(geomW, geomH)
+            val retriever = android.media.MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(fileToSave.absolutePath)
+                val w = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                val h = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val r = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                if (w > 0 && h > 0) {
+                    finalWidth = w
+                    finalHeight = h
+                    finalOrientation = r
+                    retrieverSuccess = true
+                    Log.i(TAG, "Extracted real video geometry from container: ${w}x${h}, rotation=$r")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "MediaMetadataRetriever query failed: ${e.message}")
+            } finally {
+                try { retriever.release() } catch (_: Throwable) {}
+            }
+
+            if (!retrieverSuccess) {
+                if (isCinema || isCustomPipelineRecording) {
+                    finalWidth = preparedVideoGeometry?.width ?: 1920
+                    finalHeight = preparedVideoGeometry?.height ?: 1080
+                    finalOrientation = 0
                 } else {
-                    finalWidth = maxOf(geomW, geomH)
-                    finalHeight = minOf(geomW, geomH)
+                    val geomW = preparedVideoGeometry?.width ?: 1920
+                    val geomH = preparedVideoGeometry?.height ?: 1080
+                    val hint = preparedVideoGeometry?.orientationHint ?: lockedOrientationHint
+                    finalOrientation = hint
+                    if (hint == 90 || hint == 270) {
+                        finalWidth = maxOf(geomW, geomH)
+                        finalHeight = minOf(geomW, geomH)
+                    } else {
+                        finalWidth = geomW
+                        finalHeight = geomH
+                    }
                 }
             }
 

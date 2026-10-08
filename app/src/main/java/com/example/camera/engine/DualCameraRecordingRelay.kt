@@ -49,7 +49,10 @@ class DualCameraRecordingRelay(
     private val is10Bit: Boolean = false,
     initialSource: PreviewStreamSource = PreviewStreamSource.MAIN,
     private val cinemaRecorder: CinemaSoftwareRecordingEngine? = null,
-    private val customPipelineRecorder: CustomVideoPipelineRecorder? = null
+    private val customPipelineRecorder: CustomVideoPipelineRecorder? = null,
+    private val sensorOrientation: Int = 90,
+    private val deviceRotation: Int = 0,
+    private val isFront: Boolean = false
 ) {
     companion object {
         private const val TAG = "DualCamRecRelay"
@@ -66,6 +69,12 @@ class DualCameraRecordingRelay(
     private val isPaused = AtomicBoolean(false)
     val switchCount = AtomicInteger(0)
     val relayedFrameCount = AtomicLong(0L)
+
+    private val cameraSensorOrientation: Int = sensorOrientation
+    private val activeDeviceRotation: Int = deviceRotation
+    private val isFrontFacing: Boolean = isFront
+    private val matrixValues = FloatArray(9)
+    private val localTexMatrix = FloatArray(16)
 
     // Delegated or Relay GL resources
     private var glThread: HandlerThread? = null
@@ -541,16 +550,25 @@ class DualCameraRecordingRelay(
                     EGL14.eglMakeCurrent(display, surface, surface, context)
                 }
 
-                val outW = max(bufferWidth, bufferHeight).coerceAtLeast(320)
-                val outH = min(bufferWidth, bufferHeight).coerceAtLeast(240)
+                val outW = bufferWidth
+                val outH = bufferHeight
                 GLES20.glViewport(0, 0, outW, outH)
                 GLES20.glClearColor(0f, 0f, 0f, 1f)
                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
                 GLES20.glUseProgram(programId)
 
-                // Combine Camera2 SurfaceTexture transform with vertical flip
                 val finalTexMatrix = FloatArray(16)
-                Matrix.multiplyMM(finalTexMatrix, 0, stMatrix, 0, relayTexMatrix, 0)
+                computeCameraTexMatrix(
+                    stMatrix = stMatrix,
+                    isFront = isFrontFacing,
+                    sensorOrientation = cameraSensorOrientation,
+                    deviceRotation = activeDeviceRotation,
+                    viewportWidth = outW,
+                    viewportHeight = outH,
+                    camBufferWidth = if (isUltraWide) ultraWideBufferW else mainBufferW,
+                    camBufferHeight = if (isUltraWide) ultraWideBufferH else mainBufferH,
+                    outMatrix = finalTexMatrix
+                )
 
                 GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
                 GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
@@ -589,6 +607,99 @@ class DualCameraRecordingRelay(
         } catch (t: Throwable) {
             Log.w(TAG, "Error relaying recording frame: ${t.message}")
         }
+    }
+
+    internal fun computeCameraTexMatrix(
+        stMatrix: FloatArray,
+        isFront: Boolean,
+        sensorOrientation: Int,
+        deviceRotation: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        camBufferWidth: Int,
+        camBufferHeight: Int,
+        outMatrix: FloatArray
+    ) {
+        val m0 = stMatrix[0]
+        val m1 = stMatrix[1]
+        val m4 = stMatrix[4]
+        val m5 = stMatrix[5]
+
+        val offDiag = kotlin.math.abs(m1) + kotlin.math.abs(m4)
+        val diag = kotlin.math.abs(m0) + kotlin.math.abs(m5)
+        val isStRotated90 = offDiag > diag
+
+        val det = m0 * m5 - m1 * m4
+        val isIdentitySt = kotlin.math.abs(m0 - 1f) < 1e-4f &&
+            kotlin.math.abs(m5 - 1f) < 1e-4f &&
+            offDiag < 1e-4f &&
+            kotlin.math.abs(stMatrix[13]) < 1e-4f
+        val isStMirrored = !isIdentitySt && (offDiag + diag > 0.1f) && (det > 0f)
+
+        val normRot = ((deviceRotation % 360) + 360) % 360
+        val isLandscapeTarget = (normRot == 90 || normRot == 270)
+        val isSensorSwappedInPortrait = (sensorOrientation == 90 || sensorOrientation == 270)
+        val isSwapped = isSensorSwappedInPortrait xor isLandscapeTarget
+
+        val camLong = maxOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val camShort = minOf(camBufferWidth, camBufferHeight).toFloat().coerceAtLeast(1f)
+        val uprightCamW = if (isSwapped) camShort else camLong
+        val uprightCamH = if (isSwapped) camLong else camShort
+        val camAspect = uprightCamW / uprightCamH
+
+        val targetAspect = viewportWidth.toFloat() / viewportHeight.toFloat()
+        val scaleX: Float
+        val scaleY: Float
+        if (targetAspect > camAspect) {
+            scaleX = 1.0f
+            scaleY = camAspect / targetAspect
+        } else {
+            scaleX = targetAspect / camAspect
+            scaleY = 1.0f
+        }
+
+        val (effScaleY, netRotationDeg) = if (!isStRotated90) {
+            if (!isFront) {
+                when (normRot) {
+                    0 -> (-scaleY) to 90f
+                    180 -> (-scaleY) to -90f
+                    else -> scaleY to 0f
+                }
+            } else {
+                when (normRot) {
+                    0 -> (-scaleY) to -90f
+                    180 -> (-scaleY) to 90f
+                    else -> scaleY to 0f
+                }
+            }
+        } else {
+            when (normRot) {
+                90 -> scaleY to -90f
+                270 -> scaleY to 90f
+                180 -> scaleY to 180f
+                else -> scaleY to 0f
+            }
+        }
+
+        val matrix2d = android.graphics.Matrix().apply {
+            postTranslate(-0.5f, -0.5f)
+            postScale(scaleX, effScaleY)
+            if (netRotationDeg != 0f) {
+                postRotate(netRotationDeg)
+            }
+            if (isFront != isStMirrored) {
+                postScale(-1.0f, 1.0f)
+            }
+            postTranslate(0.5f, 0.5f)
+        }
+
+        matrix2d.getValues(matrixValues)
+        localTexMatrix[0] = matrixValues[0]; localTexMatrix[1] = matrixValues[3]; localTexMatrix[2] = 0f; localTexMatrix[3] = 0f
+        localTexMatrix[4] = matrixValues[1]; localTexMatrix[5] = matrixValues[4]; localTexMatrix[6] = 0f; localTexMatrix[7] = 0f
+        localTexMatrix[8] = 0f;              localTexMatrix[9] = 0f;              localTexMatrix[10] = 1f; localTexMatrix[11] = 0f
+        localTexMatrix[12] = matrixValues[2]; localTexMatrix[13] = matrixValues[5]; localTexMatrix[14] = 0f; localTexMatrix[15] = 1f
+
+        Matrix.multiplyMM(outMatrix, 0, stMatrix, 0, localTexMatrix, 0)
     }
 
     private fun createProgram(vertexSource: String, fragmentSource: String): Int {

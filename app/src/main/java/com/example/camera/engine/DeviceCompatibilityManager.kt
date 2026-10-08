@@ -89,7 +89,7 @@ object DeviceCompatibilityManager {
                     try {
                         val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC)
                         val videoCaps = caps.videoCapabilities
-                        if (videoCaps != null && videoCaps.isSizeSupported(width, height)) {
+                        if (videoCaps != null && (videoCaps.isSizeSupported(width, height) || videoCaps.isSizeSupported(height, width))) {
                             return true
                         }
                     } catch (t: Throwable) {
@@ -161,8 +161,8 @@ object DeviceCompatibilityManager {
                         }
                         val videoCaps = caps.videoCapabilities
                         if (videoCaps != null) {
-                            if (!videoCaps.isSizeSupported(width, height)) continue
-                            if (fps > 0 && !videoCaps.areSizeAndRateSupported(width, height, fps.toDouble())) continue
+                            if (!videoCaps.isSizeSupported(width, height) && !videoCaps.isSizeSupported(height, width)) continue
+                            if (fps > 0 && !videoCaps.areSizeAndRateSupported(width, height, fps.toDouble()) && !videoCaps.areSizeAndRateSupported(height, width, fps.toDouble())) continue
                         }
                         return true
                     } catch (t: Throwable) {
