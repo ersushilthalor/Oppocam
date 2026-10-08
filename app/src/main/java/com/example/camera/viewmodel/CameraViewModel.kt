@@ -719,6 +719,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
 
     val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
+    val isUsingUltraWideSurface: StateFlow<Boolean> = engine.isUsingUltraWideSurface
+    val displayedPreviewSource: StateFlow<com.example.camera.engine.PreviewStreamSource> = engine.displayedPreviewSource
 
     fun setLensSwitchPointMm(switchPointMm: Float) {
         val clamped = switchPointMm.coerceIn(
@@ -1140,33 +1142,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _isManualProOpen.value = false
         }
 
-        // 4. Switch engine mode early to synchronize preview buffer and session
-        engine.setMode(mode)
-
-        if (mode == CameraMode.AI_SUBJECT_TRACKING) {
-            engine.closeCamera()
-        } else if (previousMode == CameraMode.AI_SUBJECT_TRACKING) {
-            safeInitializeCamera()
-        }
-
-        // 5. Restore mode-specific lens and zoom if available
-        val modeZoom = preferences.getModeZoom(mode)
-        val modeLens = preferences.getModeLens(mode, engine.availableLenses.value)
-        if (modeLens != null && modeLens.id != engine.selectedLens.value?.id) {
-            if (modeZoom > 0f) {
-                _currentZoom.value = modeZoom
-            }
-            engine.selectLens(
-                modeLens,
-                preserveZoom = modeZoom > 0f,
-                targetZoom = modeZoom.takeIf { it > 0f }
-            )
-        } else if (modeZoom > 0f) {
-            _currentZoom.value = modeZoom
-            engine.setZoom(modeZoom, isPresetTap = false)
-        }
-
-        // 6. Restore mode-specific controls
+        // 4. Restore mode-specific controls before switching engine mode to avoid exposure resets
         val mFlash = preferences.getModeFlashMode(mode)
         _flashMode.value = mFlash
         engine.flashMode = mFlash
@@ -1272,7 +1248,33 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mHybridStab = preferences.getModeHybridStabilizationConfig(mode)
         engine.updateHybridStabilizationConfig(mHybridStab)
 
-        engine.updatePreviewSettings()
+        // 5. Switch engine mode to synchronize preview buffer and session with restored settings
+        engine.setMode(mode)
+
+        if (mode == CameraMode.AI_SUBJECT_TRACKING) {
+            engine.closeCamera()
+        } else if (previousMode == CameraMode.AI_SUBJECT_TRACKING) {
+            safeInitializeCamera()
+        }
+
+        // 6. Restore mode-specific lens and zoom if available
+        val modeZoom = preferences.getModeZoom(mode)
+        val modeLens = preferences.getModeLens(mode, engine.availableLenses.value)
+        if (modeLens != null && modeLens.id != engine.selectedLens.value?.id) {
+            if (modeZoom > 0f) {
+                _currentZoom.value = modeZoom
+            }
+            engine.selectLens(
+                modeLens,
+                preserveZoom = modeZoom > 0f,
+                targetZoom = modeZoom.takeIf { it > 0f }
+            )
+        } else if (modeZoom > 0f) {
+            _currentZoom.value = modeZoom
+            engine.setZoom(modeZoom, isPresetTap = false)
+        } else {
+            engine.updatePreviewSettings()
+        }
 
         _isCinemaSettingsOpen.value = false
         if (mode == CameraMode.MORE) {
@@ -1299,6 +1301,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val isDifferentLens = currentLens == null || currentLens.id != lens.id || currentLens.lensType != lens.lensType
         val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.05f
+        val isMainAndUwSwitch = (currentLens?.lensType == LensType.WIDE && lens.lensType == LensType.ULTRAWIDE) ||
+            (currentLens?.lensType == LensType.ULTRAWIDE && lens.lensType == LensType.WIDE)
+
+        if (engine.isKeepUltraWideReady.value && isMainAndUwSwitch) {
+            // 0ms instant switch between Main (1x) and Ultra-Wide (0.5x) using already-running streams
+            zoomTransitionJob?.cancel()
+            zoomTransitionJob = null
+            _currentZoom.value = targetZ
+            preferences.setModeZoom(_cameraMode.value, targetZ)
+            engine.selectLens(lens, preserveZoom = false, targetZoom = targetZ)
+            preferences.lastFacing = lens.facing
+            preferences.saveLastLens(lens)
+            preferences.setModeLens(_cameraMode.value, lens)
+            val lensDesc = when (lens.lensType) {
+                LensType.ULTRAWIDE -> "0.5x Ultra-Wide"
+                LensType.WIDE -> "1x Main"
+                LensType.TELEPHOTO -> "2x Telephoto"
+                LensType.TELEPHOTO_3X -> "3x Telephoto"
+                LensType.MACRO -> "Macro"
+                LensType.FRONT -> "Front Selfie"
+            }
+            showToast("Switched to $lensDesc Lens")
+            return
+        }
 
         if (isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
             // Smooth continuous sub-step interpolation across complete range to target lens
@@ -1756,6 +1782,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val currentZ = _currentZoom.value
+        val isInstantKeepReadyPreset = engine.isKeepUltraWideReady.value &&
+            ((currentZ >= 0.95f && clamped <= 0.65f) || (currentZ <= 0.95f && kotlin.math.abs(clamped - 1.0f) < 0.05f))
+
+        if (isInstantKeepReadyPreset) {
+            zoomTransitionJob?.cancel()
+            zoomTransitionJob = null
+            _currentZoom.value = clamped
+            preferences.setModeZoom(_cameraMode.value, clamped)
+            if (clamped < 1.0f && ultraWideLens != null) {
+                engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = clamped)
+                preferences.lastFacing = ultraWideLens.facing
+                preferences.saveLastLens(ultraWideLens)
+                preferences.setModeLens(_cameraMode.value, ultraWideLens)
+            } else {
+                val mainLens = lensesForFacing.firstOrNull { it.isPrimaryMain }
+                    ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                    ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
+                if (mainLens != null && engine.selectedLens.value?.lensType == LensType.ULTRAWIDE) {
+                    engine.selectLens(mainLens, preserveZoom = true, targetZoom = clamped)
+                    preferences.lastFacing = mainLens.facing
+                    preferences.saveLastLens(mainLens)
+                    preferences.setModeLens(_cameraMode.value, mainLens)
+                } else {
+                    engine.setZoom(clamped, isPresetTap = true)
+                }
+            }
+            return
+        }
 
         if (kotlin.math.abs(clamped - currentZ) >= 0.05f) {
             startContinuousZoomTransition(fromZoom = currentZ, targetZoom = clamped)

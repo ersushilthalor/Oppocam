@@ -101,6 +101,9 @@ fun Viewfinder(
     isSettingsOpen: Boolean = false,
     onSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
+    isUsingUltraWideSurface: Boolean = false,
+    onUltraWideSurfaceTextureAvailable: ((SurfaceTexture?, Int, Int) -> Unit)? = null,
+    onUltraWideSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
     onTapToFocus: (Offset, Float, Float) -> Unit,
     onZoomChange: (Float) -> Unit,
     currentZoom: Float = 1.0f,
@@ -133,6 +136,15 @@ fun Viewfinder(
     var liveVirtualAperturePreviewBmp by remember { mutableStateOf<Bitmap?>(null) }
     var liveDepthColormapBmp by remember { mutableStateOf<Bitmap?>(null) }
     var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
+    var ultraWideTextureViewInstance by remember { mutableStateOf<TextureView?>(null) }
+    val currentIsUsingUltraWideSurface by rememberUpdatedState(isUsingUltraWideSurface)
+
+    LaunchedEffect(isUsingUltraWideSurface, textureViewInstance, ultraWideTextureViewInstance) {
+        val activeTv = if (isUsingUltraWideSurface) ultraWideTextureViewInstance else textureViewInstance
+        if (activeTv != null) {
+            com.example.camera.ui.components.BackdropBlurManager.registerViewfinder(activeTv)
+        }
+    }
 
 
 
@@ -157,6 +169,8 @@ fun Viewfinder(
 
     LaunchedEffect(
         textureViewInstance,
+        ultraWideTextureViewInstance,
+        isUsingUltraWideSurface,
         isHorizonLockEnabled,
         horizonRollDegrees,
         horizonNormX,
@@ -168,7 +182,7 @@ fun Viewfinder(
         isSettingsOpen,
         aspectRatio
     ) {
-        textureViewInstance?.let { tv ->
+        listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
             if (tv.width > 0 && tv.height > 0) {
                 updateTextureViewTransform(
                     textureView = tv,
@@ -465,8 +479,10 @@ fun Viewfinder(
                         }
                     },
                     update = { textureView ->
+                        textureView.alpha = if (isUsingUltraWideSurface) 0f else 1f
+                        textureView.translationZ = if (isUsingUltraWideSurface) 0f else 1f
                         // Sample background blur frame when windows are active
-                        if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
+                        if (!isUsingUltraWideSurface && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                             com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                 textureView = textureView,
                                 blurStrength = floatingWindowBlurStrength
@@ -613,6 +629,293 @@ fun Viewfinder(
                             )
                         }
                 )
+
+                // Dedicated Ultra-Wide TextureView continuously configured at the exact same resolution
+                // and aspect ratio as the active viewfinder for 0ms instant lens switching.
+                if (onUltraWideSurfaceTextureAvailable != null) {
+                    AndroidView(
+                        factory = { context ->
+                            var lastUwLumaSampleTime = 0L
+                            var uwLumaSampleBitmap: Bitmap? = null
+                            var lastUwMotionSampleTime = 0L
+                            var uwMotionSampleBitmap: Bitmap? = null
+                            TextureView(context).apply {
+                                ultraWideTextureViewInstance = this
+                                alpha = if (currentIsUsingUltraWideSurface) 1f else 0f
+                                translationZ = if (currentIsUsingUltraWideSurface) 1f else 0f
+                                addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                                    val newW = right - left
+                                    val newH = bottom - top
+                                    if (newW > 0 && newH > 0 && (newW != (oldRight - oldLeft) || newH != (oldBottom - oldTop) || framesSyncedSinceTransition < 5)) {
+                                        updateTextureViewTransform(
+                                            textureView = this,
+                                            previewBufferSize = currentPreviewBufferSize,
+                                            targetRatio = currentTargetRatio,
+                                            sensorOrientation = currentSensorOrientation,
+                                            isHorizonLockEnabled = currentIsHorizonLock,
+                                            horizonRollDegrees = currentHorizonRoll,
+                                            horizonNormX = currentHorizonNormX,
+                                            horizonNormY = currentHorizonNormY,
+                                            isDollyZoomActive = currentIsDollyZoom,
+                                            dollyScale = currentDollyScale,
+                                            dollyFocusX = currentDollyFocusX,
+                                            dollyFocusY = currentDollyFocusY,
+                                            viewWidth = newW,
+                                            viewHeight = newH
+                                        )
+                                    }
+                                }
+                                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                                        val effectiveW = if (this@apply.width > 0) this@apply.width else w
+                                        val effectiveH = if (this@apply.height > 0) this@apply.height else h
+                                        updateTextureViewTransform(
+                                            textureView = this@apply,
+                                            previewBufferSize = currentPreviewBufferSize,
+                                            targetRatio = currentTargetRatio,
+                                            sensorOrientation = currentSensorOrientation,
+                                            isHorizonLockEnabled = currentIsHorizonLock,
+                                            horizonRollDegrees = currentHorizonRoll,
+                                            horizonNormX = currentHorizonNormX,
+                                            horizonNormY = currentHorizonNormY,
+                                            isDollyZoomActive = currentIsDollyZoom,
+                                            dollyScale = currentDollyScale,
+                                            dollyFocusX = currentDollyFocusX,
+                                            dollyFocusY = currentDollyFocusY,
+                                            viewWidth = effectiveW,
+                                            viewHeight = effectiveH
+                                        )
+                                        onUltraWideSurfaceTextureAvailable.invoke(st, effectiveW, effectiveH)
+                                        onUltraWideSurfaceTextureSizeChanged?.invoke(st, effectiveW, effectiveH)
+                                        if (currentIsUsingUltraWideSurface) {
+                                            com.example.camera.ui.components.BackdropBlurManager.registerViewfinder(this@apply)
+                                        }
+                                    }
+
+                                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+                                        val effectiveW = if (this@apply.width > 0) this@apply.width else w
+                                        val effectiveH = if (this@apply.height > 0) this@apply.height else h
+                                        updateTextureViewTransform(
+                                            textureView = this@apply,
+                                            previewBufferSize = currentPreviewBufferSize,
+                                            targetRatio = currentTargetRatio,
+                                            sensorOrientation = currentSensorOrientation,
+                                            isHorizonLockEnabled = currentIsHorizonLock,
+                                            horizonRollDegrees = currentHorizonRoll,
+                                            horizonNormX = currentHorizonNormX,
+                                            horizonNormY = currentHorizonNormY,
+                                            isDollyZoomActive = currentIsDollyZoom,
+                                            dollyScale = currentDollyScale,
+                                            dollyFocusX = currentDollyFocusX,
+                                            dollyFocusY = currentDollyFocusY,
+                                            viewWidth = effectiveW,
+                                            viewHeight = effectiveH
+                                        )
+                                        onUltraWideSurfaceTextureSizeChanged?.invoke(st, effectiveW, effectiveH)
+                                    }
+
+                                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                        onUltraWideSurfaceTextureAvailable.invoke(null, 0, 0)
+                                        try {
+                                            uwLumaSampleBitmap?.recycle()
+                                            uwLumaSampleBitmap = null
+                                        } catch (ignored: Exception) {}
+                                        try {
+                                            uwMotionSampleBitmap?.recycle()
+                                            uwMotionSampleBitmap = null
+                                        } catch (ignored: Exception) {}
+                                        return true
+                                    }
+
+                                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+                                        if (!currentIsUsingUltraWideSurface) return
+
+                                        if (isMotionPhotoEnabled && cameraMode == CameraMode.PHOTO && onMotionPhotoPreviewFrame != null) {
+                                            val nowMs = android.os.SystemClock.uptimeMillis()
+                                            if (nowMs - lastUwMotionSampleTime >= 33L) {
+                                                lastUwMotionSampleTime = nowMs
+                                                try {
+                                                    val aspect = currentTargetRatio.takeIf { it > 0 } ?: (4f / 3f)
+                                                    val sampleW = if (aspect > 1.3f) 1280 else if (aspect in 0.95f..1.05f) 720 else 960
+                                                    val sampleH = 720
+                                                    if (uwMotionSampleBitmap == null || uwMotionSampleBitmap?.width != sampleW || uwMotionSampleBitmap?.height != sampleH || uwMotionSampleBitmap?.isRecycled == true) {
+                                                        uwMotionSampleBitmap = Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888)
+                                                    }
+                                                    uwMotionSampleBitmap?.let { bmp ->
+                                                        getBitmap(bmp)
+                                                        onMotionPhotoPreviewFrame.invoke(bmp)
+                                                    }
+                                                } catch (ignored: Exception) {}
+                                            }
+                                        }
+
+                                        if ((cameraMode == CameraMode.CINEMA || cameraMode == CameraMode.PHOTO) && onFrameLuminanceStats != null) {
+                                            val now = android.os.SystemClock.uptimeMillis()
+                                            if (now - lastUwLumaSampleTime >= 100L) {
+                                                lastUwLumaSampleTime = now
+                                                try {
+                                                    if (uwLumaSampleBitmap == null || uwLumaSampleBitmap?.isRecycled == true) {
+                                                        uwLumaSampleBitmap = Bitmap.createBitmap(
+                                                            com.example.camera.engine.FrameLuminanceAnalyzer.SAMPLE_WIDTH,
+                                                            com.example.camera.engine.FrameLuminanceAnalyzer.SAMPLE_HEIGHT,
+                                                            Bitmap.Config.ARGB_8888
+                                                        )
+                                                    }
+                                                    uwLumaSampleBitmap?.let { bmp ->
+                                                        getBitmap(bmp)
+                                                        val stats = com.example.camera.engine.FrameLuminanceAnalyzer.analyzeBitmap(bmp)
+                                                        if (stats != null) {
+                                                            onFrameLuminanceStats.invoke(stats)
+                                                        }
+                                                    }
+                                                } catch (ignored: Exception) {}
+                                            }
+                                        }
+
+                                        if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive) {
+                                            com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
+                                                textureView = this@apply,
+                                                blurStrength = floatingWindowBlurStrength
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        update = { textureView ->
+                            textureView.alpha = if (isUsingUltraWideSurface) 1f else 0f
+                            textureView.translationZ = if (isUsingUltraWideSurface) 1f else 0f
+                            if (isUsingUltraWideSurface && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
+                                com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
+                                    textureView = textureView,
+                                    blurStrength = floatingWindowBlurStrength
+                                )
+                            }
+                            val viewW = textureView.width.toFloat()
+                            val viewH = textureView.height.toFloat()
+                            if (viewW > 0f && viewH > 0f) {
+                                updateTextureViewTransform(
+                                    textureView = textureView,
+                                    previewBufferSize = previewBufferSize,
+                                    targetRatio = targetRatio,
+                                    sensorOrientation = sensorOrientation,
+                                    isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
+                                    horizonRollDegrees = horizonRollDegrees,
+                                    horizonNormX = horizonNormX,
+                                    horizonNormY = horizonNormY,
+                                    isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
+                                    dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
+                                    dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
+                                    dollyFocusY = dollyCropState?.focusNormY ?: 0.5f
+                                )
+                            }
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                                if (viewfinderCornerRadiusDp > 0) {
+                                    textureView.outlineProvider = object : android.view.ViewOutlineProvider() {
+                                        override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                                            val radiusPx = viewfinderCornerRadiusDp * view.resources.displayMetrics.density
+                                            outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
+                                        }
+                                    }
+                                    textureView.clipToOutline = true
+                                } else {
+                                    textureView.outlineProvider = null
+                                    textureView.clipToOutline = false
+                                }
+                            }
+
+                            val colorMatrix = android.graphics.ColorMatrix()
+                            var hasFilter = false
+
+                            if (cameraMode == CameraMode.PHOTO) {
+                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                                if (activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
+                                    val filterMat = activePhotoFilter.toAndroidColorMatrix()
+                                    if (filterMat != null) {
+                                        colorMatrix.postConcat(filterMat)
+                                        hasFilter = true
+                                    }
+                                }
+                                if (proSaturation != 0f) {
+                                    val satMat = android.graphics.ColorMatrix().apply {
+                                        setSaturation((1f + proSaturation / 100f).coerceIn(0f, 3f))
+                                    }
+                                    colorMatrix.postConcat(satMat)
+                                    hasFilter = true
+                                }
+                                if (proContrast != 1.0f || proHighlights != 0f || proShadows != 0f) {
+                                    val c = proContrast.coerceIn(0.5f, 2.0f)
+                                    val b = ((proHighlights + proShadows) / 4f)
+                                    val t = (1f - c) * 128f + b
+                                    val contrastMat = android.graphics.ColorMatrix(floatArrayOf(
+                                        c, 0f, 0f, 0f, t,
+                                        0f, c, 0f, 0f, t,
+                                        0f, 0f, c, 0f, t,
+                                        0f, 0f, 0f, 1f, 0f
+                                    ))
+                                    colorMatrix.postConcat(contrastMat)
+                                    hasFilter = true
+                                }
+                            } else if (cameraMode == CameraMode.CINEMA) {
+                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                                val effectiveConfig = if (activeLut != null && activeLut != cinemaConfig?.selectedLut) {
+                                    cinemaConfig?.copy(selectedLut = activeLut)
+                                } else {
+                                    cinemaConfig
+                                }
+                                com.example.camera.engine.CinemaColorPipeline.applyToView(
+                                    view = textureView,
+                                    config = effectiveConfig,
+                                    includeCreativeLut = effectiveConfig?.isLutPreviewEnabled ?: true
+                                )
+                                textureView.invalidate()
+                                return@AndroidView
+                            } else if (cameraMode == CameraMode.VIDEO) {
+                                if (selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
+                                    com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                                    com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToView(textureView, selectedVideoPipeline)
+                                    return@AndroidView
+                                } else {
+                                    com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                    com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
+                                    return@AndroidView
+                                }
+                            } else {
+                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
+                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
+                            }
+
+                            if (hasFilter) {
+                                val filter = android.graphics.ColorMatrixColorFilter(colorMatrix)
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                    try {
+                                        textureView.setRenderEffect(android.graphics.RenderEffect.createColorFilterEffect(filter))
+                                        if (textureView.layerType != android.view.View.LAYER_TYPE_NONE) {
+                                            textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+                                        }
+                                    } catch (e: Exception) {
+                                        val paint = android.graphics.Paint().apply { colorFilter = filter }
+                                        textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+                                    }
+                                } else {
+                                    val paint = android.graphics.Paint().apply { colorFilter = filter }
+                                    textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+                                }
+                            } else {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                    try {
+                                        textureView.setRenderEffect(null)
+                                    } catch (ignored: Exception) {}
+                                }
+                                textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+                            }
+                            textureView.invalidate()
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
 
                 // Clean Cinematic LUT Active Badge (Omitted when LOG profile is selected)
                 val isLogProfile = cinemaConfig?.let {

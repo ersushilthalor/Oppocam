@@ -761,5 +761,78 @@ class PhotonCameraLensSwitchingTest {
         )
         assertEquals(2.17f, mainCrop, 0.01f)
     }
+
+    @Test
+    fun testKeepUltraWideReadyPersistentDualSessionInstantSwitchAcrossModes() {
+        val mainLens = LensInfo(
+            cameraId = "0",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.WIDE,
+            displayName = "1x Main",
+            focalLengthMm = 5.0f,
+            maxAperture = 1.8f,
+            isPrimaryMain = true,
+            isLogicalMultiCamera = false,
+            isIndependentCamera = true,
+            baseZoomRatio = 1.0f
+        )
+        val separateUltraWide = LensInfo(
+            cameraId = "2",
+            facing = CameraCharacteristics.LENS_FACING_BACK,
+            lensType = LensType.ULTRAWIDE,
+            displayName = "0.5x Ultra Wide",
+            focalLengthMm = 2.0f,
+            maxAperture = 2.2f,
+            isIndependentCamera = true,
+            baseZoomRatio = 0.5f
+        )
+
+        // 1. Verify FALLBACK_TURBO is removed and PERSISTENT_DUAL_SESSION or CONCURRENT_DEVICES is used
+        val dualMode = engine.detectSimultaneousStreamingMode(mainLens, separateUltraWide)
+        assertTrue(
+            "Must use CONCURRENT_DEVICES or PERSISTENT_DUAL_SESSION",
+            dualMode == Camera2Engine.DualStreamingMode.CONCURRENT_DEVICES ||
+                dualMode == Camera2Engine.DualStreamingMode.PERSISTENT_DUAL_SESSION
+        )
+
+        // 2. Enable Keep Ultra Wide Ready and verify instant 1x <-> Ultra-Wide switching across Photo, Video, and Cinema (Pro Video) modes
+        engine.setKeepUltraWideReady(true)
+        assertTrue(engine.isKeepUltraWideReady.value)
+
+        val lenses = engine.availableLenses.value
+        val hwMain = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val hwUw = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+
+        if (hwMain != null && hwUw != null) {
+            for (mode in listOf(
+                com.example.camera.model.CameraMode.PHOTO,
+                com.example.camera.model.CameraMode.VIDEO,
+                com.example.camera.model.CameraMode.CINEMA
+            )) {
+                engine.setMode(mode)
+                engine.exposureCompensationIndex = 2
+
+                // Switch to Main (1x)
+                engine.selectLens(hwMain, preserveZoom = false, targetZoom = 1.0f)
+                assertEquals(hwMain.id, engine.selectedLens.value?.id)
+                assertFalse("Main lens should display MAIN stream", engine.isUsingUltraWideSurface.value)
+                assertEquals(PreviewStreamSource.MAIN, engine.displayedPreviewSource.value)
+                assertEquals("Exposure compensation must not reset on lens switch", 2, engine.exposureCompensationIndex)
+
+                // Switch 1x -> Ultra-Wide (0.5x) immediately
+                engine.selectLens(hwUw, preserveZoom = false, targetZoom = 0.5f)
+                assertEquals(hwUw.id, engine.selectedLens.value?.id)
+                assertTrue("Ultra-Wide lens should display ULTRAWIDE stream", engine.isUsingUltraWideSurface.value)
+                assertEquals(PreviewStreamSource.ULTRAWIDE, engine.displayedPreviewSource.value)
+                assertEquals("Exposure compensation must not reset on lens switch", 2, engine.exposureCompensationIndex)
+
+                // Switch Ultra-Wide (0.5x) -> Main (1x) immediately
+                engine.selectLens(hwMain, preserveZoom = false, targetZoom = 1.0f)
+                assertEquals(hwMain.id, engine.selectedLens.value?.id)
+                assertFalse("Switching back to 1x should display MAIN stream", engine.isUsingUltraWideSurface.value)
+                assertEquals(PreviewStreamSource.MAIN, engine.displayedPreviewSource.value)
+            }
+        }
+    }
 }
 

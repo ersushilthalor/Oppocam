@@ -351,8 +351,12 @@ enum class BackgroundCameraStatus(val label: String, val shortDesc: String) {
     PREPARING("Preparing", "Starting background stream..."),
     READY_QUIET("Ready (Quiet)", "Ready in background (invisible)"),
     READY_PREVIEW("Live Preview", "Streaming to little preview"),
-    FALLBACK_TURBO("Turbo Handover", "Fast normal switching active"),
     UNAVAILABLE("Unavailable", "Camera not present or in use")
+}
+
+enum class PreviewStreamSource {
+    MAIN,
+    ULTRAWIDE
 }
 
 data class MotorolaInstantSwitchState(
@@ -367,10 +371,11 @@ data class MotorolaInstantSwitchState(
     val isMotorolaDevice: Boolean = false,
     val isConcurrentHardwareSupported: Boolean = true,
     val activeStandbyLens: LensType? = null,
-    val switchLatencyEstimateMs: Int = 15,
+    val switchLatencyEstimateMs: Int = 0,
     val lastMeasuredLatencyMs: Long = 0L,
     val statusMessage: String = "Motorola Instant Switching Ready",
-    val switchPointMm: Float = 23.0f
+    val switchPointMm: Float = 23.0f,
+    val displayedPreviewSource: PreviewStreamSource = PreviewStreamSource.MAIN
 )
 
 /**

@@ -129,6 +129,7 @@ fun CameraScreen(
     val selectedVideoResolution by viewModel.engine.selectedVideoResolution.collectAsStateWithLifecycle()
     val previewAspectRatio by viewModel.engine.previewAspectRatio.collectAsStateWithLifecycle()
     val previewBufferSize by viewModel.engine.previewBufferSize.collectAsStateWithLifecycle()
+    val isUsingUltraWideSurface by viewModel.isUsingUltraWideSurface.collectAsStateWithLifecycle()
     val sensorOrientation by viewModel.engine.sensorOrientation.collectAsStateWithLifecycle()
     val storageStats by viewModel.engine.storageStats.collectAsStateWithLifecycle()
     val isRecordingVideo by viewModel.engine.isRecordingVideo.collectAsStateWithLifecycle()
@@ -354,6 +355,13 @@ fun CameraScreen(
                 },
                 onSurfaceTextureSizeChanged = { texture, width, height ->
                     viewModel.engine.onViewfinderSurfaceSizeChanged(texture, width, height)
+                },
+                isUsingUltraWideSurface = isUsingUltraWideSurface,
+                onUltraWideSurfaceTextureAvailable = { texture, width, height ->
+                    viewModel.engine.setUltraWidePreviewSurfaceTexture(texture, width, height)
+                },
+                onUltraWideSurfaceTextureSizeChanged = { texture, width, height ->
+                    viewModel.engine.onUltraWideViewfinderSurfaceSizeChanged(texture, width, height)
                 },
                 onTapToFocus = { point, normX, normY ->
                     viewModel.onTapToFocus(point, normX, normY)
