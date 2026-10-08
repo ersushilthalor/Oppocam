@@ -4647,9 +4647,6 @@ class Camera2Engine(private val context: Context) {
                 Log.e(TAG, "Failed to update preview settings", e)
             }
         }
-        if (_isKeepUltraWideReady.value && ultraWideStandbyCaptureSession != null) {
-            syncStandbyStreamSettings()
-        }
     }
 
     private var lastZoomPreviewUpdateTime = 0L

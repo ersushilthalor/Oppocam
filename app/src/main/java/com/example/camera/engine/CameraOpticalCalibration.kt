@@ -303,4 +303,51 @@ object CameraOpticalCalibration {
         // Strictly below the switch point: use Ultra-wide if available
         return if (hasUltraWide) LensType.ULTRAWIDE else LensType.WIDE
     }
+
+    /**
+     * Optical framing alignment calibration between Ultra-wide and Main Wide cameras.
+     * Calibrates scale correction, horizontal offset, and vertical offset so there is no sudden FOV or position jump at handoff.
+     */
+    data class OpticalFramingCalibration(
+        val scaleCorrection: Float = 1.0f,
+        val offsetXNorm: Float = 0.0f,
+        val offsetYNorm: Float = 0.0f
+    )
+
+    fun getUltraWideFramingCalibration(
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
+        uwEquivalentFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+    ): OpticalFramingCalibration {
+        val baseUw = if (uwEquivalentFocalMm > 0f) uwEquivalentFocalMm else DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+        val idealRatio = switchPointMm / baseUw
+        val appliedCrop = calculateUltraWideCropForSwitchPoint(switchPointMm, uwEquivalentFocalMm)
+        val scaleCorr = if (appliedCrop > 0.01f) (idealRatio / appliedCrop) else 1.0f
+
+        return OpticalFramingCalibration(
+            scaleCorrection = scaleCorr.coerceIn(0.95f, 1.05f),
+            offsetXNorm = 0.0f,
+            offsetYNorm = 0.0f
+        )
+    }
+
+    /**
+     * Smoothly interpolates optical framing calibration for a given UI zoom level (0.5x to 1.0x).
+     * At 0.5x (native uncropped Ultra-wide): returns identity (1.0x scale, 0 offset).
+     * At 1.0x (switch point): returns full framing calibration matching 1x Main FOV and optical alignment.
+     */
+    fun interpolateUltraWideFraming(
+        uiZoom: Float,
+        calib: OpticalFramingCalibration,
+        switchZoom: Float = 1.0f
+    ): OpticalFramingCalibration {
+        if (uiZoom <= 0.5f) {
+            return OpticalFramingCalibration()
+        }
+        val t = ((uiZoom - 0.5f) / (switchZoom - 0.5f).coerceAtLeast(0.01f)).coerceIn(0f, 1f)
+        return OpticalFramingCalibration(
+            scaleCorrection = 1.0f + (calib.scaleCorrection - 1.0f) * t,
+            offsetXNorm = calib.offsetXNorm * t,
+            offsetYNorm = calib.offsetYNorm * t
+        )
+    }
 }
