@@ -1781,7 +1781,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             zoomTransitionJob = null
             _currentZoom.value = clamped
             preferences.setModeZoom(_cameraMode.value, clamped)
-            engine.setZoom(clamped, isPresetTap = false)
+            engine.setZoom(clamped, isPresetTap = false, isContinuousTransition = true)
             return
         }
 

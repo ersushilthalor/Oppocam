@@ -574,6 +574,39 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
+    fun testContinuousZoomTransitionAcrossOneXBoundaryDoesNotPauseOrClamp() {
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        val engine = Camera2Engine(appContext)
+        val lenses = engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (ultraWideLens != null && mainLens != null) {
+            engine.selectLens(ultraWideLens)
+            assertEquals(ultraWideLens.id, engine.selectedLens.value?.id)
+
+            // Step through continuous zoom sequence across 1x boundary:
+            // .95 -> .97 -> .99 -> 1.00 -> 1.01 -> 1.03
+            val zoomSteps = listOf(0.95f, 0.97f, 0.99f, 1.00f, 1.01f, 1.03f)
+            for (stepZoom in zoomSteps) {
+                engine.setZoom(stepZoom, isPresetTap = false, isContinuousTransition = true)
+                assertEquals(stepZoom, engine.currentZoom, 0.001f)
+                assertEquals(stepZoom, engine.currentZoomState.value, 0.001f)
+            }
+
+            // Target lens should seamlessly handoff to Main Wide at >= 1.0x without holding at 1.0
+            assertEquals(mainLens.id, engine.selectedLens.value?.id)
+            assertEquals(1.03f, engine.currentZoom, 0.001f)
+
+            // Direct preset switch remains instant
+            engine.selectLens(ultraWideLens, preserveZoom = false, targetZoom = 0.5f)
+            assertEquals(ultraWideLens.id, engine.selectedLens.value?.id)
+            engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+            assertEquals(mainLens.id, engine.selectedLens.value?.id)
+        }
+    }
+
+    @Test
     fun testOpticalCalibrationAtPointNineNineNineMatchesOneXMainCropLimit() {
         // At 0.5x on Ultra-Wide: 1.0x digital crop (full uncropped sensor)
         val cropAt05 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.5f, 0.5f, LensType.ULTRAWIDE)
