@@ -239,6 +239,7 @@ fun CameraScreen(
     val isPhotoFilterBarOpen by viewModel.isPhotoFilterBarOpen.collectAsStateWithLifecycle()
 
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
+    val isCameraReady by viewModel.engine.isCameraReady.collectAsStateWithLifecycle()
 
     val isUsingRearMainLens = remember(selectedLens, currentZoom) {
         selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
@@ -352,8 +353,9 @@ fun CameraScreen(
                 isProModeActive = isManualProOpen,
                 floatingWindowBlurStrength = floatingWindowAppearance.blurStrength,
                 isSettingsOpen = isSettingsOpen,
-                onSurfaceTextureAvailable = { texture ->
-                    viewModel.engine.setPreviewSurfaceTexture(texture)
+                isCameraReady = isCameraReady,
+                onSurfaceTextureAvailable = { texture, width, height ->
+                    viewModel.engine.setPreviewSurfaceTexture(texture, width, height)
                 },
                 onSurfaceTextureSizeChanged = { texture, width, height ->
                     viewModel.engine.onViewfinderSurfaceSizeChanged(texture, width, height)

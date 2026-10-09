@@ -274,6 +274,18 @@ class Camera2Engine(private val context: Context) {
     private val isPreparingUltraWideStandby = java.util.concurrent.atomic.AtomicBoolean(false)
     private val isUltraWideStreaming = java.util.concurrent.atomic.AtomicBoolean(false)
     private var activeLogicalMultiCamUltraWideConfigured = false
+    private val standbySessionGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun isSizeSupportedForLens(cameraId: String?, size: Size): Boolean {
+        if (cameraId == null) return false
+        val chars = getCharacteristics(cameraId) ?: return false
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return false
+        val supportedSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
+        return supportedSizes.any {
+            (it.width == size.width && it.height == size.height) ||
+            (it.width == size.height && it.height == size.width)
+        }
+    }
 
     private val standbyCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -281,9 +293,31 @@ class Camera2Engine(private val context: Context) {
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
-            if (!isUltraWideStreaming.get()) {
-                isUltraWideStreaming.set(true)
-                _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+            val currentTexture = if (_selectedLens.value?.lensType == LensType.ULTRAWIDE) {
+                previewSurfaceTexture ?: fallbackMainSurfaceTexture
+            } else {
+                ultraWideViewfinderSurfaceTexture ?: ultraWideStandbySurfaceTexture
+            }
+            val isTextureValid = currentTexture != null && run {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) !currentTexture.isReleased else true
+            }
+            if (session == ultraWideStandbyCaptureSession && _isKeepUltraWideReady.value && isTextureValid) {
+                if (!isUltraWideStreaming.get()) {
+                    isUltraWideStreaming.set(true)
+                }
+                if (_ultraWideStreamStatus.value != BackgroundCameraStatus.READY_QUIET) {
+                    _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                }
+            }
+        }
+
+        override fun onCaptureFailed(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            failure: CaptureFailure
+        ) {
+            if (session == ultraWideStandbyCaptureSession) {
+                Log.w(TAG, "Standby capture failed: reason=${failure.reason}")
             }
         }
     }
@@ -325,14 +359,21 @@ class Camera2Engine(private val context: Context) {
 
     /**
      * Synchronizes all preview SurfaceTexture buffer dimensions (Main + Ultra-Wide)
-     * so both streams always match the active viewfinder resolution and aspect ratio.
+     * so both streams match their respective active viewfinder resolution and aspect ratio.
      */
     private fun syncPreviewBufferSizes(cameraW: Int, cameraH: Int) {
         if (cameraW <= 0 || cameraH <= 0) return
         try { previewSurfaceTexture?.setDefaultBufferSize(cameraW, cameraH) } catch (_: Throwable) {}
-        try { ultraWideViewfinderSurfaceTexture?.setDefaultBufferSize(cameraW, cameraH) } catch (_: Throwable) {}
-        try { ultraWideStandbySurfaceTexture?.setDefaultBufferSize(cameraW, cameraH) } catch (_: Throwable) {}
         try { fallbackMainSurfaceTexture?.setDefaultBufferSize(cameraW, cameraH) } catch (_: Throwable) {}
+
+        // For ultra-wide surfaces, select a preview resolution actually supported by the ultra-wide lens
+        val targetRatio = getTargetAspectRatioForMode(currentMode)
+        val uwLens = _availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val uwSize = getOptimalPreviewSize(uwLens?.cameraId, targetRatio)
+        val uwW = max(uwSize.width, uwSize.height)
+        val uwH = min(uwSize.width, uwSize.height)
+        try { ultraWideViewfinderSurfaceTexture?.setDefaultBufferSize(uwW, uwH) } catch (_: Throwable) {}
+        try { ultraWideStandbySurfaceTexture?.setDefaultBufferSize(uwW, uwH) } catch (_: Throwable) {}
     }
 
     /**
@@ -342,16 +383,8 @@ class Camera2Engine(private val context: Context) {
      */
     fun getOrCreateUltraWidePreviewSurface(cameraId: String? = null): Surface? {
         val targetRatio = getTargetAspectRatioForMode(currentMode)
-        val currentBuf = _previewBufferSize.value
-        val isBufMatching = currentBuf != null && run {
-            val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
-            kotlin.math.abs(r - targetRatio) < 0.08f
-        }
-        val optimalSize = if (isBufMatching && currentBuf != null) {
-            currentBuf
-        } else {
-            getOptimalPreviewSize(cameraId ?: _selectedLens.value?.cameraId, targetRatio)
-        }
+        val lensId = cameraId ?: _availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }?.cameraId ?: _selectedLens.value?.cameraId
+        val optimalSize = getOptimalPreviewSize(lensId, targetRatio)
         val cameraW = max(optimalSize.width, optimalSize.height)
         val cameraH = min(optimalSize.width, optimalSize.height)
 
@@ -389,16 +422,8 @@ class Camera2Engine(private val context: Context) {
      */
     fun getOrCreateMainPreviewSurface(cameraId: String? = null): Surface? {
         val targetRatio = getTargetAspectRatioForMode(currentMode)
-        val currentBuf = _previewBufferSize.value
-        val isBufMatching = currentBuf != null && run {
-            val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
-            kotlin.math.abs(r - targetRatio) < 0.08f
-        }
-        val optimalSize = if (isBufMatching && currentBuf != null) {
-            currentBuf
-        } else {
-            getOptimalPreviewSize(cameraId ?: _selectedLens.value?.cameraId, targetRatio)
-        }
+        val lensId = cameraId ?: _availableLenses.value.firstOrNull { it.isPrimaryMain || it.lensType == LensType.WIDE }?.cameraId ?: _selectedLens.value?.cameraId
+        val optimalSize = getOptimalPreviewSize(lensId, targetRatio)
         val cameraW = max(optimalSize.width, optimalSize.height)
         val cameraH = min(optimalSize.width, optimalSize.height)
 
@@ -708,9 +733,16 @@ class Camera2Engine(private val context: Context) {
             val isRecordingActive = (_isRecordingVideo.value || isStartingRecording.get()) && dualCameraRecordingRelay != null
             val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || isRecordingActive)
             val targetRatio = getTargetAspectRatioForMode(currentMode)
-            val expectedPreviewSize = _previewBufferSize.value ?: getOptimalPreviewSize(standbyLens.cameraId, targetRatio)
+            val expectedPreviewSize = getOptimalPreviewSize(standbyLens.cameraId, targetRatio)
             standbyConfiguredPreviewSize = expectedPreviewSize
             standbyConfiguredIsVideoMode = isVideo
+
+            val configToken = standbySessionGeneration.incrementAndGet()
+            val targetSurfaceTexture = if (standbyLens.lensType == LensType.ULTRAWIDE) {
+                ultraWideViewfinderSurfaceTexture ?: ultraWideStandbySurfaceTexture
+            } else {
+                previewSurfaceTexture ?: fallbackMainSurfaceTexture
+            }
 
             val relay = dualCameraRecordingRelay
             val standbyRecorderSurf = if (isRecordingActive && relay != null && relay.hasDistinctUltraWideSurface()) {
@@ -766,7 +798,20 @@ class Camera2Engine(private val context: Context) {
                 var retriedWithoutAdvancedConfig = false
                 val recordingStandbyCallback = object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
-                        if (!_isKeepUltraWideReady.value || ultraWideStandbyCameraDevice != camera) {
+                        val currentExpectedTexture = if (standbyLens.lensType == LensType.ULTRAWIDE) {
+                            ultraWideViewfinderSurfaceTexture ?: ultraWideStandbySurfaceTexture
+                        } else {
+                            previewSurfaceTexture ?: fallbackMainSurfaceTexture
+                        }
+                        val isTextureValid = targetSurfaceTexture != null &&
+                            (targetSurfaceTexture === currentExpectedTexture) &&
+                            run {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) !targetSurfaceTexture.isReleased else true
+                            }
+                        if (configToken != standbySessionGeneration.get() ||
+                            !_isKeepUltraWideReady.value ||
+                            ultraWideStandbyCameraDevice != camera ||
+                            !isTextureValid) {
                             try { session.close() } catch (_: Throwable) {}
                             return
                         }
@@ -775,7 +820,6 @@ class Camera2Engine(private val context: Context) {
                         standbyRecordingSessionFailed = false
                         isPreparingUltraWideStandby.set(false)
                         isUltraWideStreaming.set(true)
-                        _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
 
                         try {
                             applySynchronizedStandbySettings(recordBuilder, standbyLens)
@@ -784,11 +828,37 @@ class Camera2Engine(private val context: Context) {
                             Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Prewarmed recording-capable standby session active on ID ${camera.id} (${standbyLens.lensType})")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed repeating recording request on standby camera ${camera.id}", e)
+                            try { session.close() } catch (_: Throwable) {}
+                            if (ultraWideStandbyCaptureSession == session) {
+                                ultraWideStandbyCaptureSession = null
+                            }
+                            standbyConfiguredForRecording = false
+                            standbyRecordingSessionFailed = true
+                            isPreparingUltraWideStandby.set(false)
+                            isUltraWideStreaming.set(false)
+                            _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                            if (_isKeepUltraWideReady.value) {
+                                scheduleUltraWideReconnect()
+                            }
+                        }
+                    }
+
+                    override fun onClosed(session: CameraCaptureSession) {
+                        if (ultraWideStandbyCaptureSession == session) {
+                            ultraWideStandbyCaptureSession = null
+                            isUltraWideStreaming.set(false)
+                            standbyConfiguredForRecording = false
+                            standbyRecordingSessionFailed = true
+                            _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                            if (_isKeepUltraWideReady.value) {
+                                scheduleUltraWideReconnect()
+                            }
                         }
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         try { session.close() } catch (_: Throwable) {}
+                        if (configToken != standbySessionGeneration.get()) return
                         if (!retriedWithoutAdvancedConfig && (is10BitStandby || targetPhysId != null)) {
                             retriedWithoutAdvancedConfig = true
                             Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby recording session with 10-bit/physical config rejected; retrying standard recording session")
@@ -807,7 +877,9 @@ class Camera2Engine(private val context: Context) {
                         standbyConfiguredForRecording = false
                         standbyRecordingSessionFailed = true
                         isPreparingUltraWideStandby.set(false)
-                        ultraWideStandbyCaptureSession = null
+                        if (ultraWideStandbyCaptureSession == session) {
+                            ultraWideStandbyCaptureSession = null
+                        }
                     }
                 }
 
@@ -857,25 +929,58 @@ class Camera2Engine(private val context: Context) {
 
             val stateCallback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
-                    if (!_isKeepUltraWideReady.value || ultraWideStandbyCameraDevice != camera) {
+                    val currentExpectedTexture = if (standbyLens.lensType == LensType.ULTRAWIDE) {
+                        ultraWideViewfinderSurfaceTexture ?: ultraWideStandbySurfaceTexture
+                    } else {
+                        previewSurfaceTexture ?: fallbackMainSurfaceTexture
+                    }
+                    val isTextureValid = targetSurfaceTexture != null &&
+                        (targetSurfaceTexture === currentExpectedTexture) &&
+                        run {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) !targetSurfaceTexture.isReleased else true
+                        }
+                    if (configToken != standbySessionGeneration.get() ||
+                        !_isKeepUltraWideReady.value ||
+                        ultraWideStandbyCameraDevice != camera ||
+                        !isTextureValid) {
                         try { session.close() } catch (_: Throwable) {}
                         return
                     }
                     ultraWideStandbyCaptureSession = session
                     isPreparingUltraWideStandby.set(false)
-                    isUltraWideStreaming.set(true)
-                    _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
 
                     try {
                         session.setRepeatingRequest(builder.build(), standbyCaptureCallback, backgroundHandler)
-                        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Persistent background session active on ID ${camera.id} (${standbyLens.lensType}) -> READY_QUIET")
+                        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Persistent background session active on ID ${camera.id} (${standbyLens.lensType})")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed repeating request on standby camera ${camera.id}", e)
+                        try { session.close() } catch (_: Throwable) {}
+                        if (ultraWideStandbyCaptureSession == session) {
+                            ultraWideStandbyCaptureSession = null
+                        }
+                        isPreparingUltraWideStandby.set(false)
+                        isUltraWideStreaming.set(false)
+                        _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                        if (_isKeepUltraWideReady.value) {
+                            scheduleUltraWideReconnect()
+                        }
+                    }
+                }
+
+                override fun onClosed(session: CameraCaptureSession) {
+                    if (ultraWideStandbyCaptureSession == session) {
+                        ultraWideStandbyCaptureSession = null
+                        isUltraWideStreaming.set(false)
+                        _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                        if (_isKeepUltraWideReady.value) {
+                            scheduleUltraWideReconnect()
+                        }
                     }
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     try { session.close() } catch (_: Throwable) {}
+                    if (configToken != standbySessionGeneration.get()) return
                     if (includeJpegReader && sessionSurfaces.size > 1) {
                         Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby session with JPEG reader rejected; retrying with preview surface only")
                         try { ultraWideStandbyJpegReader?.close() } catch (_: Throwable) {}
@@ -884,7 +989,9 @@ class Camera2Engine(private val context: Context) {
                         return
                     }
                     isPreparingUltraWideStandby.set(false)
-                    ultraWideStandbyCaptureSession = null
+                    if (ultraWideStandbyCaptureSession == session) {
+                        ultraWideStandbyCaptureSession = null
+                    }
                     if (_isKeepUltraWideReady.value) {
                         scheduleUltraWideReconnect()
                     }
@@ -970,11 +1077,11 @@ class Camera2Engine(private val context: Context) {
         if (existingStandbyCam != null) {
             if (existingStandbyCam.id == standbyLens.cameraId) {
                 val targetRatio = getTargetAspectRatioForMode(currentMode)
-                val expectedPreviewSize = _previewBufferSize.value ?: getOptimalPreviewSize(standbyLens.cameraId, targetRatio)
+                val optimalStandbySize = getOptimalPreviewSize(standbyLens.cameraId, targetRatio)
                 val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || isRecordingNow)
                 val sizeMatches = standbyConfiguredPreviewSize != null &&
-                    max(standbyConfiguredPreviewSize!!.width, standbyConfiguredPreviewSize!!.height) == max(expectedPreviewSize.width, expectedPreviewSize.height) &&
-                    min(standbyConfiguredPreviewSize!!.width, standbyConfiguredPreviewSize!!.height) == min(expectedPreviewSize.width, expectedPreviewSize.height)
+                    max(standbyConfiguredPreviewSize!!.width, standbyConfiguredPreviewSize!!.height) == max(optimalStandbySize.width, optimalStandbySize.height) &&
+                    min(standbyConfiguredPreviewSize!!.width, standbyConfiguredPreviewSize!!.height) == min(optimalStandbySize.width, optimalStandbySize.height)
 
                 if (ultraWideStandbyCaptureSession != null &&
                     sizeMatches &&
@@ -1025,6 +1132,7 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
+                    standbySessionGeneration.incrementAndGet()
                     try { camera.close() } catch (ignored: Throwable) {}
                     if (ultraWideStandbyCameraDevice == camera) {
                         ultraWideStandbyCameraDevice = null
@@ -1039,6 +1147,7 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
+                    standbySessionGeneration.incrementAndGet()
                     try { camera.close() } catch (ignored: Throwable) {}
                     if (ultraWideStandbyCameraDevice == camera) {
                         ultraWideStandbyCameraDevice = null
@@ -1053,6 +1162,7 @@ class Camera2Engine(private val context: Context) {
                 }
             }, backgroundHandler)
         } catch (t: Throwable) {
+            standbySessionGeneration.incrementAndGet()
             isPreparingUltraWideStandby.set(false)
             Log.w(TAG, "Could not open standby camera concurrently", t)
             if (_isKeepUltraWideReady.value) {
@@ -1062,6 +1172,7 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun releaseUltraWideStandby() {
+        standbySessionGeneration.incrementAndGet()
         ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
         ultraWideReconnectRunnable = null
         isPreparingUltraWideStandby.set(false)
@@ -2099,12 +2210,16 @@ class Camera2Engine(private val context: Context) {
 
                 // Case B: Persistent dual-session across separate CameraDevices (both sessions continuously running)
                 val prewarmedCamera = ultraWideStandbyCameraDevice
-                val isStandbyRecordingReady = !_isRecordingVideo.value || (
+                val isStandbyReady = if (_isRecordingVideo.value) {
                     ultraWideStandbyCaptureSession != null &&
                         !standbyRecordingSessionFailed &&
                         (standbyConfiguredForRecording || activeRecordingStreamConfig == null)
-                    )
-                if (prewarmedCamera != null && prewarmedCamera.id == lens.cameraId && isStandbyRecordingReady) {
+                } else {
+                    ultraWideStandbyCaptureSession != null &&
+                        !isPreparingUltraWideStandby.get() &&
+                        isUltraWideStreaming.get()
+                }
+                if (prewarmedCamera != null && prewarmedCamera.id == lens.cameraId && isStandbyReady) {
                     Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms persistent dual-session switch to CameraDevice ID ${lens.cameraId} (${lens.lensType}, recording=${_isRecordingVideo.value})")
                     switchUsingPrewarmedStandby(lens, switchGen, isContinuousTransition = isContinuousTransition)
                     return
@@ -2302,17 +2417,14 @@ class Camera2Engine(private val context: Context) {
                 return
             }
 
-            // If targetCam was just opened and standbySession is still configuring, swap device pointers
-            // and configure targetCam on its dedicated surface while keeping oldCam/oldSession alive in standby.
+            // If targetCam was just opened and standbySession is still configuring, prepare session
+            // while keeping the current valid preview visible until the target stream is usable.
+            Log.w(TAG, "Standby session not configured on target camera ${targetCam.id}; preparing session before switching preview source")
             cameraDevice = targetCam
             ultraWideStandbyCameraDevice = oldCam
             ultraWideStandbyCaptureSession = oldSession
             ultraWideStandbyRequestBuilder = synchronized(previewRequestLock) { previewRequestBuilder }
             ultraWideStandbyJpegReader = imageReaderJpeg
-
-            val useUw = (targetLens.lensType == LensType.ULTRAWIDE)
-            _isUsingUltraWideSurface.value = useUw
-            _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
             activeSessionLens = targetLens
             _selectedLens.value = targetLens
             activeSessionPhysicalCameraId = targetLens.physicalCameraId
@@ -3095,13 +3207,15 @@ class Camera2Engine(private val context: Context) {
             viewfinderHeight = height
         }
         val targetRatio = getTargetAspectRatioForMode(currentMode)
+        val selectedCamId = _selectedLens.value?.cameraId
         val currentBuf = _previewBufferSize.value
-        val isBufMatching = currentBuf != null && run {
+        val isBufValidForLens = currentBuf != null && isSizeSupportedForLens(selectedCamId, currentBuf) && run {
             val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
             kotlin.math.abs(r - targetRatio) < 0.08f
         }
-        val optimalSize = if (isBufMatching && currentBuf != null) currentBuf else getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
+        val optimalSize = if (isBufValidForLens && currentBuf != null) currentBuf else getOptimalPreviewSize(selectedCamId, targetRatio)
         _previewBufferSize.value = optimalSize
+        _previewAspectRatio.value = targetRatio
         val cameraW = max(optimalSize.width, optimalSize.height)
         val cameraH = min(optimalSize.width, optimalSize.height)
         syncPreviewBufferSizes(cameraW, cameraH)
@@ -3126,13 +3240,15 @@ class Camera2Engine(private val context: Context) {
         }
         if (texture != null) {
             val targetRatio = getTargetAspectRatioForMode(currentMode)
+            val selectedCamId = _selectedLens.value?.cameraId
             val currentBuf = _previewBufferSize.value
-            val isBufMatching = currentBuf != null && run {
+            val isBufValidForLens = currentBuf != null && isSizeSupportedForLens(selectedCamId, currentBuf) && run {
                 val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
                 kotlin.math.abs(r - targetRatio) < 0.08f
             }
-            val optimalSize = if (isBufMatching && currentBuf != null) currentBuf else getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
+            val optimalSize = if (isBufValidForLens && currentBuf != null) currentBuf else getOptimalPreviewSize(selectedCamId, targetRatio)
             _previewBufferSize.value = optimalSize
+            _previewAspectRatio.value = targetRatio
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
             syncPreviewBufferSizes(cameraW, cameraH)
@@ -9624,7 +9740,10 @@ class Camera2Engine(private val context: Context) {
      */
     fun onAppForegrounded() {
         Log.d(TAG, "onAppForegrounded: re-initializing camera session")
-        if (_isCameraInitialized.value && previewSurfaceTexture != null) {
+        val isTextureValid = previewSurfaceTexture != null && run {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) !previewSurfaceTexture!!.isReleased else true
+        }
+        if (_isCameraInitialized.value && isTextureValid) {
             restartCamera()
         }
     }

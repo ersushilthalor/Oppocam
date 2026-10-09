@@ -100,7 +100,8 @@ fun Viewfinder(
     isProModeActive: Boolean = false,
     floatingWindowBlurStrength: Float = 24.0f,
     isSettingsOpen: Boolean = false,
-    onSurfaceTextureAvailable: (SurfaceTexture?) -> Unit,
+    isCameraReady: Boolean = false,
+    onSurfaceTextureAvailable: (SurfaceTexture?, Int, Int) -> Unit = { _, _, _ -> },
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
     isUsingUltraWideSurface: Boolean = false,
     onUltraWideSurfaceTextureAvailable: ((SurfaceTexture?, Int, Int) -> Unit)? = null,
@@ -169,10 +170,31 @@ fun Viewfinder(
         else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
     }
 
-    var framesSyncedSinceTransition by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(cameraMode, isSettingsOpen, previewBufferSize, targetRatioCalc) {
-        framesSyncedSinceTransition = 0
+    val applyTransformToView = rememberUpdatedState { tv: TextureView?, isUltraWide: Boolean, w: Int, h: Int ->
+        if (tv == null) return@rememberUpdatedState
+        val viewW = if (w > 0) w else tv.width
+        val viewH = if (h > 0) h else tv.height
+        if (viewW <= 0 || viewH <= 0) return@rememberUpdatedState
+        val calib = if (isUltraWide) currentUwCalib else com.example.camera.engine.CameraOpticalCalibration.OpticalFramingCalibration()
+        updateTextureViewTransform(
+            textureView = tv,
+            previewBufferSize = previewBufferSize,
+            targetRatio = targetRatioCalc,
+            sensorOrientation = sensorOrientation,
+            isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
+            horizonRollDegrees = horizonRollDegrees,
+            horizonNormX = horizonNormX,
+            horizonNormY = horizonNormY,
+            isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
+            dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
+            dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
+            dollyFocusY = dollyCropState?.focusNormY ?: 0.5f,
+            viewWidth = viewW,
+            viewHeight = viewH,
+            opticalScale = calib.scaleCorrection,
+            opticalOffsetX = calib.offsetXNorm,
+            opticalOffsetY = calib.offsetYNorm
+        )
     }
 
     LaunchedEffect(
@@ -189,29 +211,15 @@ fun Viewfinder(
         cameraMode,
         previewBufferSize,
         isSettingsOpen,
-        aspectRatio
+        aspectRatio,
+        isCameraReady
     ) {
-        listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
-            if (tv.width > 0 && tv.height > 0) {
-                val isUwTv = (tv === ultraWideTextureViewInstance)
-                val calib = if (isUwTv) currentUwCalib else com.example.camera.engine.CameraOpticalCalibration.OpticalFramingCalibration()
-                updateTextureViewTransform(
-                    textureView = tv,
-                    previewBufferSize = previewBufferSize,
-                    targetRatio = targetRatioCalc,
-                    sensorOrientation = sensorOrientation,
-                    isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
-                    horizonRollDegrees = horizonRollDegrees,
-                    horizonNormX = horizonNormX,
-                    horizonNormY = horizonNormY,
-                    isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
-                    dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
-                    dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
-                    dollyFocusY = dollyCropState?.focusNormY ?: 0.5f,
-                    opticalScale = calib.scaleCorrection,
-                    opticalOffsetX = calib.offsetXNorm,
-                    opticalOffsetY = calib.offsetYNorm
-                )
+        if (!isSettingsOpen) {
+            listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
+                val isUw = (tv === ultraWideTextureViewInstance)
+                if (tv.width > 0 && tv.height > 0) {
+                    applyTransformToView.value(tv, isUw, tv.width, tv.height)
+                }
             }
         }
     }
@@ -343,72 +351,31 @@ fun Viewfinder(
                             addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                                 val newW = right - left
                                 val newH = bottom - top
-                                if (newW > 0 && newH > 0 && (newW != (oldRight - oldLeft) || newH != (oldBottom - oldTop) || framesSyncedSinceTransition < 5)) {
-                                    updateTextureViewTransform(
-                                        textureView = this,
-                                        previewBufferSize = currentPreviewBufferSize,
-                                        targetRatio = currentTargetRatio,
-                                        sensorOrientation = currentSensorOrientation,
-                                        isHorizonLockEnabled = currentIsHorizonLock,
-                                        horizonRollDegrees = currentHorizonRoll,
-                                        horizonNormX = currentHorizonNormX,
-                                        horizonNormY = currentHorizonNormY,
-                                        isDollyZoomActive = currentIsDollyZoom,
-                                        dollyScale = currentDollyScale,
-                                        dollyFocusX = currentDollyFocusX,
-                                        dollyFocusY = currentDollyFocusY,
-                                        viewWidth = newW,
-                                        viewHeight = newH
-                                    )
+                                if (newW > 0 && newH > 0 && (newW != (oldRight - oldLeft) || newH != (oldBottom - oldTop))) {
+                                    applyTransformToView.value(this, false, newW, newH)
                                 }
                             }
                             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                 override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                                     val effectiveW = if (this@apply.width > 0) this@apply.width else w
                                     val effectiveH = if (this@apply.height > 0) this@apply.height else h
-                                    updateTextureViewTransform(
-                                        textureView = this@apply,
-                                        previewBufferSize = currentPreviewBufferSize,
-                                        targetRatio = currentTargetRatio,
-                                        sensorOrientation = currentSensorOrientation,
-                                        isHorizonLockEnabled = currentIsHorizonLock,
-                                        horizonRollDegrees = currentHorizonRoll,
-                                        horizonNormX = currentHorizonNormX,
-                                        horizonNormY = currentHorizonNormY,
-                                        isDollyZoomActive = currentIsDollyZoom,
-                                        dollyScale = currentDollyScale,
-                                        dollyFocusX = currentDollyFocusX,
-                                        dollyFocusY = currentDollyFocusY,
-                                        viewWidth = effectiveW,
-                                        viewHeight = effectiveH
-                                    )
-                                    onSurfaceTextureAvailable(st)
-                                    onSurfaceTextureSizeChanged?.invoke(st, w, h)
+                                    onSurfaceTextureAvailable(st, effectiveW, effectiveH)
+                                    onSurfaceTextureSizeChanged?.invoke(st, effectiveW, effectiveH)
+                                    if (effectiveW > 0 && effectiveH > 0) {
+                                        applyTransformToView.value(this@apply, false, effectiveW, effectiveH)
+                                    }
                                     com.example.camera.ui.components.BackdropBlurManager.registerViewfinder(this@apply)
                                 }
                                 override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
                                     val effectiveW = if (this@apply.width > 0) this@apply.width else w
                                     val effectiveH = if (this@apply.height > 0) this@apply.height else h
-                                    updateTextureViewTransform(
-                                        textureView = this@apply,
-                                        previewBufferSize = currentPreviewBufferSize,
-                                        targetRatio = currentTargetRatio,
-                                        sensorOrientation = currentSensorOrientation,
-                                        isHorizonLockEnabled = currentIsHorizonLock,
-                                        horizonRollDegrees = currentHorizonRoll,
-                                        horizonNormX = currentHorizonNormX,
-                                        horizonNormY = currentHorizonNormY,
-                                        isDollyZoomActive = currentIsDollyZoom,
-                                        dollyScale = currentDollyScale,
-                                        dollyFocusX = currentDollyFocusX,
-                                        dollyFocusY = currentDollyFocusY,
-                                        viewWidth = effectiveW,
-                                        viewHeight = effectiveH
-                                    )
-                                    onSurfaceTextureSizeChanged?.invoke(st, w, h)
+                                    onSurfaceTextureSizeChanged?.invoke(st, effectiveW, effectiveH)
+                                    if (effectiveW > 0 && effectiveH > 0) {
+                                        applyTransformToView.value(this@apply, false, effectiveW, effectiveH)
+                                    }
                                 }
                                 override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                                    onSurfaceTextureAvailable(null)
+                                    onSurfaceTextureAvailable(null, 0, 0)
                                     try {
                                         lumaSampleBitmap?.recycle()
                                         lumaSampleBitmap = null
@@ -421,27 +388,6 @@ fun Viewfinder(
                                 }
                                 override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
                                     if (currentIsUsingUltraWideSurface) return
-
-                                    // Synchronize transformation matrix continuously on initial frames
-                                    // following camera reinitialization, mode transitions, and returning from Settings
-                                    if (framesSyncedSinceTransition < 5) {
-                                        framesSyncedSinceTransition++
-                                        updateTextureViewTransform(
-                                            textureView = this@apply,
-                                            previewBufferSize = currentPreviewBufferSize,
-                                            targetRatio = currentTargetRatio,
-                                            sensorOrientation = currentSensorOrientation,
-                                            isHorizonLockEnabled = currentIsHorizonLock,
-                                            horizonRollDegrees = currentHorizonRoll,
-                                            horizonNormX = currentHorizonNormX,
-                                            horizonNormY = currentHorizonNormY,
-                                            isDollyZoomActive = currentIsDollyZoom,
-                                            dollyScale = currentDollyScale,
-                                            dollyFocusX = currentDollyFocusX,
-                                            dollyFocusY = currentDollyFocusY
-                                        )
-                                    }
-
 
                                     // Real-time Motion Photo frame buffering (30 FPS)
                                     if (isMotionPhotoEnabled && cameraMode == CameraMode.PHOTO && onMotionPhotoPreviewFrame != null) {
@@ -507,25 +453,6 @@ fun Viewfinder(
                             com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                 textureView = textureView,
                                 blurStrength = floatingWindowBlurStrength
-                            )
-                        }
-                        // Dynamically synchronize TextureView transformation with current dimensions and buffer size
-                        val viewW = textureView.width.toFloat()
-                        val viewH = textureView.height.toFloat()
-                        if (viewW > 0f && viewH > 0f) {
-                            updateTextureViewTransform(
-                                textureView = textureView,
-                                previewBufferSize = previewBufferSize,
-                                targetRatio = targetRatio,
-                                sensorOrientation = sensorOrientation,
-                                isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
-                                horizonRollDegrees = horizonRollDegrees,
-                                horizonNormX = horizonNormX,
-                                horizonNormY = horizonNormY,
-                                isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
-                                dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
-                                dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
-                                dollyFocusY = dollyCropState?.focusNormY ?: 0.5f
                             )
                         }
 
@@ -673,53 +600,19 @@ fun Viewfinder(
                                 addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                                     val newW = right - left
                                     val newH = bottom - top
-                                    if (newW > 0 && newH > 0 && (newW != (oldRight - oldLeft) || newH != (oldBottom - oldTop) || framesSyncedSinceTransition < 5)) {
-                                        updateTextureViewTransform(
-                                            textureView = this,
-                                            previewBufferSize = currentPreviewBufferSize,
-                                            targetRatio = currentTargetRatio,
-                                            sensorOrientation = currentSensorOrientation,
-                                            isHorizonLockEnabled = currentIsHorizonLock,
-                                            horizonRollDegrees = currentHorizonRoll,
-                                            horizonNormX = currentHorizonNormX,
-                                            horizonNormY = currentHorizonNormY,
-                                            isDollyZoomActive = currentIsDollyZoom,
-                                            dollyScale = currentDollyScale,
-                                            dollyFocusX = currentDollyFocusX,
-                                            dollyFocusY = currentDollyFocusY,
-                                            viewWidth = newW,
-                                            viewHeight = newH,
-                                            opticalScale = currentUwCalib.scaleCorrection,
-                                            opticalOffsetX = currentUwCalib.offsetXNorm,
-                                            opticalOffsetY = currentUwCalib.offsetYNorm
-                                        )
+                                    if (newW > 0 && newH > 0 && (newW != (oldRight - oldLeft) || newH != (oldBottom - oldTop))) {
+                                        applyTransformToView.value(this, true, newW, newH)
                                     }
                                 }
                                 surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                                     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                                         val effectiveW = if (this@apply.width > 0) this@apply.width else w
                                         val effectiveH = if (this@apply.height > 0) this@apply.height else h
-                                        updateTextureViewTransform(
-                                            textureView = this@apply,
-                                            previewBufferSize = currentPreviewBufferSize,
-                                            targetRatio = currentTargetRatio,
-                                            sensorOrientation = currentSensorOrientation,
-                                            isHorizonLockEnabled = currentIsHorizonLock,
-                                            horizonRollDegrees = currentHorizonRoll,
-                                            horizonNormX = currentHorizonNormX,
-                                            horizonNormY = currentHorizonNormY,
-                                            isDollyZoomActive = currentIsDollyZoom,
-                                            dollyScale = currentDollyScale,
-                                            dollyFocusX = currentDollyFocusX,
-                                            dollyFocusY = currentDollyFocusY,
-                                            viewWidth = effectiveW,
-                                            viewHeight = effectiveH,
-                                            opticalScale = currentUwCalib.scaleCorrection,
-                                            opticalOffsetX = currentUwCalib.offsetXNorm,
-                                            opticalOffsetY = currentUwCalib.offsetYNorm
-                                        )
                                         onUltraWideSurfaceTextureAvailable.invoke(st, effectiveW, effectiveH)
                                         onUltraWideSurfaceTextureSizeChanged?.invoke(st, effectiveW, effectiveH)
+                                        if (effectiveW > 0 && effectiveH > 0) {
+                                            applyTransformToView.value(this@apply, true, effectiveW, effectiveH)
+                                        }
                                         if (currentIsUsingUltraWideSurface) {
                                             com.example.camera.ui.components.BackdropBlurManager.registerViewfinder(this@apply)
                                         }
@@ -728,26 +621,10 @@ fun Viewfinder(
                                     override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
                                         val effectiveW = if (this@apply.width > 0) this@apply.width else w
                                         val effectiveH = if (this@apply.height > 0) this@apply.height else h
-                                        updateTextureViewTransform(
-                                            textureView = this@apply,
-                                            previewBufferSize = currentPreviewBufferSize,
-                                            targetRatio = currentTargetRatio,
-                                            sensorOrientation = currentSensorOrientation,
-                                            isHorizonLockEnabled = currentIsHorizonLock,
-                                            horizonRollDegrees = currentHorizonRoll,
-                                            horizonNormX = currentHorizonNormX,
-                                            horizonNormY = currentHorizonNormY,
-                                            isDollyZoomActive = currentIsDollyZoom,
-                                            dollyScale = currentDollyScale,
-                                            dollyFocusX = currentDollyFocusX,
-                                            dollyFocusY = currentDollyFocusY,
-                                            viewWidth = effectiveW,
-                                            viewHeight = effectiveH,
-                                            opticalScale = currentUwCalib.scaleCorrection,
-                                            opticalOffsetX = currentUwCalib.offsetXNorm,
-                                            opticalOffsetY = currentUwCalib.offsetYNorm
-                                        )
                                         onUltraWideSurfaceTextureSizeChanged?.invoke(st, effectiveW, effectiveH)
+                                        if (effectiveW > 0 && effectiveH > 0) {
+                                            applyTransformToView.value(this@apply, true, effectiveW, effectiveH)
+                                        }
                                     }
 
                                     override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
@@ -827,27 +704,6 @@ fun Viewfinder(
                                 com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                     textureView = textureView,
                                     blurStrength = floatingWindowBlurStrength
-                                )
-                            }
-                            val viewW = textureView.width.toFloat()
-                            val viewH = textureView.height.toFloat()
-                            if (viewW > 0f && viewH > 0f) {
-                                updateTextureViewTransform(
-                                    textureView = textureView,
-                                    previewBufferSize = previewBufferSize,
-                                    targetRatio = targetRatio,
-                                    sensorOrientation = sensorOrientation,
-                                    isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
-                                    horizonRollDegrees = horizonRollDegrees,
-                                    horizonNormX = horizonNormX,
-                                    horizonNormY = horizonNormY,
-                                    isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
-                                    dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
-                                    dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
-                                    dollyFocusY = dollyCropState?.focusNormY ?: 0.5f,
-                                    opticalScale = currentUwCalib.scaleCorrection,
-                                    opticalOffsetX = currentUwCalib.offsetXNorm,
-                                    opticalOffsetY = currentUwCalib.offsetYNorm
                                 )
                             }
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
