@@ -1742,10 +1742,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _currentZoom.value = finalZoom
                 preferences.setModeZoom(_cameraMode.value, finalZoom)
                 engine.isContinuousZoomTransitionActive = false
-                if (finalLens != null) {
-                    preferences.lastFacing = finalLens.facing
-                    preferences.saveLastLens(finalLens)
-                    preferences.setModeLens(_cameraMode.value, finalLens)
+                val resolvedLens = engine.selectedLens.value ?: finalLens
+                if (resolvedLens != null) {
+                    preferences.lastFacing = resolvedLens.facing
+                    preferences.saveLastLens(resolvedLens)
+                    preferences.setModeLens(_cameraMode.value, resolvedLens)
                 }
             }
         )

@@ -322,4 +322,54 @@ class ZoomTransitionVerificationTest {
         assertEquals(1.0f, controller.previewOverlapState.value.mainAlpha, 0.001f)
         assertEquals(0.0f, controller.previewOverlapState.value.ultraWideAlpha, 0.001f)
     }
+
+    @Test
+    fun testBackgroundSliderProgressAccuratelyReusesRulerMapping() {
+        val controller = ZoomTransitionController()
+        val minZoom = 0.5f
+        val maxZoom = 20.0f
+
+        val testZooms = listOf(0.5f, 0.7f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f)
+        for (z in testZooms) {
+            val progress = controller.zoomToNormalizedSliderProgress(z, minZoom, maxZoom)
+            assertTrue("Progress for zoom $z must be in 0..1, was $progress", progress in 0.0f..1.0f)
+            val reconstructed = controller.normalizedSliderProgressToZoom(progress, minZoom, maxZoom)
+            assertEquals("Zoom must round-trip through slider mapping", z, reconstructed, 0.05f)
+        }
+    }
+
+    @Test
+    fun testBackgroundSliderUltraWideToOneXAndReverseSwitchesLensCorrectly() {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            // 1. Ultra-Wide to 1x via background slider logic
+            viewModel.selectLens(uwLens, instant = true)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.engine.currentZoom, 0.01f)
+
+            // Step through background slider values towards 1.0x
+            viewModel.engine.setZoom(0.75f, isPresetTap = false, isContinuousTransition = true)
+            assertEquals(0.75f, viewModel.engine.currentZoom, 0.01f)
+
+            viewModel.engine.setZoom(0.99f, isPresetTap = false, isContinuousTransition = true)
+            assertEquals(0.99f, viewModel.engine.currentZoom, 0.01f)
+
+            // Final step at 1.0x with isContinuousTransition = false switches to Main lens
+            viewModel.engine.setZoom(1.00f, isPresetTap = false, isContinuousTransition = false)
+            assertEquals(1.00f, viewModel.engine.currentZoom, 0.01f)
+            assertEquals("At 1.0x final step, engine must select Main lens", mainLens.id, viewModel.engine.selectedLens.value?.id)
+
+            // 2. Reverse: 1x to Ultra-Wide via background slider logic
+            viewModel.engine.setZoom(0.99f, isPresetTap = false, isContinuousTransition = true)
+            assertEquals(0.99f, viewModel.engine.currentZoom, 0.01f)
+            assertEquals("Dropping below 1.0x must select Ultra-Wide lens", uwLens.id, viewModel.engine.selectedLens.value?.id)
+
+            viewModel.engine.setZoom(0.50f, isPresetTap = false, isContinuousTransition = false)
+            assertEquals(0.50f, viewModel.engine.currentZoom, 0.01f)
+            assertEquals("At 0.5x final step, must remain on Ultra-Wide lens", uwLens.id, viewModel.engine.selectedLens.value?.id)
+        }
+    }
 }

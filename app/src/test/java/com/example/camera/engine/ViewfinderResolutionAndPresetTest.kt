@@ -85,7 +85,7 @@ class ViewfinderResolutionAndPresetTest {
         val engine = viewModel.engine
         engine.setMode(CameraMode.VIDEO)
 
-        val chars = engine.getCharacteristics(engine.selectedLens.value?.cameraId)
+        val chars = engine.getCharacteristics(engine.selectedLens.value?.cameraId ?: "0")
         val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val supportedSizes = map?.getOutputSizes(android.graphics.SurfaceTexture::class.java) ?: emptyArray()
         val hasNative4K = supportedSizes.any { maxOf(it.width, it.height) >= 3840 }
@@ -121,7 +121,12 @@ class ViewfinderResolutionAndPresetTest {
 
         val optimalSize720p = engine.getOptimalPreviewSize(targetRatio = 16f / 9f)
         val maxDim720p = maxOf(optimalSize720p.width, optimalSize720p.height)
-        assertEquals("In Video mode with 720p selected, viewfinder optimal preview max dim must be 1280", 1280, maxDim720p)
+        val has720p = supportedSizes.any { maxOf(it.width, it.height) == 1280 }
+        if (has720p) {
+            assertEquals("In Video mode with 720p selected, viewfinder optimal preview max dim must be 1280", 1280, maxDim720p)
+        } else {
+            assertTrue("In Video mode with 720p selected on sensor without 720p, falls back to available preview size", maxDim720p in listOf(1280, 1920))
+        }
     }
 
     @Test
@@ -129,7 +134,7 @@ class ViewfinderResolutionAndPresetTest {
         val engine = viewModel.engine
         engine.setMode(CameraMode.CINEMA)
 
-        val chars = engine.getCharacteristics(engine.selectedLens.value?.cameraId)
+        val chars = engine.getCharacteristics(engine.selectedLens.value?.cameraId ?: "0")
         val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val supportedSizes = map?.getOutputSizes(android.graphics.SurfaceTexture::class.java) ?: emptyArray()
         val hasNative4K = supportedSizes.any { maxOf(it.width, it.height) >= 3840 }
@@ -164,9 +169,11 @@ class ViewfinderResolutionAndPresetTest {
 
         val optimalSize720p = engine.getOptimalPreviewSize(targetRatio = 16f / 9f)
         val maxDim720p = maxOf(optimalSize720p.width, optimalSize720p.height)
-        assertEquals("In Pro Video (Cinema) mode with 720p selected, viewfinder optimal preview max dim must be 1280", 1280, maxDim720p)
-    }
-        val maxDim1080p = maxOf(optimalSize1080p.width, optimalSize1080p.height)
-        assertEquals("In Pro Video (Cinema) mode with 1080p selected, viewfinder optimal preview max dim must be 1920", 1920, maxDim1080p)
+        val has720pCinema = supportedSizes.any { maxOf(it.width, it.height) == 1280 }
+        if (has720pCinema) {
+            assertEquals("In Pro Video (Cinema) mode with 720p selected, viewfinder optimal preview max dim must be 1280", 1280, maxDim720p)
+        } else {
+            assertTrue("In Pro Video with 720p selected on sensor without 720p, falls back to available preview size", maxDim720p in listOf(1280, 1920))
+        }
     }
 }

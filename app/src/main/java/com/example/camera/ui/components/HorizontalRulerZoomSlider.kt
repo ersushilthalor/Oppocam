@@ -38,7 +38,7 @@ import kotlin.math.*
  * Logarithmic zoom mapping helpers shared between MasterZoomCapsule and HorizontalRulerZoomSlider
  * so opening the slider via a swipe uses the exact same physical ruler scale.
  */
-internal fun zoomToNormalizedLog(zoom: Float, minZ: Float, maxZ: Float): Float {
+fun zoomToNormalizedLog(zoom: Float, minZ: Float, maxZ: Float): Float {
     val safeMin = minZ.coerceAtLeast(0.3f)
     val safeMax = maxZ.coerceAtLeast(safeMin + 0.05f)
     val logMin = ln(safeMin.toDouble())
@@ -48,7 +48,7 @@ internal fun zoomToNormalizedLog(zoom: Float, minZ: Float, maxZ: Float): Float {
     return ((logZ - logMin) / (logMax - logMin)).toFloat().coerceIn(0f, 1f)
 }
 
-internal fun normalizedToZoomLog(t: Float, minZ: Float, maxZ: Float): Float {
+fun normalizedToZoomLog(t: Float, minZ: Float, maxZ: Float): Float {
     val safeMin = minZ.coerceAtLeast(0.3f)
     val safeMax = maxZ.coerceAtLeast(safeMin + 0.05f)
     if (safeMax <= safeMin) return safeMin
