@@ -1121,33 +1121,57 @@ fun configureTransform(
     if (previewBufferSize != null) {
         val bufW = previewBufferSize.width.toFloat()
         val bufH = previewBufferSize.height.toFloat()
-        val isLandscapeBuffer = bufW >= bufH
-        val bufferAspect = if (isLandscapeBuffer) bufW / bufH else bufH / bufW
-        val viewAspect = maxOf(viewW, viewH) / minOf(viewW, viewH)
+        val isLandscapeDisplay = (displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270)
 
-        if (displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270) {
+        // Upright camera buffer dimensions corresponding to view orientation:
+        // In portrait (ROTATION_0, ROTATION_180), Camera2 sensor buffer is landscape (e.g. 3264x2448),
+        // so upright width is the short dimension (2448) and upright height is the long dimension (3264).
+        val camW = if (isLandscapeDisplay) maxOf(bufW, bufH) else minOf(bufW, bufH)
+        val camH = if (isLandscapeDisplay) minOf(bufW, bufH) else maxOf(bufW, bufH)
+
+        // Determine the target aspect ratio for framing. If targetRatio > 0, use it to ensure
+        // layout transitions do not apply false scaling on stale layout dimensions.
+        val effectiveTargetRatio = if (targetRatio > 0f) {
+            targetRatio
+        } else {
+            if (isLandscapeDisplay) (viewW / viewH) else (viewH / viewW)
+        }
+        val camRatio = if (isLandscapeDisplay) (camW / camH) else (camH / camW)
+
+        // When the camera buffer matches the target aspect ratio within tolerance,
+        // no aspect-ratio distortion/crop is required (Identity transform in steady-state portrait).
+        val isMatchingTargetAspect = kotlin.math.abs(camRatio - effectiveTargetRatio) < 0.05f
+
+        val (cropScaleX, cropScaleY) = if (isMatchingTargetAspect) {
+            Pair(1.0f, 1.0f)
+        } else {
+            val defaultScaleX = viewW / camW
+            val defaultScaleY = viewH / camH
+            val fillScale = maxOf(defaultScaleX, defaultScaleY)
+            Pair(fillScale / defaultScaleX, fillScale / defaultScaleY)
+        }
+
+        if (isLandscapeDisplay) {
             val bufferRect = RectF(0f, 0f, bufH, bufW)
             val viewRect = RectF(0f, 0f, viewW, viewH)
             bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
             matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-            val scale = maxOf(viewH / bufH, viewW / bufW)
-            matrix.postScale(scale, scale, centerX, centerY)
+            if (cropScaleX != 1.0f || cropScaleY != 1.0f) {
+                matrix.postScale(cropScaleX, cropScaleY, centerX, centerY)
+            }
             matrix.postRotate((90 * (displayRotation - 2)).toFloat(), centerX, centerY)
         } else if (displayRotation == Surface.ROTATION_180) {
             matrix.postRotate(180f, centerX, centerY)
+            if (cropScaleX != 1.0f || cropScaleY != 1.0f) {
+                matrix.postScale(cropScaleX, cropScaleY, centerX, centerY)
+            }
         } else {
-            // ROTATION_0 (standard portrait)
-            // Steady state: viewAspect matches bufferAspect -> identity matrix (no distortion, 1:1 square pixels).
-            // During transitions or if buffer aspect ratio differs from view aspect ratio,
-            // center-crop uniformly without distortion or stretching.
-            val diff = kotlin.math.abs(bufferAspect - targetRatio)
-            if (diff > 0.05f && kotlin.math.abs(bufferAspect - viewAspect) > 0.05f) {
-                val scale = if (viewAspect > bufferAspect) {
-                    viewAspect / bufferAspect
-                } else {
-                    bufferAspect / viewAspect
-                }
-                matrix.postScale(scale, scale, centerX, centerY)
+            // ROTATION_0 (standard portrait):
+            // Center-crop without distortion or stretching (1:1 pixel aspect ratio).
+            // When a 4:3 stream is displayed in a 9:16 frame, cropScaleX cleanly crops the sides
+            // to produce an undistorted 9:16 center crop, matching the recorded video output.
+            if (cropScaleX != 1.0f || cropScaleY != 1.0f) {
+                matrix.postScale(cropScaleX, cropScaleY, centerX, centerY)
             }
         }
     }

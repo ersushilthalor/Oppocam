@@ -1248,6 +1248,9 @@ class Camera2Engine(private val context: Context) {
             ?: emptyArray()
         val reqW = maxOf(requested.width, requested.height)
         val reqH = minOf(requested.width, requested.height)
+        val lens = _availableLenses.value.firstOrNull { it.cameraId == cameraId }
+        val isUltraWide = (lens?.lensType == LensType.ULTRAWIDE) || (lens?.isPhysical == true && lens.lensType == LensType.ULTRAWIDE)
+
         if (supportedSizes.isEmpty()) {
             val cached = lensSupportedVideoResolutions[cameraId]
             if (!cached.isNullOrEmpty()) {
@@ -1255,6 +1258,13 @@ class Camera2Engine(private val context: Context) {
                     maxOf(it.width, it.height) == reqW && minOf(it.width, it.height) == reqH
                 }
                 if (exact != null) return requested
+                if (reqW >= 3840 && isUltraWide) {
+                    val highest43Cached = cached.filter {
+                        val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                        kotlin.math.abs(r - (4f / 3f)) < 0.08f
+                    }.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                    if (highest43Cached != null) return CameraResolution(highest43Cached.width, highest43Cached.height)
+                }
                 val targetRatio = reqW.toFloat() / reqH.toFloat()
                 val matchingRatio = cached
                     .filter {
@@ -1275,6 +1285,22 @@ class Camera2Engine(private val context: Context) {
             maxOf(it.width, it.height) == reqW && minOf(it.width, it.height) == reqH
         }
         if (isExactSupported) return requested
+
+        // When 4K recording is requested on ultra-wide sensors that cannot provide 8.3MP native 16:9 pixels (e.g. 8MP sensor):
+        // capture using the highest suitable supported 4:3 sensor stream (e.g. 3264x2448) which will be cropped to 9:16 for
+        // live preview and final video while keeping encoder output at 4K (2160x3840).
+        if (reqW >= 3840 && isUltraWide) {
+            val allStreamSizes = ((map?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()).toList() +
+                    supportedSizes.toList()).distinctBy { "${it.width}x${it.height}" }
+            val fourThreeSizes = allStreamSizes.filter {
+                val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                kotlin.math.abs(r - (4f / 3f)) < 0.08f
+            }
+            val highest43 = fourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+            if (highest43 != null) {
+                return CameraResolution(highest43.width, highest43.height)
+            }
+        }
 
         val targetRatio = reqW.toFloat() / reqH.toFloat()
         val matchingRatio = supportedSizes
@@ -1914,7 +1940,15 @@ class Camera2Engine(private val context: Context) {
             )
             val filteredVideoResolutions = if (videoSizes.isNotEmpty()) {
                 val matched = standardVideoQualities.filter { standard ->
-                    videoSizes.any { it.width == standard.width && it.height == standard.height }
+                    if (standard.width == 3840 && standard.height == 2160) {
+                        videoSizes.any { it.width == 3840 && it.height == 2160 } ||
+                        videoSizes.any { (it.width.toLong() * it.height.toLong()) >= 5_000_000L } ||
+                        (map?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()).any {
+                            (it.width.toLong() * it.height.toLong()) >= 5_000_000L
+                        }
+                    } else {
+                        videoSizes.any { it.width == standard.width && it.height == standard.height }
+                    }
                 }
                 if (matched.isNotEmpty()) {
                     matched
@@ -2020,18 +2054,38 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun getOptimalPreviewSize(cameraId: String? = null, targetRatio: Float = getTargetAspectRatioForMode(currentMode)): Size {
-        val streamRatio = if (currentMode == CameraMode.CINEMA || currentMode == CameraMode.VIDEO) {
-            16f / 9f
-        } else {
-            targetRatio
-        }
-        val id = cameraId ?: _selectedLens.value?.cameraId ?: return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
-        val chars = getCharacteristics(id) ?: return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
-        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
+        val streamRatio = targetRatio
+        val fallbackDefault = if (streamRatio > 1.5f) Size(1920, 1080) else Size(1440, 1080)
+        val id = cameraId ?: _selectedLens.value?.cameraId ?: return fallbackDefault
+        val lens = _availableLenses.value.firstOrNull { it.cameraId == id }
+        val isUltraWideLens = (lens?.lensType == LensType.ULTRAWIDE) || (lens?.isPhysical == true && lens.lensType == LensType.ULTRAWIDE)
+        val is4KVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) &&
+            ((userSelectedVideoResolution?.let { maxOf(it.width, it.height) >= 3840 } == true) ||
+             (_selectedVideoResolution.value?.let { maxOf(it.width, it.height) >= 3840 } == true))
+
+        val chars = getCharacteristics(id) ?: return fallbackDefault
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return fallbackDefault
         val previewSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
         if (previewSizes.isEmpty()) {
-            return Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
+            return fallbackDefault
         }
+
+        // The 8MP ultra-wide sensor cannot provide 8.3MP native pixels for a full 4K frame,
+        // so capture using the highest suitable supported 4:3 sensor stream and crop it to 9:16.
+        if (is4KVideo && isUltraWideLens) {
+            val hasNative4K = previewSizes.any { max(it.width, it.height) >= 3840 && min(it.width, it.height) >= 2160 }
+            if (!hasNative4K) {
+                val fourThreeSizes = previewSizes.filter {
+                    val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
+                    kotlin.math.abs(r - (4f / 3f)) < 0.08f
+                }
+                val highest43 = fourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                if (highest43 != null) {
+                    return highest43
+                }
+            }
+        }
+
         val maxDim = viewfinderResolution.maxDimension
         val matchingRatioSizes = previewSizes.filter {
             val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
@@ -2045,7 +2099,7 @@ class Camera2Engine(private val context: Context) {
                 val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
                 kotlin.math.abs(r - streamRatio)
             }
-            ?: Size(if (streamRatio > 1.5f) 1920 else 1440, 1080)
+            ?: fallbackDefault
     }
 
     private fun onSessionConfigurationFinished() {
@@ -6889,8 +6943,16 @@ class Camera2Engine(private val context: Context) {
             }
 
             val is16To9Requested = kotlin.math.abs((reqMaxDim.toFloat() / reqMinDim.toFloat()) - (16f / 9f)) < 0.08f
+            val is4KRequested = reqMaxDim >= 3840
+            val isUltraWideLens = (lens.lensType == LensType.ULTRAWIDE)
 
-            val videoRes = if (isSupported) {
+            val videoRes = if (is4KRequested && isUltraWideLens) {
+                // The 8MP ultra-wide sensor cannot provide 8.3MP native pixels for a full 4K frame,
+                // so capture using the highest suitable supported 4:3 sensor stream and crop it to 9:16
+                // for both the live viewfinder and final video. Keep the encoder output at 4K (2160x3840 in portrait);
+                // do not downgrade recording to 1080p because of the aspect ratio.
+                requestedRes
+            } else if (isSupported) {
                 requestedRes
             } else {
                 val matching16to9 = if (is16To9Requested) {
