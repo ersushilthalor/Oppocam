@@ -99,32 +99,32 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testSinusoidalEaseInOutTimingProfile400ms() {
+    fun testSinusoidalEaseInOutTimingProfile300ms() {
         val stepCount = 50
         val durationMs = ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS.toDouble()
-        assertEquals(400.0, durationMs, 0.001)
+        assertEquals(300.0, durationMs, 0.001)
 
         val controller = ZoomTransitionController()
-        val targetElapsedMs = controller.calculateSinusoidalElapsedTimestamps(stepCount, 400L)
+        val targetElapsedMs = controller.calculateSinusoidalElapsedTimestamps(stepCount, 300L)
 
-        // Verify start and finish timing: exactly 0ms and 400ms
+        // Verify start and finish timing: exactly 0ms and 300ms
         assertEquals(0L, targetElapsedMs[0])
-        assertEquals(400L, targetElapsedMs[stepCount])
+        assertEquals(300L, targetElapsedMs[stepCount])
 
-        // Verify middle timing (at 50% progress, exactly 200ms)
-        assertEquals(200L, targetElapsedMs[25])
+        // Verify middle timing (at 50% progress, exactly 150ms)
+        assertEquals(150L, targetElapsedMs[25])
 
         // Verify slow start (ease-in)
         val firstStepDuration = targetElapsedMs[1] - targetElapsedMs[0]
-        assertTrue("Start should be slow (~35-40ms), was $firstStepDuration", firstStepDuration in 30..45)
+        assertTrue("Start should be slow (~25-30ms), was $firstStepDuration", firstStepDuration in 20..35)
 
         // Verify faster middle
         val middleStepDuration = targetElapsedMs[25] - targetElapsedMs[24]
-        assertTrue("Middle should be fast (~5-8ms), was $middleStepDuration", middleStepDuration in 3..10)
+        assertTrue("Middle should be fast (~3-6ms), was $middleStepDuration", middleStepDuration in 2..8)
 
         // Verify slow finish (ease-out)
         val lastStepDuration = targetElapsedMs[50] - targetElapsedMs[49]
-        assertTrue("Finish should be slow (~35-40ms), was $lastStepDuration", lastStepDuration in 30..45)
+        assertTrue("Finish should be slow (~25-30ms), was $lastStepDuration", lastStepDuration in 20..35)
 
         // Verify strictly monotonic timestamps across all 50 intervals
         for (i in 0 until stepCount) {
@@ -268,5 +268,73 @@ class ZoomTransitionVerificationTest {
         // Preset tap to 2.0x should trigger continuous transition
         viewModel.setZoom(2.0f, isPresetTap = true)
         assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
+    }
+
+    @Test
+    fun testFixed300msDurationAcrossArbitraryZoomValues() {
+        // Duration must be strictly 300ms regardless of zoom span: 1x -> 2x, 1x -> 10x, 0.5x <-> 1.0x
+        assertEquals(300L, ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS)
+
+        val controller = ZoomTransitionController()
+        val timestamps1xTo2x = controller.calculateSinusoidalElapsedTimestamps(100, 300L)
+        assertEquals(300L, timestamps1xTo2x.last())
+
+        val timestamps1xTo10x = controller.calculateSinusoidalElapsedTimestamps(900, 300L)
+        assertEquals(300L, timestamps1xTo10x.last())
+
+        val timestampsHalfXToOneX = controller.calculateSinusoidalElapsedTimestamps(50, 300L)
+        assertEquals(300L, timestampsHalfXToOneX.last())
+    }
+
+    @Test
+    fun testSymmetric300msDurationUltraWideToMainAndMainToUltraWide() {
+        val controller = ZoomTransitionController()
+        val stepsUwToMain = controller.generateContinuousZoomSteps(0.50f, 1.00f)
+        val stepsMainToUw = controller.generateContinuousZoomSteps(1.00f, 0.50f)
+
+        assertEquals(stepsUwToMain.size, stepsMainToUw.size)
+        assertEquals(51, stepsUwToMain.size)
+
+        val timeProfileUwToMain = controller.calculateSinusoidalElapsedTimestamps(stepsUwToMain.size - 1, 300L)
+        val timeProfileMainToUw = controller.calculateSinusoidalElapsedTimestamps(stepsMainToUw.size - 1, 300L)
+
+        // Both directions must have identical 300ms completion
+        assertEquals(300L, timeProfileUwToMain.last())
+        assertEquals(300L, timeProfileMainToUw.last())
+
+        // Symmetrical middle transition point at exactly 150ms
+        assertEquals(150L, timeProfileUwToMain[25])
+        assertEquals(150L, timeProfileMainToUw[25])
+    }
+
+    @Test
+    fun testSliderZoomAppliesImmediatelyWithZeroDelay() {
+        val lenses = viewModel.engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+        if (mainLens != null) {
+            viewModel.engine.selectLens(mainLens)
+        }
+
+        // Slider zoom (isPresetTap = false) cancels active transition and immediately updates currentZoom
+        viewModel.setZoom(3.5f, isPresetTap = false)
+        assertEquals(3.5f, viewModel.currentZoom.value, 0.01f)
+        assertEquals(3.5f, viewModel.engine.currentZoom, 0.01f)
+        assertFalse(viewModel.engine.zoomTransitionController.isTransitionActive.value)
+    }
+
+    @Test
+    fun testInstantLensSwitchBypassesAnimationWindow() {
+        val lenses = viewModel.engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        if (mainLens != null && uwLens != null) {
+            viewModel.selectLens(mainLens, instant = true)
+            assertFalse(viewModel.engine.zoomTransitionController.isTransitionActive.value)
+
+            // Instant switch to ultra-wide
+            viewModel.selectLens(uwLens, instant = true)
+            assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
+            assertFalse(viewModel.engine.zoomTransitionController.isTransitionActive.value)
+        }
     }
 }

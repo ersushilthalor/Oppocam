@@ -37,17 +37,16 @@ data class PreviewOverlapState(
  * Unified Zoom Transition Controller.
  *
  * Implements:
- * 1. Ultra-smooth continuous zoom transition across all lenses and zoom values with
- *    a total transition duration of EXACTLY 400ms (0.40 seconds).
- * 2. Sinusoidal continuous interpolation (smooth ease-in, faster middle movement, smooth ease-out)
- *    traversing EVERY consecutive 0.01x intermediate zoom value without skipping or jumping.
- * 3. Redundant camera-engine call elimination using delta/frame-rate pacing.
- * 4. iPhone-style overlapping preview animation on the actual preview layers for both
- *    Ultra-Wide -> 1x and 1x -> Ultra-Wide switches lasting EXACTLY 100ms (0.10 seconds)
- *    in both directions.
- * 5. Synchronized 100ms preview overlap with the physical camera handoff without restarting
- *    camera sessions or waiting for new camera initialization.
- * 6. Preservation of instant lens readiness, background standby-camera operation, and responsive preset taps.
+ * 1. Fixed duration of EXACTLY 300ms (0.30 seconds) for every zoom transition across all lenses
+ *    and zoom values (1x -> 2x, 1x -> 10x, 0.5x <-> 1x, and any custom zoom).
+ * 2. Identical 300ms duration and smoothness in both directions for Ultra-Wide <-> 1x switching.
+ * 3. Continuous, seamless zoom interpolation with smooth sinusoidal ease-in-out motion:
+ *    no sudden jumps, pauses, intermediate stops, or visible lens-switch stutters.
+ * 4. Preserves every intermediate zoom value and progresses continuously to the exact target value.
+ * 5. Seamless preview handoff for Ultra-Wide <-> 1x switching without waiting for animation to finish.
+ * 6. Preserves instant-switch capability (0ms delay to switch hardware lens) and standby-camera operation.
+ * 7. Eliminates redundant camera-engine calls with frame-rate pacing (~15ms / 60fps), preventing pipeline flooding.
+ * 8. Zero delays on slider-based zoom or manual pinch gestures.
  */
 class ZoomTransitionController(
     private val onApplyZoomToEngine: (zoom: Float, isContinuous: Boolean) -> Unit = { _, _ -> },
@@ -55,7 +54,7 @@ class ZoomTransitionController(
 ) {
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
-        const val TOTAL_TRANSITION_DURATION_MS = 400L // Exactly 400ms (0.40 seconds)
+        const val TOTAL_TRANSITION_DURATION_MS = 300L // Exactly 300ms (0.30 seconds)
         const val PREVIEW_OVERLAP_DURATION_MS = 100L  // Exactly 100ms (0.10 seconds)
     }
 
@@ -174,13 +173,12 @@ class ZoomTransitionController(
 
         val job = scope.launch(Dispatchers.Main.immediate) {
             val startTime = SystemClock.uptimeMillis()
-            val stepIntervalMs = 10L // ~100fps silky smooth preview crossfade updates
-            val steps = (durationMs / stepIntervalMs).toInt().coerceAtLeast(10)
 
-            for (i in 0..steps) {
-                if (!isActive) break
+            while (isActive) {
                 val now = SystemClock.uptimeMillis()
-                val elapsed = (now - startTime).coerceAtLeast(0L)
+                val elapsed = now - startTime
+                if (elapsed >= durationMs) break
+
                 val linearProgress = (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
                 val smoothProgress = (0.5f * (1.0f - cos(linearProgress * PI.toFloat()))).coerceIn(0f, 1f)
 
@@ -199,14 +197,10 @@ class ZoomTransitionController(
                     overlapProgress = smoothProgress
                 )
 
-                val targetTime = startTime + ((i + 1) * durationMs / steps)
-                val waitMs = targetTime - SystemClock.uptimeMillis()
-                if (waitMs > 0) {
-                    delay(waitMs)
-                }
+                delay(8L) // ~120fps ultra-fluid preview crossfade updates
             }
 
-            // Exactly at 100ms mark: finalize preview state
+            // Exactly at durationMs mark: finalize preview state
             val finalIsUw = (toLensType == LensType.ULTRAWIDE)
             setSteadyStatePreview(finalIsUw)
             onComplete?.invoke()
@@ -216,7 +210,7 @@ class ZoomTransitionController(
     }
 
     /**
-     * Executes the unified 400ms continuous zoom transition with synchronized 100ms preview overlap.
+     * Executes the unified 300ms continuous zoom transition with synchronized seamless preview handoff.
      *
      * @param fromZoom Starting zoom value
      * @param targetZoom Target zoom value
@@ -224,6 +218,7 @@ class ZoomTransitionController(
      * @param currentLens Active lens
      * @param switchPointMm Dynamic lens switch point in mm
      * @param scope CoroutineScope to launch within (usually viewModelScope)
+     * @param durationMs Fixed duration of exactly 300ms
      * @param onZoomUpdate Callback on each continuous zoom step
      * @param onComplete Callback when transition completes
      */
@@ -269,7 +264,7 @@ class ZoomTransitionController(
                 else -> mainWideLens
             }
 
-            // If start and target are practically identical, finish immediately without 400ms delay
+            // If start and target are practically identical, finish immediately without delay
             if (abs(endZ - startZ) < 0.005f) {
                 _currentInterpolatedZoom.value = endZ
                 onZoomUpdate(endZ)
@@ -295,15 +290,11 @@ class ZoomTransitionController(
             val steps = generateContinuousZoomSteps(startZ, endZ)
             val stepCount = steps.size - 1
 
-            // Pre-calculate ease-in / fast middle / ease-out timestamps over EXACTLY durationMs (400ms)
-            val targetElapsedMs = calculateSinusoidalElapsedTimestamps(stepCount, durationMs)
-
-            // Overlap timing window: exactly 100ms
             // Direction 1: Downward switch crossing boundary into Ultra-Wide (e.g. 1.0x -> 0.5x)
-            // Perform synchronized FOV-matched handoff at startZ/boundary, running 100ms preview overlap from t=0 to t=100ms
+            // Perform synchronized FOV-matched handoff at startZ/boundary, running seamless preview handoff without waiting for animation to finish
             val isCrossingDownToUw = startZ >= switchZoom && endZ < switchZoom && ultraWideLens != null
             if (isCrossingDownToUw) {
-                // Handoff to Ultra-Wide with matched FOV crop
+                // Immediate optical FOV-matched handoff to Ultra-Wide
                 onSelectLensOnEngine(ultraWideLens!!, startZ, true)
                 startPreviewOverlap(
                     LensType.WIDE,
@@ -314,7 +305,7 @@ class ZoomTransitionController(
             }
 
             // Direction 2: Upward switch crossing boundary from Ultra-Wide to Main (e.g. 0.5x -> 1.0x)
-            // Starts on Ultra-Wide; 100ms preview overlap runs during the final 100ms (from t = durationMs - 100ms to durationMs)
+            // Starts on Ultra-Wide; preview crossfade runs during final 100ms handoff window approaching 1.0x
             val isCrossingUpToMain = startZ < switchZoom && endZ >= switchZoom && mainWideLens != null
             if (isCrossingUpToMain) {
                 if (currentLens?.lensType != LensType.ULTRAWIDE && ultraWideLens != null) {
@@ -323,30 +314,37 @@ class ZoomTransitionController(
             }
 
             val startTime = SystemClock.uptimeMillis()
+            var lastReportedStepIndex = 0
             var lastDispatchedZoom = startZ
             var lastDispatchedTime = startTime
             var hasTriggeredUpwardOverlap = false
             val upwardOverlapStartMs = max(0L, durationMs - PREVIEW_OVERLAP_DURATION_MS)
 
-            // Step through every intermediate zoom value in strict sequential order
-            for (stepIndex in 0 until stepCount) {
-                if (!isActive) break
-
-                val targetTime = startTime + targetElapsedMs[stepIndex]
+            // Step through intermediate values using continuous sinusoidal ease-in-out motion
+            while (isActive) {
                 val now = SystemClock.uptimeMillis()
-                val waitMs = targetTime - now
-                if (waitMs > 0) {
-                    delay(waitMs)
+                val elapsed = now - startTime
+                if (elapsed >= durationMs) break
+
+                // Sinusoidal ease-in-out progress: (1 - cos(PI * progress)) / 2
+                val linearProgress = (elapsed.toDouble() / durationMs.toDouble()).coerceIn(0.0, 1.0)
+                val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+
+                // Advance step index and report all intermediate values in sequence
+                val targetStepIndex = (smoothProgress * stepCount).roundToInt().coerceIn(0, stepCount)
+                if (targetStepIndex > lastReportedStepIndex) {
+                    for (s in (lastReportedStepIndex + 1)..targetStepIndex) {
+                        val z = steps[s]
+                        _currentInterpolatedZoom.value = z
+                        onZoomUpdate(z)
+                    }
+                    lastReportedStepIndex = targetStepIndex
                 }
 
-                val currentZ = steps[stepIndex]
-                _currentInterpolatedZoom.value = currentZ
-                onZoomUpdate(currentZ)
+                val currentZ = steps[targetStepIndex]
 
-                val elapsedNow = SystemClock.uptimeMillis() - startTime
-
-                // Trigger 100ms preview overlap for upward switch when entering the 100ms window
-                if (isCrossingUpToMain && !hasTriggeredUpwardOverlap && elapsedNow >= upwardOverlapStartMs) {
+                // Trigger upward preview overlap when entering the handoff window
+                if (isCrossingUpToMain && !hasTriggeredUpwardOverlap && elapsed >= upwardOverlapStartMs) {
                     hasTriggeredUpwardOverlap = true
                     startPreviewOverlap(
                         LensType.ULTRAWIDE,
@@ -356,21 +354,27 @@ class ZoomTransitionController(
                     )
                 }
 
-                // Avoid redundant camera-engine calls while preserving every intermediate visual step:
-                // Only dispatch to camera engine if zoom delta >= 0.01x or at least 15ms elapsed
-                val currentTime = SystemClock.uptimeMillis()
-                if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (currentTime - lastDispatchedTime) >= 15L) {
+                // Paced camera-engine updates (60fps pacing, avoid redundant calls)
+                if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 15L) {
                     lastDispatchedZoom = currentZ
-                    lastDispatchedTime = currentTime
+                    lastDispatchedTime = now
                     onApplyZoomToEngine(currentZ, true)
+                }
+
+                val nextTick = minOf(startTime + durationMs, now + 8L)
+                val waitMs = nextTick - SystemClock.uptimeMillis()
+                if (waitMs > 0) {
+                    delay(waitMs)
                 }
             }
 
-            // Final step reaching exactly durationMs (400ms)
-            val finalTargetTime = startTime + targetElapsedMs[stepCount]
-            val finalWaitMs = finalTargetTime - SystemClock.uptimeMillis()
-            if (finalWaitMs > 0) {
-                delay(finalWaitMs)
+            // Report any remaining intermediate steps up to stepCount
+            if (lastReportedStepIndex < stepCount) {
+                for (s in (lastReportedStepIndex + 1)..stepCount) {
+                    val z = steps[s]
+                    _currentInterpolatedZoom.value = z
+                    onZoomUpdate(z)
+                }
             }
 
             // Final boundary handoff for upward switch
@@ -394,7 +398,7 @@ class ZoomTransitionController(
             _isTransitionActive.value = false
             activeTransitionJob = null
 
-            // Ensure steady state preview is clean
+            // Ensure steady state preview is cleanly set
             val finalIsUw = (resolvedDestinationLens?.lensType == LensType.ULTRAWIDE || endZ < switchZoom)
             setSteadyStatePreview(finalIsUw)
 

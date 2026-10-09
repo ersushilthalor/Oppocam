@@ -1304,7 +1304,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.05f
 
         if (!instant && isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
-            // Smooth continuous sub-step interpolation across complete range to target lens (exactly 400ms)
+            // Smooth continuous sub-step interpolation across complete range to target lens (exactly 300ms)
             val duration = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
             startContinuousZoomTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens, durationMs = duration)
             val lensDesc = when (lens.lensType) {
@@ -1638,9 +1638,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Unified continuous zoom transition and interpolation system.
-     * Transitions between any two zoom values over exactly 400ms (0.40s) using continuous
+     * Transitions between any two zoom values over exactly 300ms (0.30s) using continuous
      * sub-step interpolation with sinusoidal ease-in, faster middle, and smooth ease-out:
-     * - Total transition duration of exactly 400ms for every animated zoom transition.
+     * - Total transition duration of exactly 300ms for every animated zoom transition.
      * - Every intermediate 0.01x zoom value is visited in strict order without skipping or sudden jumps.
      * - Eliminates redundant camera engine calls using delta/time pacing.
      * - Synchronizes an iPhone-style overlapping preview animation on the actual preview layers
