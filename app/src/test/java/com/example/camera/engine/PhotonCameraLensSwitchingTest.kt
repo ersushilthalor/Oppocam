@@ -1261,5 +1261,89 @@ class PhotonCameraLensSwitchingTest {
             )
         }
     }
+
+    @Test
+    fun test4KVideoResolutionAndFpsPreservedAcrossUltraWideCapabilityRefreshAndStandbySwitch() {
+        engine.detectHardwareLenses()
+        val lenses = engine.availableLenses.value
+        val hwMain = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val hwUw = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        if (hwMain == null || hwUw == null) return
+
+        val mainLens = hwMain.copy(cameraId = "0", isLogicalMultiCamera = false, isIndependentCamera = true)
+        val uwLens = hwUw.copy(cameraId = "2", isLogicalMultiCamera = false, isIndependentCamera = true)
+
+        val res4K = com.example.camera.model.CameraResolution(3840, 2160)
+        engine.setKeepUltraWideReady(true)
+        engine.setMode(com.example.camera.model.CameraMode.VIDEO)
+        engine.selectVideoResolution(res4K)
+        engine.videoFps = 60
+
+        assertEquals(res4K, engine.selectedVideoResolution.value)
+        assertEquals(60, engine.videoFps)
+
+        // Inspecting Ultra-Wide capabilities (which only supports up to 1080p in default test characteristics)
+        // must never silently reset the user's selected 4K video resolution or FPS.
+        engine.inspectCapabilities(uwLens.cameraId)
+        assertEquals(
+            "Selected 4K video resolution must not be reset to 1080p by inspectCapabilities()",
+            res4K,
+            engine.selectedVideoResolution.value
+        )
+        assertEquals("Selected FPS must be preserved", 60, engine.videoFps)
+
+        // Switching Main -> Ultra-Wide -> Main via prewarmed standby during recording must preserve 4K and FPS
+        val mainCam = android.hardware.camera2.TestCamera2Factory.TrackingCameraDevice("0")
+        val uwCam = android.hardware.camera2.TestCamera2Factory.TrackingCameraDevice("2")
+        val mainSess = android.hardware.camera2.TestCamera2Factory.TrackingCaptureSession(mainCam)
+        val uwSess = android.hardware.camera2.TestCamera2Factory.TrackingCaptureSession(uwCam)
+
+        val encoderSt = android.graphics.SurfaceTexture(12)
+        val encoderSurf = android.view.Surface(encoderSt)
+        val relay = DualCameraRecordingRelay(
+            encoderTargetSurface = encoderSurf,
+            bufferWidth = 3840,
+            bufferHeight = 2160,
+            fps = 60,
+            is10Bit = false,
+            initialSource = PreviewStreamSource.MAIN
+        )
+        val recConfig = Camera2Engine.ActiveRecordingStreamConfig(
+            videoResolution = res4K,
+            targetFps = 60,
+            fpsRange = android.util.Range(60, 60),
+            is10Bit = false,
+            dynamicRangeProfile = null,
+            isVideoStabilizationEnabled = true,
+            videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
+            isOisAllowed = true,
+            orientationHint = 90,
+            encoderRotation = 90
+        )
+
+        engine.configurePrewarmedDualRecordingStateForTest(
+            activeCam = mainCam,
+            activeSess = mainSess,
+            standbyCam = uwCam,
+            standbySess = uwSess,
+            relay = relay,
+            config = recConfig,
+            standbyRecordingReady = true,
+            standbyFailed = false
+        )
+
+        engine.selectLens(uwLens, preserveZoom = false, targetZoom = 0.5f)
+        assertEquals("Selected 4K resolution must remain 3840x2160 on Ultra-Wide switch", res4K, engine.selectedVideoResolution.value)
+        assertEquals("Selected FPS must remain 60 on Ultra-Wide switch", 60, engine.videoFps)
+        assertEquals("Active recording stream config must remain 4K", res4K, engine.getActiveRecordingStreamConfigForTest()?.videoResolution)
+
+        engine.selectLens(mainLens, preserveZoom = false, targetZoom = 1.0f)
+        assertEquals("Selected 4K resolution must remain 3840x2160 on return to Main", res4K, engine.selectedVideoResolution.value)
+        assertEquals("Selected FPS must remain 60 on return to Main", 60, engine.videoFps)
+
+        relay.release()
+        encoderSurf.release()
+        encoderSt.release()
+    }
 }
 

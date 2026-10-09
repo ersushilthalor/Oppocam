@@ -753,26 +753,13 @@ class Camera2Engine(private val context: Context) {
             // AND its dedicated recording surface at the active recording configuration/FPS/dynamic range.
             if (isRecordingActive && standbyRecorderSurf != null && standbyRecorderSurf.isValid) {
                 val recConfig = activeRecordingStreamConfig
-                val standbyChars = getCharacteristics(standbyLens.cameraId)
-                val standbyMap = standbyChars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                val requestedVideoRes = recConfig?.videoResolution ?: (_selectedVideoResolution.value ?: CameraResolution(1920, 1080))
-                val supportedStandbySizes = standbyMap?.getOutputSizes(MediaRecorder::class.java)
-                    ?: standbyMap?.getOutputSizes(SurfaceTexture::class.java)
-                    ?: emptyArray()
-                val matchesRequested = supportedStandbySizes.isEmpty() || supportedStandbySizes.any {
-                    max(it.width, it.height) == max(requestedVideoRes.width, requestedVideoRes.height) &&
-                        min(it.width, it.height) == min(requestedVideoRes.width, requestedVideoRes.height)
-                }
-                val effectiveStandbyVideoSize = if (matchesRequested) {
-                    Size(max(requestedVideoRes.width, requestedVideoRes.height), min(requestedVideoRes.width, requestedVideoRes.height))
-                } else {
-                    val best = supportedStandbySizes
-                        .filter { max(it.width, it.height) <= max(requestedVideoRes.width, requestedVideoRes.height) }
-                        .maxByOrNull { it.width.toLong() * it.height.toLong() }
-                        ?: supportedStandbySizes.firstOrNull()
-                        ?: Size(max(requestedVideoRes.width, requestedVideoRes.height), min(requestedVideoRes.width, requestedVideoRes.height))
-                    Size(max(best.width, best.height), min(best.width, best.height))
-                }
+                val requestedVideoRes = recConfig?.videoResolution
+                    ?: (userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080))
+                val resolvedStandbyRes = resolveEffectiveVideoResolutionForLens(standbyLens.cameraId, requestedVideoRes)
+                val effectiveStandbyVideoSize = Size(
+                    max(resolvedStandbyRes.width, resolvedStandbyRes.height),
+                    min(resolvedStandbyRes.width, resolvedStandbyRes.height)
+                )
                 relay?.updateInputBufferSize(
                     isUltraWide = (standbyLens.lensType == LensType.ULTRAWIDE),
                     width = effectiveStandbyVideoSize.width,
@@ -1239,8 +1226,72 @@ class Camera2Engine(private val context: Context) {
     private val _selectedPhotoResolution = MutableStateFlow<CameraResolution?>(null)
     val selectedPhotoResolution: StateFlow<CameraResolution?> = _selectedPhotoResolution.asStateFlow()
 
+    @Volatile
+    private var userSelectedVideoResolution: CameraResolution? = null
+    private val lensSupportedVideoResolutions = java.util.concurrent.ConcurrentHashMap<String, List<CameraResolution>>()
+
     private val _selectedVideoResolution = MutableStateFlow<CameraResolution?>(null)
     val selectedVideoResolution: StateFlow<CameraResolution?> = _selectedVideoResolution.asStateFlow()
+
+    fun getSupportedVideoResolutionsForLens(cameraId: String): List<CameraResolution> {
+        return lensSupportedVideoResolutions[cameraId] ?: _capabilities.value.supportedVideoResolutions
+    }
+
+    fun resolveEffectiveVideoResolutionForLens(
+        cameraId: String,
+        requested: CameraResolution = userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080)
+    ): CameraResolution {
+        val chars = getCharacteristics(cameraId)
+        val map = chars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val supportedSizes = map?.getOutputSizes(MediaRecorder::class.java)
+            ?: map?.getOutputSizes(SurfaceTexture::class.java)
+            ?: emptyArray()
+        val reqW = maxOf(requested.width, requested.height)
+        val reqH = minOf(requested.width, requested.height)
+        if (supportedSizes.isEmpty()) {
+            val cached = lensSupportedVideoResolutions[cameraId]
+            if (!cached.isNullOrEmpty()) {
+                val exact = cached.firstOrNull {
+                    maxOf(it.width, it.height) == reqW && minOf(it.width, it.height) == reqH
+                }
+                if (exact != null) return requested
+                val targetRatio = reqW.toFloat() / reqH.toFloat()
+                val matchingRatio = cached
+                    .filter {
+                        val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                        kotlin.math.abs(r - targetRatio) < 0.08f && maxOf(it.width, it.height) <= reqW
+                    }
+                    .maxByOrNull { it.width.toLong() * it.height.toLong() }
+                val bestCached = matchingRatio
+                    ?: cached
+                        .filter { maxOf(it.width, it.height) <= reqW }
+                        .maxByOrNull { it.width.toLong() * it.height.toLong() }
+                    ?: cached.first()
+                return CameraResolution(bestCached.width, bestCached.height)
+            }
+            return requested
+        }
+        val isExactSupported = supportedSizes.any {
+            maxOf(it.width, it.height) == reqW && minOf(it.width, it.height) == reqH
+        }
+        if (isExactSupported) return requested
+
+        val targetRatio = reqW.toFloat() / reqH.toFloat()
+        val matchingRatio = supportedSizes
+            .filter {
+                val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                kotlin.math.abs(r - targetRatio) < 0.08f && maxOf(it.width, it.height) <= reqW
+            }
+            .maxByOrNull { it.width.toLong() * it.height.toLong() }
+        if (matchingRatio != null) {
+            return CameraResolution(matchingRatio.width, matchingRatio.height)
+        }
+        val largestWithinCap = supportedSizes
+            .filter { maxOf(it.width, it.height) <= reqW }
+            .maxByOrNull { it.width.toLong() * it.height.toLong() }
+            ?: supportedSizes.first()
+        return CameraResolution(largestWithinCap.width, largestWithinCap.height)
+    }
 
     private val _storageStats = MutableStateFlow(StorageStats())
     val storageStats: StateFlow<StorageStats> = _storageStats.asStateFlow()
@@ -1927,12 +1978,29 @@ class Camera2Engine(private val context: Context) {
             cinemaEngine.onCameraConfigured(chars, filteredVideoResolutions)
             _cinemaCapabilities.value = cinemaEngine.capabilities
 
+            lensSupportedVideoResolutions[cameraId] = filteredVideoResolutions
+
             if (_selectedPhotoResolution.value == null || !photoResolutions.contains(_selectedPhotoResolution.value)) {
                 _selectedPhotoResolution.value = photoResolutions.firstOrNull()
             }
-            if (_selectedVideoResolution.value == null || !filteredVideoResolutions.contains(_selectedVideoResolution.value)) {
-                _selectedVideoResolution.value = filteredVideoResolutions.firstOrNull { it.height == 1080 }
-                    ?: filteredVideoResolutions.firstOrNull()
+            val preservedVideoRes = userSelectedVideoResolution ?: _selectedVideoResolution.value
+            if (preservedVideoRes != null) {
+                userSelectedVideoResolution = preservedVideoRes
+                if (_selectedVideoResolution.value != preservedVideoRes) {
+                    _selectedVideoResolution.value = preservedVideoRes
+                }
+            } else {
+                val prefRes = CameraResolution(preferences.videoWidth, preferences.videoHeight)
+                val initialVideoRes = filteredVideoResolutions.firstOrNull {
+                    it.width == prefRes.width && it.height == prefRes.height
+                } ?: if (prefRes.width > 0 && prefRes.height > 0) {
+                    prefRes
+                } else {
+                    filteredVideoResolutions.firstOrNull { it.height == 1080 }
+                        ?: filteredVideoResolutions.firstOrNull()
+                }
+                userSelectedVideoResolution = initialVideoRes
+                _selectedVideoResolution.value = initialVideoRes
             }
 
             updatePreviewAspectRatio()
@@ -2457,11 +2525,25 @@ class Camera2Engine(private val context: Context) {
                     return@synchronized
                 }
                 val previewSurf = getActivePreviewSurface()
-                val recSurf = activeRecordingSurface
+                val relay = dualCameraRecordingRelay
+                if (relay != null) {
+                    val targetSource = if (targetLens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                    relay.setActiveSource(targetSource)
+                    val requestedRes = activeRecordingStreamConfig?.videoResolution
+                        ?: (userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080))
+                    val effectiveRes = resolveEffectiveVideoResolutionForLens(targetLens.cameraId, requestedRes)
+                    relay.updateInputBufferSize(
+                        isUltraWide = (targetLens.lensType == LensType.ULTRAWIDE),
+                        width = effectiveRes.width,
+                        height = effectiveRes.height
+                    )
+                }
+                val recSurf = relay?.getRecorderSurfaceForLens(targetLens) ?: activeRecordingSurface
                 if (!_isRecordingVideo.value || previewSurf == null || recSurf == null || !recSurf.isValid) {
                     completeLensSwitch(targetLens)
                     return@synchronized
                 }
+                activeRecordingSurface = recSurf
 
                 try {
                     try {
@@ -2473,7 +2555,9 @@ class Camera2Engine(private val context: Context) {
                     captureSession = null
 
                     val configGen = sessionConfigGeneration.incrementAndGet()
-                    val is10BitMode = currentMode == CameraMode.CINEMA && cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10
+                    val recConfig = activeRecordingStreamConfig
+                    val is10BitMode = recConfig?.is10Bit
+                        ?: (currentMode == CameraMode.CINEMA && cinemaConfig.value.logBitDepth == LogBitDepth.BIT_10)
                     activeSessionPhysicalCameraId = targetPhysicalId
                     activeSessionLens = targetLens
 
@@ -2482,6 +2566,12 @@ class Camera2Engine(private val context: Context) {
                         addTarget(recSurf)
                         applyCommonSettings(this)
                         set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                        val targetChars = getCharacteristics(targetLens.cameraId)
+                        val desiredFps = recConfig?.targetFps ?: if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
+                        val matchedRange = targetChars?.let { findBestFpsRange(it, desiredFps) } ?: recConfig?.fpsRange
+                        if (matchedRange != null) {
+                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedRange)
+                        }
                     }
                     synchronized(previewRequestLock) {
                         previewRequestBuilder = recordBuilder
@@ -2845,11 +2935,28 @@ class Camera2Engine(private val context: Context) {
                                     previewSurface = Surface(texture)
                                 }
 
-                                val recSurf = activeRecordingSurface
+                                val relay = dualCameraRecordingRelay
+                                if (relay != null) {
+                                    val targetSource = if (lens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                                    relay.setActiveSource(targetSource)
+                                    val requestedRes = activeRecordingStreamConfig?.videoResolution
+                                        ?: (userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080))
+                                    val effectiveRes = resolveEffectiveVideoResolutionForLens(lens.cameraId, requestedRes)
+                                    relay.updateInputBufferSize(
+                                        isUltraWide = (lens.lensType == LensType.ULTRAWIDE),
+                                        width = effectiveRes.width,
+                                        height = effectiveRes.height
+                                    )
+                                }
+                                val recSurf = relay?.getRecorderSurfaceForLens(lens) ?: activeRecordingSurface
+                                if (recSurf != null && recSurf.isValid) {
+                                    activeRecordingSurface = recSurf
+                                }
                                 val isRecording = _isRecordingVideo.value
                                 if (isRecording && recSurf != null && recSurf.isValid) {
                                     try {
                                         val configGen = sessionConfigGeneration.incrementAndGet()
+                                        val recConfig = activeRecordingStreamConfig
                                         val useLogicalZoom = canUseLogicalZoomForLens(lens.cameraId, lens, currentZoom)
                                         val targetPhysId = if (useLogicalZoom) null else lens.physicalCameraId
                                         activeSessionPhysicalCameraId = targetPhysId
@@ -2862,6 +2969,12 @@ class Camera2Engine(private val context: Context) {
                                             addTarget(recSurf)
                                             applyCommonSettings(this)
                                             set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                            val targetChars = getCharacteristics(lens.cameraId)
+                                            val desiredFps = recConfig?.targetFps ?: if (currentMode == CameraMode.CINEMA) cinemaConfig.value.videoFps else videoFps
+                                            val matchedRange = targetChars?.let { findBestFpsRange(it, desiredFps) } ?: recConfig?.fpsRange
+                                            if (matchedRange != null) {
+                                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedRange)
+                                            }
                                         }
                                         synchronized(previewRequestLock) {
                                             previewRequestBuilder = recordBuilder
@@ -2962,6 +3075,7 @@ class Camera2Engine(private val context: Context) {
      * Switch video resolution
      */
     fun selectVideoResolution(resolution: CameraResolution) {
+        userSelectedVideoResolution = resolution
         _selectedVideoResolution.value = resolution
         updatePreviewAspectRatio()
         if (cameraDevice != null) {
@@ -2975,6 +3089,7 @@ class Camera2Engine(private val context: Context) {
      * Restore saved video resolution without triggering camera restart before viewfinder is attached
      */
     fun restoreInitialVideoResolution(resolution: CameraResolution) {
+        userSelectedVideoResolution = resolution
         _selectedVideoResolution.value = resolution
         updatePreviewAspectRatio()
     }
@@ -6762,43 +6877,41 @@ class Camera2Engine(private val context: Context) {
             val requestedRes = if (isCinema && cinemaConfig.value.selectedResolution != null) {
                 cinemaConfig.value.selectedResolution!!
             } else {
-                _selectedVideoResolution.value ?: CameraResolution(1920, 1080)
+                userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080)
             }
 
             val supportedVideoSizes = map?.getOutputSizes(MediaRecorder::class.java)
                 ?: map?.getOutputSizes(SurfaceTexture::class.java)
                 ?: emptyArray()
 
-            val isSupported = supportedVideoSizes.any {
-                (maxOf(it.width, it.height) == maxOf(requestedRes.width, requestedRes.height)) &&
-                (minOf(it.width, it.height) == minOf(requestedRes.width, requestedRes.height))
+            val reqMaxDim = maxOf(requestedRes.width, requestedRes.height)
+            val reqMinDim = minOf(requestedRes.width, requestedRes.height)
+            val isSupported = supportedVideoSizes.isEmpty() || supportedVideoSizes.any {
+                (maxOf(it.width, it.height) == reqMaxDim) &&
+                (minOf(it.width, it.height) == reqMinDim)
             }
 
-            val is16To9Requested = kotlin.math.abs((maxOf(requestedRes.width, requestedRes.height).toFloat() / minOf(requestedRes.width, requestedRes.height).toFloat()) - (16f / 9f)) < 0.08f
-            val is4KRequested = maxOf(requestedRes.width, requestedRes.height) >= 3840
+            val is16To9Requested = kotlin.math.abs((reqMaxDim.toFloat() / reqMinDim.toFloat()) - (16f / 9f)) < 0.08f
 
             val videoRes = if (isSupported) {
                 requestedRes
-            } else if (is4KRequested && is16To9Requested) {
-                // When 4K 16:9 / 9:16 is selected, Ultra-Wide must NEVER fall back to 3:4/4:3 just because the sensor is 8MP.
-                // Maintain full 4K 3840x2160 target; relay/recorder crops the native UW stream to 16:9 and outputs full 4K.
-                CameraResolution(3840, 2160)
             } else {
                 val matching16to9 = if (is16To9Requested) {
                     supportedVideoSizes
                         .filter {
                             val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
-                            kotlin.math.abs(r - (16f / 9f)) < 0.08f && maxOf(it.width, it.height) <= 3840
+                            kotlin.math.abs(r - (16f / 9f)) < 0.08f && maxOf(it.width, it.height) <= reqMaxDim
                         }
                         .maxByOrNull { it.width.toLong() * it.height.toLong() }
                 } else null
 
                 if (matching16to9 != null) {
+                    Log.w(TAG, "[RECORDING] Size ${requestedRes.width}x${requestedRes.height} unsupported for ${lens.lensType}, using supported 16:9 ${matching16to9.width}x${matching16to9.height}")
                     CameraResolution(matching16to9.width, matching16to9.height)
                 } else {
                     val largest = supportedVideoSizes
-                        .filter { maxOf(it.width, it.height) <= 3840 }
-                        .maxByOrNull { it.width * it.height }
+                        .filter { maxOf(it.width, it.height) <= reqMaxDim }
+                        .maxByOrNull { it.width.toLong() * it.height.toLong() }
                     if (largest != null) {
                         Log.w(TAG, "[RECORDING] Size ${requestedRes.width}x${requestedRes.height} unsupported for ${lens.lensType}, using ${largest.width}x${largest.height}")
                         CameraResolution(largest.width, largest.height)
@@ -7459,34 +7572,18 @@ class Camera2Engine(private val context: Context) {
                 )
                 if (relay.isRelayReady) {
                     if (isKeepUwReadyBack && uwLensForRec != null && mainLensForRec != null) {
-                        // Configure input camera buffer sizes based on sensor capabilities.
-                        // If Ultra-Wide sensor is 8MP (e.g. 4:3), Relay's computeCameraTexMatrix uniformly center-crops it
-                        // to 16:9 / 9:16 and outputs a pristine 4K (2160x3840) frame without distortion or stretching.
-                        val uwChars = getCharacteristics(uwLensForRec.cameraId)
-                        val uwMap = uwChars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                        val uwSizes = uwMap?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
-                        val bestUwSize = uwSizes.firstOrNull { maxOf(it.width, it.height) == 3840 && minOf(it.width, it.height) == 2160 }
-                            ?: uwSizes.firstOrNull {
-                                val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
-                                kotlin.math.abs(r - (16f / 9f)) < 0.08f && maxOf(it.width, it.height) <= 3840
-                            }
-                            ?: uwSizes.maxByOrNull { it.width * it.height }
-                        if (bestUwSize != null) {
-                            relay.updateInputBufferSize(isUltraWide = true, bestUwSize.width, bestUwSize.height)
-                        }
+                        val bestUwRes = resolveEffectiveVideoResolutionForLens(uwLensForRec.cameraId, videoRes)
+                        relay.updateInputBufferSize(isUltraWide = true, bestUwRes.width, bestUwRes.height)
 
-                        val mainChars = getCharacteristics(mainLensForRec.cameraId)
-                        val mainMap = mainChars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                        val mainSizes = mainMap?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
-                        val bestMainSize = mainSizes.firstOrNull { maxOf(it.width, it.height) == 3840 && minOf(it.width, it.height) == 2160 }
-                            ?: mainSizes.firstOrNull {
-                                val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
-                                kotlin.math.abs(r - (16f / 9f)) < 0.08f && maxOf(it.width, it.height) <= 3840
-                            }
-                            ?: mainSizes.maxByOrNull { it.width * it.height }
-                        if (bestMainSize != null) {
-                            relay.updateInputBufferSize(isUltraWide = false, bestMainSize.width, bestMainSize.height)
-                        }
+                        val bestMainRes = resolveEffectiveVideoResolutionForLens(mainLensForRec.cameraId, videoRes)
+                        relay.updateInputBufferSize(isUltraWide = false, bestMainRes.width, bestMainRes.height)
+                    } else {
+                        val activeStreamRes = resolveEffectiveVideoResolutionForLens(lens.cameraId, videoRes)
+                        relay.updateInputBufferSize(
+                            isUltraWide = (lens.lensType == LensType.ULTRAWIDE),
+                            width = activeStreamRes.width,
+                            height = activeStreamRes.height
+                        )
                     }
 
                     dualCameraRecordingRelay = relay
