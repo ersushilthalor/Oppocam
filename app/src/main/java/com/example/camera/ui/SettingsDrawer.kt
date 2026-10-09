@@ -215,6 +215,8 @@ fun SettingsDrawer(
     onViewfinderCornerRadiusChange: (Int) -> Unit = {},
     lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
     onLensSwitchPointChange: (Float) -> Unit = {},
+    isIncludeLensSwitchPointsInPresetsEnabled: Boolean = false,
+    onIncludeLensSwitchPointsInPresetsToggle: (Boolean) -> Unit = {},
     lensSwitchOverlapDurationSec: Float = 0.3f,
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     onDismiss: () -> Unit = {}
@@ -454,6 +456,8 @@ fun SettingsDrawer(
                             instantSwitchState = instantSwitchState,
                             lensSwitchPointMm = lensSwitchPointMm,
                             onLensSwitchPointChange = onLensSwitchPointChange,
+                            isIncludeLensSwitchPointsInPresetsEnabled = isIncludeLensSwitchPointsInPresetsEnabled,
+                            onIncludeLensSwitchPointsInPresetsToggle = onIncludeLensSwitchPointsInPresetsToggle,
                             lensSwitchOverlapDurationSec = lensSwitchOverlapDurationSec,
                             onLensSwitchOverlapDurationChange = onLensSwitchOverlapDurationChange,
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
@@ -2042,6 +2046,8 @@ private fun CameraLensSettingsPage(
     instantSwitchState: MotorolaInstantSwitchState,
     lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
     onLensSwitchPointChange: (Float) -> Unit = {},
+    isIncludeLensSwitchPointsInPresetsEnabled: Boolean = false,
+    onIncludeLensSwitchPointsInPresetsToggle: (Boolean) -> Unit = {},
     lensSwitchOverlapDurationSec: Float = 0.3f,
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
@@ -2076,6 +2082,16 @@ private fun CameraLensSettingsPage(
             SwitchPointSettingCard(
                 switchPointMm = lensSwitchPointMm,
                 onSwitchPointChange = onLensSwitchPointChange
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Include Switch Points in Zoom Presets",
+                description = "Automatically add non-default lens-switch points to zoom presets at their exact positions (e.g. 28mm placed at ~1.3x between 1x and 2x).",
+                isChecked = isIncludeLensSwitchPointsInPresetsEnabled,
+                onCheckedChange = onIncludeLensSwitchPointsInPresetsToggle,
+                tag = "toggle_include_lens_switch_points_in_presets"
             )
         }
 
@@ -3995,6 +4011,7 @@ fun CameraSettingsScreen(
     val refocusFrameCount by viewModel.refocusFrameCount.collectAsStateWithLifecycle()
     val isUltraFastShutterEnabled by viewModel.isUltraFastShutterEnabled.collectAsStateWithLifecycle()
     val ultraFastShutterFps by viewModel.ultraFastShutterFps.collectAsStateWithLifecycle()
+    val isIncludeLensSwitchPointsInPresetsEnabled by viewModel.isIncludeLensSwitchPointsInPresetsEnabled.collectAsStateWithLifecycle()
     val zoomPresetsMode by viewModel.zoomPresetsMode.collectAsStateWithLifecycle()
     val customZoomPresetsStr by viewModel.customZoomPresetsStr.collectAsStateWithLifecycle()
     val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
@@ -4177,6 +4194,8 @@ fun CameraSettingsScreen(
         instantSwitchState = instantSwitchState,
         lensSwitchPointMm = instantSwitchState.switchPointMm,
         onLensSwitchPointChange = { viewModel.setLensSwitchPointMm(it) },
+        isIncludeLensSwitchPointsInPresetsEnabled = isIncludeLensSwitchPointsInPresetsEnabled,
+        onIncludeLensSwitchPointsInPresetsToggle = { viewModel.setIncludeLensSwitchPointsInPresets(it) },
         onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
         onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },

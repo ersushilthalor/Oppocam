@@ -472,15 +472,18 @@ class Camera2Engine(private val context: Context) {
         ultraWideViewfinderSurfaceTexture = texture
         if (texture != null) {
             val targetRatio = getTargetAspectRatioForMode(currentMode)
+            val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
             val currentBuf = _previewBufferSize.value
-            val isBufMatching = currentBuf != null && run {
+            val isBufMatching = !isVideoOrCinema && currentBuf != null && run {
                 val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
                 kotlin.math.abs(r - targetRatio) < 0.08f
             }
             val optimalSize = if (isBufMatching && currentBuf != null) {
                 currentBuf
             } else {
-                getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
+                val uwId = _availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }?.let { it.physicalCameraId ?: it.cameraId }
+                    ?: _selectedLens.value?.cameraId
+                getOptimalPreviewSize(uwId, targetRatio)
             }
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
@@ -521,15 +524,18 @@ class Camera2Engine(private val context: Context) {
     fun onUltraWideViewfinderSurfaceSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
         ultraWideViewfinderSurfaceTexture = texture
         val targetRatio = getTargetAspectRatioForMode(currentMode)
+        val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
         val currentBuf = _previewBufferSize.value
-        val isBufMatching = currentBuf != null && run {
+        val isBufMatching = !isVideoOrCinema && currentBuf != null && run {
             val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
             kotlin.math.abs(r - targetRatio) < 0.08f
         }
         val optimalSize = if (isBufMatching && currentBuf != null) {
             currentBuf
         } else {
-            getOptimalPreviewSize(_selectedLens.value?.cameraId, targetRatio)
+            val uwId = _availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }?.let { it.physicalCameraId ?: it.cameraId }
+                ?: _selectedLens.value?.cameraId
+            getOptimalPreviewSize(uwId, targetRatio)
         }
         val cameraW = max(optimalSize.width, optimalSize.height)
         val cameraH = min(optimalSize.width, optimalSize.height)
@@ -2085,19 +2091,67 @@ class Camera2Engine(private val context: Context) {
             return fallbackDefault
         }
 
-        // The 8MP ultra-wide sensor cannot provide 8.3MP native pixels for a full 4K frame,
-        // so capture using the highest suitable supported 4:3 sensor stream and crop it to 9:16.
-        if (is4KVideo && isUltraWideLens) {
-            val hasNative4K = previewSizes.any { max(it.width, it.height) >= 3840 && min(it.width, it.height) >= 2160 }
-            if (!hasNative4K) {
-                val fourThreeSizes = previewSizes.filter {
-                    val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
-                    kotlin.math.abs(r - (4f / 3f)) < 0.08f
+        // In Video and Pro Video (Cinema) modes only:
+        // Use the selected recording resolution (e.g. 4K/1080p/720p) for the viewfinder before recording starts
+        val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
+        if (isVideoOrCinema) {
+            val targetRecRes = if (currentMode == CameraMode.CINEMA) {
+                _cinemaConfig.value.selectedResolution
+                    ?: userSelectedVideoResolution
+                    ?: _selectedVideoResolution.value
+                    ?: CameraResolution(3840, 2160)
+            } else {
+                userSelectedVideoResolution
+                    ?: _selectedVideoResolution.value
+                    ?: CameraResolution(1920, 1080)
+            }
+            val targetMax = maxOf(targetRecRes.width, targetRecRes.height)
+            val targetMin = minOf(targetRecRes.width, targetRecRes.height)
+
+            // 1. Direct exact match in SurfaceTexture preview sizes
+            val exactMatch = previewSizes.firstOrNull {
+                maxOf(it.width, it.height) == targetMax && minOf(it.width, it.height) == targetMin
+            }
+            if (exactMatch != null) {
+                return exactMatch
+            }
+
+            // 2. The 8MP ultra-wide sensor cannot provide 8.3MP native pixels for a full 4K frame,
+            // so capture using the highest suitable supported 4:3 sensor stream and crop it to 9:16.
+            if (targetMax >= 3840 && isUltraWideLens) {
+                val hasNative4K = previewSizes.any { max(it.width, it.height) >= 3840 && min(it.width, it.height) >= 2160 }
+                if (!hasNative4K) {
+                    val fourThreeSizes = previewSizes.filter {
+                        val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
+                        kotlin.math.abs(r - (4f / 3f)) < 0.08f
+                    }
+                    val highest43 = fourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                    if (highest43 != null) {
+                        return highest43
+                    }
                 }
-                val highest43 = fourThreeSizes.maxByOrNull { it.width.toLong() * it.height.toLong() }
-                if (highest43 != null) {
-                    return highest43
+            }
+
+            // 3. Matching stream ratio sizes closest to target recording dimension
+            val matchingRatioSizes = previewSizes.filter {
+                val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
+                kotlin.math.abs(r - streamRatio) < 0.08f
+            }
+            if (matchingRatioSizes.isNotEmpty()) {
+                val closest = matchingRatioSizes.minByOrNull {
+                    kotlin.math.abs(maxOf(it.width, it.height) - targetMax)
                 }
+                if (closest != null) {
+                    return closest
+                }
+            }
+
+            // 4. Closest overall size in previewSizes
+            val closestOverall = previewSizes.minByOrNull {
+                kotlin.math.abs(maxOf(it.width, it.height) - targetMax)
+            }
+            if (closestOverall != null) {
+                return closestOverall
             }
         }
 
@@ -3167,6 +3221,7 @@ class Camera2Engine(private val context: Context) {
         }
         currentMode = mode
 
+        val previousBufferSize = _previewBufferSize.value
         // Immediately synchronize aspect ratio and optimal buffer dimensions on mode switch
         _previewAspectRatio.value = newRatio
         val optimalSize = getOptimalPreviewSize(_selectedLens.value?.cameraId, newRatio)
@@ -3212,10 +3267,13 @@ class Camera2Engine(private val context: Context) {
             dollyZoomEngine.stop()
         }
 
+        val optimalSizeChanged = previousBufferSize != null && (previousBufferSize.width != optimalSize.width || previousBufferSize.height != optimalSize.height)
+
         val needsReconfigure = (kotlin.math.abs(oldStreamRatio - newStreamRatio) > 0.05f) ||
                 (was43 != is43) ||
                 (wasVideoTemplate != isVideoTemplate) ||
                 (wasMore && is43) ||
+                optimalSizeChanged ||
                 (captureSession == null) ||
                 (!_isCameraReady.value)
 
@@ -3314,7 +3372,8 @@ class Camera2Engine(private val context: Context) {
      * Update Cinema Mode configuration and immediately apply to hardware ISP
      */
     fun setCinemaConfig(newConfig: CinemaConfig) {
-        val oldProfile = _cinemaConfig.value.colorProfile
+        val oldConfig = _cinemaConfig.value
+        val oldProfile = oldConfig.colorProfile
         val supportedDepths = _cinemaCapabilities.value.getSupportedBitDepthsForCodec(newConfig.codec)
         val sanitizedConfig = if (newConfig.logBitDepth == LogBitDepth.BIT_10 && !supportedDepths.contains(LogBitDepth.BIT_10)) {
             newConfig.copy(logBitDepth = LogBitDepth.BIT_8)
@@ -3333,6 +3392,15 @@ class Camera2Engine(private val context: Context) {
         if (currentMode == CameraMode.CINEMA) {
             updatePreviewAspectRatio()
             updatePreviewSettings()
+            val resChanged = oldConfig.selectedResolution != sanitizedConfig.selectedResolution
+            val ratioChanged = oldConfig.aspectRatio != sanitizedConfig.aspectRatio
+            if (resChanged || ratioChanged) {
+                if (cameraDevice != null) {
+                    reconfigureSession()
+                } else {
+                    restartCamera()
+                }
+            }
         }
     }
 
@@ -3376,8 +3444,9 @@ class Camera2Engine(private val context: Context) {
         }
         val targetRatio = getTargetAspectRatioForMode(currentMode)
         val selectedCamId = _selectedLens.value?.cameraId
+        val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
         val currentBuf = _previewBufferSize.value
-        val isBufValidForLens = currentBuf != null && isSizeSupportedForLens(selectedCamId, currentBuf) && run {
+        val isBufValidForLens = !isVideoOrCinema && currentBuf != null && isSizeSupportedForLens(selectedCamId, currentBuf) && run {
             val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
             kotlin.math.abs(r - targetRatio) < 0.08f
         }
@@ -3409,8 +3478,9 @@ class Camera2Engine(private val context: Context) {
         if (texture != null) {
             val targetRatio = getTargetAspectRatioForMode(currentMode)
             val selectedCamId = _selectedLens.value?.cameraId
+            val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
             val currentBuf = _previewBufferSize.value
-            val isBufValidForLens = currentBuf != null && isSizeSupportedForLens(selectedCamId, currentBuf) && run {
+            val isBufValidForLens = !isVideoOrCinema && currentBuf != null && isSizeSupportedForLens(selectedCamId, currentBuf) && run {
                 val r = max(currentBuf.width, currentBuf.height).toFloat() / min(currentBuf.width, currentBuf.height).toFloat()
                 kotlin.math.abs(r - targetRatio) < 0.08f
             }
@@ -3763,8 +3833,20 @@ class Camera2Engine(private val context: Context) {
 
         val caps = _capabilities.value
         val activeLens = _selectedLens.value
-        val targetSize = getOptimalPhotoSizeForLens(activeLens, cameraId)
-        _selectedPhotoResolution.value = CameraResolution(targetSize.width, targetSize.height, ImageFormat.JPEG)
+        val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
+        val targetSize = if (isVideoOrCinema) {
+            val targetRecRes = if (currentMode == CameraMode.CINEMA) {
+                _cinemaConfig.value.selectedResolution ?: userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080)
+            } else {
+                userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080)
+            }
+            Size(maxOf(targetRecRes.width, targetRecRes.height), minOf(targetRecRes.width, targetRecRes.height))
+        } else {
+            getOptimalPhotoSizeForLens(activeLens, cameraId)
+        }
+        if (!isVideoOrCinema) {
+            _selectedPhotoResolution.value = CameraResolution(targetSize.width, targetSize.height, ImageFormat.JPEG)
+        }
 
         try {
             imageReaderJpeg = ImageReader.newInstance(
@@ -3979,8 +4061,8 @@ class Camera2Engine(private val context: Context) {
                 val physIds = chars?.physicalCameraIds ?: emptySet()
                 val uwPhysId = ultraWideLens.physicalCameraId!!
                 if (physIds.contains(uwPhysId)) {
-                    val mainSurf = getOrCreateMainPreviewSurface(camera.id) ?: previewSurf
-                    val uwSurf = getOrCreateUltraWidePreviewSurface(camera.id)
+                    val mainSurf = getOrCreateMainPreviewSurface(mainLens?.physicalCameraId ?: camera.id) ?: previewSurf
+                    val uwSurf = getOrCreateUltraWidePreviewSurface(uwPhysId)
                     if (uwSurf != null && uwSurf.isValid && uwSurf !== mainSurf) {
                         val isUwSelected = (activeLens?.lensType == LensType.ULTRAWIDE)
                         activeSessionPhysicalCameraId = if (isUwSelected) uwPhysId else mainLens?.physicalCameraId
@@ -4113,7 +4195,11 @@ class Camera2Engine(private val context: Context) {
                 if (imageReaderRaw != null) activeOutputs.add("RAW")
                 CameraPerformanceMonitor.setActiveOutputs(activeOutputs)
 
-                val template = CameraDevice.TEMPLATE_PREVIEW
+                val template = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) {
+                    CameraDevice.TEMPLATE_RECORD
+                } else {
+                    CameraDevice.TEMPLATE_PREVIEW
+                }
                 val builder = camera.createCaptureRequest(template).apply {
                     addTarget(previewSurf)
                     applyCommonSettings(this)

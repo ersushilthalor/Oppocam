@@ -424,6 +424,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _activeZoomPresets = MutableStateFlow(preferences.getEffectiveZoomPresets(hasUltraWide = true))
     val activeZoomPresets: StateFlow<List<Float>> = _activeZoomPresets.asStateFlow()
 
+    private val _isIncludeLensSwitchPointsInPresetsEnabled = MutableStateFlow(preferences.isIncludeLensSwitchPointsInPresetsEnabled)
+    val isIncludeLensSwitchPointsInPresetsEnabled: StateFlow<Boolean> = _isIncludeLensSwitchPointsInPresetsEnabled.asStateFlow()
+
+    fun setIncludeLensSwitchPointsInPresets(enabled: Boolean) {
+        _isIncludeLensSwitchPointsInPresetsEnabled.value = enabled
+        preferences.isIncludeLensSwitchPointsInPresetsEnabled = enabled
+        refreshActiveZoomPresets()
+        showToast(if (enabled) "Switch points included in zoom presets" else "Standard zoom presets restored")
+    }
+
     fun setZoomPresetsMode(mode: String) {
         _zoomPresetsMode.value = mode
         preferences.zoomPresetsMode = mode
@@ -445,8 +455,31 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun refreshActiveZoomPresets() {
-        val hasUW = engine.availableLenses.value.any { it.lensType == LensType.ULTRAWIDE }
-        _activeZoomPresets.value = preferences.getEffectiveZoomPresets(hasUW)
+        val lenses = engine.availableLenses.value
+        val hasUW = lenses.any { it.lensType == LensType.ULTRAWIDE }
+        // Calibrated 1x equivalent focal length for optical switch points (~21.6mm eq, placing 28mm at ~1.3x)
+        val mainEqFocal = 21.6f
+        val currentSwitchPointMm = preferences.lensSwitchPointMm
+        val nonDefaultSwitchPoints = mutableListOf<Float>()
+        if (preferences.isIncludeLensSwitchPointsInPresetsEnabled) {
+            if (kotlin.math.abs(currentSwitchPointMm - 23.0f) > 0.5f) {
+                val switchZoom = (Math.round((currentSwitchPointMm / mainEqFocal) * 10f) / 10f).coerceIn(0.6f, 15.0f)
+                nonDefaultSwitchPoints.add(switchZoom)
+            }
+            lenses.forEach { lens ->
+                if (lens.isPhysical && !lens.isZoomPreset && lens.facing == CameraCharacteristics.LENS_FACING_BACK) {
+                    if (lens.equivalent35mmFocalMm > 24.5f && kotlin.math.abs(lens.equivalent35mmFocalMm - currentSwitchPointMm) > 1.0f) {
+                        val ratio = (Math.round((lens.equivalent35mmFocalMm / mainEqFocal) * 10f) / 10f).coerceIn(0.6f, 15.0f)
+                        nonDefaultSwitchPoints.add(ratio)
+                    }
+                }
+            }
+        }
+        _activeZoomPresets.value = preferences.getEffectiveZoomPresets(
+            hasUltraWide = hasUW,
+            additionalSwitchPoints = nonDefaultSwitchPoints,
+            includeSwitchPoints = preferences.isIncludeLensSwitchPointsInPresetsEnabled
+        )
     }
 
     fun setRefocusPhotoEnabled(enabled: Boolean) {
@@ -744,6 +777,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.lensSwitchPointMm = clamped
         _instantSwitchState.update { it.copy(switchPointMm = clamped) }
         engine.setLensSwitchPointMm(clamped)
+        refreshActiveZoomPresets()
         val uwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(clamped)
         val mainCrop = CameraOpticalCalibration.calculateMainCropForSwitchPoint(clamped)
         showToast("Switch Point: ${clamped.toInt()}mm (UW ${String.format(java.util.Locale.US, "%.2f", uwCrop)}×, Main ${String.format(java.util.Locale.US, "%.2f", mainCrop)}×)")

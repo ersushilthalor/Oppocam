@@ -50,6 +50,7 @@ class CameraPreferences(context: Context) {
         private const val KEY_HAS_PROMPTED_GALLERY = "pref_has_prompted_gallery"
         private const val KEY_ZOOM_PRESETS_MODE = "pref_zoom_presets_mode"
         private const val KEY_CUSTOM_ZOOM_PRESETS = "pref_custom_zoom_presets"
+        private const val KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS = "pref_include_lens_switch_points_in_presets"
         private const val KEY_MOTION_PHOTO_ENABLED = "pref_motion_photo_enabled"
         private const val KEY_MOTION_PHOTO_DURATION = "pref_motion_photo_duration"
         private const val KEY_VIEWFINDER_CORNER_RADIUS = "pref_viewfinder_corner_radius"
@@ -113,8 +114,16 @@ class CameraPreferences(context: Context) {
         get() = prefs.getString(KEY_CUSTOM_ZOOM_PRESETS, "1x, 2x, 4x, 8x") ?: "1x, 2x, 4x, 8x"
         set(value) = prefs.edit().putString(KEY_CUSTOM_ZOOM_PRESETS, value).apply()
 
-    fun getEffectiveZoomPresets(hasUltraWide: Boolean): List<Float> {
-        return when (zoomPresetsMode) {
+    var isIncludeLensSwitchPointsInPresetsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS, false)
+        set(value) = prefs.edit().putBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS, value).apply()
+
+    fun getEffectiveZoomPresets(
+        hasUltraWide: Boolean,
+        additionalSwitchPoints: List<Float> = emptyList(),
+        includeSwitchPoints: Boolean = isIncludeLensSwitchPointsInPresetsEnabled
+    ): List<Float> {
+        val basePresets = when (zoomPresetsMode) {
             "POWERS_OF_TWO" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 4.0f, 8.0f) else listOf(1.0f, 2.0f, 4.0f, 8.0f)
             "CINEMATIC" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 6.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 6.0f, 10.0f)
             "CUSTOM" -> {
@@ -128,6 +137,18 @@ class CameraPreferences(context: Context) {
             }
             else -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f) else listOf(1.0f, 2.0f, 3.0f)
         }
+
+        if (!includeSwitchPoints || additionalSwitchPoints.isEmpty()) {
+            return basePresets
+        }
+
+        val combined = basePresets.toMutableList()
+        additionalSwitchPoints.forEach { switchZoom ->
+            if (combined.none { kotlin.math.abs(it - switchZoom) < 0.05f }) {
+                combined.add(switchZoom)
+            }
+        }
+        return combined.sorted()
     }
 
     var preferredGalleryPackage: String?
