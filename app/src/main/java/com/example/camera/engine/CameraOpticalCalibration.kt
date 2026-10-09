@@ -240,9 +240,13 @@ object CameraOpticalCalibration {
                 if (uiZoom <= 0.5f) {
                     1.0f
                 } else if (uiZoom <= switchZoom) {
-                    val t = ((uiZoom - 0.5f) / (switchZoom - 0.5f).coerceAtLeast(0.001f)).coerceIn(0f, 1f)
-                    val crop = 1.0f + t * (maxUwCrop - 1.0f)
-                    crop.coerceIn(1.0f, maxUwCrop)
+                    if (uiZoom >= switchZoom - 0.001f) {
+                        maxUwCrop
+                    } else {
+                        val t = ((uiZoom - 0.5f) / (switchZoom - 0.5f).coerceAtLeast(0.001f)).coerceIn(0f, 1f)
+                        val crop = 1.0f + t * (maxUwCrop - 1.0f)
+                        crop.coerceIn(1.0f, maxUwCrop)
+                    }
                 } else {
                     // Continuous extension beyond switchZoom during in-flight lens handoff:
                     // scale proportionally so effective FOV matches Main lens at uiZoom with zero freeze or scale jump

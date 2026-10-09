@@ -1018,7 +1018,7 @@ class Camera2Engine(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun ensureUltraWideSimultaneousReady() {
-        if (!_isKeepUltraWideReady.value) return
+        if (!_isKeepUltraWideReady.value && !isContinuousZoomTransitionActive) return
         val currentLens = _selectedLens.value ?: return
         if (currentLens.facing != CameraCharacteristics.LENS_FACING_BACK) return
 
@@ -1619,7 +1619,7 @@ class Camera2Engine(private val context: Context) {
     @Volatile
     private var pendingIsContinuousTransitionWhileSwitching: Boolean = false
     @Volatile
-    private var isContinuousZoomTransitionActive: Boolean = false
+    var isContinuousZoomTransitionActive: Boolean = false
 
     val cinemaEngine = CinemaEngine(context)
     private val _cinemaConfig = MutableStateFlow(preferences.getCinemaConfig())
@@ -2241,9 +2241,9 @@ class Camera2Engine(private val context: Context) {
                     !isPhysicalStreamRequired &&
                     canUseLogicalZoomForLens(lens.cameraId, lens, effectiveTargetZoom)
 
-            // 1. Instant 0ms switch when Keep Ultra Wide Ready is enabled (both Photo mode AND active Video recording):
+            // 1. Instant 0ms switch when Keep Ultra Wide Ready or continuous zoom transition is active (both Photo mode AND active Video recording):
             // Neither close(), stopRepeating(), openCamera(), nor createCameraCaptureSession() is called!
-            if (_isKeepUltraWideReady.value && isSwitchBetweenMainAndUW) {
+            if ((_isKeepUltraWideReady.value || isContinuousZoomTransitionActive || isContinuousTransition || ultraWideStandbyCaptureSession != null) && isSwitchBetweenMainAndUW) {
                 val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
                 val primaryMainLens = backLenses.firstOrNull { it.isPrimaryMain }
                     ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
@@ -5100,7 +5100,14 @@ class Camera2Engine(private val context: Context) {
                 effectiveTargetLens.physicalCameraId != activeSessionPhysicalCameraId) ||
                 !canUseLogicalZoomForLens(effectiveTargetLens.cameraId, effectiveTargetLens, pZoom)
 
-        if (isDifferentCameraDevice || (effectiveTargetLens.lensType != activeLens.lensType && (requiresPhysicalStreamSwitch || activeLogicalMultiCamUltraWideConfigured))) {
+        val isStandbyOrPhysicalAvailable = requiresPhysicalStreamSwitch ||
+                activeLogicalMultiCamUltraWideConfigured ||
+                _isKeepUltraWideReady.value ||
+                ultraWideStandbyCaptureSession != null ||
+                isContinuousTransition ||
+                isContinuousZoomTransitionActive
+
+        if (isDifferentCameraDevice || (effectiveTargetLens.lensType != activeLens.lensType && isStandbyOrPhysicalAvailable)) {
             selectLens(
                 effectiveTargetLens,
                 preserveZoom = true,
@@ -5111,14 +5118,19 @@ class Camera2Engine(private val context: Context) {
             // Same logical/physical device with genuine continuous zoom support: smoothly update active lens and zoom continuously without tearing down camera session
             _selectedLens.value = effectiveTargetLens
             activeSessionLens = effectiveTargetLens
-            if (_isKeepUltraWideReady.value && effectiveTargetLens.facing == CameraCharacteristics.LENS_FACING_BACK) {
-                val useUw = (effectiveTargetLens.lensType == LensType.ULTRAWIDE)
-                val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
-                if (_isRecordingVideo.value) {
-                    dualCameraRecordingRelay?.setActiveSource(targetSource)
+            if (effectiveTargetLens.facing == CameraCharacteristics.LENS_FACING_BACK) {
+                if (effectiveTargetLens.lensType == LensType.ULTRAWIDE && pZoom > 0.5f) {
+                    ensureUltraWideSimultaneousReady()
                 }
-                _isUsingUltraWideSurface.value = useUw
-                _displayedPreviewSource.value = targetSource
+                if (_isKeepUltraWideReady.value) {
+                    val useUw = (effectiveTargetLens.lensType == LensType.ULTRAWIDE)
+                    val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                    if (_isRecordingVideo.value) {
+                        dualCameraRecordingRelay?.setActiveSource(targetSource)
+                    }
+                    _isUsingUltraWideSurface.value = useUw
+                    _displayedPreviewSource.value = targetSource
+                }
             }
             scheduleZoomPreviewUpdate(immediate = isPresetTap && !isContinuousTransition)
         }
