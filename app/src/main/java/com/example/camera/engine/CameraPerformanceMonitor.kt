@@ -15,11 +15,14 @@ object CameraPerformanceMonitor {
 
     private val previewFrameCounter = AtomicInteger(0)
     private val yuvFrameCounter = AtomicInteger(0)
+    private val recordingFrameCounter = AtomicInteger(0)
 
     @Volatile private var lastReportTimeMs = SystemClock.elapsedRealtime()
     @Volatile private var activeOutputsDescription = "[PREVIEW]"
 
     @Volatile var currentPreviewFps = 0.0f
+        private set
+    @Volatile var currentRecordingFps = 0.0f
         private set
     @Volatile var currentYuvFps = 0.0f
         private set
@@ -52,6 +55,7 @@ object CameraPerformanceMonitor {
         lastReportTimeMs = SystemClock.elapsedRealtime()
         previewFrameCounter.set(0)
         yuvFrameCounter.set(0)
+        recordingFrameCounter.set(0)
         try {
             Choreographer.getInstance().postFrameCallback(uiFrameCallback)
         } catch (ignored: Throwable) {}
@@ -74,18 +78,22 @@ object CameraPerformanceMonitor {
                 if (delta >= LOG_INTERVAL_MS) {
                     val pCount = previewFrameCounter.getAndSet(0)
                     val yCount = yuvFrameCounter.getAndSet(0)
+                    val rCount = recordingFrameCounter.getAndSet(0)
                     lastReportTimeMs = now
                     currentPreviewFps = (pCount * 1000f) / delta
                     currentYuvFps = (yCount * 1000f) / delta
+                    currentRecordingFps = (rCount * 1000f) / delta
 
                     val runtime = Runtime.getRuntime()
                     val usedMemMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
 
+                    val recFpsStr = if (rCount > 0 || currentRecordingFps > 0f) String.format(" | Rec: %.1f FPS", currentRecordingFps) else ""
                     Log.i(
                         TAG,
                         String.format(
-                            "Preview: %.1f FPS | UI: %.1f ms | YUV: %.1f FPS | Outputs: %s | UsedHeap: %dMB",
+                            "Preview: %.1f FPS%s | UI: %.1f ms | YUV: %.1f FPS | Outputs: %s | UsedHeap: %dMB",
                             currentPreviewFps,
+                            recFpsStr,
                             currentUiFrameTimeMs,
                             currentYuvFps,
                             activeOutputsDescription,
@@ -95,6 +103,10 @@ object CameraPerformanceMonitor {
                 }
             }
         }
+    }
+
+    fun onRecordingFrame() {
+        recordingFrameCounter.incrementAndGet()
     }
 
     fun onYuvFrame() {

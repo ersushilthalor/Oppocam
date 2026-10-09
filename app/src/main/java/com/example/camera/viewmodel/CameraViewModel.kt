@@ -37,7 +37,7 @@ enum class ProControlTab(val label: String) {
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
 
     val engine = Camera2Engine(application.applicationContext)
-    private val preferences = CameraPreferences(application.applicationContext)
+    internal val preferences = CameraPreferences(application.applicationContext)
 
     val lastCapturedMedia: StateFlow<CapturedMedia?> = engine.lastCapturedMedia
 

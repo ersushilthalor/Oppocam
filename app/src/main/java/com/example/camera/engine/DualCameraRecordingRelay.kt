@@ -639,6 +639,7 @@ class DualCameraRecordingRelay(
                 val swapped = EGL14.eglSwapBuffers(display, surface)
                 if (swapped) {
                     relayedFrameCount.incrementAndGet()
+                    CameraPerformanceMonitor.onRecordingFrame()
                 } else {
                     Log.w(TAG, "eglSwapBuffers returned false")
                 }
