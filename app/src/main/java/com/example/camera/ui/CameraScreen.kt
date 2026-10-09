@@ -18,6 +18,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -1228,8 +1236,174 @@ fun CameraScreen(
                 onDismissRequest = { viewModel.setBeforeAfterOpen(false) }
             )
         }
+
+        // 11. Initial Loading & Calibration Splash Screen matching app icon reference
+        var hasLoadedOnce by remember { mutableStateOf(false) }
+        LaunchedEffect(isCameraReady) {
+            if (isCameraReady) {
+                delay(200)
+                hasLoadedOnce = true
+            }
+        }
+
+        val splashAlpha by animateFloatAsState(
+            targetValue = if (!hasLoadedOnce) 1f else 0f,
+            animationSpec = tween(durationMillis = 350),
+            label = "splashAlpha"
+        )
+
+        if (splashAlpha > 0f) {
+            CameraLoadingSplashScreen(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = splashAlpha }
+            )
+        }
     }
 }
+}
+
+@Composable
+fun CameraLoadingSplashScreen(
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "lensPulse")
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.98f,
+        targetValue = 1.02f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "iconScale"
+    )
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glowAlpha"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0xFF0C0E14)),
+        contentAlignment = Alignment.Center
+    ) {
+        // Subtle ambient radial glow behind the camera icon
+        Box(
+            modifier = Modifier
+                .size(260.dp)
+                .graphicsLayer {
+                    alpha = glowAlpha
+                    scaleX = scale * 1.05f
+                    scaleY = scale * 1.05f
+                }
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF3B82F6).copy(alpha = 0.45f),
+                            Color(0xFF1D4ED8).copy(alpha = 0.15f),
+                            Color.Transparent
+                        )
+                    ),
+                    shape = CircleShape
+                )
+        )
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 32.dp)
+        ) {
+            // Icon Card styled exactly as the reference rounded squircle
+            Box(
+                modifier = Modifier
+                    .size(136.dp)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .shadow(
+                        elevation = 20.dp,
+                        shape = RoundedCornerShape(34.dp),
+                        spotColor = Color(0xFF2563EB).copy(alpha = 0.4f)
+                    )
+                    .clip(RoundedCornerShape(34.dp))
+                    .background(Color(0xFFC9E0FF)),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = com.example.R.drawable.ic_app_camera_icon),
+                    contentDescription = "Camera Pro Logo",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            Text(
+                text = "Camera Pro",
+                color = Color.White,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Calibrating Optical Sensors...",
+                color = Color(0xFFC9E0FF).copy(alpha = 0.85f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.5.sp
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Sleek indeterminate linear progress bar in sapphire blue
+            Box(
+                modifier = Modifier
+                    .width(110.dp)
+                    .height(3.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF1E293B))
+            ) {
+                val progressOffset by infiniteTransition.animateFloat(
+                    initialValue = -1f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1400, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "barOffset"
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.45f)
+                        .graphicsLayer {
+                            translationX = (progressOffset + 0.5f) * 110f * 1.5f
+                        }
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color(0xFF38BDF8),
+                                    Color(0xFF2563EB),
+                                    Color(0xFF38BDF8)
+                                )
+                            ),
+                            shape = CircleShape
+                        )
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -1240,28 +1414,28 @@ fun CameraPermissionPrompt(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF101012))
+            .background(Color(0xFF0C0E14))
             .padding(32.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             Box(
                 modifier = Modifier
-                    .size(88.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFFFD54F).copy(alpha = 0.15f))
-                    .border(2.dp, Color(0xFFFFD54F), CircleShape),
+                    .size(96.dp)
+                    .shadow(16.dp, RoundedCornerShape(26.dp), spotColor = Color(0xFF2563EB).copy(alpha = 0.4f))
+                    .clip(RoundedCornerShape(26.dp))
+                    .background(Color(0xFFC9E0FF)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.CameraAlt,
+                Image(
+                    painter = painterResource(id = com.example.R.drawable.ic_app_camera_icon),
                     contentDescription = null,
-                    tint = Color(0xFFFFD54F),
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
                 )
             }
 
@@ -1274,7 +1448,7 @@ fun CameraPermissionPrompt(
             )
 
             Text(
-                text = "To capture high-resolution photos and record crisp video with genuine Camera2 manual controls, grant camera and microphone permissions.",
+                text = "To capture high-resolution photos and record cinematic video with optical lens switching, grant camera and microphone permissions.",
                 color = Color.White.copy(alpha = 0.7f),
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
@@ -1286,8 +1460,8 @@ fun CameraPermissionPrompt(
             Button(
                 onClick = onRequestPermission,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFFD54F),
-                    contentColor = Color.Black
+                    containerColor = Color(0xFF2563EB),
+                    contentColor = Color.White
                 ),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
