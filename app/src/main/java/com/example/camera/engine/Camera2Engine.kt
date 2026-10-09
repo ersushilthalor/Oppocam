@@ -2148,11 +2148,7 @@ class Camera2Engine(private val context: Context) {
         if (nextLens != null && isHardwareMismatch) {
             selectLens(nextLens, preserveZoom = true, targetZoom = currentZoom, isContinuousTransition = nextIsContinuous)
         } else {
-            if (!nextIsContinuous) {
-                scheduleZoomPreviewUpdate(immediate = nextPresetTap || nextZoom != null)
-            } else if (nextZoom != null) {
-                scheduleZoomPreviewUpdate(immediate = false)
-            }
+            scheduleZoomPreviewUpdate(immediate = true, explicitZoom = currentZoom)
         }
 
         if (currentActive != null) {
@@ -2269,9 +2265,7 @@ class Camera2Engine(private val context: Context) {
                     _selectedLens.value = lens
                     activeSessionPhysicalCameraId = if (useUw) lens.physicalCameraId else primaryMainLens?.physicalCameraId
                     Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
-                    if (!isContinuousTransition) {
-                        scheduleZoomPreviewUpdate(immediate = true)
-                    }
+                    scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
                     completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
                     return
                 }
@@ -2323,9 +2317,7 @@ class Camera2Engine(private val context: Context) {
                 _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                 activeSessionLens = lens
                 _selectedLens.value = lens
-                if (!isContinuousTransition) {
-                    scheduleZoomPreviewUpdate(immediate = true)
-                }
+                scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
                 completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
                 return
             }
@@ -2365,9 +2357,7 @@ class Camera2Engine(private val context: Context) {
                     activeSessionLens = lens
                     _selectedLens.value = lens
                     if (cameraDevice != null && cameraDevice?.id == lens.cameraId && captureSession != null) {
-                        if (!isContinuousTransition) {
-                            scheduleZoomPreviewUpdate(immediate = true)
-                        }
+                        scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
                         completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
                     } else if (cameraDevice != null && cameraDevice?.id == lens.cameraId && previewSurfaceTexture != null) {
                         createCameraCaptureSession(forceLogicalStream = true)
@@ -2470,15 +2460,9 @@ class Camera2Engine(private val context: Context) {
                 // Update capabilities for the newly active lens first, then apply
                 // settings. During continuous zoom, do NOT synchronously flush the capture request.
                 inspectCapabilities(targetLens.cameraId)
-                if (!isContinuousTransition) {
-                    scheduleZoomPreviewUpdate(immediate = true)
-                    backgroundHandler?.post {
-                        syncStandbyStreamSettings()
-                    }
-                } else {
-                    backgroundHandler?.post {
-                        syncStandbyStreamSettings()
-                    }
+                scheduleZoomPreviewUpdate(immediate = true, explicitZoom = currentZoom)
+                backgroundHandler?.post {
+                    syncStandbyStreamSettings()
                 }
                 completeLensSwitch(targetLens, isContinuousTransition = isContinuousTransition)
                 Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms instant stream swap completed to ${targetLens.lensType} (ID=${targetCam.id}, recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
@@ -4585,7 +4569,7 @@ class Camera2Engine(private val context: Context) {
     /**
      * Apply AE, AF, AWB, Flash, ISO, Shutter, Zoom, Stabilization to CaptureRequest.Builder
      */
-    private fun applyCommonSettings(builder: CaptureRequest.Builder) {
+    private fun applyCommonSettings(builder: CaptureRequest.Builder, explicitZoom: Float? = null) {
         val caps = _capabilities.value
 
         // Exposure compensation (apply cinema EV if in Cinema mode, or standard exposure index)
@@ -4807,10 +4791,10 @@ class Camera2Engine(private val context: Context) {
         }
 
         // Digital Zoom / Crop Region
-        applyZoom(builder)
+        applyZoom(builder, explicitZoom)
     }
 
-    private fun applyZoom(builder: CaptureRequest.Builder) {
+    private fun applyZoom(builder: CaptureRequest.Builder, explicitZoom: Float? = null) {
         val lens = activeSessionLens ?: _selectedLens.value ?: return
 
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
@@ -4829,7 +4813,7 @@ class Camera2Engine(private val context: Context) {
                     CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
                 ) == true)
 
-            val effectiveUiZoom = currentZoom
+            val effectiveUiZoom = explicitZoom ?: currentZoom
 
             // Digital Crop calculation calibrated from actual sensor FOV
             val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
@@ -4930,7 +4914,7 @@ class Camera2Engine(private val context: Context) {
     /**
      * Updates preview request with new settings on the fly
      */
-    fun updatePreviewSettings() {
+    fun updatePreviewSettings(explicitZoom: Float? = null) {
         if (isClosingCamera) return
         val session = captureSession ?: return
         synchronized(previewRequestLock) {
@@ -4938,7 +4922,7 @@ class Camera2Engine(private val context: Context) {
             val activeSess = captureSession ?: return
             if (activeSess !== session) return
             try {
-                applyCommonSettings(builder)
+                applyCommonSettings(builder, explicitZoom)
                 activeSess.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update preview settings", e)
@@ -4949,17 +4933,18 @@ class Camera2Engine(private val context: Context) {
     private var lastZoomPreviewUpdateTime = 0L
     private var pendingZoomRunnable: Runnable? = null
 
-    private fun scheduleZoomPreviewUpdate(immediate: Boolean = false) {
+    private fun scheduleZoomPreviewUpdate(immediate: Boolean = false, explicitZoom: Float? = null) {
         val handler = backgroundHandler
         val now = android.os.SystemClock.uptimeMillis()
+        val isContinuous = isContinuousZoomTransitionActive
         if (handler == null || Looper.myLooper() == handler.looper) {
-            if (!immediate && (now - lastZoomPreviewUpdateTime < 16L)) {
+            if (!immediate && !isContinuous && (now - lastZoomPreviewUpdateTime < 16L)) {
                 if (pendingZoomRunnable == null) {
                     val delayMs = (16L - (now - lastZoomPreviewUpdateTime)).coerceIn(4L, 16L)
                     val runnable = Runnable {
                         pendingZoomRunnable = null
                         lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                        updatePreviewSettings()
+                        updatePreviewSettings(explicitZoom)
                     }
                     pendingZoomRunnable = runnable
                     handler?.postDelayed(runnable, delayMs)
@@ -4969,26 +4954,25 @@ class Camera2Engine(private val context: Context) {
             pendingZoomRunnable?.let { handler?.removeCallbacks(it) }
             pendingZoomRunnable = null
             lastZoomPreviewUpdateTime = now
-            updatePreviewSettings()
+            updatePreviewSettings(explicitZoom)
             return
         }
 
-        if (immediate || (now - lastZoomPreviewUpdateTime >= 16L && pendingZoomRunnable == null)) {
+        if (immediate || isContinuous || (now - lastZoomPreviewUpdateTime >= 16L && pendingZoomRunnable == null)) {
             pendingZoomRunnable?.let { handler.removeCallbacks(it) }
+            pendingZoomRunnable = null
             lastZoomPreviewUpdateTime = now
             val runnable = Runnable {
-                pendingZoomRunnable = null
                 lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                updatePreviewSettings()
+                updatePreviewSettings(explicitZoom)
             }
-            pendingZoomRunnable = runnable
             handler.post(runnable)
         } else if (pendingZoomRunnable == null) {
             val delayMs = (16L - (now - lastZoomPreviewUpdateTime)).coerceIn(4L, 16L)
             val runnable = Runnable {
                 pendingZoomRunnable = null
                 lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                updatePreviewSettings()
+                updatePreviewSettings(explicitZoom)
             }
             pendingZoomRunnable = runnable
             handler.postDelayed(runnable, delayMs)
@@ -5046,8 +5030,9 @@ class Camera2Engine(private val context: Context) {
                 pendingZoomWhileSwitching = clampedZoom
                 pendingZoomPresetTapWhileSwitching = isPresetTap
                 pendingIsContinuousTransitionWhileSwitching = isContinuousTransition
+                scheduleZoomPreviewUpdate(immediate = isPresetTap || isContinuousTransition, explicitZoom = clampedZoom)
             } else {
-                scheduleZoomPreviewUpdate(immediate = isPresetTap && !isContinuousTransition)
+                scheduleZoomPreviewUpdate(immediate = isPresetTap || isContinuousTransition, explicitZoom = clampedZoom)
             }
             return
         }
@@ -5089,7 +5074,7 @@ class Camera2Engine(private val context: Context) {
             pendingZoomPresetTapWhileSwitching = isPresetTap
             pendingLensWhileSwitching = targetLens
             pendingIsContinuousTransitionWhileSwitching = isContinuousTransition
-            scheduleZoomPreviewUpdate(immediate = isPresetTap && !isContinuousTransition)
+            scheduleZoomPreviewUpdate(immediate = isPresetTap || isContinuousTransition, explicitZoom = pZoom)
             return
         }
 
@@ -5132,7 +5117,7 @@ class Camera2Engine(private val context: Context) {
                     _displayedPreviewSource.value = targetSource
                 }
             }
-            scheduleZoomPreviewUpdate(immediate = isPresetTap && !isContinuousTransition)
+            scheduleZoomPreviewUpdate(immediate = isPresetTap || isContinuousTransition, explicitZoom = clampedZoom)
         }
     }
 
