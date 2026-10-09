@@ -104,6 +104,11 @@ fun Viewfinder(
     onSurfaceTextureAvailable: (SurfaceTexture?, Int, Int) -> Unit = { _, _, _ -> },
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
     isUsingUltraWideSurface: Boolean = false,
+    previewOverlapState: com.example.camera.engine.PreviewOverlapState = com.example.camera.engine.PreviewOverlapState(
+        isOverlapping = false,
+        mainAlpha = if (isUsingUltraWideSurface) 0f else 1f,
+        ultraWideAlpha = if (isUsingUltraWideSurface) 1f else 0f
+    ),
     onUltraWideSurfaceTextureAvailable: ((SurfaceTexture?, Int, Int) -> Unit)? = null,
     onUltraWideSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
     onTapToFocus: (Offset, Float, Float) -> Unit,
@@ -140,6 +145,7 @@ fun Viewfinder(
     var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
     var ultraWideTextureViewInstance by remember { mutableStateOf<TextureView?>(null) }
     val currentIsUsingUltraWideSurface by rememberUpdatedState(isUsingUltraWideSurface)
+    val currentPreviewOverlapState by rememberUpdatedState(previewOverlapState)
     val ultraWideFramingCalib = remember {
         com.example.camera.engine.CameraOpticalCalibration.getUltraWideFramingCalibration()
     }
@@ -201,6 +207,7 @@ fun Viewfinder(
         textureViewInstance,
         ultraWideTextureViewInstance,
         isUsingUltraWideSurface,
+        previewOverlapState,
         currentZoom,
         isHorizonLockEnabled,
         horizonRollDegrees,
@@ -345,9 +352,11 @@ fun Viewfinder(
                         var motionSampleBitmap: Bitmap? = null
                         TextureView(context).apply {
                             textureViewInstance = this
-                            alpha = if (currentIsUsingUltraWideSurface) 0f else 1f
-                            visibility = if (currentIsUsingUltraWideSurface) android.view.View.INVISIBLE else android.view.View.VISIBLE
-                            translationZ = if (currentIsUsingUltraWideSurface) 0f else 1f
+                            val isUw = currentIsUsingUltraWideSurface
+                            val overlap = currentPreviewOverlapState
+                            alpha = if (overlap.isOverlapping) overlap.mainAlpha else (if (isUw) 0f else 1f)
+                            visibility = if (overlap.isOverlapping || !isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                            translationZ = if (overlap.isOverlapping) (if (!isUw) 2f else 1f) else (if (isUw) 0f else 1f)
                             addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                                 val newW = right - left
                                 val newH = bottom - top
@@ -445,9 +454,10 @@ fun Viewfinder(
                     },
                     update = { textureView ->
                         val isUw = currentIsUsingUltraWideSurface
-                        textureView.alpha = if (isUw) 0f else 1f
-                        textureView.visibility = if (isUw) android.view.View.INVISIBLE else android.view.View.VISIBLE
-                        textureView.translationZ = if (isUw) 0f else 1f
+                        val overlap = currentPreviewOverlapState
+                        textureView.alpha = if (overlap.isOverlapping) overlap.mainAlpha else (if (isUw) 0f else 1f)
+                        textureView.visibility = if (overlap.isOverlapping || !isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                        textureView.translationZ = if (overlap.isOverlapping) (if (!isUw) 2f else 1f) else (if (isUw) 0f else 1f)
                         // Sample background blur frame when windows are active
                         if (!isUw && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                             com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
@@ -594,9 +604,11 @@ fun Viewfinder(
                             var uwMotionSampleBitmap: Bitmap? = null
                             TextureView(context).apply {
                                 ultraWideTextureViewInstance = this
-                                alpha = if (currentIsUsingUltraWideSurface) 1f else 0f
-                                visibility = if (currentIsUsingUltraWideSurface) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                                translationZ = if (currentIsUsingUltraWideSurface) 1f else 0f
+                                val isUw = currentIsUsingUltraWideSurface
+                                val overlap = currentPreviewOverlapState
+                                alpha = if (overlap.isOverlapping) overlap.ultraWideAlpha else (if (isUw) 1f else 0f)
+                                visibility = if (overlap.isOverlapping || isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                                translationZ = if (overlap.isOverlapping) (if (isUw) 2f else 1f) else (if (isUw) 1f else 0f)
                                 addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                                     val newW = right - left
                                     val newH = bottom - top
@@ -697,9 +709,10 @@ fun Viewfinder(
                         },
                         update = { textureView ->
                             val isUw = currentIsUsingUltraWideSurface
-                            textureView.alpha = if (isUw) 1f else 0f
-                            textureView.visibility = if (isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                            textureView.translationZ = if (isUw) 1f else 0f
+                            val overlap = currentPreviewOverlapState
+                            textureView.alpha = if (overlap.isOverlapping) overlap.ultraWideAlpha else (if (isUw) 1f else 0f)
+                            textureView.visibility = if (overlap.isOverlapping || isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                            textureView.translationZ = if (overlap.isOverlapping) (if (isUw) 2f else 1f) else (if (isUw) 1f else 0f)
                             if (isUw && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                                 com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                     textureView = textureView,

@@ -213,6 +213,16 @@ class Camera2Engine(private val context: Context) {
     private val _isUsingUltraWideSurface = MutableStateFlow(false)
     val isUsingUltraWideSurface: StateFlow<Boolean> = _isUsingUltraWideSurface.asStateFlow()
 
+    val zoomTransitionController = ZoomTransitionController(
+        onApplyZoomToEngine = { zoom, isContinuous ->
+            setZoom(zoom, isPresetTap = false, isContinuousTransition = isContinuous)
+        },
+        onSelectLensOnEngine = { lens, targetZoom, isContinuous ->
+            selectLens(lens, preserveZoom = true, targetZoom = targetZoom, isContinuousTransition = isContinuous)
+        }
+    )
+    val previewOverlapState: StateFlow<PreviewOverlapState> = zoomTransitionController.previewOverlapState
+
     @Volatile
     private var ultraWideViewfinderSurfaceTexture: SurfaceTexture? = null
     @Volatile
@@ -1645,7 +1655,12 @@ class Camera2Engine(private val context: Context) {
     @Volatile
     private var pendingIsContinuousTransitionWhileSwitching: Boolean = false
     @Volatile
-    var isContinuousZoomTransitionActive: Boolean = false
+    private var _isContinuousZoomTransitionActiveField: Boolean = false
+    var isContinuousZoomTransitionActive: Boolean
+        get() = zoomTransitionController.isTransitionActive.value || _isContinuousZoomTransitionActiveField
+        set(value) {
+            _isContinuousZoomTransitionActiveField = value
+        }
 
     val cinemaEngine = CinemaEngine(context)
     private val _cinemaConfig = MutableStateFlow(preferences.getCinemaConfig())

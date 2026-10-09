@@ -99,6 +99,86 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
+    fun testSinusoidalEaseInOutTimingProfile400ms() {
+        val stepCount = 50
+        val durationMs = ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS.toDouble()
+        assertEquals(400.0, durationMs, 0.001)
+
+        val controller = ZoomTransitionController()
+        val targetElapsedMs = controller.calculateSinusoidalElapsedTimestamps(stepCount, 400L)
+
+        // Verify start and finish timing: exactly 0ms and 400ms
+        assertEquals(0L, targetElapsedMs[0])
+        assertEquals(400L, targetElapsedMs[stepCount])
+
+        // Verify middle timing (at 50% progress, exactly 200ms)
+        assertEquals(200L, targetElapsedMs[25])
+
+        // Verify slow start (ease-in)
+        val firstStepDuration = targetElapsedMs[1] - targetElapsedMs[0]
+        assertTrue("Start should be slow (~35-40ms), was $firstStepDuration", firstStepDuration in 30..45)
+
+        // Verify faster middle
+        val middleStepDuration = targetElapsedMs[25] - targetElapsedMs[24]
+        assertTrue("Middle should be fast (~5-8ms), was $middleStepDuration", middleStepDuration in 3..10)
+
+        // Verify slow finish (ease-out)
+        val lastStepDuration = targetElapsedMs[50] - targetElapsedMs[49]
+        assertTrue("Finish should be slow (~35-40ms), was $lastStepDuration", lastStepDuration in 30..45)
+
+        // Verify strictly monotonic timestamps across all 50 intervals
+        for (i in 0 until stepCount) {
+            assertTrue("Timestamp $i must be <= timestamp ${i + 1}", targetElapsedMs[i] <= targetElapsedMs[i + 1])
+        }
+    }
+
+    @Test
+    fun testPreviewOverlapDuration100msSymmetric() {
+        assertEquals(100L, ZoomTransitionController.PREVIEW_OVERLAP_DURATION_MS)
+
+        val controller = ZoomTransitionController()
+
+        // At start (0ms): progress is 0.0
+        val pStart = controller.calculateOverlapProgress(0L, 0L, 100L)
+        assertEquals(0.0f, pStart, 0.001f)
+
+        // In middle (50ms): progress is 0.5
+        val pMid = controller.calculateOverlapProgress(50L, 0L, 100L)
+        assertEquals(0.5f, pMid, 0.01f)
+
+        // At end (100ms): progress is 1.0
+        val pEnd = controller.calculateOverlapProgress(100L, 0L, 100L)
+        assertEquals(1.0f, pEnd, 0.001f)
+
+        // Beyond 100ms: clamped to 1.0
+        val pPast = controller.calculateOverlapProgress(150L, 0L, 100L)
+        assertEquals(1.0f, pPast, 0.001f)
+    }
+
+    @Test
+    fun testGenerateContinuousZoomStepsIncludesEveryValue() {
+        val controller = ZoomTransitionController()
+
+        val stepsUp = controller.generateContinuousZoomSteps(0.50f, 1.00f)
+        assertEquals(51, stepsUp.size)
+        assertEquals(0.50f, stepsUp.first(), 0.0001f)
+        assertEquals(1.00f, stepsUp.last(), 0.0001f)
+        for (i in 0 until stepsUp.size - 1) {
+            val diff = (stepsUp[i + 1] - stepsUp[i]) * 100f
+            assertEquals(1.0f, diff, 0.001f)
+        }
+
+        val stepsDown = controller.generateContinuousZoomSteps(1.00f, 0.50f)
+        assertEquals(51, stepsDown.size)
+        assertEquals(1.00f, stepsDown.first(), 0.0001f)
+        assertEquals(0.50f, stepsDown.last(), 0.0001f)
+        for (i in 0 until stepsDown.size - 1) {
+            val diff = (stepsDown[i] - stepsDown[i + 1]) * 100f
+            assertEquals(1.0f, diff, 0.001f)
+        }
+    }
+
+    @Test
     fun testCameraPipelineZoomAppliedDirectly() {
         val lenses = viewModel.engine.availableLenses.value
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()

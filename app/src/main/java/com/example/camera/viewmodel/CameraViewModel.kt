@@ -721,6 +721,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
     val isUsingUltraWideSurface: StateFlow<Boolean> = engine.isUsingUltraWideSurface
     val displayedPreviewSource: StateFlow<com.example.camera.engine.PreviewStreamSource> = engine.displayedPreviewSource
+    val previewOverlapState: StateFlow<com.example.camera.engine.PreviewOverlapState> = engine.previewOverlapState
 
     fun setLensSwitchPointMm(switchPointMm: Float) {
         val clamped = switchPointMm.coerceIn(
@@ -1015,7 +1016,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         engine.onLensSwitchCompletedListener = { switchedLens, targetZoom ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
-                if (zoomTransitionJob == null || !zoomTransitionJob!!.isActive) {
+                if (!engine.zoomTransitionController.isTransitionActive.value) {
                     _currentZoom.value = targetZoom
                     preferences.setModeZoom(_cameraMode.value, targetZoom)
                 }
@@ -1303,8 +1304,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.05f
 
         if (!instant && isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
-            // Smooth continuous sub-step interpolation across complete range to target lens
-            val duration = 500L
+            // Smooth continuous sub-step interpolation across complete range to target lens (exactly 400ms)
+            val duration = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
             startContinuousZoomTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens, durationMs = duration)
             val lensDesc = when (lens.lensType) {
                 LensType.ULTRAWIDE -> "0.5x Ultra-Wide"
@@ -1319,11 +1320,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         if (instant) {
-            zoomTransitionJob?.cancel()
-            zoomTransitionJob = null
+            engine.zoomTransitionController.cancelTransition()
+            engine.isContinuousZoomTransitionActive = false
         }
 
+        val oldLensType = currentLens?.lensType ?: LensType.WIDE
         engine.selectLens(lens)
+        if ((oldLensType == LensType.ULTRAWIDE && lens.lensType != LensType.ULTRAWIDE) ||
+            (oldLensType != LensType.ULTRAWIDE && lens.lensType == LensType.ULTRAWIDE)) {
+            engine.zoomTransitionController.startPreviewOverlap(
+                fromLensType = oldLensType,
+                toLensType = lens.lensType,
+                scope = viewModelScope,
+                durationMs = com.example.camera.engine.ZoomTransitionController.PREVIEW_OVERLAP_DURATION_MS
+            )
+        }
         preferences.lastFacing = lens.facing
         preferences.saveLastLens(lens)
         preferences.setModeLens(_cameraMode.value, lens)
@@ -1625,192 +1636,84 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (next) "Focus Locked" else "Focus Unlocked")
     }
 
-    private var zoomTransitionJob: Job? = null
-
     /**
-     * Unified continuous zoom interpolation system.
-     * Smoothly transitions between any two zoom values over exactly 500 ms (0.5s) using continuous
-     * sub-step interpolation with a smooth sinusoidal ease-in-out curve:
-     * - Starts slow
-     * - Becomes faster in the middle
-     * - Slows down smoothly at the end
-     * - No jumps, steps, snapping, or predefined zoom-value jumps
-     * The entire transition always takes exactly 0.5s regardless of zoom distance (1x->2x, 1x->3x, 1x->5x, 0.5x->1x).
-     * Continuous floating-point interpolation from current to target zoom.
-     * Synchronizes physical lens switching and digital crop at the exact sub-step threshold where the zoom
-     * crosses the optical boundary (e.g., 0.5x <-> 1.0x at 1.000x / 0.999x, 1.0x <-> 2.0x at 1.8x, etc.),
-     * with no discrete steps. Instant switching between physical lenses remains independent and instant.
-     */
-    /**
-     * Unified continuous zoom interpolation system.
-     * Smoothly transitions between any two zoom values over exactly 500 ms using continuous
-     * sub-step interpolation with a smooth sinusoidal ease-in-out curve:
-     * - Starts slow
-     * - Becomes faster in the middle
-     * - Slows down smoothly at the end
-     * - No jumps, steps, snapping, or predefined zoom-value jumps
-     * - For 0.5x -> 1.0x: uses every consecutive zoom value in order:
-     *   0.50x, 0.51x, 0.52x, ... 0.98x, 0.99x on Ultra-Wide, then performs the synchronized
-     *   main-lens handoff to 1.00x. No intermediate 0.01x step may be skipped.
-     * - For 1.0x -> 0.5x: hands off to Ultra-Wide at 1.00x with matched FOV, then uses every
-     *   consecutive zoom value in reverse: 1.00x, 0.99x, 0.98x, ... 0.51x, 0.50x. No intermediate step skipped.
-     * - Each intermediate zoom update is applied to the camera pipeline.
+     * Unified continuous zoom transition and interpolation system.
+     * Transitions between any two zoom values over exactly 400ms (0.40s) using continuous
+     * sub-step interpolation with sinusoidal ease-in, faster middle, and smooth ease-out:
+     * - Total transition duration of exactly 400ms for every animated zoom transition.
+     * - Every intermediate 0.01x zoom value is visited in strict order without skipping or sudden jumps.
+     * - Eliminates redundant camera engine calls using delta/time pacing.
+     * - Synchronizes an iPhone-style overlapping preview animation on the actual preview layers
+     *   for both Ultra-Wide -> 1x and 1x -> Ultra-Wide switches lasting exactly 100ms in both directions.
+     * - Preserves instant lens readiness, standby-camera operation, and responsive preset taps.
      */
     fun startContinuousZoomTransition(
         fromZoom: Float,
         targetZoom: Float,
         targetLens: LensInfo? = null,
-        durationMs: Long = 500L
+        durationMs: Long = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
     ) {
-        zoomTransitionJob?.cancel()
-        zoomTransitionJob = viewModelScope.launch(Dispatchers.Main.immediate) {
-            val currentFacing = engine.selectedLens.value?.facing
-            val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
-            val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                ?: lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-            val mainWideLens = lensesForFacing.firstOrNull { it.isPrimaryMain }
-                ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
-                ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
-                ?: lensesForFacing.firstOrNull()
-            val tele2xLens = lensesForFacing.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical }
-            val tele3xLens = lensesForFacing.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
+        val currentFacing = engine.selectedLens.value?.facing
+        val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
+        val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+            ?: lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val minZoom = if (ultraWideLens != null) 0.5f else 1.0f
+        val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 20.0f
+        val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
 
-            val minZoom = if (ultraWideLens != null) 0.5f else 1.0f
-            val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 20.0f
-            val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
+        val clampedFrom = fromZoom.coerceIn(minZoom, maxZoom)
+        val clampedTarget = targetZoom.coerceIn(minZoom, maxZoom)
 
-            val startZ = ((fromZoom * 100f).let { kotlin.math.round(it) } / 100f).coerceIn(minZoom, maxZoom)
-            val endZ = ((targetZoom * 100f).let { kotlin.math.round(it) } / 100f).coerceIn(minZoom, maxZoom)
-
-            val switchPoint = engine.lensSwitchPointMm.value
-            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
-
-            val resolvedDestinationLens = targetLens ?: when {
-                endZ < switchZoom -> ultraWideLens
-                endZ >= 2.8f && tele3xLens != null -> tele3xLens
-                endZ >= 1.8f && tele2xLens != null -> tele2xLens
-                else -> mainWideLens
-            } ?: engine.resolvedTargetLens.value
-
-            if (kotlin.math.abs(endZ - startZ) < 0.005f) {
-                _currentZoom.value = endZ
-                preferences.setModeZoom(_cameraMode.value, endZ)
-                val destLens = resolvedDestinationLens
-                if (destLens != null && !engine.isRunningOnLens(destLens)) {
-                    engine.selectLens(destLens, preserveZoom = true, targetZoom = endZ)
-                } else {
-                    engine.setZoom(endZ, isPresetTap = true)
-                }
-                zoomTransitionJob = null
-                return@launch
-            }
-
-            engine.isContinuousZoomTransitionActive = true
-
-            // Generate every consecutive 0.01x zoom step in strict order
-            val stepCount = kotlin.math.max(1, (kotlin.math.abs(endZ - startZ) * 100f).let { kotlin.math.round(it).toInt() })
-            val steps = ArrayList<Float>(stepCount + 1)
-            for (stepIndex in 0..stepCount) {
-                val t = stepIndex.toFloat() / stepCount.toFloat()
-                val interpolated = startZ + (endZ - startZ) * t
-                val rounded = (interpolated * 100f).let { kotlin.math.round(it) } / 100f
-                steps.add(rounded)
-            }
-
-            // Pre-calculate ease-in/ease-out target elapsed timestamps (in milliseconds)
-            // Sinusoidal ease: progress = (1 - cos(pi * t / T)) / 2 => t = (T / pi) * acos(1 - 2 * progress)
-            // Produces smooth slow start, faster middle, and slow finish over exactly durationMs (500 ms)
-            val targetElapsedMs = LongArray(stepCount + 1)
-            for (stepIndex in 0..stepCount) {
-                val progress = (stepIndex.toDouble() / stepCount.toDouble()).coerceIn(0.0, 1.0)
-                val cosVal = (1.0 - 2.0 * progress).coerceIn(-1.0, 1.0)
-                val elapsed = (durationMs.toDouble() / Math.PI) * Math.acos(cosVal)
-                targetElapsedMs[stepIndex] = (elapsed + 0.5).toLong()
-            }
-
-            // Downward transition crossing switchZoom into Ultra-Wide (e.g. 1.0x -> 0.5x):
-            // Perform synchronized FOV-matched handoff to Ultra-Wide at switchZoom/startZ boundary FIRST
-            // so that every subsequent descending step (0.99x down to 0.50x) runs continuously on Ultra-Wide
-            if (startZ >= switchZoom && endZ < switchZoom && ultraWideLens != null && currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
-                if (engine.selectedLens.value?.lensType != LensType.ULTRAWIDE) {
-                    engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = startZ, isContinuousTransition = true)
-                    preferences.lastFacing = ultraWideLens.facing
-                    preferences.saveLastLens(ultraWideLens)
-                    preferences.setModeLens(_cameraMode.value, ultraWideLens)
+        engine.isContinuousZoomTransitionActive = true
+        engine.zoomTransitionController.startTransition(
+            fromZoom = clampedFrom,
+            targetZoom = clampedTarget,
+            targetLens = targetLens,
+            availableLenses = engine.availableLenses.value,
+            currentLens = engine.selectedLens.value,
+            switchPointMm = engine.lensSwitchPointMm.value,
+            scope = viewModelScope,
+            durationMs = durationMs,
+            onZoomUpdate = { interpolatedZoom ->
+                _currentZoom.value = interpolatedZoom
+                preferences.setModeZoom(_cameraMode.value, interpolatedZoom)
+            },
+            onComplete = { finalZoom, finalLens ->
+                _currentZoom.value = finalZoom
+                preferences.setModeZoom(_cameraMode.value, finalZoom)
+                engine.isContinuousZoomTransitionActive = false
+                if (finalLens != null) {
+                    preferences.lastFacing = finalLens.facing
+                    preferences.saveLastLens(finalLens)
+                    preferences.setModeLens(_cameraMode.value, finalLens)
                 }
             }
-
-            // Upward transition toward switch point / 1.0x (e.g. 0.5x -> 1.0x):
-            // Ensure Ultra-Wide is active and prewarm Main lens in standby for synchronized handoff
-            if (startZ < switchZoom && endZ >= switchZoom && currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
-                if (ultraWideLens != null && engine.selectedLens.value?.lensType != LensType.ULTRAWIDE) {
-                    engine.selectLens(ultraWideLens, preserveZoom = true, targetZoom = startZ, isContinuousTransition = true)
-                }
-                engine.ensureUltraWideSimultaneousReady()
-            }
-
-            val startTime = android.os.SystemClock.uptimeMillis()
-
-            // Run through every intermediate step strictly in order
-            for (stepIndex in 0 until stepCount) {
-                if (!isActive) break
-
-                val targetTime = startTime + targetElapsedMs[stepIndex]
-                val now = android.os.SystemClock.uptimeMillis()
-                val waitMs = targetTime - now
-                if (waitMs > 0) {
-                    delay(waitMs)
-                }
-
-                val currentZ = steps[stepIndex]
-                _currentZoom.value = currentZ
-                preferences.setModeZoom(_cameraMode.value, currentZ)
-
-                // Apply intermediate zoom update directly to the camera pipeline
-                engine.setZoom(currentZ, isPresetTap = false, isContinuousTransition = true)
-            }
-
-            // Final step (e.g. 1.00x in 0.5x -> 1.0x, or 0.50x in 1.0x -> 0.5x)
-            val finalTargetTime = startTime + targetElapsedMs[stepCount]
-            val nowAtEnd = android.os.SystemClock.uptimeMillis()
-            val finalWaitMs = finalTargetTime - nowAtEnd
-            if (finalWaitMs > 0) {
-                delay(finalWaitMs)
-            }
-
-            // At 1.00x handoff for upward transition: switch to Main lens at the exact boundary
-            if (startZ < switchZoom && endZ >= switchZoom && mainWideLens != null && currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
-                if (engine.selectedLens.value?.id != mainWideLens.id) {
-                    engine.selectLens(mainWideLens, preserveZoom = true, targetZoom = endZ, isContinuousTransition = true)
-                    preferences.lastFacing = mainWideLens.facing
-                    preferences.saveLastLens(mainWideLens)
-                    preferences.setModeLens(_cameraMode.value, mainWideLens)
-                }
-            } else if (resolvedDestinationLens != null && !engine.isRunningOnLens(resolvedDestinationLens) && engine.targetLens.value?.id != resolvedDestinationLens.id) {
-                engine.selectLens(resolvedDestinationLens, preserveZoom = true, targetZoom = endZ, isContinuousTransition = true)
-                preferences.lastFacing = resolvedDestinationLens.facing
-                preferences.saveLastLens(resolvedDestinationLens)
-                preferences.setModeLens(_cameraMode.value, resolvedDestinationLens)
-            }
-
-            _currentZoom.value = endZ
-            preferences.setModeZoom(_cameraMode.value, endZ)
-            engine.setZoom(endZ, isPresetTap = false, isContinuousTransition = false)
-            engine.isContinuousZoomTransitionActive = false
-            zoomTransitionJob = null
-        }
+        )
     }
 
     fun startSmoothHalfXToOneXTransition(fromZoom: Float = _currentZoom.value) {
-        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = 1.0f, durationMs = 500L)
+        startContinuousZoomTransition(
+            fromZoom = fromZoom,
+            targetZoom = 1.0f,
+            durationMs = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
+        )
     }
 
     fun startSmoothOneXToHalfXTransition(fromZoom: Float = _currentZoom.value, targetZoom: Float = 0.5f) {
-        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = targetZoom, durationMs = 500L)
+        startContinuousZoomTransition(
+            fromZoom = fromZoom,
+            targetZoom = targetZoom,
+            durationMs = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
+        )
     }
 
     fun startSmoothLensTransition(fromZoom: Float, targetZoom: Float, targetLens: LensInfo? = null) {
-        startContinuousZoomTransition(fromZoom = fromZoom, targetZoom = targetZoom, targetLens = targetLens, durationMs = 500L)
+        startContinuousZoomTransition(
+            fromZoom = fromZoom,
+            targetZoom = targetZoom,
+            targetLens = targetLens,
+            durationMs = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
+        )
     }
 
     fun setZoom(zoom: Float, isPresetTap: Boolean = false) {
@@ -1827,8 +1730,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // Cancel running transition if user initiates a new manual zoom action or slider gesture
         if (!isPresetTap) {
-            zoomTransitionJob?.cancel()
-            zoomTransitionJob = null
+            engine.zoomTransitionController.cancelTransition()
+            engine.isContinuousZoomTransitionActive = false
             _currentZoom.value = clamped
             preferences.setModeZoom(_cameraMode.value, clamped)
             engine.setZoom(clamped, isPresetTap = false, isContinuousTransition = true)
@@ -1838,7 +1741,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val currentZ = _currentZoom.value
 
         if (kotlin.math.abs(clamped - currentZ) >= 0.05f) {
-            startContinuousZoomTransition(fromZoom = currentZ, targetZoom = clamped, durationMs = 500L)
+            startContinuousZoomTransition(
+                fromZoom = currentZ,
+                targetZoom = clamped,
+                durationMs = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
+            )
             return
         }
 
