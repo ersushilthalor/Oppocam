@@ -89,6 +89,7 @@ fun CameraSettingsHost(
     val activePipelinePreset by viewModel.activePipelinePreset.collectAsStateWithLifecycle()
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val lensSwitchPointMm by viewModel.lensSwitchPointMm.collectAsStateWithLifecycle()
+    val lensSwitchOverlapDurationSec by viewModel.lensSwitchOverlapDurationSec.collectAsStateWithLifecycle()
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
@@ -242,6 +243,8 @@ fun CameraSettingsHost(
         onViewfinderCornerRadiusChange = { viewModel.setViewfinderCornerRadius(it) },
         lensSwitchPointMm = lensSwitchPointMm,
         onLensSwitchPointChange = { viewModel.setLensSwitchPointMm(it) },
+        lensSwitchOverlapDurationSec = lensSwitchOverlapDurationSec,
+        onLensSwitchOverlapDurationChange = { viewModel.setLensSwitchOverlapDuration(it) },
         onDismiss = onDismiss
     )
 }

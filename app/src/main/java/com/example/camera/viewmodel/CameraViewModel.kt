@@ -713,15 +713,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
             ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF,
-            switchPointMm = preferences.lensSwitchPointMm
+            switchPointMm = preferences.lensSwitchPointMm,
+            lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec
         )
     )
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
+
+    private val _lensSwitchOverlapDurationSec = MutableStateFlow(preferences.lensSwitchOverlapDurationSec)
+    val lensSwitchOverlapDurationSec: StateFlow<Float> = _lensSwitchOverlapDurationSec.asStateFlow()
 
     val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
     val isUsingUltraWideSurface: StateFlow<Boolean> = engine.isUsingUltraWideSurface
     val displayedPreviewSource: StateFlow<com.example.camera.engine.PreviewStreamSource> = engine.displayedPreviewSource
     val previewOverlapState: StateFlow<com.example.camera.engine.PreviewOverlapState> = engine.previewOverlapState
+
+    fun setLensSwitchOverlapDuration(seconds: Float) {
+        val clamped = (Math.round(seconds.coerceIn(0.1f, 1.0f) * 10f) / 10f)
+        preferences.lensSwitchOverlapDurationSec = clamped
+        _lensSwitchOverlapDurationSec.value = clamped
+        engine.zoomTransitionController.overlapDurationMs = (clamped * 1000f + 0.5f).toLong()
+        _instantSwitchState.update { it.copy(lensSwitchOverlapDurationSec = clamped) }
+        showToast("Lens Switch Overlap: ${String.format(java.util.Locale.US, "%.1f", clamped)} sec")
+    }
 
     fun setLensSwitchPointMm(switchPointMm: Float) {
         val clamped = switchPointMm.coerceIn(
@@ -1001,6 +1014,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(_customVideoPipelineConfig.value)
         engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
+        engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
+        engine.setLensSwitchPointMm(preferences.lensSwitchPointMm)
 
         viewModelScope.launch {
             engine.ultraWideStreamStatus.collect { status ->
@@ -1301,10 +1316,67 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val isDifferentLens = currentLens == null || currentLens.id != lens.id || currentLens.lensType != lens.lensType
+        val isBetweenMainAndUw = (currentLens?.lensType == LensType.WIDE && lens.lensType == LensType.ULTRAWIDE) ||
+                (currentLens?.lensType == LensType.ULTRAWIDE && lens.lensType == LensType.WIDE) ||
+                (lens.lensType == LensType.ULTRAWIDE && currentZ > 0.65f) ||
+                (lens.lensType == LensType.WIDE && currentZ <= 0.65f)
+
+        if (instant) {
+            engine.zoomTransitionController.cancelTransition()
+            engine.isContinuousZoomTransitionActive = false
+            engine.selectLens(lens)
+            engine.zoomTransitionController.setSteadyStatePreview(lens.lensType == LensType.ULTRAWIDE)
+            preferences.lastFacing = lens.facing
+            preferences.saveLastLens(lens)
+            preferences.setModeLens(_cameraMode.value, lens)
+            _currentZoom.value = targetZ
+            preferences.setModeZoom(_cameraMode.value, targetZ)
+            val lensDesc = when (lens.lensType) {
+                LensType.ULTRAWIDE -> "0.5x Ultra-Wide"
+                LensType.WIDE -> "1x Main"
+                LensType.TELEPHOTO -> "2x Telephoto"
+                LensType.TELEPHOTO_3X -> "3x Telephoto"
+                LensType.MACRO -> "Macro"
+                LensType.FRONT -> "Front Selfie"
+            }
+            showToast("Switched to $lensDesc Lens")
+            return
+        }
+
+        // PHYSICAL LENS SWITCH between Ultra-Wide and 1x Main:
+        // Use the dedicated "Lens Switch Overlap Animation Duration" setting
+        if (isDifferentLens && isBetweenMainAndUw && lens.facing == (currentLens?.facing ?: lens.facing)) {
+            val oldLensType = currentLens?.lensType ?: (if (currentZ <= 0.65f) LensType.ULTRAWIDE else LensType.WIDE)
+            val overlapDuration = preferences.lensSwitchOverlapDurationMs
+            engine.zoomTransitionController.overlapDurationMs = overlapDuration
+
+            // 1. Immediately initiate preview overlap crossfade with the configured duration
+            engine.zoomTransitionController.startPreviewOverlap(
+                fromLensType = oldLensType,
+                toLensType = lens.lensType,
+                scope = viewModelScope,
+                durationMs = overlapDuration
+            )
+
+            // 2. Select the lens on engine
+            engine.selectLens(lens, preserveZoom = false, targetZoom = targetZ, isContinuousTransition = true)
+
+            // 3. Update current zoom state and persist
+            _currentZoom.value = targetZ
+            preferences.setModeZoom(_cameraMode.value, targetZ)
+            preferences.lastFacing = lens.facing
+            preferences.saveLastLens(lens)
+            preferences.setModeLens(_cameraMode.value, lens)
+
+            val lensDesc = if (lens.lensType == LensType.ULTRAWIDE) "0.5x Ultra-Wide" else "1x Main"
+            showToast("Switched to $lensDesc Lens")
+            return
+        }
+
         val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.05f
 
-        if (!instant && isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
-            // Smooth continuous sub-step interpolation across complete range to target lens (exactly 300ms)
+        if (isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
+            // Smooth continuous sub-step interpolation across complete range for other lenses
             val duration = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
             startContinuousZoomTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens, durationMs = duration)
             val lensDesc = when (lens.lensType) {
@@ -1319,11 +1391,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        if (instant) {
-            engine.zoomTransitionController.cancelTransition()
-            engine.isContinuousZoomTransitionActive = false
-        }
-
         val oldLensType = currentLens?.lensType ?: LensType.WIDE
         engine.selectLens(lens)
         if ((oldLensType == LensType.ULTRAWIDE && lens.lensType != LensType.ULTRAWIDE) ||
@@ -1332,7 +1399,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 fromLensType = oldLensType,
                 toLensType = lens.lensType,
                 scope = viewModelScope,
-                durationMs = com.example.camera.engine.ZoomTransitionController.PREVIEW_OVERLAP_DURATION_MS
+                durationMs = preferences.lensSwitchOverlapDurationMs
             )
         }
         preferences.lastFacing = lens.facing
@@ -1739,6 +1806,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val currentZ = _currentZoom.value
+        val currentLensType = engine.selectedLens.value?.lensType
+
+        // Physical lens switch when preset 0.5x or 1.0x is tapped across boundary
+        val isSwitchToUwPreset = (clamped <= 0.6f && (currentZ > 0.65f || currentLensType != LensType.ULTRAWIDE) && ultraWideLens != null)
+        val isSwitchToWidePreset = (clamped in 0.95f..1.05f && (currentZ <= 0.65f || currentLensType == LensType.ULTRAWIDE))
+        if (isSwitchToUwPreset && ultraWideLens != null) {
+            selectLens(ultraWideLens, instant = false)
+            return
+        }
+        if (isSwitchToWidePreset) {
+            val mainWideLens = lensesForFacing.firstOrNull { it.isPrimaryMain }
+                ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
+            if (mainWideLens != null) {
+                selectLens(mainWideLens, instant = false)
+                return
+            }
+        }
 
         if (kotlin.math.abs(clamped - currentZ) >= 0.05f) {
             startContinuousZoomTransition(

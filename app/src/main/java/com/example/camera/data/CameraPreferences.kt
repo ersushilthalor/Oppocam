@@ -54,7 +54,25 @@ class CameraPreferences(context: Context) {
         private const val KEY_MOTION_PHOTO_DURATION = "pref_motion_photo_duration"
         private const val KEY_VIEWFINDER_CORNER_RADIUS = "pref_viewfinder_corner_radius"
         private const val KEY_LENS_SWITCH_POINT_MM = "pref_lens_switch_point_mm"
+        private const val KEY_LENS_SWITCH_OVERLAP_DURATION_SEC = "pref_lens_switch_overlap_duration_sec"
+        const val DEFAULT_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.3f
+        const val MIN_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.1f
+        const val MAX_LENS_SWITCH_OVERLAP_DURATION_SEC = 1.0f
+        const val STEP_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.1f
     }
+
+    var lensSwitchOverlapDurationSec: Float
+        get() = prefs.getFloat(
+            KEY_LENS_SWITCH_OVERLAP_DURATION_SEC,
+            DEFAULT_LENS_SWITCH_OVERLAP_DURATION_SEC
+        ).coerceIn(MIN_LENS_SWITCH_OVERLAP_DURATION_SEC, MAX_LENS_SWITCH_OVERLAP_DURATION_SEC)
+        set(value) {
+            val rounded = (Math.round(value.coerceIn(MIN_LENS_SWITCH_OVERLAP_DURATION_SEC, MAX_LENS_SWITCH_OVERLAP_DURATION_SEC) * 10f) / 10f)
+            prefs.edit().putFloat(KEY_LENS_SWITCH_OVERLAP_DURATION_SEC, rounded).apply()
+        }
+
+    val lensSwitchOverlapDurationMs: Long
+        get() = (lensSwitchOverlapDurationSec * 1000f + 0.5f).toLong()
 
     var lensSwitchPointMm: Float
         get() = prefs.getFloat(

@@ -337,4 +337,69 @@ class ZoomTransitionVerificationTest {
             assertFalse(viewModel.engine.zoomTransitionController.isTransitionActive.value)
         }
     }
+
+    @Test
+    fun testLensSwitchOverlapDurationSettingAndClamping() {
+        // Default is 0.3s
+        assertEquals(0.3f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
+        assertEquals(300L, viewModel.preferences.lensSwitchOverlapDurationMs)
+        assertEquals(300L, viewModel.engine.zoomTransitionController.overlapDurationMs)
+
+        // Adjust to 0.5s
+        viewModel.setLensSwitchOverlapDuration(0.5f)
+        assertEquals(0.5f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
+        assertEquals(500L, viewModel.preferences.lensSwitchOverlapDurationMs)
+        assertEquals(500L, viewModel.engine.zoomTransitionController.overlapDurationMs)
+
+        // Adjust to min 0.1s
+        viewModel.setLensSwitchOverlapDuration(0.05f) // clamped to 0.1s
+        assertEquals(0.1f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
+        assertEquals(100L, viewModel.preferences.lensSwitchOverlapDurationMs)
+        assertEquals(100L, viewModel.engine.zoomTransitionController.overlapDurationMs)
+
+        // Adjust to max 1.0s
+        viewModel.setLensSwitchOverlapDuration(1.5f) // clamped to 1.0s
+        assertEquals(1.0f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
+        assertEquals(1000L, viewModel.preferences.lensSwitchOverlapDurationMs)
+        assertEquals(1000L, viewModel.engine.zoomTransitionController.overlapDurationMs)
+
+        // Restore default 0.3s
+        viewModel.setLensSwitchOverlapDuration(0.3f)
+        assertEquals(0.3f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
+        assertEquals(300L, viewModel.preferences.lensSwitchOverlapDurationMs)
+    }
+
+    @Test
+    fun testSmoothOverlapCrossfadeSymmetricBothDirections() {
+        val controller = ZoomTransitionController()
+        controller.overlapDurationMs = 500L
+
+        // Direction 1: Wide -> Ultra-Wide
+        val job1 = controller.startPreviewOverlap(
+            fromLensType = LensType.WIDE,
+            toLensType = LensType.ULTRAWIDE,
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+            durationMs = 500L
+        )
+        val state1 = controller.previewOverlapState.value
+        assertTrue(state1.isOverlapping)
+        assertEquals(PreviewStreamSource.ULTRAWIDE, state1.topSource)
+        assertEquals(1.0f, state1.mainAlpha, 0.001f) // Outgoing underneath is solid 1.0f
+        assertEquals(0.0f, state1.ultraWideAlpha, 0.001f) // Incoming on top starts at 0.0f
+        job1.cancel()
+
+        // Direction 2: Ultra-Wide -> Wide
+        val job2 = controller.startPreviewOverlap(
+            fromLensType = LensType.ULTRAWIDE,
+            toLensType = LensType.WIDE,
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+            durationMs = 500L
+        )
+        val state2 = controller.previewOverlapState.value
+        assertTrue(state2.isOverlapping)
+        assertEquals(PreviewStreamSource.MAIN, state2.topSource)
+        assertEquals(0.0f, state2.mainAlpha, 0.001f) // Incoming on top starts at 0.0f
+        assertEquals(1.0f, state2.ultraWideAlpha, 0.001f) // Outgoing underneath is solid 1.0f
+        job2.cancel()
+    }
 }

@@ -30,18 +30,19 @@ data class PreviewOverlapState(
     val mainAlpha: Float = 1.0f,
     val ultraWideAlpha: Float = 0.0f,
     val activeSource: PreviewStreamSource = PreviewStreamSource.MAIN,
-    val overlapProgress: Float = 0.0f
+    val overlapProgress: Float = 0.0f,
+    val topSource: PreviewStreamSource = PreviewStreamSource.MAIN
 )
 
 /**
  * Unified Zoom Transition Controller.
  *
  * Implements:
- * 1. Fixed duration of EXACTLY 300ms (0.30 seconds) for every zoom transition across all lenses
- *    and zoom values (1x -> 2x, 1x -> 10x, 0.5x <-> 1x, and any custom zoom).
- * 2. Identical 300ms duration and smoothness in both directions for Ultra-Wide <-> 1x switching.
- * 3. Continuous, seamless zoom interpolation with smooth sinusoidal ease-in-out motion:
- *    no sudden jumps, pauses, intermediate stops, or visible lens-switch stutters.
+ * 1. Fixed duration of EXACTLY 300ms (0.30 seconds) for continuous digital zoom slider transitions.
+ * 2. Dedicated user-configurable "Lens Switch Overlap Animation Duration" setting (0.1s to 1.0s, default 0.3s)
+ *    applied specifically to physical lens-switching preview overlap crossfades (Ultra-Wide ↔ 1x Main).
+ * 3. Continuous, seamless preview handoff with smooth sinusoidal ease-in-out motion:
+ *    no sudden jumps, pauses, intermediate stops, dark flickers, or visible lens-switch stutters.
  * 4. Preserves every intermediate zoom value and progresses continuously to the exact target value.
  * 5. Seamless preview handoff for Ultra-Wide <-> 1x switching without waiting for animation to finish.
  * 6. Preserves instant-switch capability (0ms delay to switch hardware lens) and standby-camera operation.
@@ -54,9 +55,14 @@ class ZoomTransitionController(
 ) {
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
-        const val TOTAL_TRANSITION_DURATION_MS = 300L // Exactly 300ms (0.30 seconds)
-        const val PREVIEW_OVERLAP_DURATION_MS = 100L  // Exactly 100ms (0.10 seconds)
+        const val TOTAL_TRANSITION_DURATION_MS = 300L // 300ms (0.30s) for continuous digital zoom
+        const val DEFAULT_OVERLAP_DURATION_MS = 300L  // 300ms (0.30s) default for lens-switch overlap
+        const val PREVIEW_OVERLAP_DURATION_MS = 100L  // Backwards compatibility default
+        const val MIN_OVERLAP_DURATION_MS = 100L      // 100ms (0.10s)
+        const val MAX_OVERLAP_DURATION_MS = 1000L     // 1000ms (1.00s)
     }
+
+    var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
 
     private val _isTransitionActive = MutableStateFlow(false)
     val isTransitionActive: StateFlow<Boolean> = _isTransitionActive.asStateFlow()
@@ -117,17 +123,17 @@ class ZoomTransitionController(
 
     /**
      * Calculates the normalized progress (0.0 to 1.0) of preview overlap crossfading.
-     * Overlap duration is exactly [PREVIEW_OVERLAP_DURATION_MS] (100ms).
+     * Overlap duration is by default [overlapDurationMs].
      */
     fun calculateOverlapProgress(
         elapsedMs: Long,
         overlapStartMs: Long,
-        overlapDurationMs: Long = PREVIEW_OVERLAP_DURATION_MS
+        overlapDurationMs: Long = this.overlapDurationMs
     ): Float {
         if (elapsedMs <= overlapStartMs) return 0f
         if (elapsedMs >= overlapStartMs + overlapDurationMs) return 1f
         val fraction = ((elapsedMs - overlapStartMs).toFloat() / overlapDurationMs.toFloat()).coerceIn(0f, 1f)
-        // Smooth sinusoidal ease curve for the 100ms crossfade
+        // Smooth sinusoidal ease curve for the crossfade
         return (0.5f * (1.0f - cos(fraction * PI.toFloat()))).coerceIn(0f, 1f)
     }
 
@@ -140,22 +146,24 @@ class ZoomTransitionController(
             mainAlpha = if (isUltraWide) 0.0f else 1.0f,
             ultraWideAlpha = if (isUltraWide) 1.0f else 0.0f,
             activeSource = if (isUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN,
-            overlapProgress = if (isUltraWide) 1.0f else 0.0f
+            overlapProgress = if (isUltraWide) 1.0f else 0.0f,
+            topSource = if (isUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
         )
     }
 
     /**
      * Starts an iPhone-style overlapping preview animation on the actual preview layers
-     * for Ultra-Wide <-> Main handoff lasting EXACTLY 100ms (0.10 seconds) in both directions.
+     * for Ultra-Wide <-> Main handoff lasting user-configured [durationMs] in both directions.
      *
      * Crossfades the actual TextureView preview layers without restarting camera sessions
-     * or waiting for camera initialization.
+     * or waiting for camera initialization. Outgoing preview remains solid underneath while
+     * incoming preview fades in on top, guaranteeing zero black flicker, jump, or dimming.
      */
     fun startPreviewOverlap(
         fromLensType: LensType,
         toLensType: LensType,
         scope: CoroutineScope,
-        durationMs: Long = PREVIEW_OVERLAP_DURATION_MS,
+        durationMs: Long = overlapDurationMs,
         onComplete: (() -> Unit)? = null
     ): Job {
         activeOverlapJob?.cancel()
@@ -171,19 +179,40 @@ class ZoomTransitionController(
             return dummyJob
         }
 
+        val topSource = if (isUwToMain) PreviewStreamSource.MAIN else PreviewStreamSource.ULTRAWIDE
+        val effectiveDuration = durationMs.coerceIn(MIN_OVERLAP_DURATION_MS, MAX_OVERLAP_DURATION_MS)
+
+        // Immediately enter active overlapping state synchronously so there is zero gap, flicker or jump
+        val initialMainAlpha = if (isUwToMain) 0.0f else 1.0f
+        val initialUwAlpha = if (isUwToMain) 1.0f else 0.0f
+        _previewOverlapState.value = PreviewOverlapState(
+            isOverlapping = true,
+            mainAlpha = initialMainAlpha,
+            ultraWideAlpha = initialUwAlpha,
+            activeSource = if (isUwToMain) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN,
+            overlapProgress = 0.0f,
+            topSource = topSource
+        )
+
         val job = scope.launch(Dispatchers.Main.immediate) {
             val startTime = SystemClock.uptimeMillis()
 
             while (isActive) {
                 val now = SystemClock.uptimeMillis()
                 val elapsed = now - startTime
-                if (elapsed >= durationMs) break
+                if (elapsed >= effectiveDuration) break
 
-                val linearProgress = (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                val linearProgress = (elapsed.toFloat() / effectiveDuration.toFloat()).coerceIn(0f, 1f)
                 val smoothProgress = (0.5f * (1.0f - cos(linearProgress * PI.toFloat()))).coerceIn(0f, 1f)
 
-                val mainAlpha = if (isUwToMain) smoothProgress else (1.0f - smoothProgress)
-                val uwAlpha = if (isUwToMain) (1.0f - smoothProgress) else smoothProgress
+                // Perfect optical crossfade:
+                // The incoming layer is ON TOP (zIndex = 2f) and its opacity fades from 0.0f to 1.0f.
+                // The outgoing layer is UNDERNEATH (zIndex = 1f) and remains solid 1.0f throughout.
+                // Hardware alpha blending (topAlpha * Top + (1 - topAlpha) * Bottom) produces
+                // a mathematically pure, seamless crossfade with 0% black background leakage,
+                // no dips in luminance, no flickering, and no pauses.
+                val mainAlpha = if (isUwToMain) smoothProgress else 1.0f
+                val uwAlpha = if (isMainToUw) smoothProgress else 1.0f
 
                 _previewOverlapState.value = PreviewOverlapState(
                     isOverlapping = true,
@@ -194,13 +223,14 @@ class ZoomTransitionController(
                     } else {
                         if (isUwToMain) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                     },
-                    overlapProgress = smoothProgress
+                    overlapProgress = smoothProgress,
+                    topSource = topSource
                 )
 
                 delay(8L) // ~120fps ultra-fluid preview crossfade updates
             }
 
-            // Exactly at durationMs mark: finalize preview state
+            // Exactly at effectiveDuration mark: finalize steady state preview
             val finalIsUw = (toLensType == LensType.ULTRAWIDE)
             setSteadyStatePreview(finalIsUw)
             onComplete?.invoke()
@@ -274,7 +304,7 @@ class ZoomTransitionController(
                         currentLens?.lensType ?: LensType.WIDE,
                         resolvedDestinationLens.lensType,
                         scope,
-                        PREVIEW_OVERLAP_DURATION_MS
+                        overlapDurationMs
                     )
                 } else {
                     onApplyZoomToEngine(endZ, false)
@@ -300,12 +330,12 @@ class ZoomTransitionController(
                     LensType.WIDE,
                     LensType.ULTRAWIDE,
                     scope,
-                    PREVIEW_OVERLAP_DURATION_MS
+                    overlapDurationMs
                 )
             }
 
             // Direction 2: Upward switch crossing boundary from Ultra-Wide to Main (e.g. 0.5x -> 1.0x)
-            // Starts on Ultra-Wide; preview crossfade runs during final 100ms handoff window approaching 1.0x
+            // Starts on Ultra-Wide; preview crossfade runs during final handoff window approaching 1.0x
             val isCrossingUpToMain = startZ < switchZoom && endZ >= switchZoom && mainWideLens != null
             if (isCrossingUpToMain) {
                 if (currentLens?.lensType != LensType.ULTRAWIDE && ultraWideLens != null) {
@@ -318,7 +348,7 @@ class ZoomTransitionController(
             var lastDispatchedZoom = startZ
             var lastDispatchedTime = startTime
             var hasTriggeredUpwardOverlap = false
-            val upwardOverlapStartMs = max(0L, durationMs - PREVIEW_OVERLAP_DURATION_MS)
+            val upwardOverlapStartMs = max(0L, durationMs - overlapDurationMs)
 
             // Step through intermediate values using continuous sinusoidal ease-in-out motion
             while (isActive) {
@@ -346,11 +376,12 @@ class ZoomTransitionController(
                 // Trigger upward preview overlap when entering the handoff window
                 if (isCrossingUpToMain && !hasTriggeredUpwardOverlap && elapsed >= upwardOverlapStartMs) {
                     hasTriggeredUpwardOverlap = true
+                    onSelectLensOnEngine(mainWideLens!!, currentZ, true)
                     startPreviewOverlap(
                         LensType.ULTRAWIDE,
                         LensType.WIDE,
                         scope,
-                        PREVIEW_OVERLAP_DURATION_MS
+                        overlapDurationMs
                     )
                 }
 
@@ -385,7 +416,7 @@ class ZoomTransitionController(
                         LensType.ULTRAWIDE,
                         LensType.WIDE,
                         scope,
-                        PREVIEW_OVERLAP_DURATION_MS
+                        overlapDurationMs
                     )
                 }
             } else if (resolvedDestinationLens != null && resolvedDestinationLens.id != currentLens?.id && !isCrossingDownToUw) {
@@ -398,9 +429,11 @@ class ZoomTransitionController(
             _isTransitionActive.value = false
             activeTransitionJob = null
 
-            // Ensure steady state preview is cleanly set
-            val finalIsUw = (resolvedDestinationLens?.lensType == LensType.ULTRAWIDE || endZ < switchZoom)
-            setSteadyStatePreview(finalIsUw)
+            // Ensure steady state preview is cleanly set if no overlap is actively running
+            if (activeOverlapJob?.isActive != true) {
+                val finalIsUw = (resolvedDestinationLens?.lensType == LensType.ULTRAWIDE || endZ < switchZoom)
+                setSteadyStatePreview(finalIsUw)
+            }
 
             onComplete(endZ, resolvedDestinationLens)
         }

@@ -375,7 +375,8 @@ data class MotorolaInstantSwitchState(
     val lastMeasuredLatencyMs: Long = 0L,
     val statusMessage: String = "Motorola Instant Switching Ready",
     val switchPointMm: Float = 23.0f,
-    val displayedPreviewSource: PreviewStreamSource = PreviewStreamSource.MAIN
+    val displayedPreviewSource: PreviewStreamSource = PreviewStreamSource.MAIN,
+    val lensSwitchOverlapDurationSec: Float = 0.3f
 )
 
 /**

@@ -215,6 +215,8 @@ fun SettingsDrawer(
     onViewfinderCornerRadiusChange: (Int) -> Unit = {},
     lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
     onLensSwitchPointChange: (Float) -> Unit = {},
+    lensSwitchOverlapDurationSec: Float = 0.3f,
+    onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -452,6 +454,8 @@ fun SettingsDrawer(
                             instantSwitchState = instantSwitchState,
                             lensSwitchPointMm = lensSwitchPointMm,
                             onLensSwitchPointChange = onLensSwitchPointChange,
+                            lensSwitchOverlapDurationSec = lensSwitchOverlapDurationSec,
+                            onLensSwitchOverlapDurationChange = onLensSwitchOverlapDurationChange,
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
                             onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
                             onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
@@ -2038,6 +2042,8 @@ private fun CameraLensSettingsPage(
     instantSwitchState: MotorolaInstantSwitchState,
     lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
     onLensSwitchPointChange: (Float) -> Unit = {},
+    lensSwitchOverlapDurationSec: Float = 0.3f,
+    onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
@@ -2070,6 +2076,13 @@ private fun CameraLensSettingsPage(
             SwitchPointSettingCard(
                 switchPointMm = lensSwitchPointMm,
                 onSwitchPointChange = onLensSwitchPointChange
+            )
+        }
+
+        item {
+            LensSwitchOverlapDurationSettingCard(
+                durationSec = lensSwitchOverlapDurationSec,
+                onDurationChange = onLensSwitchOverlapDurationChange
             )
         }
 
@@ -2330,6 +2343,172 @@ private fun SwitchPointSettingCard(
                         ),
                         modifier = Modifier.testTag("chip_switch_point_$presetFocal")
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LensSwitchOverlapDurationSettingCard(
+    durationSec: Float,
+    onDurationChange: (Float) -> Unit
+) {
+    val roundedDuration = (Math.round(durationSec.coerceIn(0.1f, 1.0f) * 10f) / 10f)
+    val displayValue = String.format(java.util.Locale.US, "%.1f sec", roundedDuration)
+    val isDefault = Math.abs(roundedDuration - 0.3f) < 0.05f
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("setting_lens_switch_overlap_duration_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Cameraswitch,
+                            contentDescription = null,
+                            tint = Color(0xFFFFD54F),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Lens Switch Overlap Animation Duration",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Ultra-Wide ↔ 1x crossfade duration (0.1s – 1.0s)",
+                            color = Color.White.copy(alpha = 0.55f),
+                            fontSize = 11.5.sp
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFFFD54F).copy(alpha = 0.18f))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = if (isDefault) "$displayValue (Default)" else displayValue,
+                        color = Color(0xFFFFD54F),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Step controls (- and + buttons) with Slider
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Decrement button
+                Surface(
+                    onClick = {
+                        val next = ((roundedDuration - 0.1f) * 10f).roundToInt() / 10f
+                        onDurationChange(next.coerceIn(0.1f, 1.0f))
+                    },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("btn_decrease_overlap_duration"),
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = 0.1f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("-", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Slider(
+                    value = roundedDuration,
+                    onValueChange = { newVal ->
+                        val stepped = (Math.round(newVal.coerceIn(0.1f, 1.0f) * 10f) / 10f)
+                        onDurationChange(stepped)
+                    },
+                    valueRange = 0.1f..1.0f,
+                    steps = 8, // 8 inner steps for 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("slider_lens_switch_overlap_duration"),
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFFFFD54F),
+                        activeTrackColor = Color(0xFFFFD54F),
+                        inactiveTrackColor = Color.White.copy(alpha = 0.18f)
+                    )
+                )
+
+                // Increment button
+                Surface(
+                    onClick = {
+                        val next = ((roundedDuration + 0.1f) * 10f).roundToInt() / 10f
+                        onDurationChange(next.coerceIn(0.1f, 1.0f))
+                    },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("btn_increase_overlap_duration"),
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = 0.1f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("+", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Quick preset pills: 0.1s, 0.2s, 0.3s (Default), 0.5s, 0.7s, 1.0s
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val durationPresets = listOf(0.1f, 0.2f, 0.3f, 0.5f, 0.7f, 1.0f)
+                durationPresets.forEach { p ->
+                    val isSelected = Math.abs(roundedDuration - p) < 0.04f
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.08f))
+                            .clickable { onDurationChange(p) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "${(p * 10).roundToInt() / 10f}s",
+                            color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.8f),
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
