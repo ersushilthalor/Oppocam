@@ -61,44 +61,6 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testSinusoidalEaseInOutTimingProfile500ms() {
-        val stepCount = 50
-        val durationMs = 500.0
-
-        val targetElapsedMs = LongArray(stepCount + 1)
-        for (stepIndex in 0..stepCount) {
-            val progress = (stepIndex.toDouble() / stepCount.toDouble()).coerceIn(0.0, 1.0)
-            val cosVal = (1.0 - 2.0 * progress).coerceIn(-1.0, 1.0)
-            val elapsed = (durationMs / Math.PI) * Math.acos(cosVal)
-            targetElapsedMs[stepIndex] = (elapsed + 0.5).toLong()
-        }
-
-        // Verify start and finish timing
-        assertEquals(0L, targetElapsedMs[0])
-        assertEquals(500L, targetElapsedMs[stepCount])
-
-        // Verify middle timing (at 50% progress, exactly 250ms)
-        assertEquals(250L, targetElapsedMs[25])
-
-        // Verify slow start: step 0 -> step 1 takes ~45ms
-        val firstStepDuration = targetElapsedMs[1] - targetElapsedMs[0]
-        assertTrue("Start should be slow (~45ms), was $firstStepDuration", firstStepDuration in 40..50)
-
-        // Verify faster middle: step 24 -> step 25 takes ~6ms
-        val middleStepDuration = targetElapsedMs[25] - targetElapsedMs[24]
-        assertTrue("Middle should be fast (~6ms), was $middleStepDuration", middleStepDuration in 4..10)
-
-        // Verify slow finish: step 49 -> step 50 takes ~45ms
-        val lastStepDuration = targetElapsedMs[50] - targetElapsedMs[49]
-        assertTrue("Finish should be slow (~45ms), was $lastStepDuration", lastStepDuration in 40..50)
-
-        // Verify strictly monotonic timestamps across all 50 intervals
-        for (i in 0 until stepCount) {
-            assertTrue("Timestamp $i must be <= timestamp ${i + 1}", targetElapsedMs[i] <= targetElapsedMs[i + 1])
-        }
-    }
-
-    @Test
     fun testSinusoidalEaseInOutTimingProfile300ms() {
         val stepCount = 50
         val durationMs = ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS.toDouble()
@@ -133,35 +95,13 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testPreviewOverlapDuration100msSymmetric() {
-        assertEquals(100L, ZoomTransitionController.PREVIEW_OVERLAP_DURATION_MS)
-
-        val controller = ZoomTransitionController()
-
-        // At start (0ms): progress is 0.0
-        val pStart = controller.calculateOverlapProgress(0L, 0L, 100L)
-        assertEquals(0.0f, pStart, 0.001f)
-
-        // In middle (50ms): progress is 0.5
-        val pMid = controller.calculateOverlapProgress(50L, 0L, 100L)
-        assertEquals(0.5f, pMid, 0.01f)
-
-        // At end (100ms): progress is 1.0
-        val pEnd = controller.calculateOverlapProgress(100L, 0L, 100L)
-        assertEquals(1.0f, pEnd, 0.001f)
-
-        // Beyond 100ms: clamped to 1.0
-        val pPast = controller.calculateOverlapProgress(150L, 0L, 100L)
-        assertEquals(1.0f, pPast, 0.001f)
-    }
-
-    @Test
     fun testGenerateContinuousZoomStepsIncludesEveryValue() {
         val controller = ZoomTransitionController()
 
         val stepsUp = controller.generateContinuousZoomSteps(0.50f, 1.00f)
         assertEquals(51, stepsUp.size)
         assertEquals(0.50f, stepsUp.first(), 0.0001f)
+        assertEquals(0.99f, stepsUp[49], 0.0001f)
         assertEquals(1.00f, stepsUp.last(), 0.0001f)
         for (i in 0 until stepsUp.size - 1) {
             val diff = (stepsUp[i + 1] - stepsUp[i]) * 100f
@@ -171,6 +111,7 @@ class ZoomTransitionVerificationTest {
         val stepsDown = controller.generateContinuousZoomSteps(1.00f, 0.50f)
         assertEquals(51, stepsDown.size)
         assertEquals(1.00f, stepsDown.first(), 0.0001f)
+        assertEquals(0.99f, stepsDown[1], 0.0001f)
         assertEquals(0.50f, stepsDown.last(), 0.0001f)
         for (i in 0 until stepsDown.size - 1) {
             val diff = (stepsDown[i] - stepsDown[i + 1]) * 100f
@@ -211,7 +152,7 @@ class ZoomTransitionVerificationTest {
         )
         assertEquals("Target at 0.99x must be Ultra-Wide", LensType.ULTRAWIDE, lensTypeAt99)
 
-        // At 1.00x, target lens must resolve to Wide (Main)
+        // At 1.00x, when transition completes, target lens resolves to Wide (Main)
         val lensTypeAt100 = CameraOpticalCalibration.resolveTargetLensType(
             currentLensType = LensType.ULTRAWIDE,
             targetZoom = 1.00f,
@@ -220,7 +161,7 @@ class ZoomTransitionVerificationTest {
             hasTelephoto3x = false,
             isPresetTap = false,
             switchPointMm = 23.0f,
-            isContinuousTransition = true
+            isContinuousTransition = false
         )
         assertEquals("Target at 1.00x must be Wide", LensType.WIDE, lensTypeAt100)
     }
@@ -256,7 +197,7 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testPresetTapTriggersTransitionJob() {
+    fun testPresetTapTriggersTransitionJobWithoutBypass() {
         val lenses = viewModel.engine.availableLenses.value
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
         if (mainLens != null) {
@@ -265,14 +206,49 @@ class ZoomTransitionVerificationTest {
         viewModel.setZoom(1.0f, isPresetTap = false)
         assertEquals(1.0f, viewModel.currentZoom.value, 0.01f)
 
-        // Preset tap to 2.0x should trigger continuous transition
+        // Preset tap to 2.0x must trigger continuous transition and cannot bypass it
         viewModel.setZoom(2.0f, isPresetTap = true)
+        assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
+
+        // Preset tap from 2.0x to 1.0x must trigger continuous transition and cannot bypass it
+        viewModel.setZoom(1.0f, isPresetTap = true)
         assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
     }
 
     @Test
+    fun testPresetTapOneXCannotBypassTransitionFromUltraWide() {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        if (uwLens != null) {
+            viewModel.selectLens(uwLens, instant = true)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.currentZoom.value, 0.01f)
+
+            // Tapping 1x preset while on Ultra-Wide must trigger continuous transition, not direct switch!
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            assertTrue("Tapping 1x preset must activate continuous transition", viewModel.engine.isContinuousZoomTransitionActive)
+        }
+    }
+
+    @Test
+    fun testPresetTapHalfXCannotBypassTransitionFromOneX() {
+        val lenses = viewModel.engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        if (mainLens != null && uwLens != null) {
+            viewModel.selectLens(mainLens, instant = true)
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            assertEquals(1.0f, viewModel.currentZoom.value, 0.01f)
+
+            // Tapping 0.5x preset while on Main 1x must trigger continuous transition, not direct switch!
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            assertTrue("Tapping 0.5x preset must activate continuous transition", viewModel.engine.isContinuousZoomTransitionActive)
+        }
+    }
+
+    @Test
     fun testFixed300msDurationAcrossArbitraryZoomValues() {
-        // Duration must be strictly 300ms regardless of zoom span: 1x -> 2x, 1x -> 10x, 0.5x <-> 1.0x
+        // Duration must be strictly 300ms (0.30 seconds), never less
         assertEquals(300L, ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS)
 
         val controller = ZoomTransitionController()
@@ -298,7 +274,7 @@ class ZoomTransitionVerificationTest {
         val timeProfileUwToMain = controller.calculateSinusoidalElapsedTimestamps(stepsUwToMain.size - 1, 300L)
         val timeProfileMainToUw = controller.calculateSinusoidalElapsedTimestamps(stepsMainToUw.size - 1, 300L)
 
-        // Both directions must have identical 300ms completion
+        // Both directions must have identical 300ms completion (never less)
         assertEquals(300L, timeProfileUwToMain.last())
         assertEquals(300L, timeProfileMainToUw.last())
 
@@ -339,67 +315,11 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testLensSwitchOverlapDurationSettingAndClamping() {
-        // Default is 0.3s
-        assertEquals(0.3f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
-        assertEquals(300L, viewModel.preferences.lensSwitchOverlapDurationMs)
-        assertEquals(300L, viewModel.engine.zoomTransitionController.overlapDurationMs)
-
-        // Adjust to 0.5s
-        viewModel.setLensSwitchOverlapDuration(0.5f)
-        assertEquals(0.5f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
-        assertEquals(500L, viewModel.preferences.lensSwitchOverlapDurationMs)
-        assertEquals(500L, viewModel.engine.zoomTransitionController.overlapDurationMs)
-
-        // Adjust to min 0.1s
-        viewModel.setLensSwitchOverlapDuration(0.05f) // clamped to 0.1s
-        assertEquals(0.1f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
-        assertEquals(100L, viewModel.preferences.lensSwitchOverlapDurationMs)
-        assertEquals(100L, viewModel.engine.zoomTransitionController.overlapDurationMs)
-
-        // Adjust to max 1.0s
-        viewModel.setLensSwitchOverlapDuration(1.5f) // clamped to 1.0s
-        assertEquals(1.0f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
-        assertEquals(1000L, viewModel.preferences.lensSwitchOverlapDurationMs)
-        assertEquals(1000L, viewModel.engine.zoomTransitionController.overlapDurationMs)
-
-        // Restore default 0.3s
-        viewModel.setLensSwitchOverlapDuration(0.3f)
-        assertEquals(0.3f, viewModel.lensSwitchOverlapDurationSec.value, 0.001f)
-        assertEquals(300L, viewModel.preferences.lensSwitchOverlapDurationMs)
-    }
-
-    @Test
-    fun testSmoothOverlapCrossfadeSymmetricBothDirections() {
+    fun testOverlapAnimationCompletelyRemoved() {
         val controller = ZoomTransitionController()
-        controller.overlapDurationMs = 500L
-
-        // Direction 1: Wide -> Ultra-Wide
-        val job1 = controller.startPreviewOverlap(
-            fromLensType = LensType.WIDE,
-            toLensType = LensType.ULTRAWIDE,
-            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
-            durationMs = 500L
-        )
-        val state1 = controller.previewOverlapState.value
-        assertTrue(state1.isOverlapping)
-        assertEquals(PreviewStreamSource.ULTRAWIDE, state1.topSource)
-        assertEquals(1.0f, state1.mainAlpha, 0.001f) // Outgoing underneath is solid 1.0f
-        assertEquals(0.0f, state1.ultraWideAlpha, 0.001f) // Incoming on top starts at 0.0f
-        job1.cancel()
-
-        // Direction 2: Ultra-Wide -> Wide
-        val job2 = controller.startPreviewOverlap(
-            fromLensType = LensType.ULTRAWIDE,
-            toLensType = LensType.WIDE,
-            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
-            durationMs = 500L
-        )
-        val state2 = controller.previewOverlapState.value
-        assertTrue(state2.isOverlapping)
-        assertEquals(PreviewStreamSource.MAIN, state2.topSource)
-        assertEquals(0.0f, state2.mainAlpha, 0.001f) // Incoming on top starts at 0.0f
-        assertEquals(1.0f, state2.ultraWideAlpha, 0.001f) // Outgoing underneath is solid 1.0f
-        job2.cancel()
+        // Overlap state is non-overlapping by default
+        assertFalse(controller.previewOverlapState.value.isOverlapping)
+        assertEquals(1.0f, controller.previewOverlapState.value.mainAlpha, 0.001f)
+        assertEquals(0.0f, controller.previewOverlapState.value.ultraWideAlpha, 0.001f)
     }
 }
