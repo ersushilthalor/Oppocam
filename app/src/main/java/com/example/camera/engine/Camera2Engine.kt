@@ -357,10 +357,12 @@ class Camera2Engine(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
                     val concurrentSets = mgr.concurrentCameraIds
-                    val matches = concurrentSets.any { combo ->
-                        combo.contains(mainLens.cameraId) && combo.contains(ultraWideLens.cameraId)
+                    if (concurrentSets.isNotEmpty()) {
+                        val matches = concurrentSets.any { combo ->
+                            combo.contains(mainLens.cameraId) && combo.contains(ultraWideLens.cameraId)
+                        }
+                        return if (matches) DualStreamingMode.CONCURRENT_DEVICES else DualStreamingMode.NONE
                     }
-                    if (matches) return DualStreamingMode.CONCURRENT_DEVICES
                 } catch (ignored: Throwable) {}
             }
             return DualStreamingMode.PERSISTENT_DUAL_SESSION
@@ -489,6 +491,20 @@ class Camera2Engine(private val context: Context) {
             val cameraH = min(optimalSize.width, optimalSize.height)
             try { texture.setDefaultBufferSize(cameraW, cameraH) } catch (_: Throwable) {}
 
+            if (prevTexture !== texture) {
+                standbySessionGeneration.incrementAndGet()
+                try { ultraWideStandbyCaptureSession?.stopRepeating() } catch (_: Throwable) {}
+                try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
+                ultraWideStandbyCaptureSession = null
+                isPreparingUltraWideStandby.set(false)
+                isUltraWideStreaming.set(false)
+                standbyConfiguredForRecording = false
+                _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                if (ultraWideStandbySurface === ultraWideViewfinderSurface) {
+                    ultraWideStandbySurface = null
+                }
+            }
+
             if (prevTexture !== texture || ultraWideViewfinderSurface == null || !ultraWideViewfinderSurface!!.isValid) {
                 try { ultraWideViewfinderSurface?.release() } catch (_: Throwable) {}
                 ultraWideViewfinderSurface = Surface(texture)
@@ -497,17 +513,8 @@ class Camera2Engine(private val context: Context) {
 
             if (_isKeepUltraWideReady.value && _isCameraInitialized.value) {
                 backgroundHandler?.post {
-                    // If standby camera was previously streaming to the headless fallback surface,
-                    // rebind it once to the live UI TextureView surface so it streams directly to Viewfinder.
-                    val standbyCam = ultraWideStandbyCameraDevice
-                    val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                    val uwLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-                        ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
-                    if (standbyCam != null && uwLens != null && standbyCam.id == uwLens.cameraId && prevTexture !== texture && !_isRecordingVideo.value) {
-                        try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
-                        ultraWideStandbyCaptureSession = null
-                        standbyConfiguredForRecording = false
-                    } else if (activeLogicalMultiCamUltraWideConfigured && prevTexture !== texture && !isConfiguringSession && !_isRecordingVideo.value) {
+                    if (isClosingCamera || !_isKeepUltraWideReady.value || !_isCameraInitialized.value) return@post
+                    if (activeLogicalMultiCamUltraWideConfigured && prevTexture !== texture && !isConfiguringSession && !_isRecordingVideo.value) {
                         activeLogicalMultiCamUltraWideConfigured = false
                         createCameraCaptureSession()
                         return@post
@@ -516,6 +523,19 @@ class Camera2Engine(private val context: Context) {
                 }
             }
         } else {
+            standbySessionGeneration.incrementAndGet()
+            try { ultraWideStandbyCaptureSession?.stopRepeating() } catch (_: Throwable) {}
+            try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
+            ultraWideStandbyCaptureSession = null
+            isPreparingUltraWideStandby.set(false)
+            isUltraWideStreaming.set(false)
+            _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+            if (activeLogicalMultiCamUltraWideConfigured) {
+                activeLogicalMultiCamUltraWideConfigured = false
+            }
+            if (ultraWideStandbySurface === ultraWideViewfinderSurface) {
+                ultraWideStandbySurface = null
+            }
             try { ultraWideViewfinderSurface?.release() } catch (_: Throwable) {}
             ultraWideViewfinderSurface = null
         }
@@ -694,12 +714,13 @@ class Camera2Engine(private val context: Context) {
     private val MAX_ULTRAWIDE_RECONNECT = 3
 
     private fun scheduleUltraWideReconnect(delayMs: Long = 1000L) {
+        if (isClosingCamera || !_isKeepUltraWideReady.value) return
         if (ultraWideReconnectCount >= MAX_ULTRAWIDE_RECONNECT) {
             return
         }
         ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
         val runnable = Runnable {
-            if (_isKeepUltraWideReady.value && _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_BACK) {
+            if (!isClosingCamera && _isKeepUltraWideReady.value && _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_BACK) {
                 if (ultraWideStandbyCameraDevice == null && !isPreparingUltraWideStandby.get()) {
                     ultraWideReconnectCount++
                     Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Reopening background camera (attempt $ultraWideReconnectCount)...")
@@ -815,6 +836,7 @@ class Camera2Engine(private val context: Context) {
                             !_isKeepUltraWideReady.value ||
                             ultraWideStandbyCameraDevice != camera ||
                             !isTextureValid) {
+                            isPreparingUltraWideStandby.set(false)
                             try { session.close() } catch (_: Throwable) {}
                             return
                         }
@@ -840,7 +862,7 @@ class Camera2Engine(private val context: Context) {
                             isPreparingUltraWideStandby.set(false)
                             isUltraWideStreaming.set(false)
                             _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
-                            if (_isKeepUltraWideReady.value) {
+                            if (_isKeepUltraWideReady.value && !isClosingCamera) {
                                 scheduleUltraWideReconnect()
                             }
                         }
@@ -853,7 +875,7 @@ class Camera2Engine(private val context: Context) {
                             standbyConfiguredForRecording = false
                             standbyRecordingSessionFailed = true
                             _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
-                            if (_isKeepUltraWideReady.value) {
+                            if (_isKeepUltraWideReady.value && !isClosingCamera) {
                                 scheduleUltraWideReconnect()
                             }
                         }
@@ -861,7 +883,10 @@ class Camera2Engine(private val context: Context) {
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         try { session.close() } catch (_: Throwable) {}
-                        if (configToken != standbySessionGeneration.get()) return
+                        if (configToken != standbySessionGeneration.get()) {
+                            isPreparingUltraWideStandby.set(false)
+                            return
+                        }
                         if (!retriedWithoutAdvancedConfig && (is10BitStandby || targetPhysId != null)) {
                             retriedWithoutAdvancedConfig = true
                             Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby recording session with 10-bit/physical config rejected; retrying standard recording session")
@@ -946,6 +971,7 @@ class Camera2Engine(private val context: Context) {
                         !_isKeepUltraWideReady.value ||
                         ultraWideStandbyCameraDevice != camera ||
                         !isTextureValid) {
+                        isPreparingUltraWideStandby.set(false)
                         try { session.close() } catch (_: Throwable) {}
                         return
                     }
@@ -964,7 +990,7 @@ class Camera2Engine(private val context: Context) {
                         isPreparingUltraWideStandby.set(false)
                         isUltraWideStreaming.set(false)
                         _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
-                        if (_isKeepUltraWideReady.value) {
+                        if (_isKeepUltraWideReady.value && !isClosingCamera) {
                             scheduleUltraWideReconnect()
                         }
                     }
@@ -975,7 +1001,7 @@ class Camera2Engine(private val context: Context) {
                         ultraWideStandbyCaptureSession = null
                         isUltraWideStreaming.set(false)
                         _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
-                        if (_isKeepUltraWideReady.value) {
+                        if (_isKeepUltraWideReady.value && !isClosingCamera) {
                             scheduleUltraWideReconnect()
                         }
                     }
@@ -983,7 +1009,10 @@ class Camera2Engine(private val context: Context) {
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     try { session.close() } catch (_: Throwable) {}
-                    if (configToken != standbySessionGeneration.get()) return
+                    if (configToken != standbySessionGeneration.get()) {
+                        isPreparingUltraWideStandby.set(false)
+                        return
+                    }
                     if (includeJpegReader && sessionSurfaces.size > 1) {
                         Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby session with JPEG reader rejected; retrying with preview surface only")
                         try { ultraWideStandbyJpegReader?.close() } catch (_: Throwable) {}
@@ -995,7 +1024,7 @@ class Camera2Engine(private val context: Context) {
                     if (ultraWideStandbyCaptureSession == session) {
                         ultraWideStandbyCaptureSession = null
                     }
-                    if (_isKeepUltraWideReady.value) {
+                    if (_isKeepUltraWideReady.value && !isClosingCamera) {
                         scheduleUltraWideReconnect()
                     }
                 }
@@ -1035,6 +1064,7 @@ class Camera2Engine(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun ensureUltraWideSimultaneousReady() {
         if (!_isKeepUltraWideReady.value && !isContinuousZoomTransitionActive) return
+        if (isClosingCamera || isStartingCamera || isConfiguringSession) return
         val currentLens = _selectedLens.value ?: return
         if (currentLens.facing != CameraCharacteristics.LENS_FACING_BACK) return
 
@@ -1123,18 +1153,31 @@ class Camera2Engine(private val context: Context) {
                 getOrCreateMainPreviewSurface(standbyLens.cameraId)
             }
 
+            val openToken = standbySessionGeneration.incrementAndGet()
             mgr.openCamera(standbyLens.cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
-                    if (!_isKeepUltraWideReady.value) {
+                    if (openToken != standbySessionGeneration.get() ||
+                        !_isKeepUltraWideReady.value ||
+                        isClosingCamera ||
+                        cameraDevice == null ||
+                        !_isCameraInitialized.value) {
+                        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Stale standby camera opened (${camera.id}, token=$openToken), closing safely")
                         isPreparingUltraWideStandby.set(false)
                         try { camera.close() } catch (_: Throwable) {}
                         return
+                    }
+                    if (ultraWideStandbyCameraDevice != null && ultraWideStandbyCameraDevice !== camera) {
+                        try { ultraWideStandbyCameraDevice?.close() } catch (_: Throwable) {}
                     }
                     ultraWideStandbyCameraDevice = camera
                     configureStandbySessionOnDevice(camera, standbyLens)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
+                    if (openToken != standbySessionGeneration.get()) {
+                        try { camera.close() } catch (ignored: Throwable) {}
+                        return
+                    }
                     standbySessionGeneration.incrementAndGet()
                     try { camera.close() } catch (ignored: Throwable) {}
                     if (ultraWideStandbyCameraDevice == camera) {
@@ -1144,12 +1187,16 @@ class Camera2Engine(private val context: Context) {
                     isPreparingUltraWideStandby.set(false)
                     isUltraWideStreaming.set(false)
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
-                    if (_isKeepUltraWideReady.value) {
+                    if (_isKeepUltraWideReady.value && !isClosingCamera) {
                         scheduleUltraWideReconnect()
                     }
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
+                    if (openToken != standbySessionGeneration.get()) {
+                        try { camera.close() } catch (ignored: Throwable) {}
+                        return
+                    }
                     standbySessionGeneration.incrementAndGet()
                     try { camera.close() } catch (ignored: Throwable) {}
                     if (ultraWideStandbyCameraDevice == camera) {
@@ -1159,7 +1206,7 @@ class Camera2Engine(private val context: Context) {
                     isPreparingUltraWideStandby.set(false)
                     isUltraWideStreaming.set(false)
                     Log.w(TAG, "Standby camera open error: $error (scheduling reconnect)")
-                    if (_isKeepUltraWideReady.value) {
+                    if (_isKeepUltraWideReady.value && !isClosingCamera) {
                         scheduleUltraWideReconnect()
                     }
                 }
@@ -1168,7 +1215,7 @@ class Camera2Engine(private val context: Context) {
             standbySessionGeneration.incrementAndGet()
             isPreparingUltraWideStandby.set(false)
             Log.w(TAG, "Could not open standby camera concurrently", t)
-            if (_isKeepUltraWideReady.value) {
+            if (_isKeepUltraWideReady.value && !isClosingCamera) {
                 scheduleUltraWideReconnect()
             }
         }
@@ -3280,16 +3327,6 @@ class Camera2Engine(private val context: Context) {
         if (needsReconfigure) {
             if (cameraDevice != null) {
                 reconfigureSession()
-                if (_isKeepUltraWideReady.value && ultraWideStandbyCameraDevice != null) {
-                    backgroundHandler?.post {
-                        val standbyCam = ultraWideStandbyCameraDevice
-                        val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                        val standbyLens = backLenses.firstOrNull { it.cameraId == standbyCam?.id }
-                        if (standbyCam != null && standbyLens != null) {
-                            configureStandbySessionOnDevice(standbyCam, standbyLens)
-                        }
-                    }
-                }
             } else {
                 restartCamera()
             }
@@ -3550,6 +3587,7 @@ class Camera2Engine(private val context: Context) {
                 reconfigureSession()
                 return
             }
+            isClosingCamera = false
             isStartingCamera = true
         }
 
@@ -9916,6 +9954,7 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun closeCameraInternal() {
+        isClosingCamera = true
         CameraPerformanceMonitor.stop()
         _isCameraReady.value = false
         sessionConfigGeneration.incrementAndGet()
@@ -9937,8 +9976,6 @@ class Camera2Engine(private val context: Context) {
             dualCameraRecordingRelay?.release()
         } catch (ignored: Throwable) {}
         dualCameraRecordingRelay = null
-        _isUsingUltraWideSurface.value = false
-        _displayedPreviewSource.value = PreviewStreamSource.MAIN
         _isUsingUltraWideSurface.value = false
         _displayedPreviewSource.value = PreviewStreamSource.MAIN
         try {
@@ -9973,11 +10010,33 @@ class Camera2Engine(private val context: Context) {
             Log.e(TAG, "Error closing image readers", e)
         }
         isStartingCamera = false
+        isClosingCamera = false
     }
 
     fun closeCamera() {
-        synchronized(cameraLifecycleLock) {
-            closeCameraInternal()
+        isClosingCamera = true
+        _isCameraReady.value = false
+        standbySessionGeneration.incrementAndGet()
+        sessionConfigGeneration.incrementAndGet()
+        ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+        ultraWideReconnectRunnable = null
+        pendingZoomRunnable?.let { backgroundHandler?.removeCallbacks(it) }
+        pendingZoomRunnable = null
+        isPreparingUltraWideStandby.set(false)
+        isUltraWideStreaming.set(false)
+        _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+
+        val handler = backgroundHandler
+        if (handler != null && Looper.myLooper() != handler.looper) {
+            handler.post {
+                synchronized(cameraLifecycleLock) {
+                    closeCameraInternal()
+                }
+            }
+        } else {
+            synchronized(cameraLifecycleLock) {
+                closeCameraInternal()
+            }
         }
     }
 
