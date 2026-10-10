@@ -204,7 +204,7 @@ class ZoomTransitionController(
 
             val startTime = SystemClock.uptimeMillis()
             var lastDispatchedZoom = startZ
-            var lastDispatchedTime = startTime
+            var lastDispatchedTime = 0L
 
             // Move the slider in the background from startNorm to targetNorm over exactly 300ms (0.30s)
             while (isActive) {
@@ -244,10 +244,10 @@ class ZoomTransitionController(
                 delay(transitionDurationMs - totalElapsed)
             }
 
-            // Apply final target zoom value with isContinuous = false
+            // Apply final target zoom value maintaining continuous transition
             _currentInterpolatedZoom.value = endZ
             onZoomUpdate(endZ)
-            onApplyZoomToEngine(endZ, false)
+            onApplyZoomToEngine(endZ, true)
 
             val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
             setSteadyStatePreview(endZ < switchZoom)

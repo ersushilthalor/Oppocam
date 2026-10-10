@@ -5139,7 +5139,7 @@ class Camera2Engine(private val context: Context) {
      */
     fun setZoom(zoom: Float, isPresetTap: Boolean = false, isContinuousTransition: Boolean = false) {
         val currentLens = _selectedLens.value ?: return
-        isContinuousZoomTransitionActive = isContinuousTransition
+        isContinuousZoomTransitionActive = isContinuousTransition || zoomTransitionController.isTransitionActive.value
 
         val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
         val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
@@ -5240,19 +5240,19 @@ class Camera2Engine(private val context: Context) {
                 effectiveTargetLens.physicalCameraId != activeSessionPhysicalCameraId) ||
                 !canUseLogicalZoomForLens(effectiveTargetLens.cameraId, effectiveTargetLens, pZoom)
 
+        val isContinuous = isContinuousTransition || isContinuousZoomTransitionActive
         val isStandbyOrPhysicalAvailable = requiresPhysicalStreamSwitch ||
                 activeLogicalMultiCamUltraWideConfigured ||
                 _isKeepUltraWideReady.value ||
                 ultraWideStandbyCaptureSession != null ||
-                isContinuousTransition ||
-                isContinuousZoomTransitionActive
+                isContinuous
 
         if (isDifferentCameraDevice || (effectiveTargetLens.lensType != activeLens.lensType && isStandbyOrPhysicalAvailable)) {
             selectLens(
                 effectiveTargetLens,
                 preserveZoom = true,
                 targetZoom = pZoom,
-                isContinuousTransition = isContinuousTransition
+                isContinuousTransition = isContinuous
             )
         } else {
             // Same logical/physical device with genuine continuous zoom support: smoothly update active lens and zoom continuously without tearing down camera session
@@ -5272,7 +5272,7 @@ class Camera2Engine(private val context: Context) {
                     _displayedPreviewSource.value = targetSource
                 }
             }
-            scheduleZoomPreviewUpdate(immediate = isPresetTap || isContinuousTransition, explicitZoom = clampedZoom)
+            scheduleZoomPreviewUpdate(immediate = isPresetTap || isContinuous, explicitZoom = clampedZoom)
         }
     }
 
