@@ -4440,7 +4440,7 @@ private fun CustomPipelineSettingsPage(
                 config = config,
                 onConfigChange = onConfigChange,
                 onResetDefaults = onResetDefaults,
-                onDismiss = null,
+                onDismiss = {},
                 modifier = Modifier.fillMaxWidth()
             )
         }

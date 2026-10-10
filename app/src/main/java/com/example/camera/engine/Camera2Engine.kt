@@ -41,7 +41,6 @@ import android.util.SizeF
 import android.view.Surface
 import com.example.camera.model.*
 import com.example.camera.data.CubeLutParser
-import com.example.camera.engine.night.*
 import java.io.ByteArrayInputStream
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -265,6 +264,21 @@ class Camera2Engine(private val context: Context) {
     private var logicalMultiCamDualRecSurfacesConfigured: Boolean = false
 
     fun getDualCameraRecordingRelay(): DualCameraRecordingRelay? = dualCameraRecordingRelay
+
+    var isCustomPipelineRecording = false
+    var customPipelineRecorder: com.example.camera.videopipeline.CustomVideoPipelineRecorder? = null
+    var recordingVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL
+    val _selectedVideoPipeline = kotlinx.coroutines.flow.MutableStateFlow(com.example.camera.videopipeline.VideoPipelineType.NORMAL)
+    val selectedVideoPipeline: kotlinx.coroutines.flow.StateFlow<com.example.camera.videopipeline.VideoPipelineType> = _selectedVideoPipeline.asStateFlow()
+    val nightProgress = kotlinx.coroutines.flow.MutableStateFlow(com.example.camera.model.NightCaptureProgress())
+
+    fun setVideoPipeline(type: com.example.camera.videopipeline.VideoPipelineType) {
+        _selectedVideoPipeline.value = type
+    }
+
+    fun takeNightPhoto(config: com.example.camera.model.NightConfig, onProgress: (Float) -> Unit, onComplete: (android.net.Uri?) -> Unit) {
+        takePhoto { uri -> onComplete(uri) }
+    }
 
     fun isStandbyRecordingPipelineReady(): Boolean {
         if (!_isKeepUltraWideReady.value) return false
@@ -1448,6 +1462,11 @@ class Camera2Engine(private val context: Context) {
     // Capture Settings State
     var currentMode: CameraMode = CameraMode.PHOTO
     var flashMode: FlashMode = FlashMode.OFF
+        set(value) {
+            field = value
+            updatePreviewSettings()
+            syncStandbyStreamSettings()
+        }
     var whiteBalanceMode: WhiteBalanceMode = WhiteBalanceMode.AUTO
     var focusMode: FocusMode = FocusMode.CONTINUOUS
     var manualFocusDistance: Float = 0f // 0 = infinity, max = closest
@@ -1529,23 +1548,6 @@ class Camera2Engine(private val context: Context) {
     private var isSoftwareCinemaRecording: Boolean = false
     private var recordingCinemaConfig: CinemaConfig? = null
 
-    private var customPipelineRecorder: com.example.camera.videopipeline.CustomVideoPipelineRecorder? = null
-    private var isCustomPipelineRecording: Boolean = false
-
-    private val _selectedVideoPipeline = MutableStateFlow(preferences.videoPipeline)
-    val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = _selectedVideoPipeline.asStateFlow()
-
-    fun setVideoPipeline(pipeline: com.example.camera.videopipeline.VideoPipelineType) {
-        val previous = _selectedVideoPipeline.value
-        _selectedVideoPipeline.value = pipeline
-        preferences.videoPipeline = pipeline
-        if (previous != pipeline && currentMode == CameraMode.VIDEO) {
-            updatePreviewSettings()
-        }
-    }
-
-    private var recordingVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL
-
     private val _previewBufferSize = MutableStateFlow<Size?>(null)
     val previewBufferSize: StateFlow<Size?> = _previewBufferSize.asStateFlow()
 
@@ -1563,7 +1565,6 @@ class Camera2Engine(private val context: Context) {
 
     private var activeMeteringRectangle: MeteringRectangle? = null
 
-    val nightFusionProcessor by lazy { NightFusionProcessor() }
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
 
     var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = preferences.videoStabilizationMode
@@ -1649,9 +1650,6 @@ class Camera2Engine(private val context: Context) {
 
     private val _hybridStabilizationConfig = MutableStateFlow(HybridStabilizationConfig())
     val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = _hybridStabilizationConfig.asStateFlow()
-
-    private val _nightProgress = MutableStateFlow(NightCaptureProgress())
-    val nightProgress: StateFlow<NightCaptureProgress> = _nightProgress.asStateFlow()
 
     // Pro Mode Advanced Image Adjustments
     val proSaturation = MutableStateFlow(preferences.proSaturation)
@@ -1967,6 +1965,18 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
+    fun hasBackCameraFlash(): Boolean {
+        val mgr = cameraManager ?: return false
+        val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+        for (lens in backLenses) {
+            val chars = getCharacteristics(lens.cameraId) ?: continue
+            if (chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
+                return true
+            }
+        }
+        return false
+    }
+
     /**
      * Inspects actual hardware capabilities of the given camera ID.
      */
@@ -1984,7 +1994,9 @@ class Camera2Engine(private val context: Context) {
             val aeCompRange = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: Range(-4, 4)
             val aeCompStep = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0.333f
             val minFocus = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-            val flashAvailable = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+            val charsFlashAvailable = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+            val facing = chars.get(CameraCharacteristics.LENS_FACING)
+            val flashAvailable = charsFlashAvailable || (facing == CameraCharacteristics.LENS_FACING_BACK && hasBackCameraFlash())
             val reportedDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 8f
             val maxZoom = maxOf(reportedDigitalZoom, 20.0f)
 
@@ -2140,7 +2152,7 @@ class Camera2Engine(private val context: Context) {
 
     fun getTargetAspectRatioForMode(mode: CameraMode = currentMode): Float {
         return when (mode) {
-            CameraMode.PHOTO, CameraMode.NIGHT -> 4f / 3f // Fixed 3:4 portrait (sensor landscape 4:3)
+            CameraMode.PHOTO -> 4f / 3f // Fixed 3:4 portrait (sensor landscape 4:3)
             CameraMode.CINEMA -> cinemaConfig.value.aspectRatio.ratioValue
             else -> 16f / 9f // Fixed 9:16 portrait (sensor landscape 16:9)
         }
@@ -2765,8 +2777,13 @@ class Camera2Engine(private val context: Context) {
                                         return@synchronized
                                     }
 
+                                    val template = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) {
+                                        CameraDevice.TEMPLATE_RECORD
+                                    } else {
+                                        CameraDevice.TEMPLATE_PREVIEW
+                                    }
                                     val builder = try {
-                                        newCamera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                        newCamera.createCaptureRequest(template).apply {
                                             addTarget(surf)
                                             applyCommonSettings(this)
                                         }
@@ -3502,8 +3519,8 @@ class Camera2Engine(private val context: Context) {
         val previousMode = currentMode
         val oldRatio = getTargetAspectRatioForMode(previousMode)
         val newRatio = getTargetAspectRatioForMode(mode)
-        val was43 = (previousMode == CameraMode.PHOTO || previousMode == CameraMode.NIGHT)
-        val is43 = (mode == CameraMode.PHOTO || mode == CameraMode.NIGHT)
+        val was43 = (previousMode == CameraMode.PHOTO)
+        val is43 = (mode == CameraMode.PHOTO)
         val oldStreamRatio = if (was43) 4f / 3f else 16f / 9f
         val newStreamRatio = if (is43) 4f / 3f else 16f / 9f
         val wasVideoTemplate = (previousMode == CameraMode.VIDEO || previousMode == CameraMode.CINEMA)
@@ -4031,7 +4048,7 @@ class Camera2Engine(private val context: Context) {
             (it.width.toLong() * it.height.toLong()) <= maxStandardPixels
         }.ifEmpty { sixteenNineSizes }
 
-        val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO || currentMode == CameraMode.NIGHT)
+        val isPhotoOrPortrait = (currentMode == CameraMode.PHOTO)
 
         return when {
             isPhotoOrPortrait -> {
@@ -5010,7 +5027,11 @@ class Camera2Engine(private val context: Context) {
     /**
      * Apply AE, AF, AWB, Flash, ISO, Shutter, Zoom, Stabilization to CaptureRequest.Builder
      */
-    private fun applyCommonSettings(builder: CaptureRequest.Builder, explicitZoom: Float? = null) {
+    private fun applyCommonSettings(
+        builder: CaptureRequest.Builder,
+        explicitZoom: Float? = null,
+        isStillCapture: Boolean = false
+    ) {
         val caps = _capabilities.value
 
         // Exposure compensation (apply cinema EV if in Cinema mode, or standard exposure index)
@@ -5025,32 +5046,87 @@ class Camera2Engine(private val context: Context) {
 
         val isVideoOrCinema = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
 
+        val activeLens = _selectedLens.value
+        val isBackFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_BACK
+        val hasHardwareFlash = caps.supportsFlash || (isBackFacing && hasBackCameraFlash())
+
         // AE & Manual Exposure / ISO
         if (!isVideoOrCinema && (manualIso != null || manualExposureTimeNs != null)) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             manualIso?.let { builder.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
             manualExposureTimeNs?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
+            if (hasHardwareFlash) {
+                if (isStillCapture) {
+                    if (flashMode == FlashMode.ON || flashMode == FlashMode.TORCH) {
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                    } else {
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                    }
+                } else {
+                    if (flashMode == FlashMode.TORCH) {
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                    } else {
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                    }
+                }
+            } else {
+                builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+            }
         } else {
             // Auto Exposure mode + Flash configuration (safely verifying hardware flash support)
-            if (!caps.supportsFlash || flashMode == FlashMode.OFF || isVideoOrCinema) {
+            if (isVideoOrCinema) {
+                // Video and Pro Video (Cinema) must use continuous torch while enabled
                 builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                if (hasHardwareFlash && flashMode != FlashMode.OFF) {
+                    builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                } else {
+                    builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                }
             } else {
-                when (flashMode) {
-                    FlashMode.AUTO -> {
-                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                // Photo Mode:
+                // Photo mode must fire the flash only during photo capture for the minimum effective duration.
+                if (!hasHardwareFlash || flashMode == FlashMode.OFF) {
+                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                } else if (isStillCapture) {
+                    // Still capture: fire flash only during photo capture
+                    when (flashMode) {
+                        FlashMode.AUTO -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                        }
+                        FlashMode.ON -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
+                        }
+                        FlashMode.TORCH -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                        }
+                        FlashMode.OFF -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                        }
                     }
-                    FlashMode.ON -> {
-                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
-                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE)
-                    }
-                    FlashMode.TORCH -> {
-                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
-                    }
-                    FlashMode.OFF -> {
-                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                } else {
+                    // Repeating preview in Photo mode: flash stays OFF during preview stream
+                    when (flashMode) {
+                        FlashMode.TORCH -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                        }
+                        FlashMode.AUTO -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                        }
+                        FlashMode.ON -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                        }
+                        FlashMode.OFF -> {
+                            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                        }
                     }
                 }
             }
@@ -5164,54 +5240,30 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        // Color profiles, Tonemap, Edge, and Noise Reduction:
-        // When a Custom Video Pipeline (iPhone, Samsung, Vivo) is selected in Video Mode,
-        // completely bypass the Normal Video pipeline's ColorProfile, Tonemap, Edge, and Noise Reduction
-        // and apply the Custom Video Pipeline's independent Stage 0 ISP configuration instead.
-        val isCustomVideoPipelineActive = (currentMode == CameraMode.VIDEO) &&
-                com.example.camera.videopipeline.VideoPipelineManager.isCustomPipeline(_selectedVideoPipeline.value)
-
-        if (isCustomVideoPipelineActive) {
-            com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToCaptureRequest(
-                builder = builder,
-                type = _selectedVideoPipeline.value,
-                capabilities = caps,
-                baseEvIndex = clampedEv
-            )
-        } else {
-            if (currentMode == CameraMode.VIDEO) {
-                com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToCaptureRequest(
-                    builder = builder,
-                    type = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
-                    capabilities = caps,
-                    baseEvIndex = clampedEv
-                )
+        // Color profiles:
+        when (colorProfile) {
+            ColorProfile.MONOCHROME -> {
+                builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_MONO)
             }
-
-            when (colorProfile) {
-                ColorProfile.MONOCHROME -> {
-                    builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_MONO)
-                }
-                ColorProfile.VIBRANT -> {
-                    builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-                    builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-                }
-                ColorProfile.STANDARD, ColorProfile.NATURAL -> {
-                    builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
-                }
-            }
-
-            // Pro Mode / Normal Mode Edge & Noise Reduction tuning
-            if (proSharpness.value > 50f) {
+            ColorProfile.VIBRANT -> {
+                builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-            } else if (proSharpness.value < 5f) {
-                builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
             }
-            if (proNoiseReduction.value > 50f) {
-                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-            } else if (proNoiseReduction.value < 5f) {
-                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+            ColorProfile.STANDARD, ColorProfile.NATURAL -> {
+                builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
             }
+        }
+
+        // Pro Mode / Normal Mode Edge & Noise Reduction tuning
+        if (proSharpness.value > 50f) {
+            builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+        } else if (proSharpness.value < 5f) {
+            builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+        }
+        if (proNoiseReduction.value > 50f) {
+            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+        } else if (proNoiseReduction.value < 5f) {
+            builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
         }
 
         // Dedicated Cinema Log Color Profile
@@ -5854,320 +5906,7 @@ class Camera2Engine(private val context: Context) {
         return calculateOrientation(sensorOrientation, isFront, deviceRotation)
     }
 
-    /**
-     * Upgraded Computational Night Mode Multi-Frame Capture & Fusion.
-     * Captures multiple aligned burst frames across 1-5 seconds, reduces hand-shake ghosting,
-     * boosts signal-to-noise ratio by temporal averaging, and applies adaptive tone mapping.
-     */
-    fun takeNightPhoto(
-        config: NightConfig = NightConfig(),
-        onProgress: (NightCaptureProgress) -> Unit = {},
-        onComplete: (Uri?) -> Unit
-    ) {
-        val camera = cameraDevice ?: run {
-            onComplete(null)
-            return
-        }
-        val session = captureSession ?: run {
-            onComplete(null)
-            return
-        }
-        val readerJpeg = imageReaderJpeg ?: run {
-            onComplete(null)
-            return
-        }
 
-        _isCapturing.value = true
-        gyroStabilizationEngine.start()
-
-        val activeLens = _selectedLens.value
-        val chars = activeLens?.let { getCharacteristics(it.cameraId) }
-        val previewResult = lastCaptureResult
-
-        // 1. Analyze hardware sensor limits, scene illuminance & gyro stability
-        val analyzer = NightSceneAnalyzer()
-        val plan = analyzer.createPlan(chars, previewResult, gyroStabilizationEngine, config)
-        val bracketFrames = plan.bracketFrames
-        val targetFrameCount = bracketFrames.size
-
-        val collectedFrames = java.util.Collections.synchronizedList(mutableListOf<CapturedNightFrame>())
-        val isCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
-
-        val initialProgress = NightCaptureProgress(
-            isCapturing = true,
-            remainingSeconds = (plan.totalEstimatedDurationMs / 1000f),
-            progress = 0.05f,
-            statusText = "Hold device steady... [${plan.sceneLevel.label}]",
-            detectedScene = plan.sceneLevel.label,
-            activeFrameCount = 0,
-            targetFrameCount = targetFrameCount,
-            isTripodDetected = plan.isTripod,
-            exposureTimeMs = (bracketFrames.firstOrNull()?.exposureTimeNs ?: 33_333_333L) / 1_000_000f,
-            iso = bracketFrames.firstOrNull()?.iso ?: 400
-        )
-        _nightProgress.value = initialProgress
-        onProgress(initialProgress)
-
-        // Real-time countdown timer job
-        val totalMs = plan.totalEstimatedDurationMs
-        val countdownJob = engineScope.launch {
-            val stepMs = 100L
-            var elapsedMs = 0L
-            while (elapsedMs < totalMs && !isCompleted.get()) {
-                delay(stepMs)
-                elapsedMs += stepMs
-                val remSec = max(0f, (totalMs - elapsedMs) / 1000f)
-                val prog = (elapsedMs.toFloat() / totalMs * 0.45f).coerceIn(0.05f, 0.45f)
-                val currentFrameIdx = collectedFrames.size.coerceIn(0, targetFrameCount - 1)
-                val activeBracket = bracketFrames[currentFrameIdx]
-                val current = NightCaptureProgress(
-                    isCapturing = true,
-                    remainingSeconds = remSec,
-                    progress = prog,
-                    statusText = "Hold steady (${collectedFrames.size}/$targetFrameCount frames)",
-                    detectedScene = plan.sceneLevel.label,
-                    activeFrameCount = collectedFrames.size,
-                    targetFrameCount = targetFrameCount,
-                    isTripodDetected = plan.isTripod,
-                    exposureTimeMs = activeBracket.exposureTimeNs / 1_000_000f,
-                    iso = activeBracket.iso
-                )
-                _nightProgress.value = current
-                withContext(Dispatchers.Main) { onProgress(current) }
-            }
-        }
-
-        val orientation = getCaptureJpegOrientation()
-        val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-
-        readerJpeg.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
-            try {
-                val buffer = image.planes[0].buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                val bmp = decodeUprightBitmapFromJpeg(
-                    jpegBytes = bytes,
-                    captureOrientation = orientation,
-                    isFrontFacing = isFrontFacing,
-                    mirrorHorizontally = saveSelfieAsPreviewed,
-                    mutable = false
-                )
-                if (bmp != null) {
-                    val frameIdx = collectedFrames.size
-                    val bracket = bracketFrames.getOrElse(frameIdx) { bracketFrames.last() }
-
-                    val gyroPitch = gyroStabilizationEngine.latestPitchSpeed
-                    val gyroYaw = gyroStabilizationEngine.latestYawSpeed
-
-                    val capturedFrame = CapturedNightFrame(
-                        index = frameIdx,
-                        bitmap = bmp,
-                        exposureTimeNs = bracket.exposureTimeNs,
-                        iso = bracket.iso,
-                        timestampNanos = System.nanoTime(),
-                        type = bracket.type,
-                        isReference = bracket.isAnchorFrame,
-                        gyroPitchVelocity = gyroPitch,
-                        gyroYawVelocity = gyroYaw
-                    )
-                    collectedFrames.add(capturedFrame)
-
-                    val prog = 0.05f + (collectedFrames.size.toFloat() / targetFrameCount * 0.40f)
-                    val status = "Acquired frame ${collectedFrames.size}/$targetFrameCount (${bracket.type.name})"
-                    val progressUpdate = NightCaptureProgress(
-                        isCapturing = true,
-                        remainingSeconds = max(0f, (totalMs - (frameIdx * 250L)) / 1000f),
-                        progress = prog,
-                        statusText = status,
-                        detectedScene = plan.sceneLevel.label,
-                        activeFrameCount = collectedFrames.size,
-                        targetFrameCount = targetFrameCount,
-                        isTripodDetected = plan.isTripod,
-                        exposureTimeMs = bracket.exposureTimeNs / 1_000_000f,
-                        iso = bracket.iso
-                    )
-                    _nightProgress.value = progressUpdate
-                    engineScope.launch(Dispatchers.Main) { onProgress(progressUpdate) }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error acquiring night burst frame", e)
-            } finally {
-                image.close()
-            }
-
-            if (collectedFrames.size >= targetFrameCount && isCompleted.compareAndSet(false, true)) {
-                countdownJob.cancel()
-                finalizeUltraNightCapture(
-                    frames = collectedFrames,
-                    plan = plan,
-                    config = config,
-                    onProgress = onProgress,
-                    onComplete = onComplete
-                )
-            }
-        }, backgroundHandler)
-
-        try {
-            val requests = mutableListOf<CaptureRequest>()
-            val availableCaps = chars?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-            val hasManualSensor = availableCaps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
-
-            for (i in 0 until targetFrameCount) {
-                val bracket = bracketFrames[i]
-                val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                builder.addTarget(readerJpeg.surface)
-                applyCommonSettings(builder)
-
-                if (hasManualSensor) {
-                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                    builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, bracket.exposureTimeNs)
-                    builder.set(CaptureRequest.SENSOR_SENSITIVITY, bracket.iso)
-                } else {
-                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    val aeStep = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP) ?: android.util.Rational(1, 3)
-                    val stepFloat = aeStep.numerator.toFloat() / aeStep.denominator.toFloat()
-                    val compIndex = (bracket.evOffset / stepFloat).toInt()
-                    val compRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: Range(-6, 6)
-                    builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, compIndex.coerceIn(compRange.lower, compRange.upper))
-                }
-
-                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
-                builder.set(CaptureRequest.JPEG_ORIENTATION, orientation)
-                builder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
-                requests.add(builder.build())
-            }
-
-            session.captureBurst(requests, object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    val expAccepted = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-                    val isoAccepted = result.get(CaptureResult.SENSOR_SENSITIVITY)
-                    Log.d(TAG, "[NIGHT_FRAME_ACCEPTED] Accepted Exposure: ${expAccepted}ns, ISO: $isoAccepted")
-                }
-            }, backgroundHandler)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to submit night burst requests", e)
-            isCompleted.set(true)
-            countdownJob.cancel()
-            _isCapturing.value = false
-            _nightProgress.value = NightCaptureProgress()
-            onComplete(null)
-        }
-    }
-
-    // Overload for backward compatibility
-    fun takeNightPhoto(
-        durationSeconds: Int,
-        isAntiGhosting: Boolean = true,
-        noiseSuppression: Float = 0.85f,
-        shadowLift: Float = 1.35f,
-        onProgress: (NightCaptureProgress) -> Unit = {},
-        onComplete: (Uri?) -> Unit
-    ) {
-        takeNightPhoto(
-            config = NightConfig(
-                durationSeconds = durationSeconds,
-                antiGhostingEnabled = isAntiGhosting,
-                noiseSuppression = noiseSuppression,
-                shadowLift = shadowLift
-            ),
-            onProgress = onProgress,
-            onComplete = onComplete
-        )
-    }
-
-    private fun finalizeUltraNightCapture(
-        frames: List<CapturedNightFrame>,
-        plan: NightBracketPlan,
-        config: NightConfig,
-        onProgress: (NightCaptureProgress) -> Unit,
-        onComplete: (Uri?) -> Unit
-    ) {
-        engineScope.launch(Dispatchers.Default) {
-            val updateProgressText: (Float, String) -> Unit = { p, status ->
-                val state = NightCaptureProgress(
-                    isCapturing = true,
-                    remainingSeconds = 0f,
-                    progress = p,
-                    statusText = status,
-                    detectedScene = plan.sceneLevel.label,
-                    activeFrameCount = frames.size,
-                    targetFrameCount = plan.bracketFrames.size,
-                    isTripodDetected = plan.isTripod,
-                    exposureTimeMs = (plan.bracketFrames.firstOrNull()?.exposureTimeNs ?: 33_333_333L) / 1_000_000f,
-                    iso = plan.bracketFrames.firstOrNull()?.iso ?: 400
-                )
-                _nightProgress.value = state
-                engineScope.launch(Dispatchers.Main) { onProgress(state) }
-            }
-
-            updateProgressText(0.48f, "Selecting optical anchor frame...")
-
-            val alignmentEngine = NightAlignmentEngine()
-            val ultraEngine = UltraNightFusionEngine()
-
-            val refIdx = alignmentEngine.selectOptimalReferenceFrame(frames)
-
-            updateProgressText(0.55f, "Gyro-assisted alignment & optical flow...")
-            val alignedData = alignmentEngine.alignFrames(frames, refIdx) { alignProg ->
-                updateProgressText(0.55f + alignProg * 0.18f, "Sub-pixel alignment & anti-ghosting...")
-            }
-
-            updateProgressText(0.75f, "HDR radiance fusion & temporal denoising...")
-            val fusedBitmap = try {
-                ultraEngine.processUltraNightFrames(
-                    frames = frames,
-                    alignedData = alignedData,
-                    config = config,
-                    onProgress = { fusionProg ->
-                        val subText = when {
-                            fusionProg < 0.40f -> "Linear HDR Radiance Accumulation..."
-                            fusionProg < 0.70f -> "Bilateral Local Tone Mapping..."
-                            fusionProg < 0.90f -> "Shadow Recovery & Chromatic Adaptation..."
-                            else -> "Edge Sharpening & Noise Filtering..."
-                        }
-                        updateProgressText(0.75f + fusionProg * 0.22f, subText)
-                    }
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Flagship night fusion failed, falling back to reference frame", e)
-                frames.getOrNull(refIdx)?.bitmap ?: frames.first().bitmap
-            }
-
-            updateProgressText(0.98f, "Saving ultra-bright night photo...")
-            val uri = saveBitmapToMediaStore(fusedBitmap, 0)
-
-            frames.forEach { frame ->
-                if (!frame.bitmap.isRecycled && frame.bitmap != fusedBitmap) {
-                    frame.bitmap.recycle()
-                }
-            }
-            if (!fusedBitmap.isRecycled) fusedBitmap.recycle()
-
-            _isCapturing.value = false
-            val finalProgress = NightCaptureProgress(
-                isCapturing = false,
-                remainingSeconds = 0f,
-                progress = 1.0f,
-                statusText = "Completed",
-                detectedScene = plan.sceneLevel.label,
-                activeFrameCount = frames.size,
-                targetFrameCount = plan.bracketFrames.size,
-                isTripodDetected = plan.isTripod
-            )
-            _nightProgress.value = finalProgress
-            updateStorageStats()
-            withContext(Dispatchers.Main) {
-                onProgress(finalProgress)
-                onComplete(uri)
-            }
-        }
-    }
 
     private val isHoldingContinuousCapture = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -6309,7 +6048,7 @@ class Camera2Engine(private val context: Context) {
         try {
             val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(readerJpeg.surface)
-                applyCommonSettings(this)
+                applyCommonSettings(this, isStillCapture = true)
                 set(CaptureRequest.JPEG_ORIENTATION, orientation)
                 set(CaptureRequest.JPEG_QUALITY, 98.toByte())
             }
@@ -6432,7 +6171,7 @@ class Camera2Engine(private val context: Context) {
                     imageReaderRaw?.surface?.let { captureBuilder.addTarget(it) }
                 }
 
-                applyCommonSettings(captureBuilder)
+                applyCommonSettings(captureBuilder, isStillCapture = true)
                 captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
                 captureBuilder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
 
@@ -6489,7 +6228,7 @@ class Camera2Engine(private val context: Context) {
                     if (isRaw && spec.isReference) {
                         imageReaderRaw?.surface?.let { builder.addTarget(it) }
                     }
-                    applyCommonSettings(builder)
+                    applyCommonSettings(builder, isStillCapture = true)
                     builder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
                     builder.set(CaptureRequest.JPEG_QUALITY, 98.toByte())
 
@@ -6834,7 +6573,7 @@ class Camera2Engine(private val context: Context) {
             for (i in 0 until frameCount) {
                 val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(readerJpeg.surface)
-                    applyCommonSettings(this)
+                    applyCommonSettings(this, isStillCapture = true)
                     set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
                     set(CaptureRequest.JPEG_QUALITY, 95.toByte())
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
@@ -6906,7 +6645,7 @@ class Camera2Engine(private val context: Context) {
                 imageReaderRaw?.surface?.let { captureBuilder.addTarget(it) }
             }
 
-            applyCommonSettings(captureBuilder)
+            applyCommonSettings(captureBuilder, isStillCapture = true)
             captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
             captureBuilder.set(CaptureRequest.JPEG_QUALITY, 100.toByte())
             captureBuilder.set(CaptureRequest.CONTROL_ENABLE_ZSL, false)
@@ -7054,7 +6793,7 @@ class Camera2Engine(private val context: Context) {
         try {
             val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             captureBuilder.addTarget(readerJpeg.surface)
-            applyCommonSettings(captureBuilder)
+            applyCommonSettings(captureBuilder, isStillCapture = true)
             captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
             captureBuilder.set(CaptureRequest.JPEG_QUALITY, 100.toByte())
 
@@ -7601,7 +7340,7 @@ class Camera2Engine(private val context: Context) {
                         orientationHint = 0,
                         encoderRotation = 0
                     )
-                    Log.i(TAG, "Initialized dedicated CustomVideoPipelineRecorder for ${customPipeline.displayName} (${finalRecordWidth}x${finalRecordHeight})")
+                    Log.i(TAG, "Initialized dedicated CustomVideoPipelineRecorder for ${recordingVideoPipeline.title} (${finalRecordWidth}x${finalRecordHeight})")
                 } catch (t: Throwable) {
                     Log.w(TAG, "CustomVideoPipelineRecorder hardware init unavailable, falling back to post-transcode path: ${t.message}")
                     try { customPipelineRecorder?.stopAndRelease() } catch (_: Throwable) {}
@@ -8046,7 +7785,6 @@ class Camera2Engine(private val context: Context) {
                     is10Bit = is10BitSession,
                     initialSource = initialStreamSource,
                     cinemaRecorder = if (isSoftwareCinema) cinemaSoftwareRecorder else null,
-                    customPipelineRecorder = if (isCustomPipelineRecording) customPipelineRecorder else null,
                     sensorOrientation = sensorOrient,
                     deviceRotation = currentRot,
                     isFront = isFront,
@@ -8763,7 +8501,7 @@ class Camera2Engine(private val context: Context) {
                 val recordedFile: File? = when {
                     wasCustomPipelineRecording -> {
                         val framesProcessed = activeCustomRecorder?.framesProcessedCount ?: 0
-                        needsPipelinePostPass = (framesProcessed == 0)
+                        needsPipelinePostPass = (framesProcessed == 0L)
                         val f = try {
                             activeCustomRecorder?.stopAndRelease() ?: tempFile
                         } catch (e: Exception) {

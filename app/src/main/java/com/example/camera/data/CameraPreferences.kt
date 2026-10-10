@@ -24,7 +24,6 @@ class CameraPreferences(context: Context) {
         private const val KEY_VIDEO_FPS = "pref_video_fps"
         private const val KEY_VIDEO_BITRATE = "pref_video_bitrate"
         private const val KEY_VIDEO_STABILIZATION = "pref_video_stabilization"
-        private const val KEY_VIDEO_PIPELINE = "pref_video_pipeline_mode"
         private const val KEY_AUDIO_ENABLED = "pref_audio_enabled"
         private const val KEY_COLOR_PROFILE = "pref_color_profile"
         private const val KEY_WHITE_BALANCE = "pref_white_balance"
@@ -367,22 +366,6 @@ class CameraPreferences(context: Context) {
     var isAudioEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUDIO_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_AUDIO_ENABLED, value).apply()
-
-    var videoPipeline: com.example.camera.videopipeline.VideoPipelineType
-        get() {
-            val name = prefs.getString(KEY_VIDEO_PIPELINE, com.example.camera.videopipeline.VideoPipelineType.NORMAL.name)
-            return try {
-                com.example.camera.videopipeline.VideoPipelineType.valueOf(name ?: com.example.camera.videopipeline.VideoPipelineType.NORMAL.name)
-            } catch (e: Exception) {
-                com.example.camera.videopipeline.VideoPipelineType.NORMAL
-            }
-        }
-        set(value) {
-            prefs.edit()
-                .putString(KEY_VIDEO_PIPELINE, value.name)
-                .putBoolean("pref_is_custom_video_pipeline_enabled", value == com.example.camera.videopipeline.VideoPipelineType.CUSTOM)
-                .apply()
-        }
 
     var proSaturation: Float
         get() = prefs.getFloat("pref_pro_saturation", 0f)
@@ -815,27 +798,6 @@ class CameraPreferences(context: Context) {
         cinemaOutputGamma = config.outputGamma
     }
 
-    // Upgraded Night Mode Preferences
-    var nightDurationSeconds: Int
-        get() = prefs.getInt("pref_night_duration", 2).coerceIn(1, 5)
-        set(value) = prefs.edit().putInt("pref_night_duration", value.coerceIn(1, 5)).apply()
-
-    var nightIsMultiFrameFusion: Boolean
-        get() = prefs.getBoolean("pref_night_fusion", true)
-        set(value) = prefs.edit().putBoolean("pref_night_fusion", value).apply()
-
-    var nightIsAntiGhostingEnabled: Boolean
-        get() = prefs.getBoolean("pref_night_anti_ghosting", true)
-        set(value) = prefs.edit().putBoolean("pref_night_anti_ghosting", value).apply()
-
-    var nightNoiseSuppression: Float
-        get() = prefs.getFloat("pref_night_noise_suppression", 0.85f)
-        set(value) = prefs.edit().putFloat("pref_night_noise_suppression", value).apply()
-
-    var nightShadowLift: Float
-        get() = prefs.getFloat("pref_night_shadow_lift", 1.25f)
-        set(value) = prefs.edit().putFloat("pref_night_shadow_lift", value).apply()
-
     // Hybrid Stabilization Preferences
     var isHybridStabilizationEnabled: Boolean
         get() = prefs.getBoolean("pref_hybrid_stabilization", true)
@@ -884,26 +846,6 @@ class CameraPreferences(context: Context) {
     var isSunExposureSliderEnabled: Boolean
         get() = prefs.getBoolean("pref_sun_slider", true)
         set(value) = prefs.edit().putBoolean("pref_sun_slider", value).apply()
-
-    var nightConfig: NightConfig
-        get() = NightConfig(
-            durationSeconds = nightDurationSeconds,
-            multiFrameFusionEnabled = nightIsMultiFrameFusion,
-            antiGhostingEnabled = nightIsAntiGhostingEnabled,
-            noiseSuppression = nightNoiseSuppression,
-            shadowLift = nightShadowLift,
-            isMultiFrameFusion = nightIsMultiFrameFusion,
-            isAntiGhostingEnabled = nightIsAntiGhostingEnabled,
-            noiseSuppressionStrength = nightNoiseSuppression,
-            shadowLiftFactor = nightShadowLift
-        )
-        set(value) {
-            nightDurationSeconds = value.durationSeconds
-            nightIsMultiFrameFusion = value.multiFrameFusionEnabled
-            nightIsAntiGhostingEnabled = value.antiGhostingEnabled
-            nightNoiseSuppression = value.noiseSuppression
-            nightShadowLift = value.shadowLift
-        }
 
     var tapFocusConfig: TapFocusConfig
         get() = TapFocusConfig(
@@ -1439,33 +1381,6 @@ class CameraPreferences(context: Context) {
         return try { PhotoFilter.valueOf(name) } catch (e: Exception) { selectedPhotoFilter }
     }
 
-    fun setModeNightConfig(mode: CameraMode, config: NightConfig) {
-        nightConfig = config
-        prefs.edit()
-            .putInt(modeKey(mode, "night_duration"), config.durationSeconds)
-            .putBoolean(modeKey(mode, "night_fusion"), config.multiFrameFusionEnabled)
-            .putBoolean(modeKey(mode, "night_anti_ghost"), config.antiGhostingEnabled)
-            .putFloat(modeKey(mode, "night_noise"), config.noiseSuppression)
-            .putFloat(modeKey(mode, "night_shadow"), config.shadowLift)
-            .apply()
-    }
-
-    fun getModeNightConfig(mode: CameraMode): NightConfig {
-        if (!prefs.contains(modeKey(mode, "night_duration"))) return nightConfig
-        val dur = prefs.getInt(modeKey(mode, "night_duration"), nightDurationSeconds)
-        val fus = prefs.getBoolean(modeKey(mode, "night_fusion"), nightIsMultiFrameFusion)
-        val ag = prefs.getBoolean(modeKey(mode, "night_anti_ghost"), nightIsAntiGhostingEnabled)
-        val ns = prefs.getFloat(modeKey(mode, "night_noise"), nightNoiseSuppression)
-        val sl = prefs.getFloat(modeKey(mode, "night_shadow"), nightShadowLift)
-        return NightConfig(
-            durationSeconds = dur,
-            multiFrameFusionEnabled = fus,
-            antiGhostingEnabled = ag,
-            noiseSuppression = ns,
-            shadowLift = sl
-        )
-    }
-
     fun setModeCinemaConfig(mode: CameraMode, config: CinemaConfig) {
         saveCinemaConfig(config)
     }
@@ -1673,114 +1588,9 @@ class CameraPreferences(context: Context) {
             .apply()
     }
 
-    var isCustomVideoPipelineEnabled: Boolean
-        get() = videoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM
-        set(value) {
-            videoPipeline = if (value) {
-                com.example.camera.videopipeline.VideoPipelineType.CUSTOM
-            } else {
-                com.example.camera.videopipeline.VideoPipelineType.NORMAL
-            }
-        }
-
-    fun getCustomVideoPipelineConfig(): com.example.camera.videopipeline.CustomVideoPipelineConfig {
-        return com.example.camera.videopipeline.CustomVideoPipelineConfig(
-            exposure = prefs.getFloat("pref_cvp_exposure", 0.0f),
-            highlightRecovery = prefs.getFloat("pref_cvp_hl_recovery", 0.40f),
-            shadowRecovery = prefs.getFloat("pref_cvp_sh_recovery", 0.35f),
-            blackLevel = prefs.getFloat("pref_cvp_black_level", 0.0f),
-            midtoneControl = prefs.getFloat("pref_cvp_midtone", 0.0f),
-            contrast = prefs.getFloat("pref_cvp_contrast", 0.0f),
-            localContrast = prefs.getFloat("pref_cvp_local_contrast", 0.15f),
-            dynamicRangeToneMapping = prefs.getFloat("pref_cvp_dyn_range_tm", 0.35f),
-            highlightRollOff = prefs.getFloat("pref_cvp_hl_rolloff", 0.45f),
-            shadowRollOff = prefs.getFloat("pref_cvp_sh_rolloff", 0.30f),
-            whiteBalance = try {
-                com.example.camera.model.WhiteBalanceMode.valueOf(
-                    prefs.getString("pref_cvp_wb", com.example.camera.model.WhiteBalanceMode.AUTO.name)
-                        ?: com.example.camera.model.WhiteBalanceMode.AUTO.name
-                )
-            } catch (e: Exception) {
-                com.example.camera.model.WhiteBalanceMode.AUTO
-            },
-            temperature = prefs.getFloat("pref_cvp_temperature", 0.0f),
-            tint = prefs.getFloat("pref_cvp_tint", 0.0f),
-            saturation = prefs.getFloat("pref_cvp_saturation", 1.0f),
-            vibrance = prefs.getFloat("pref_cvp_vibrance", 0.0f),
-            colorMatrixPreset = prefs.getInt("pref_cvp_colormatrix_preset", 0),
-            redGain = prefs.getFloat("pref_cvp_red_gain", 1.0f),
-            greenGain = prefs.getFloat("pref_cvp_green_gain", 1.0f),
-            blueGain = prefs.getFloat("pref_cvp_blue_gain", 1.0f),
-            lumaCurvePreset = prefs.getInt("pref_cvp_lumacurve_preset", 0),
-            redCurveStrength = prefs.getFloat("pref_cvp_red_curve", 0.0f),
-            greenCurveStrength = prefs.getFloat("pref_cvp_green_curve", 0.0f),
-            blueCurveStrength = prefs.getFloat("pref_cvp_blue_curve", 0.0f),
-            chromaStrength = prefs.getFloat("pref_cvp_chroma_strength", 1.0f),
-            chromaNoiseReduction = prefs.getFloat("pref_cvp_chroma_nr", 0.30f),
-            lumaNoiseReduction = prefs.getFloat("pref_cvp_luma_nr", 0.25f),
-            temporalNoiseReduction = prefs.getFloat("pref_cvp_temporal_nr", 0.50f),
-            spatialNoiseReduction = prefs.getFloat("pref_cvp_spatial_nr", 0.30f),
-            sharpening = prefs.getFloat("pref_cvp_sharpening", 0.20f),
-            microContrast = prefs.getFloat("pref_cvp_micro_contrast", 0.12f),
-            textureDetail = prefs.getFloat("pref_cvp_texture_detail", 0.15f),
-            debanding = prefs.getFloat("pref_cvp_debanding", 0.20f),
-            demosaicDetailProcessing = prefs.getFloat("pref_cvp_demosaic", 0.25f),
-            lensShadingCorrection = prefs.getFloat("pref_cvp_lens_shading", 0.35f),
-            distortionCorrection = prefs.getFloat("pref_cvp_distortion", 0.25f),
-            blackClippingControl = prefs.getFloat("pref_cvp_black_clipping", 0.10f),
-            highlightClippingProtection = prefs.getFloat("pref_cvp_hl_clipping", 0.40f),
-            hdrToneMappingStrength = prefs.getFloat("pref_cvp_hdr_strength", 0.35f),
-            localToneMapping = prefs.getFloat("pref_cvp_local_tm", 0.20f),
-            colorHighlightShadowSeparation = prefs.getFloat("pref_cvp_color_sep", 0.15f),
-            outputGamma = prefs.getFloat("pref_cvp_output_gamma", 2.2f),
-            logToDisplayTransformStrength = prefs.getFloat("pref_cvp_log_to_display", 1.0f)
-        )
-    }
-
-    fun saveCustomVideoPipelineConfig(config: com.example.camera.videopipeline.CustomVideoPipelineConfig) {
-        prefs.edit()
-            .putFloat("pref_cvp_exposure", config.exposure)
-            .putFloat("pref_cvp_hl_recovery", config.highlightRecovery)
-            .putFloat("pref_cvp_sh_recovery", config.shadowRecovery)
-            .putFloat("pref_cvp_black_level", config.blackLevel)
-            .putFloat("pref_cvp_midtone", config.midtoneControl)
-            .putFloat("pref_cvp_contrast", config.contrast)
-            .putFloat("pref_cvp_local_contrast", config.localContrast)
-            .putFloat("pref_cvp_dyn_range_tm", config.dynamicRangeToneMapping)
-            .putFloat("pref_cvp_hl_rolloff", config.highlightRollOff)
-            .putFloat("pref_cvp_sh_rolloff", config.shadowRollOff)
-            .putString("pref_cvp_wb", config.whiteBalance.name)
-            .putFloat("pref_cvp_temperature", config.temperature)
-            .putFloat("pref_cvp_tint", config.tint)
-            .putFloat("pref_cvp_saturation", config.saturation)
-            .putFloat("pref_cvp_vibrance", config.vibrance)
-            .putInt("pref_cvp_colormatrix_preset", config.colorMatrixPreset)
-            .putFloat("pref_cvp_red_gain", config.redGain)
-            .putFloat("pref_cvp_green_gain", config.greenGain)
-            .putFloat("pref_cvp_blue_gain", config.blueGain)
-            .putInt("pref_cvp_lumacurve_preset", config.lumaCurvePreset)
-            .putFloat("pref_cvp_red_curve", config.redCurveStrength)
-            .putFloat("pref_cvp_green_curve", config.greenCurveStrength)
-            .putFloat("pref_cvp_blue_curve", config.blueCurveStrength)
-            .putFloat("pref_cvp_chroma_strength", config.chromaStrength)
-            .putFloat("pref_cvp_chroma_nr", config.chromaNoiseReduction)
-            .putFloat("pref_cvp_luma_nr", config.lumaNoiseReduction)
-            .putFloat("pref_cvp_temporal_nr", config.temporalNoiseReduction)
-            .putFloat("pref_cvp_spatial_nr", config.spatialNoiseReduction)
-            .putFloat("pref_cvp_sharpening", config.sharpening)
-            .putFloat("pref_cvp_micro_contrast", config.microContrast)
-            .putFloat("pref_cvp_texture_detail", config.textureDetail)
-            .putFloat("pref_cvp_debanding", config.debanding)
-            .putFloat("pref_cvp_demosaic", config.demosaicDetailProcessing)
-            .putFloat("pref_cvp_lens_shading", config.lensShadingCorrection)
-            .putFloat("pref_cvp_distortion", config.distortionCorrection)
-            .putFloat("pref_cvp_black_clipping", config.blackClippingControl)
-            .putFloat("pref_cvp_hl_clipping", config.highlightClippingProtection)
-            .putFloat("pref_cvp_hdr_strength", config.hdrToneMappingStrength)
-            .putFloat("pref_cvp_local_tm", config.localToneMapping)
-            .putFloat("pref_cvp_color_sep", config.colorHighlightShadowSeparation)
-            .putFloat("pref_cvp_output_gamma", config.outputGamma)
-            .putFloat("pref_cvp_log_to_display", config.logToDisplayTransformStrength)
-            .apply()
-    }
+    fun getModeNightConfig(mode: Any): NightConfig = NightConfig()
+    fun setModeNightConfig(mode: Any, config: NightConfig) {}
+    var nightConfig: NightConfig = NightConfig()
+    fun getCustomVideoPipelineConfig(): com.example.camera.videopipeline.CustomVideoPipelineConfig = com.example.camera.videopipeline.CustomVideoPipelineConfig()
+    fun saveCustomVideoPipelineConfig(config: com.example.camera.videopipeline.CustomVideoPipelineConfig) {}
 }

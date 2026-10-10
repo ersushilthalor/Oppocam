@@ -6,9 +6,9 @@ import android.util.Size
 
 enum class CameraMode(val title: String) {
     PHOTO("Photo"),
+    NIGHT("Night"),
     VIDEO("Video"),
     CINEMA("Pro Video"),
-    NIGHT("Night"),
     MORE("More"),
     AI_SUBJECT_TRACKING("AI Tracking")
 }
@@ -248,36 +248,6 @@ data class CapturedMedia(
     val timestamp: Long,
     val displayName: String,
     val isFrontCamera: Boolean = false
-)
-
-data class NightConfig(
-    val durationSeconds: Int = 0, // 0 = AUTO (intelligent scene & gyro sensing), 1 to 5 seconds
-    val multiFrameFusionEnabled: Boolean = true,
-    val antiGhostingEnabled: Boolean = true,
-    val noiseSuppression: Float = 0.85f,
-    val shadowLift: Float = 1.35f,
-    val isMultiFrameFusion: Boolean = true,
-    val isAntiGhostingEnabled: Boolean = true,
-    val noiseSuppressionStrength: Float = 0.85f,
-    val shadowLiftFactor: Float = 1.35f,
-    val exposureBias: Float = 1.0f,
-    val highlightProtection: Boolean = true,
-    val localToneMapping: Boolean = true,
-    val tripodDetectionEnabled: Boolean = true,
-    val rawSensorPreferred: Boolean = true
-)
-
-data class NightCaptureProgress(
-    val isCapturing: Boolean = false,
-    val remainingSeconds: Float = 0f,
-    val progress: Float = 0f,
-    val statusText: String = "Hold device steady...",
-    val detectedScene: String = "Auto Night",
-    val activeFrameCount: Int = 0,
-    val targetFrameCount: Int = 0,
-    val isTripodDetected: Boolean = false,
-    val exposureTimeMs: Float = 0f,
-    val iso: Int = 0
 )
 
 enum class VideoStabilizationMode(

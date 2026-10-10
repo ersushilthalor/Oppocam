@@ -49,7 +49,6 @@ class DualCameraRecordingRelay(
     private val is10Bit: Boolean = false,
     initialSource: PreviewStreamSource = PreviewStreamSource.MAIN,
     private val cinemaRecorder: CinemaSoftwareRecordingEngine? = null,
-    private val customPipelineRecorder: CustomVideoPipelineRecorder? = null,
     private val sensorOrientation: Int = 90,
     private val deviceRotation: Int = 0,
     private val isFront: Boolean = false,
@@ -64,6 +63,8 @@ class DualCameraRecordingRelay(
         private const val EGL_GL_COLORSPACE_KHR = 0x309D
         private const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
     }
+
+    var customPipelineRecorder: CustomVideoPipelineRecorder? = null
 
     @Volatile
     var currentVideoAdjustments: com.example.camera.model.VideoAdjustments = initialAdjustments ?: com.example.camera.model.VideoAdjustments()
@@ -212,20 +213,6 @@ class DualCameraRecordingRelay(
                 isDelegatingToNativeGlRecorder = true
                 isRelayReady = true
                 Log.i(TAG, "Delegated dual-camera recording surfaces to CinemaSoftwareRecordingEngine (source=$activeSource)")
-                return
-            }
-        }
-
-        if (customPipelineRecorder != null) {
-            val mainSurf = customPipelineRecorder.getMainInputSurface()
-            val uwSurf = customPipelineRecorder.getUltraWideInputSurface()
-            if (mainSurf != null && uwSurf != null && mainSurf !== uwSurf) {
-                customPipelineRecorder.setActiveStreamSource(activeSource)
-                internalMainSurface = mainSurf
-                internalUltraWideSurface = uwSurf
-                isDelegatingToNativeGlRecorder = true
-                isRelayReady = true
-                Log.i(TAG, "Delegated dual-camera recording surfaces to CustomVideoPipelineRecorder (source=$activeSource)")
                 return
             }
         }
