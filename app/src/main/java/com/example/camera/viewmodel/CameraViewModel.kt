@@ -1725,6 +1725,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clampedTarget = targetZoom.coerceIn(minZoom, maxZoom)
 
         engine.isContinuousZoomTransitionActive = true
+        engine.ensureUltraWideSimultaneousReady()
         engine.zoomTransitionController.startTransition(
             fromZoom = clampedFrom,
             targetZoom = clampedTarget,
