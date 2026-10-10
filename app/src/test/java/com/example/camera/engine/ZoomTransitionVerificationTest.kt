@@ -426,4 +426,143 @@ class ZoomTransitionVerificationTest {
             assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
         }
     }
+
+    @Test
+    fun testVerifyAllSixHoldDurationValuesAndPersistence() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val testValues = listOf(0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+        val expectedMs = listOf(50L, 100L, 150L, 200L, 250L, 300L)
+
+        // 1. Verify default value is 0.10 sec (100 ms)
+        val defaultVm = CameraViewModel(app)
+        assertEquals(0.10f, defaultVm.lensSwitchHoldDurationSec.value, 0.001f)
+        assertEquals(100L, defaultVm.engine.zoomTransitionController.holdAtOneXDurationMs)
+
+        // 2. Separately verify each of the six values
+        for (i in testValues.indices) {
+            val value = testValues[i]
+            val ms = expectedMs[i]
+
+            viewModel.setLensSwitchHoldDuration(value)
+
+            // Verify ViewModel state flow
+            assertEquals("ViewModel hold duration state should match $value", value, viewModel.lensSwitchHoldDurationSec.value, 0.001f)
+
+            // Verify controller execution parameter
+            assertEquals("Engine controller hold duration ms should match $ms", ms, viewModel.engine.zoomTransitionController.holdAtOneXDurationMs)
+
+            // Verify persistence in CameraPreferences
+            val prefs = com.example.camera.data.CameraPreferences(app)
+            assertEquals("Preferences hold duration sec should match $value", value, prefs.lensSwitchHoldDurationSec, 0.001f)
+            assertEquals("Preferences hold duration ms should match $ms", ms, prefs.lensSwitchHoldDurationMs)
+
+            // Verify persistence survives across app restart by instantiating a fresh ViewModel
+            val restoredVm = CameraViewModel(app)
+            assertEquals("Restored ViewModel hold duration sec should match $value", value, restoredVm.lensSwitchHoldDurationSec.value, 0.001f)
+            assertEquals("Restored Engine hold duration ms should match $ms", ms, restoredVm.engine.zoomTransitionController.holdAtOneXDurationMs)
+        }
+
+        // Restore default for subsequent tests
+        viewModel.setLensSwitchHoldDuration(0.10f)
+        assertEquals(0.10f, viewModel.lensSwitchHoldDurationSec.value, 0.001f)
+        assertEquals(100L, viewModel.engine.zoomTransitionController.holdAtOneXDurationMs)
+    }
+
+    @Test
+    fun testPhysicalMainLensSwitchesOnlyAfterSelectedHoldForAllSixValues() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val testValues = listOf(0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+            val expectedMs = listOf(50L, 100L, 150L, 200L, 250L, 300L)
+
+            for (i in testValues.indices) {
+                val value = testValues[i]
+                val expectedHoldMs = expectedMs[i]
+
+                val reachedOneXTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val switchedMainTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val switchedLensRef = java.util.concurrent.atomic.AtomicReference<LensInfo?>(null)
+                val switchOccurredBeforeHold = java.util.concurrent.atomic.AtomicBoolean(false)
+
+                val controller = ZoomTransitionController(
+                    onApplyZoomToEngine = { zoom, _ ->
+                        if (zoom >= 1.0f && reachedOneXTime.get() < 0L) {
+                            reachedOneXTime.set(android.os.SystemClock.uptimeMillis())
+                        }
+                    },
+                    onSelectLensOnEngine = { lens, _, _ ->
+                        val now = android.os.SystemClock.uptimeMillis()
+                        switchedMainTime.set(now)
+                        switchedLensRef.set(lens)
+                        val reached = reachedOneXTime.get()
+                        if (reached > 0L && (now - reached) < (expectedHoldMs - 25L)) {
+                            switchOccurredBeforeHold.set(true)
+                        }
+                    }
+                )
+
+                controller.holdAtOneXDurationMs = expectedHoldMs
+
+                val job = controller.startTransition(
+                    fromZoom = 0.5f,
+                    targetZoom = 1.0f,
+                    targetLens = mainLens,
+                    availableLenses = listOf(uwLens, mainLens),
+                    currentLens = uwLens,
+                    switchPointMm = 23.0f,
+                    scope = this,
+                    durationMs = 50L,
+                    onZoomUpdate = {},
+                    onComplete = { _, _ -> }
+                )
+
+                job.join()
+
+                assertTrue("1x exact FOV must be reached before lens switch", reachedOneXTime.get() > 0L)
+                assertTrue("Physical Main lens must be selected", switchedMainTime.get() > 0L)
+                assertEquals("Switched lens must be Main lens", mainLens.id, switchedLensRef.get()?.id)
+                assertFalse("Switch must NOT occur before selected hold duration ($expectedHoldMs ms)", switchOccurredBeforeHold.get())
+
+                val actualHoldDuration = switchedMainTime.get() - reachedOneXTime.get()
+                assertTrue(
+                    "Hold duration for $value sec must be at least ${expectedHoldMs - 20L}ms, was ${actualHoldDuration}ms",
+                    actualHoldDuration >= (expectedHoldMs - 20L)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun testInstantSwitchingAndReverseDirectionPreservedWithConfiguredHold() {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            // Set a non-default hold duration (e.g. 0.25 sec = 250 ms)
+            viewModel.setLensSwitchHoldDuration(0.25f)
+            assertEquals(250L, viewModel.engine.zoomTransitionController.holdAtOneXDurationMs)
+
+            // 1. Instant switch to Ultra-Wide must be immediate with no hold or animation delay
+            viewModel.selectLens(uwLens, instant = true)
+            assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
+            assertFalse(viewModel.engine.zoomTransitionController.isTransitionActive.value)
+
+            // 2. Instant switch to Main must be immediate with no hold or animation delay
+            viewModel.selectLens(mainLens, instant = true)
+            assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
+            assertFalse(viewModel.engine.zoomTransitionController.isTransitionActive.value)
+
+            // 3. Reverse direction (1x -> 0.5x) must remain smooth continuous transition without hold duration
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            assertTrue("1x -> 0.5x zoom preset tap must activate continuous zoom transition", viewModel.engine.isContinuousZoomTransitionActive)
+
+            // Reset back to default 0.10s
+            viewModel.setLensSwitchHoldDuration(0.10f)
+        }
+    }
 }

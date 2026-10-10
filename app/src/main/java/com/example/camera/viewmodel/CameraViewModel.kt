@@ -747,7 +747,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
             ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF,
             switchPointMm = preferences.lensSwitchPointMm,
-            lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec
+            lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
+            lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec
         )
     )
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
@@ -755,10 +756,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _lensSwitchOverlapDurationSec = MutableStateFlow(preferences.lensSwitchOverlapDurationSec)
     val lensSwitchOverlapDurationSec: StateFlow<Float> = _lensSwitchOverlapDurationSec.asStateFlow()
 
+    private val _lensSwitchHoldDurationSec = MutableStateFlow(preferences.lensSwitchHoldDurationSec)
+    val lensSwitchHoldDurationSec: StateFlow<Float> = _lensSwitchHoldDurationSec.asStateFlow()
+
     val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
     val isUsingUltraWideSurface: StateFlow<Boolean> = engine.isUsingUltraWideSurface
     val displayedPreviewSource: StateFlow<com.example.camera.engine.PreviewStreamSource> = engine.displayedPreviewSource
     val previewOverlapState: StateFlow<com.example.camera.engine.PreviewOverlapState> = engine.previewOverlapState
+
+    fun setLensSwitchHoldDuration(seconds: Float) {
+        val clamped = (Math.round(seconds.coerceIn(
+            CameraPreferences.MIN_LENS_SWITCH_HOLD_DURATION_SEC,
+            CameraPreferences.MAX_LENS_SWITCH_HOLD_DURATION_SEC
+        ) * 20f) / 20f).coerceIn(
+            CameraPreferences.MIN_LENS_SWITCH_HOLD_DURATION_SEC,
+            CameraPreferences.MAX_LENS_SWITCH_HOLD_DURATION_SEC
+        )
+        preferences.lensSwitchHoldDurationSec = clamped
+        _lensSwitchHoldDurationSec.value = clamped
+        val ms = (clamped * 1000f + 0.5f).toLong()
+        engine.zoomTransitionController.holdAtOneXDurationMs = ms
+        _instantSwitchState.update { it.copy(lensSwitchHoldDurationSec = clamped) }
+        showToast("Lens Switch Hold: ${String.format(java.util.Locale.US, "%.2f", clamped)} sec")
+    }
 
     fun setLensSwitchOverlapDuration(seconds: Float) {
         val clamped = (Math.round(seconds.coerceIn(0.1f, 1.0f) * 10f) / 10f)
@@ -1049,6 +1069,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
+        engine.zoomTransitionController.holdAtOneXDurationMs = preferences.lensSwitchHoldDurationMs
         engine.setLensSwitchPointMm(preferences.lensSwitchPointMm)
 
         viewModelScope.launch {

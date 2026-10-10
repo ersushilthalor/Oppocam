@@ -219,6 +219,8 @@ fun SettingsDrawer(
     onIncludeLensSwitchPointsInPresetsToggle: (Boolean) -> Unit = {},
     lensSwitchOverlapDurationSec: Float = 0.3f,
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
+    lensSwitchHoldDurationSec: Float = 0.10f,
+    onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -460,6 +462,8 @@ fun SettingsDrawer(
                             onIncludeLensSwitchPointsInPresetsToggle = onIncludeLensSwitchPointsInPresetsToggle,
                             lensSwitchOverlapDurationSec = lensSwitchOverlapDurationSec,
                             onLensSwitchOverlapDurationChange = onLensSwitchOverlapDurationChange,
+                            lensSwitchHoldDurationSec = lensSwitchHoldDurationSec,
+                            onLensSwitchHoldDurationChange = onLensSwitchHoldDurationChange,
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
                             onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
                             onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
@@ -2050,6 +2054,8 @@ private fun CameraLensSettingsPage(
     onIncludeLensSwitchPointsInPresetsToggle: (Boolean) -> Unit = {},
     lensSwitchOverlapDurationSec: Float = 0.3f,
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
+    lensSwitchHoldDurationSec: Float = 0.10f,
+    onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
@@ -2082,6 +2088,13 @@ private fun CameraLensSettingsPage(
             SwitchPointSettingCard(
                 switchPointMm = lensSwitchPointMm,
                 onSwitchPointChange = onLensSwitchPointChange
+            )
+        }
+
+        item {
+            LensSwitchHoldDurationSettingCard(
+                holdDurationSec = lensSwitchHoldDurationSec,
+                onHoldDurationChange = onLensSwitchHoldDurationChange
             )
         }
 
@@ -2183,6 +2196,146 @@ private fun CameraLensSettingsPage(
                 selectedOption = viewfinderResolution,
                 onOptionSelected = onViewfinderResolutionSelected
             )
+        }
+    }
+}
+
+@Composable
+private fun LensSwitchHoldDurationSettingCard(
+    holdDurationSec: Float,
+    onHoldDurationChange: (Float) -> Unit
+) {
+    val roundedDuration = ((holdDurationSec.coerceIn(0.05f, 0.30f) * 20f).roundToInt() / 20f).coerceIn(0.05f, 0.30f)
+    val isDefault = kotlin.math.abs(roundedDuration - 0.10f) < 0.001f
+    val displayValue = if (isDefault) {
+        String.format(java.util.Locale.US, "%.2f sec (Default)", roundedDuration)
+    } else {
+        String.format(java.util.Locale.US, "%.2f sec", roundedDuration)
+    }
+
+    val options = listOf(
+        0.05f to "0.05 sec",
+        0.10f to "0.10 sec",
+        0.15f to "0.15 sec",
+        0.20f to "0.20 sec",
+        0.25f to "0.25 sec",
+        0.30f to "0.30 sec"
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("setting_lens_switch_hold_duration_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Timer,
+                            contentDescription = null,
+                            tint = Color(0xFFFFD54F),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Lens Switch Hold Duration",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Hold duration at 1x field of view on the Ultra-Wide lens before switching to the Main lens (.5x → 1x).",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color.Black.copy(alpha = 0.35f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Current Hold Time",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = displayValue,
+                        color = Color(0xFFFFD54F),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                options.forEach { (value, label) ->
+                    val isSelected = kotlin.math.abs(roundedDuration - value) < 0.01f
+                    val tagValue = String.format(java.util.Locale.US, "%.2f", value)
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onHoldDurationChange(value) },
+                        modifier = Modifier.testTag("hold_duration_option_$tagValue"),
+                        label = {
+                            Text(
+                                text = label,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFFFD54F),
+                            selectedLabelColor = Color.Black,
+                            containerColor = Color.White.copy(alpha = 0.08f),
+                            labelColor = Color.White
+                        )
+                    )
+                }
+            }
         }
     }
 }
@@ -4196,6 +4349,10 @@ fun CameraSettingsScreen(
         onLensSwitchPointChange = { viewModel.setLensSwitchPointMm(it) },
         isIncludeLensSwitchPointsInPresetsEnabled = isIncludeLensSwitchPointsInPresetsEnabled,
         onIncludeLensSwitchPointsInPresetsToggle = { viewModel.setIncludeLensSwitchPointsInPresets(it) },
+        lensSwitchOverlapDurationSec = viewModel.lensSwitchOverlapDurationSec.collectAsStateWithLifecycle().value,
+        onLensSwitchOverlapDurationChange = { viewModel.setLensSwitchOverlapDuration(it) },
+        lensSwitchHoldDurationSec = viewModel.lensSwitchHoldDurationSec.collectAsStateWithLifecycle().value,
+        onLensSwitchHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
         onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
         onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },

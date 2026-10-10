@@ -55,7 +55,10 @@ class ZoomTransitionController(
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
         const val TOTAL_TRANSITION_DURATION_MS = 300L // Fixed duration of exactly 300ms (0.30s), never less
-        const val HOLD_AT_ONE_X_DURATION_MS = 100L // 0.1 second hold at exact 1x FOV before physical switch
+        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 100L // 0.10 second default hold at exact 1x FOV before physical switch
+        const val HOLD_AT_ONE_X_DURATION_MS = 100L // Preserved for backwards compatibility
+        const val MIN_HOLD_AT_ONE_X_DURATION_MS = 50L
+        const val MAX_HOLD_AT_ONE_X_DURATION_MS = 300L
         const val DEFAULT_OVERLAP_DURATION_MS = 300L
         const val PREVIEW_OVERLAP_DURATION_MS = 100L
         const val MIN_OVERLAP_DURATION_MS = 100L
@@ -63,6 +66,7 @@ class ZoomTransitionController(
     }
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
+    var holdAtOneXDurationMs: Long = DEFAULT_HOLD_AT_ONE_X_DURATION_MS
 
     private val _isTransitionActive = MutableStateFlow(false)
     val isTransitionActive: StateFlow<Boolean> = _isTransitionActive.asStateFlow()
@@ -252,8 +256,9 @@ class ZoomTransitionController(
                 onZoomUpdate(1.0f)
                 onApplyZoomToEngine(1.0f, true)
 
-                // 3. Once Ultra-Wide reaches exact 1x field of view, hold that view for 0.1s (100 ms)
-                delay(HOLD_AT_ONE_X_DURATION_MS)
+                // 3. Once Ultra-Wide reaches exact 1x field of view, hold that view for the selected hold duration
+                val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
+                delay(holdDuration)
 
                 // 4. After the 100 ms hold, switch instantly to physical 1x Main lens with zero intentional delay
                 onSelectLensOnEngine(mainWideLens, 1.0f, false)

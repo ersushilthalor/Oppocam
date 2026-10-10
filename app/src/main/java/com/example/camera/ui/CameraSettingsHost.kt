@@ -91,6 +91,7 @@ fun CameraSettingsHost(
     val lensSwitchPointMm by viewModel.lensSwitchPointMm.collectAsStateWithLifecycle()
     val isIncludeLensSwitchPointsInPresetsEnabled by viewModel.isIncludeLensSwitchPointsInPresetsEnabled.collectAsStateWithLifecycle()
     val lensSwitchOverlapDurationSec by viewModel.lensSwitchOverlapDurationSec.collectAsStateWithLifecycle()
+    val lensSwitchHoldDurationSec by viewModel.lensSwitchHoldDurationSec.collectAsStateWithLifecycle()
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
@@ -248,6 +249,8 @@ fun CameraSettingsHost(
         onIncludeLensSwitchPointsInPresetsToggle = { viewModel.setIncludeLensSwitchPointsInPresets(it) },
         lensSwitchOverlapDurationSec = lensSwitchOverlapDurationSec,
         onLensSwitchOverlapDurationChange = { viewModel.setLensSwitchOverlapDuration(it) },
+        lensSwitchHoldDurationSec = lensSwitchHoldDurationSec,
+        onLensSwitchHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
         onDismiss = onDismiss
     )
 }
