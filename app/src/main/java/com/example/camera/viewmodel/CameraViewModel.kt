@@ -745,7 +745,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             isShowUltraWidePreview = preferences.isShowUltraWidePreview,
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
-            ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF,
+            ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF,
             switchPointMm = preferences.lensSwitchPointMm,
             lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
             lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec

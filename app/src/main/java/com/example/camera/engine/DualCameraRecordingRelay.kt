@@ -114,6 +114,8 @@ class DualCameraRecordingRelay(
     private val mvpMatrix = FloatArray(16)
     private val stMatrix = FloatArray(16)
     private val relayTexMatrix = FloatArray(16)
+    private val renderTexMatrix = FloatArray(16)
+    private val renderPreviewTexMatrix = FloatArray(16)
     private var vertexBuffer: FloatBuffer? = null
     private var texCoordBuffer: FloatBuffer? = null
 
@@ -580,11 +582,8 @@ class DualCameraRecordingRelay(
                 val outW = bufferWidth
                 val outH = bufferHeight
                 GLES20.glViewport(0, 0, outW, outH)
-                GLES20.glClearColor(0f, 0f, 0f, 1f)
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
                 GLES20.glUseProgram(programId)
 
-                val finalTexMatrix = FloatArray(16)
                 computeCameraTexMatrix(
                     stMatrix = stMatrix,
                     isFront = isFrontFacing,
@@ -594,11 +593,11 @@ class DualCameraRecordingRelay(
                     viewportHeight = outH,
                     camBufferWidth = if (isUltraWide) ultraWideBufferW else mainBufferW,
                     camBufferHeight = if (isUltraWide) ultraWideBufferH else mainBufferH,
-                    outMatrix = finalTexMatrix
+                    outMatrix = renderTexMatrix
                 )
 
                 GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
-                GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
+                GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, renderTexMatrix, 0)
                 GLES20.glUniform1i(sTextureHandle, 0)
 
                 val frameTimeSec = ((candidatePtsNs - recordingStartMonotonicNs).toFloat() / 1_000_000_000f)
@@ -634,7 +633,6 @@ class DualCameraRecordingRelay(
                     GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
                 }
 
-                GLES20.glFinish()
                 EGLExt.eglPresentationTimeANDROID(display, surface, candidatePtsNs)
                 val swapped = EGL14.eglSwapBuffers(display, surface)
                 if (swapped) {
@@ -652,11 +650,8 @@ class DualCameraRecordingRelay(
                             val pW = if (previewWidth > 0) previewWidth else outW
                             val pH = if (previewHeight > 0) previewHeight else outH
                             GLES20.glViewport(0, 0, pW, pH)
-                            GLES20.glClearColor(0f, 0f, 0f, 1f)
-                            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
                             GLES20.glUseProgram(programId)
 
-                            val previewTexMatrix = FloatArray(16)
                             computeCameraTexMatrix(
                                 stMatrix = stMatrix,
                                 isFront = isFrontFacing,
@@ -666,11 +661,11 @@ class DualCameraRecordingRelay(
                                 viewportHeight = pH,
                                 camBufferWidth = if (isUltraWide) ultraWideBufferW else mainBufferW,
                                 camBufferHeight = if (isUltraWide) ultraWideBufferH else mainBufferH,
-                                outMatrix = previewTexMatrix
+                                outMatrix = renderPreviewTexMatrix
                             )
 
                             GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
-                            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, previewTexMatrix, 0)
+                            GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, renderPreviewTexMatrix, 0)
                             GLES20.glUniform1i(sTextureHandle, 0)
 
                             if (handles != null) {

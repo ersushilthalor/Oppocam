@@ -247,7 +247,7 @@ class CameraPreferences(context: Context) {
     }
 
     var isKeepUltraWideReady: Boolean
-        get() = prefs.getBoolean(KEY_KEEP_ULTRAWIDE_READY, false)
+        get() = prefs.getBoolean(KEY_KEEP_ULTRAWIDE_READY, true)
         set(value) = prefs.edit().putBoolean(KEY_KEEP_ULTRAWIDE_READY, value).apply()
 
     var isAutoSwitchToUltraWide: Boolean

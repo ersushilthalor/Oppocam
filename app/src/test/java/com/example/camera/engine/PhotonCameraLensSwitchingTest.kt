@@ -173,10 +173,10 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
-    fun testKeepUltraWideReadyDefaultOff() {
+    fun testKeepUltraWideReadyDefaultOn() {
         val prefs = com.example.camera.data.CameraPreferences(context)
-        assertFalse("Keep Ultra Wide Ready must be OFF by default in preferences", prefs.isKeepUltraWideReady)
-        assertFalse("Keep Ultra Wide Ready must be OFF by default in engine", engine.isKeepUltraWideReady.value)
+        assertTrue("Keep Ultra Wide Ready must be ON by default in preferences", prefs.isKeepUltraWideReady)
+        assertTrue("Keep Ultra Wide Ready must be ON by default in engine", engine.isKeepUltraWideReady.value)
     }
 
     @Test

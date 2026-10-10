@@ -285,6 +285,7 @@ class Camera2Engine(private val context: Context) {
     private val isUltraWideStreaming = java.util.concurrent.atomic.AtomicBoolean(false)
     private var activeLogicalMultiCamUltraWideConfigured = false
     private val standbySessionGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val standbyCameraDeviceGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun isSizeSupportedForLens(cameraId: String?, size: Size): Boolean {
         if (cameraId == null) return false
@@ -496,7 +497,6 @@ class Camera2Engine(private val context: Context) {
                 try { ultraWideStandbyCaptureSession?.stopRepeating() } catch (_: Throwable) {}
                 try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
                 ultraWideStandbyCaptureSession = null
-                isPreparingUltraWideStandby.set(false)
                 isUltraWideStreaming.set(false)
                 standbyConfiguredForRecording = false
                 _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
@@ -755,7 +755,7 @@ class Camera2Engine(private val context: Context) {
     private fun configureStandbySessionOnDevice(
         camera: CameraDevice,
         standbyLens: LensInfo,
-        includeJpegReader: Boolean = true
+        includeJpegReader: Boolean = false
     ) {
         try {
             val standbyPreviewSurf = if (standbyLens.lensType == LensType.ULTRAWIDE) {
@@ -766,6 +766,10 @@ class Camera2Engine(private val context: Context) {
                 isPreparingUltraWideStandby.set(false)
                 return
             }
+
+            try { ultraWideStandbyCaptureSession?.stopRepeating() } catch (_: Throwable) {}
+            try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
+            ultraWideStandbyCaptureSession = null
 
             val isRecordingActive = (_isRecordingVideo.value || isStartingRecording.get()) && dualCameraRecordingRelay != null
             val isVideo = (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || isRecordingActive)
@@ -1131,7 +1135,6 @@ class Camera2Engine(private val context: Context) {
 
                 if (ultraWideStandbyCaptureSession != null &&
                     sizeMatches &&
-                    standbyConfiguredIsVideoMode == isVideo &&
                     standbyConfiguredForRecording == isRecordingNow) {
                     isUltraWideStreaming.set(true)
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
@@ -1142,6 +1145,7 @@ class Camera2Engine(private val context: Context) {
                 return
             } else {
                 // Close mismatched standby camera if any
+                standbyCameraDeviceGeneration.incrementAndGet()
                 try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
                 ultraWideStandbyCaptureSession = null
                 try { existingStandbyCam.close() } catch (_: Throwable) {}
@@ -1166,10 +1170,10 @@ class Camera2Engine(private val context: Context) {
                 getOrCreateMainPreviewSurface(standbyLens.cameraId)
             }
 
-            val openToken = standbySessionGeneration.incrementAndGet()
+            val openToken = standbyCameraDeviceGeneration.incrementAndGet()
             mgr.openCamera(standbyLens.cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
-                    if (openToken != standbySessionGeneration.get() ||
+                    if (openToken != standbyCameraDeviceGeneration.get() ||
                         (!_isKeepUltraWideReady.value && !isContinuousZoomTransitionActive) ||
                         isClosingCamera ||
                         cameraDevice == null ||
@@ -1187,10 +1191,11 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
-                    if (openToken != standbySessionGeneration.get()) {
+                    if (openToken != standbyCameraDeviceGeneration.get()) {
                         try { camera.close() } catch (ignored: Throwable) {}
                         return
                     }
+                    standbyCameraDeviceGeneration.incrementAndGet()
                     standbySessionGeneration.incrementAndGet()
                     try { camera.close() } catch (ignored: Throwable) {}
                     if (ultraWideStandbyCameraDevice == camera) {
@@ -1206,10 +1211,11 @@ class Camera2Engine(private val context: Context) {
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
-                    if (openToken != standbySessionGeneration.get()) {
+                    if (openToken != standbyCameraDeviceGeneration.get()) {
                         try { camera.close() } catch (ignored: Throwable) {}
                         return
                     }
+                    standbyCameraDeviceGeneration.incrementAndGet()
                     standbySessionGeneration.incrementAndGet()
                     try { camera.close() } catch (ignored: Throwable) {}
                     if (ultraWideStandbyCameraDevice == camera) {
@@ -1225,6 +1231,7 @@ class Camera2Engine(private val context: Context) {
                 }
             }, backgroundHandler)
         } catch (t: Throwable) {
+            standbyCameraDeviceGeneration.incrementAndGet()
             standbySessionGeneration.incrementAndGet()
             isPreparingUltraWideStandby.set(false)
             Log.w(TAG, "Could not open standby camera concurrently", t)
@@ -1235,6 +1242,7 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun releaseUltraWideStandby() {
+        standbyCameraDeviceGeneration.incrementAndGet()
         standbySessionGeneration.incrementAndGet()
         ultraWideReconnectRunnable?.let { backgroundHandler?.removeCallbacks(it) }
         ultraWideReconnectRunnable = null
@@ -8042,7 +8050,7 @@ class Camera2Engine(private val context: Context) {
                     sensorOrientation = sensorOrient,
                     deviceRotation = currentRot,
                     isFront = isFront,
-                    previewTargetSurface = previewSurf,
+                    previewTargetSurface = null,
                     previewWidth = viewfinderWidth,
                     previewHeight = viewfinderHeight,
                     initialAdjustments = currentVideoAdjustments

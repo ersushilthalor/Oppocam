@@ -237,16 +237,16 @@ fun Viewfinder(
         textureViewInstance?.let { tv ->
             val mainAlpha = if (!isUw) 1f else 0f
             tv.alpha = mainAlpha
-            tv.translationZ = if (!isUw) 2f else 1f
-            (tv.parent as? android.view.View)?.translationZ = if (!isUw) 2f else 1f
-            tv.visibility = if (!isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
+            tv.translationZ = if (!isUw) 2f else 0f
+            (tv.parent as? android.view.View)?.translationZ = if (!isUw) 2f else 0f
+            tv.visibility = android.view.View.VISIBLE
         }
         ultraWideTextureViewInstance?.let { tv ->
             val uwAlpha = if (isUw) 1f else 0f
             tv.alpha = uwAlpha
-            tv.translationZ = if (isUw) 2f else 1f
-            (tv.parent as? android.view.View)?.translationZ = if (isUw) 2f else 1f
-            tv.visibility = if (isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
+            tv.translationZ = if (isUw) 2f else 0f
+            (tv.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
+            tv.visibility = android.view.View.VISIBLE
         }
     }
 
@@ -626,9 +626,9 @@ fun Viewfinder(
                                 ultraWideTextureViewInstance = this
                                 val isUw = currentIsUsingUltraWideSurface
                                 alpha = if (isUw) 1f else 0f
-                                visibility = if (isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                                translationZ = if (isUw) 2f else 1f
-                                (this.parent as? android.view.View)?.translationZ = if (isUw) 2f else 1f
+                                visibility = android.view.View.VISIBLE
+                                translationZ = if (isUw) 2f else 0f
+                                (this.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
                                 addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                                     val newW = right - left
                                     val newH = bottom - top
@@ -730,9 +730,9 @@ fun Viewfinder(
                         update = { textureView ->
                             val isUw = currentIsUsingUltraWideSurface
                             textureView.alpha = if (isUw) 1f else 0f
-                            textureView.visibility = if (isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                            textureView.translationZ = if (isUw) 2f else 1f
-                            (textureView.parent as? android.view.View)?.translationZ = if (isUw) 2f else 1f
+                            textureView.visibility = android.view.View.VISIBLE
+                            textureView.translationZ = if (isUw) 2f else 0f
+                            (textureView.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
                             if (isUw && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                                 com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                     textureView = textureView,
