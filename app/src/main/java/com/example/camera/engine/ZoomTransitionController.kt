@@ -55,6 +55,7 @@ class ZoomTransitionController(
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
         const val TOTAL_TRANSITION_DURATION_MS = 300L // Fixed duration of exactly 300ms (0.30s), never less
+        const val HOLD_AT_ONE_X_DURATION_MS = 100L // 0.1 second hold at exact 1x FOV before physical switch
         const val DEFAULT_OVERLAP_DURATION_MS = 300L
         const val PREVIEW_OVERLAP_DURATION_MS = 100L
         const val MIN_OVERLAP_DURATION_MS = 100L
@@ -198,6 +199,72 @@ class ZoomTransitionController(
 
             _isTransitionActive.value = true
 
+            val isHalfXToOneX = (currentLens?.lensType == LensType.ULTRAWIDE || startZ <= 0.65f) &&
+                endZ in 0.95f..1.05f &&
+                (targetLens?.lensType == LensType.WIDE || targetLens?.isPrimaryMain == true || targetLens == null) &&
+                ultraWideLens != null && mainWideLens != null
+
+            if (isHalfXToOneX) {
+                // 1. Keep view on Ultra-Wide lens; do NOT switch to Main lens immediately
+                setSteadyStatePreview(true)
+                val startNorm = zoomToNormalizedLog(startZ, minZoom, maxZoom)
+                val targetNorm = zoomToNormalizedLog(1.0f, minZoom, maxZoom)
+
+                val startTime = SystemClock.uptimeMillis()
+                var lastDispatchedZoom = startZ
+                var lastDispatchedTime = 0L
+
+                // 2. Smoothly apply digital cropping on Ultra-Wide lens from 0.5x to 1x
+                while (isActive) {
+                    val now = SystemClock.uptimeMillis()
+                    val elapsed = now - startTime
+                    if (elapsed >= transitionDurationMs) break
+
+                    val linearProgress = (elapsed.toDouble() / transitionDurationMs.toDouble()).coerceIn(0.0, 1.0)
+                    val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+                    val currentNorm = (startNorm + (targetNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
+
+                    val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
+                    val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, 1.0f)
+
+                    if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                        lastDispatchedZoom = currentZ
+                        lastDispatchedTime = now
+                        _currentInterpolatedZoom.value = currentZ
+                        onZoomUpdate(currentZ)
+                        onApplyZoomToEngine(currentZ, true)
+                    }
+
+                    val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
+                    val waitMs = nextTick - SystemClock.uptimeMillis()
+                    if (waitMs > 0) {
+                        delay(waitMs)
+                    }
+                }
+
+                val totalElapsed = SystemClock.uptimeMillis() - startTime
+                if (totalElapsed < transitionDurationMs) {
+                    delay(transitionDurationMs - totalElapsed)
+                }
+
+                // Ensure Ultra-Wide reaches the exact 1x field of view
+                _currentInterpolatedZoom.value = 1.0f
+                onZoomUpdate(1.0f)
+                onApplyZoomToEngine(1.0f, true)
+
+                // 3. Once Ultra-Wide reaches exact 1x field of view, hold that view for 0.1s (100 ms)
+                delay(HOLD_AT_ONE_X_DURATION_MS)
+
+                // 4. After the 100 ms hold, switch instantly to physical 1x Main lens with zero intentional delay
+                onSelectLensOnEngine(mainWideLens, 1.0f, false)
+                setSteadyStatePreview(false)
+                _isTransitionActive.value = false
+                activeTransitionJob = null
+
+                onComplete(1.0f, mainWideLens)
+                return@launch
+            }
+
             // Reuse the actual zoom slider logarithmic mapping to anchor start and target positions
             val startNorm = zoomToNormalizedLog(startZ, minZoom, maxZoom)
             val targetNorm = zoomToNormalizedLog(endZ, minZoom, maxZoom)
@@ -222,7 +289,7 @@ class ZoomTransitionController(
                 val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
 
                 // Apply zoom through the camera controller slider handler (at ~60fps pacing)
-                if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 15L) {
+                if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
                     lastDispatchedZoom = currentZ
                     lastDispatchedTime = now
                     _currentInterpolatedZoom.value = currentZ
@@ -231,7 +298,7 @@ class ZoomTransitionController(
                     onApplyZoomToEngine(currentZ, true)
                 }
 
-                val nextTick = minOf(startTime + transitionDurationMs, now + 10L)
+                val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
                 val waitMs = nextTick - SystemClock.uptimeMillis()
                 if (waitMs > 0) {
                     delay(waitMs)

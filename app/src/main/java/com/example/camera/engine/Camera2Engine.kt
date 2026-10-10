@@ -1104,7 +1104,7 @@ class Camera2Engine(private val context: Context) {
             val camera = cameraDevice ?: return
             getOrCreateUltraWidePreviewSurface(ultraWideLens.cameraId)
             getOrCreateMainPreviewSurface(mainLens.cameraId)
-            if (!activeLogicalMultiCamUltraWideConfigured && captureSession != null && !isConfiguringSession && !_isRecordingVideo.value) {
+            if (!activeLogicalMultiCamUltraWideConfigured && captureSession != null && !isConfiguringSession && !_isRecordingVideo.value && !isContinuousZoomTransitionActive) {
                 createCameraCaptureSession()
                 return
             }
@@ -5365,11 +5365,17 @@ class Camera2Engine(private val context: Context) {
 
     private var lastZoomPreviewUpdateTime = 0L
     private var pendingZoomRunnable: Runnable? = null
+    @Volatile
+    private var pendingZoomUpdateTarget: Float? = null
+    @Volatile
+    private var isZoomUpdateScheduled = false
 
     private fun scheduleZoomPreviewUpdate(immediate: Boolean = false, explicitZoom: Float? = null) {
         val handler = backgroundHandler
         val now = android.os.SystemClock.uptimeMillis()
         val isContinuous = isContinuousZoomTransitionActive
+        val zoomToApply = explicitZoom ?: currentZoom
+
         if (handler == null || Looper.myLooper() == handler.looper) {
             if (!immediate && !isContinuous && (now - lastZoomPreviewUpdateTime < 16L)) {
                 if (pendingZoomRunnable == null) {
@@ -5377,7 +5383,7 @@ class Camera2Engine(private val context: Context) {
                     val runnable = Runnable {
                         pendingZoomRunnable = null
                         lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                        updatePreviewSettings(explicitZoom)
+                        updatePreviewSettings(zoomToApply)
                     }
                     pendingZoomRunnable = runnable
                     handler?.postDelayed(runnable, delayMs)
@@ -5387,28 +5393,43 @@ class Camera2Engine(private val context: Context) {
             pendingZoomRunnable?.let { handler?.removeCallbacks(it) }
             pendingZoomRunnable = null
             lastZoomPreviewUpdateTime = now
-            updatePreviewSettings(explicitZoom)
+            updatePreviewSettings(zoomToApply)
             return
         }
 
-        if (immediate || isContinuous || (now - lastZoomPreviewUpdateTime >= 16L && pendingZoomRunnable == null)) {
+        pendingZoomUpdateTarget = zoomToApply
+
+        if (immediate) {
             pendingZoomRunnable?.let { handler.removeCallbacks(it) }
             pendingZoomRunnable = null
+            isZoomUpdateScheduled = false
             lastZoomPreviewUpdateTime = now
-            val runnable = Runnable {
+            handler.post {
+                val z = pendingZoomUpdateTarget
                 lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                updatePreviewSettings(explicitZoom)
+                updatePreviewSettings(z)
             }
-            handler.post(runnable)
-        } else if (pendingZoomRunnable == null) {
-            val delayMs = (16L - (now - lastZoomPreviewUpdateTime)).coerceIn(4L, 16L)
+            return
+        }
+
+        // For continuous transitions and regular zooms: coalesce so at most ONE update is pending in the queue
+        if (!isZoomUpdateScheduled) {
+            isZoomUpdateScheduled = true
+            val timeSinceLast = now - lastZoomPreviewUpdateTime
+            val delayMs = if (timeSinceLast >= 16L) 0L else (16L - timeSinceLast).coerceIn(2L, 16L)
+
             val runnable = Runnable {
-                pendingZoomRunnable = null
+                isZoomUpdateScheduled = false
+                val z = pendingZoomUpdateTarget
                 lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
-                updatePreviewSettings(explicitZoom)
+                updatePreviewSettings(z)
             }
             pendingZoomRunnable = runnable
-            handler.postDelayed(runnable, delayMs)
+            if (delayMs > 0L) {
+                handler.postDelayed(runnable, delayMs)
+            } else {
+                handler.post(runnable)
+            }
         }
     }
 
@@ -5441,7 +5462,9 @@ class Camera2Engine(private val context: Context) {
 
         currentZoom = clampedZoom
         _currentZoom.value = clampedZoom
-        preferences.currentZoom = clampedZoom
+        if (!isContinuousZoomTransitionActive && !isContinuousTransition) {
+            preferences.currentZoom = clampedZoom
+        }
 
         // If front selfie camera, apply digital zoom on active stream,
         // or switch to rear lens if user explicitly tapped a rear zoom preset (.5x or 1x)
@@ -5517,13 +5540,18 @@ class Camera2Engine(private val context: Context) {
         }
 
         val activeLens = activeSessionLens ?: currentLens
-        val effectiveTargetLens = targetLens
+        val isContinuous = isContinuousTransition || isContinuousZoomTransitionActive
+        val effectiveTargetLens = if (isContinuous && activeLens.lensType == LensType.ULTRAWIDE && pZoom <= 1.0f) {
+            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally all the way to 1.0x FOV
+            ultraWideLens ?: targetLens
+        } else {
+            targetLens
+        }
         val isDifferentCameraDevice = cameraDevice != null && effectiveTargetLens.cameraId != cameraDevice?.id
         val requiresPhysicalStreamSwitch = (effectiveTargetLens.physicalCameraId != null &&
                 effectiveTargetLens.physicalCameraId != activeSessionPhysicalCameraId) ||
                 !canUseLogicalZoomForLens(effectiveTargetLens.cameraId, effectiveTargetLens, pZoom)
 
-        val isContinuous = isContinuousTransition || isContinuousZoomTransitionActive
         val isStandbyOrPhysicalAvailable = requiresPhysicalStreamSwitch ||
                 activeLogicalMultiCamUltraWideConfigured ||
                 _isKeepUltraWideReady.value ||
@@ -5548,7 +5576,7 @@ class Camera2Engine(private val context: Context) {
                 activeSessionLens = effectiveTargetLens
             }
             if (effectiveTargetLens.facing == CameraCharacteristics.LENS_FACING_BACK) {
-                if (effectiveTargetLens.lensType == LensType.ULTRAWIDE && pZoom > 0.5f) {
+                if (effectiveTargetLens.lensType == LensType.ULTRAWIDE && pZoom > 0.5f && !isContinuous) {
                     ensureUltraWideSimultaneousReady()
                 }
                 if (_isKeepUltraWideReady.value) {

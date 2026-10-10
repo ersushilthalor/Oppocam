@@ -56,6 +56,9 @@ class CustomVideoPipeline(
     private var cachedGlslCode: String = buildGlslCode(initialConfig)
 
     @Volatile
+    private var cachedTonemapCurve: TonemapCurve? = null
+
+    @Volatile
     private var activeViewRef: WeakReference<View>? = null
 
     /**
@@ -66,6 +69,7 @@ class CustomVideoPipeline(
         config = newConfig
         cachedAgslCode = buildAgslCode(newConfig)
         cachedGlslCode = buildGlslCode(newConfig)
+        cachedTonemapCurve = null
         invalidateShader()
 
         // Force rebind on active viewfinder view if attached
@@ -150,7 +154,11 @@ class CustomVideoPipeline(
         // 3. Genuine Cinema Mode Rec.2020 Natural Log Tonemap Curve applied to hardware ISP
         if (capabilities.supportsTonemapCurve) {
             try {
-                val naturalCurve = buildRec2020NaturalTonemapCurve(cfg)
+                var naturalCurve = cachedTonemapCurve
+                if (naturalCurve == null) {
+                    naturalCurve = buildRec2020NaturalTonemapCurve(cfg)
+                    cachedTonemapCurve = naturalCurve
+                }
                 builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
                 builder.set(CaptureRequest.TONEMAP_CURVE, naturalCurve)
             } catch (e: Exception) {

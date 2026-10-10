@@ -384,4 +384,46 @@ class ZoomTransitionVerificationTest {
             assertEquals("At 0.5x final step, must remain on Ultra-Wide lens", uwLens.id, viewModel.engine.selectedLens.value?.id)
         }
     }
+
+    @Test
+    fun testHalfXToOneXTransitionSequenceHoldAndSwitch() {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            assertEquals(100L, ZoomTransitionController.HOLD_AT_ONE_X_DURATION_MS)
+
+            viewModel.selectLens(uwLens, instant = true)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.currentZoom.value, 0.01f)
+
+            // When user taps 1x while at 0.5x, do NOT switch to Main lens immediately
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
+
+            // Must initially remain on Ultra-Wide lens
+            assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
+        }
+    }
+
+    @Test
+    fun testVideoModeSmoothZoomTransitionWithoutSessionRestart() {
+        viewModel.setCameraMode(com.example.camera.model.CameraMode.VIDEO)
+        assertEquals(com.example.camera.model.CameraMode.VIDEO, viewModel.cameraMode.value)
+
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            viewModel.selectLens(uwLens, instant = true)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+
+            // Tapping 1x in Video Mode smoothly starts continuous transition
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
+            assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
+        }
+    }
 }

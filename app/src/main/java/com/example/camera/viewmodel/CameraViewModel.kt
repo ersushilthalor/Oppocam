@@ -1123,8 +1123,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             engine.currentZoomState.collect { zoom ->
                 _currentZoom.value = zoom
-                preferences.currentZoom = zoom
-                preferences.setModeZoom(_cameraMode.value, zoom)
+                if (!engine.isContinuousZoomTransitionActive && !engine.zoomTransitionController.isTransitionActive.value) {
+                    preferences.currentZoom = zoom
+                    preferences.setModeZoom(_cameraMode.value, zoom)
+                }
             }
         }
     }
@@ -1724,12 +1726,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clampedFrom = fromZoom.coerceIn(minZoom, maxZoom)
         val clampedTarget = targetZoom.coerceIn(minZoom, maxZoom)
 
+        val resolvedTargetLens = targetLens ?: if (clampedTarget >= 1.0f && clampedFrom < 1.0f) {
+            lensesForFacing.firstOrNull { it.isPrimaryMain }
+                ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+                ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
+        } else {
+            null
+        }
+
         engine.isContinuousZoomTransitionActive = true
         engine.ensureUltraWideSimultaneousReady()
         engine.zoomTransitionController.startTransition(
             fromZoom = clampedFrom,
             targetZoom = clampedTarget,
-            targetLens = targetLens,
+            targetLens = resolvedTargetLens,
             availableLenses = engine.availableLenses.value,
             currentLens = engine.selectedLens.value,
             switchPointMm = engine.lensSwitchPointMm.value,
@@ -1737,10 +1747,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             durationMs = durationMs,
             onZoomUpdate = { interpolatedZoom ->
                 _currentZoom.value = interpolatedZoom
-                preferences.setModeZoom(_cameraMode.value, interpolatedZoom)
             },
             onComplete = { finalZoom, finalLens ->
                 _currentZoom.value = finalZoom
+                preferences.currentZoom = finalZoom
                 preferences.setModeZoom(_cameraMode.value, finalZoom)
                 engine.isContinuousZoomTransitionActive = false
                 val resolvedLens = engine.selectedLens.value ?: finalLens
