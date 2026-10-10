@@ -152,7 +152,19 @@ class ZoomTransitionVerificationTest {
         )
         assertEquals("Target at 0.99x must be Ultra-Wide", LensType.ULTRAWIDE, lensTypeAt99)
 
-        // At 1.00x, when transition completes, target lens resolves to Wide (Main)
+        // At 1.00x, target lens resolves to Wide (Main) both during and after transition
+        val lensTypeAt100Continuous = CameraOpticalCalibration.resolveTargetLensType(
+            currentLensType = LensType.ULTRAWIDE,
+            targetZoom = 1.00f,
+            hasUltraWide = true,
+            hasTelephoto2x = false,
+            hasTelephoto3x = false,
+            isPresetTap = false,
+            switchPointMm = 23.0f,
+            isContinuousTransition = true
+        )
+        assertEquals("Target at 1.00x during continuous transition must be Wide", LensType.WIDE, lensTypeAt100Continuous)
+
         val lensTypeAt100 = CameraOpticalCalibration.resolveTargetLensType(
             currentLensType = LensType.ULTRAWIDE,
             targetZoom = 1.00f,

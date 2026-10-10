@@ -286,10 +286,6 @@ object CameraOpticalCalibration {
 
         // At or above the dynamic switch point zoom threshold, target Main (Wide) or Telephoto lens
         if (targetZoom >= switchZoom) {
-            if (isContinuousTransition && currentLensType == LensType.ULTRAWIDE && targetZoom < (switchZoom + 0.005f)) {
-                // Keep on Ultra-Wide during in-flight continuous zoom transition until complete
-                return LensType.ULTRAWIDE
-            }
             val isDirectOrTransition = isPresetTap || isContinuousTransition
             return when {
                 targetZoom >= 2.8f && hasTelephoto3x && (isDirectOrTransition || currentLensType == LensType.TELEPHOTO_3X || targetZoom >= 3.15f) && switchZoom <= 2.8f -> LensType.TELEPHOTO_3X
