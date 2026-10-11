@@ -69,7 +69,6 @@ fun BottomControlBar(
     isRecordingPaused: Boolean = false,
     videoDurationSeconds: Int,
     isCapturing: Boolean,
-    nightCaptureProgress: NightCaptureProgress = NightCaptureProgress(),
     isManualProOpen: Boolean = false,
     lastCapturedMedia: CapturedMedia?,
     activeTimerCountdown: Int?,
@@ -425,67 +424,6 @@ fun BottomControlBar(
                                             .background(shutterColor)
                                     )
                                 }
-                                CameraMode.NIGHT -> {
-                                    if (nightCaptureProgress.isCapturing) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(shutterSize)
-                                                .scale(buttonScale),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            // Progress arc ring around the shutter button
-                                            CircularProgressIndicator(
-                                                progress = { nightCaptureProgress.progress },
-                                                modifier = Modifier.size(shutterSize * 0.96f),
-                                                color = Color(0xFFFFB300),
-                                                trackColor = Color.White.copy(alpha = 0.20f),
-                                                strokeWidth = 3.5.dp
-                                            )
-                                            // Inner core with remaining countdown text or processing spinner
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(shutterSize * 0.70f)
-                                                    .clip(CircleShape)
-                                                    .background(Color(0xFF1E1E24))
-                                                    .border(1.5.dp, Color(0xFFFFB300).copy(alpha = 0.6f), CircleShape),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                val remSec = nightCaptureProgress.remainingSeconds
-                                                if (remSec > 0.05f) {
-                                                    Text(
-                                                        text = if (remSec >= 1.0f) "${remSec.toInt()}s" else "%.1fs".format(remSec),
-                                                        color = Color(0xFFFFB300),
-                                                        fontSize = 13.sp,
-                                                        fontWeight = FontWeight.ExtraBold
-                                                    )
-                                                } else {
-                                                    CircularProgressIndicator(
-                                                        modifier = Modifier.size(16.dp),
-                                                        color = Color(0xFFFFB300),
-                                                        strokeWidth = 2.dp
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(shutterSize * 0.8f)
-                                                .scale(buttonScale)
-                                                .clip(CircleShape)
-                                                .background(Color.White)
-                                                .border(3.dp, Color(0xFFFFB300), CircleShape),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(shutterSize * 0.25f)
-                                                    .clip(CircleShape)
-                                                    .background(Color(0xFFFFB300))
-                                            )
-                                        }
-                                    }
-                                }
 
                                 CameraMode.VIDEO, CameraMode.CINEMA -> {
                                     if (isRecordingVideo) {
@@ -561,7 +499,7 @@ fun BottomControlBar(
                         val modeScrollState = rememberScrollState()
                         if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.PIXEL_PILL) {
                             // Pixel UI Template:
-                            // First Icon (Photo Modes): Photo, Night, Pro Manual
+                            // First Icon (Photo Modes): Photo, Pro Manual
                             // Second Icon (Video and Special Modes): Video, Cinema, AI Subject Tracing
                             // "More" option is completely removed from the Pixel UI template.
                             data class PixelModeEntry(
@@ -580,15 +518,6 @@ fun BottomControlBar(
                                         onSelect = {
                                             onSetManualProOpen(false)
                                             onModeSelected(CameraMode.PHOTO)
-                                        }
-                                    ),
-                                    PixelModeEntry(
-                                        tag = "mode_night",
-                                        label = "Night",
-                                        isSelected = cameraMode == CameraMode.NIGHT,
-                                        onSelect = {
-                                            onSetManualProOpen(false)
-                                            onModeSelected(CameraMode.NIGHT)
                                         }
                                     ),
                                     PixelModeEntry(
@@ -953,7 +882,7 @@ fun BottomControlBar(
                                 modifier = Modifier.padding(3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // First Icon (Photo Modes): Photo, Night, Pro Manual
+                                // First Icon (Photo Modes): Photo, Pro Manual
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(18.dp))

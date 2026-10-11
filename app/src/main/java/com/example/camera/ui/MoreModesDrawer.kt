@@ -34,7 +34,6 @@ fun MoreModesDrawer(
     onDismissRequest: () -> Unit,
     onSelectProManual: () -> Unit,
     onSelectCinemaLog: () -> Unit,
-    onSelectNight: () -> Unit,
     onSelectAiSubjectTracking: () -> Unit = {},
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -127,14 +126,6 @@ fun MoreModesDrawer(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    MoreModeCard(
-                        icon = Icons.Outlined.NightsStay,
-                        title = "Night Fusion",
-                        subtitle = "Computational HDR burst",
-                        tag = "mode_card_night",
-                        modifier = Modifier.weight(1f),
-                        onClick = onSelectNight
-                    )
                     MoreModeCard(
                         icon = Icons.Outlined.GpsFixed,
                         title = "AI Subject Tracking",

@@ -92,8 +92,6 @@ fun Viewfinder(
     cinemaConfig: CinemaConfig? = null,
     videoAdjustments: com.example.camera.model.VideoAdjustments? = null,
     isGpuRelayPreviewActive: Boolean = false,
-    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
-    customVideoPipelineConfig: com.example.camera.videopipeline.CustomVideoPipelineConfig? = null,
     proSaturation: Float = 0f,
     proContrast: Float = 1.0f,
     proHighlights: Float = 0f,
@@ -132,7 +130,6 @@ fun Viewfinder(
     isDollyZoomActive: Boolean = false,
     dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
     onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
-    onOpenCustomPipelineSettings: (() -> Unit)? = null,
     stabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
     modifier: Modifier = Modifier
 ) {
@@ -171,7 +168,7 @@ fun Viewfinder(
     }
 
     val targetRatioCalc = when (cameraMode) {
-        CameraMode.PHOTO, CameraMode.NIGHT -> 4f / 3f
+        CameraMode.PHOTO -> 4f / 3f
         CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
         CameraMode.VIDEO -> 16f / 9f
         else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
@@ -259,11 +256,11 @@ fun Viewfinder(
         val containerWidth = maxWidth
         val containerHeight = maxHeight
 
-        // Native viewfinder uses 3:4 frame for Photo, Pro, and Night modes,
+        // Native viewfinder uses 3:4 frame for Photo and Pro modes,
         // mode-specific aspect ratio for Cinema mode, and 9:16 frame for Video mode.
-        val isFourThree = (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.NIGHT)
+        val isFourThree = (cameraMode == CameraMode.PHOTO)
         val targetRatio = when (cameraMode) {
-            CameraMode.PHOTO, CameraMode.NIGHT -> 4f / 3f
+            CameraMode.PHOTO -> 4f / 3f
             CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
             CameraMode.VIDEO -> 16f / 9f
             else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
@@ -507,8 +504,6 @@ fun Viewfinder(
                         var hasFilter = false
 
                         if (cameraMode == CameraMode.PHOTO) {
-                            // Completely isolate Photo Mode from video adjustments and video pipelines
-                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             if (activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
                                 val filterMat = activePhotoFilter.toAndroidColorMatrix()
@@ -540,7 +535,6 @@ fun Viewfinder(
                                 hasFilter = true
                             }
                         } else if (cameraMode == CameraMode.CINEMA) {
-                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             val effectiveConfig = if (activeLut != null && activeLut != cinemaConfig?.selectedLut) {
                                 cinemaConfig?.copy(selectedLut = activeLut)
@@ -555,22 +549,15 @@ fun Viewfinder(
                             textureView.invalidate()
                             return@AndroidView
                         } else if (cameraMode == CameraMode.VIDEO) {
-                            if (selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
-                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                                com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToView(textureView, selectedVideoPipeline)
-                                return@AndroidView
-                            } else if (isGpuRelayPreviewActive) {
+                            if (isGpuRelayPreviewActive) {
                                 // Real-time GPU relay split is actively rendering identical processed frames directly into preview surface
-                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                 com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                                 return@AndroidView
                             } else {
-                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                 com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
                                 return@AndroidView
                             }
                         } else {
-                            com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                             com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                         }
 
@@ -758,7 +745,6 @@ fun Viewfinder(
                             var hasFilter = false
 
                             if (cameraMode == CameraMode.PHOTO) {
-                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                 com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                                 if (activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
                                     val filterMat = activePhotoFilter.toAndroidColorMatrix()
@@ -788,7 +774,6 @@ fun Viewfinder(
                                     hasFilter = true
                                 }
                             } else if (cameraMode == CameraMode.CINEMA) {
-                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                 com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                                 val effectiveConfig = if (activeLut != null && activeLut != cinemaConfig?.selectedLut) {
                                     cinemaConfig?.copy(selectedLut = activeLut)
@@ -803,22 +788,15 @@ fun Viewfinder(
                                 textureView.invalidate()
                                 return@AndroidView
                             } else if (cameraMode == CameraMode.VIDEO) {
-                                if (selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
-                                    com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                                    com.example.camera.videopipeline.VideoPipelineManager.applyPipelineToView(textureView, selectedVideoPipeline)
-                                    return@AndroidView
-                                } else if (isGpuRelayPreviewActive) {
+                                if (isGpuRelayPreviewActive) {
                                     // Real-time GPU relay split is actively rendering identical processed frames directly into preview surface
-                                    com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                     com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                                     return@AndroidView
                                 } else {
-                                    com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                     com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
                                     return@AndroidView
                                 }
                             } else {
-                                com.example.camera.videopipeline.VideoPipelineManager.clearPipelineFromView(textureView)
                                 com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
                             }
 
@@ -913,38 +891,6 @@ fun Viewfinder(
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp
                         )
-                    }
-                } else if (cameraMode == CameraMode.VIDEO && selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM) {
-                    val pipelineAccent = Color(0xFFFFD54F)
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(10.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xDD0D0F18))
-                            .border(1.dp, pipelineAccent.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
-                            .clickable(enabled = onOpenCustomPipelineSettings != null) {
-                                onOpenCustomPipelineSettings?.invoke()
-                            }
-                            .padding(horizontal = 9.dp, vertical = 5.dp)
-                            .testTag("active_custom_pipeline_badge")
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(pipelineAccent)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "CUSTOM PIPELINE • REC.2020 NATURAL LOG",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.6.sp
-                            )
-                        }
                     }
                 }
 

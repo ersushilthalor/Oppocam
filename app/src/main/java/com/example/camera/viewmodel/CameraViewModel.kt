@@ -45,14 +45,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _cameraMode = MutableStateFlow(preferences.cameraMode)
     val cameraMode: StateFlow<CameraMode> = _cameraMode.asStateFlow()
 
-    private val _nightConfig = MutableStateFlow(preferences.getModeNightConfig(preferences.cameraMode))
-    val nightConfig: StateFlow<NightConfig> = _nightConfig.asStateFlow()
-    val nightProgress: StateFlow<NightCaptureProgress> = engine.nightProgress
-
-    val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = engine.hybridStabilizationConfig
-
     private val _selectedAspectRatio = MutableStateFlow(
-        if (preferences.cameraMode == CameraMode.PHOTO || preferences.cameraMode == CameraMode.NIGHT) {
+        if (preferences.cameraMode == CameraMode.PHOTO) {
             CameraAspectRatio.RATIO_4_3
         } else {
             CameraAspectRatio.RATIO_9_16
@@ -67,7 +61,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val isRecordingPaused: StateFlow<Boolean> = engine.isRecordingPaused
     val isSavingVideo: StateFlow<Boolean> = engine.isSavingVideo
     val videoDurationSeconds: StateFlow<Int> = engine.videoDurationSeconds
-    val selectedVideoPipeline: StateFlow<com.example.camera.videopipeline.VideoPipelineType> = engine.selectedVideoPipeline
 
     // Photo Filter State
     private val _selectedPhotoFilter = MutableStateFlow(preferences.getModePhotoFilter(preferences.cameraMode))
@@ -593,52 +586,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // Custom Video Pipeline State (Dedicated "Custom Pipeline" in Video Mode)
-    private val _customVideoPipelineConfig = MutableStateFlow(preferences.getCustomVideoPipelineConfig())
-    val customVideoPipelineConfig: StateFlow<com.example.camera.videopipeline.CustomVideoPipelineConfig> = _customVideoPipelineConfig.asStateFlow()
 
-    private val _isCustomVideoPipelineSettingsOpen = MutableStateFlow(false)
-    val isCustomVideoPipelineSettingsOpen: StateFlow<Boolean> = _isCustomVideoPipelineSettingsOpen.asStateFlow()
-
-    fun setCustomVideoPipelineSettingsOpen(isOpen: Boolean) {
-        _isCustomVideoPipelineSettingsOpen.value = isOpen
-        if (isOpen) {
-            _isVideoSettingsPanelOpen.value = false
-            _isVideoAdjustmentsOpen.value = false
-            _isSettingsOpen.value = false
-            _isManualProOpen.value = false
-        }
-    }
-
-    fun toggleCustomVideoPipelineSettingsOpen() {
-        setCustomVideoPipelineSettingsOpen(!_isCustomVideoPipelineSettingsOpen.value)
-    }
-
-    private var saveCustomVideoPipelineJob: kotlinx.coroutines.Job? = null
-
-    fun updateCustomVideoPipelineConfig(config: com.example.camera.videopipeline.CustomVideoPipelineConfig) {
-        _customVideoPipelineConfig.value = config
-        com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(config)
-        engine.updatePreviewSettings()
-
-        saveCustomVideoPipelineJob?.cancel()
-        saveCustomVideoPipelineJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            kotlinx.coroutines.delay(300)
-            preferences.saveCustomVideoPipelineConfig(config)
-        }
-    }
-
-    fun resetCustomVideoPipelineConfig() {
-        saveCustomVideoPipelineJob?.cancel()
-        val defaultCfg = com.example.camera.videopipeline.CustomVideoPipelineConfig()
-        _customVideoPipelineConfig.value = defaultCfg
-        com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(defaultCfg)
-        engine.updatePreviewSettings()
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            preferences.saveCustomVideoPipelineConfig(defaultCfg)
-        }
-        showToast("Custom Pipeline reset to Cinema Natural baseline")
-    }
 
     fun updateCinemaConfig(config: CinemaConfig) {
         engine.setCinemaConfig(config)
@@ -987,6 +935,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val isOisEnabled: StateFlow<Boolean> = _isOisEnabled.asStateFlow()
     val actualOisHardwareActive: StateFlow<Boolean> = engine.actualOisHardwareActive
     val actualEisHardwareActive: StateFlow<Boolean> = engine.actualEisHardwareActive
+    val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = engine.hybridStabilizationConfig
 
     private val _isVideoStabilizationEnabled = MutableStateFlow(preferences.getModeVideoStabilization(preferences.cameraMode))
     val isVideoStabilizationEnabled: StateFlow<Boolean> = _isVideoStabilizationEnabled.asStateFlow()
@@ -1065,7 +1014,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setCinemaConfig(preferences.getCinemaConfig())
         engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
-        com.example.camera.videopipeline.VideoPipelineManager.getCustomPipeline().updateConfig(_customVideoPipelineConfig.value)
         engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
@@ -1099,10 +1047,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // Restore initial mode aspect ratio:
         // - Photo mode: fixed 3:4
-        // - Night mode: fixed 3:4
         // - Cinema mode: mode-specific cinema aspect ratio (16:9, IMAX, Cinematic)
         // - All other modes: fixed 9:16
-        if (initialMode == CameraMode.PHOTO || initialMode == CameraMode.NIGHT) {
+        if (initialMode == CameraMode.PHOTO) {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
             engine.setPreviewAspectRatio(4f / 3f)
         } else if (initialMode == CameraMode.CINEMA) {
@@ -1181,10 +1128,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.cameraMode = mode
 
         // 3. Immediately synchronize aspect ratio:
-        // Photo, Night, and Pro modes strictly keep 3:4 aspect ratio.
+        // Photo and Pro modes strictly keep 3:4 aspect ratio.
         // Cinema mode uses selected cinema aspect ratio (16:9, IMAX, Cinematic).
         // Video mode keeps 9:16 aspect ratio.
-        if (mode == CameraMode.PHOTO || mode == CameraMode.NIGHT) {
+        if (mode == CameraMode.PHOTO) {
             _selectedAspectRatio.value = CameraAspectRatio.RATIO_4_3
             engine.setPreviewAspectRatio(4f / 3f)
         } else if (mode == CameraMode.CINEMA) {
@@ -1311,9 +1258,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mColorProfile = preferences.getModeColorProfile(mode)
         _colorProfile.value = mColorProfile
         engine.colorProfile = mColorProfile
-
-        val mNightConfig = preferences.getModeNightConfig(mode)
-        _nightConfig.value = mNightConfig
 
         val mTapFocus = preferences.getModeTapFocusConfig(mode)
         _tapFocusConfig.value = mTapFocus
@@ -1542,14 +1486,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.videoHeight = quality.height
         preferences.videoFps = quality.fps
         showToast("Video Quality: ${quality.fullLabel}")
-    }
-
-    fun selectVideoPipeline(pipeline: com.example.camera.videopipeline.VideoPipelineType) {
-        engine.setVideoPipeline(pipeline)
-        if (pipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-            _isVideoAdjustmentsOpen.value = false
-        }
-        showToast("Video Pipeline: ${pipeline.title} (${pipeline.subtitle})")
     }
 
     fun toggleManualPro() {
@@ -2099,12 +2035,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (locked) "AE/AF LOCKED" else "AE/AF UNLOCKED")
     }
 
-    fun setNightConfig(config: NightConfig) {
-        _nightConfig.value = config
-        preferences.nightConfig = config
-        preferences.setModeNightConfig(_cameraMode.value, config)
-    }
-
     fun setHybridStabilizationConfig(config: HybridStabilizationConfig) {
         engine.updateHybridStabilizationConfig(config)
         preferences.hybridStabilizationConfig = config
@@ -2214,60 +2144,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.setModeTapFocusConfig(_cameraMode.value, config)
     }
 
-    fun triggerNightCapture() {
-        if (engine.isCapturing.value) return
-
-        val timerSeconds = _timerMode.value.seconds
-        if (timerSeconds > 0) {
-            timerJob?.cancel()
-            timerJob = viewModelScope.launch {
-                for (remaining in timerSeconds downTo 1) {
-                    _activeTimerCountdown.value = remaining
-                    delay(1000)
-                }
-                _activeTimerCountdown.value = null
-                executeNightCapture()
-            }
-        } else {
-            executeNightCapture()
-        }
-    }
-
-    private fun executeNightCapture() {
-        com.example.camera.sound.CameraSoundManager.playShutter()
-        val config = _nightConfig.value
-        engine.takeNightPhoto(
-            config = config,
-            onProgress = {},
-            onComplete = { uri ->
-                if (uri != null) {
-                    showToast("Night photo captured")
-                } else {
-                    showToast("Night capture failed")
-                }
-            }
-        )
-    }
-
-    fun setSelectedPhotoFilter(filter: PhotoFilter) {
-        _selectedPhotoFilter.value = filter
-        engine.selectedPhotoFilter = filter
-        showToast("Filter: ${filter.displayName}")
-    }
-
-    fun togglePhotoFilterBar() {
-        _isPhotoFilterBarOpen.value = !_isPhotoFilterBarOpen.value
-    }
-
-    fun setPhotoFilterBarOpen(open: Boolean) {
-        _isPhotoFilterBarOpen.value = open
-    }
-
     fun onMainActionButtonClick() {
         when (_cameraMode.value) {
             CameraMode.PHOTO, CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> triggerPhotoCapture()
             CameraMode.VIDEO, CameraMode.CINEMA -> triggerVideoCapture()
-            CameraMode.NIGHT -> triggerNightCapture()
         }
     }
 
@@ -2592,6 +2472,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.selectedPhotoFilter = filter
         preferences.setModePhotoFilter(_cameraMode.value, filter)
         showToast("Filter: ${filter.displayName}")
+    }
+
+    fun setSelectedPhotoFilter(filter: PhotoFilter) {
+        setPhotoFilter(filter)
+    }
+
+    fun togglePhotoFilterBar() {
+        _isPhotoFilterBarOpen.value = !_isPhotoFilterBarOpen.value
+    }
+
+    fun setPhotoFilterBarOpen(open: Boolean) {
+        _isPhotoFilterBarOpen.value = open
     }
 
     fun setManualShutterSpeed(ns: Long?) {

@@ -36,12 +36,9 @@ fun FloatingVideoSettingsPanel(
     currentResolution: CameraResolution?,
     currentFps: Int,
     isUltraStabilizationEnabled: Boolean = false,
-    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
     onResolutionSelected: (CameraResolution) -> Unit,
     onFpsSelected: (Int) -> Unit,
     onUltraStabilizationToggle: () -> Unit = {},
-    onVideoPipelineSelected: (com.example.camera.videopipeline.VideoPipelineType) -> Unit = {},
-    onOpenCustomPipelineSettings: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {

@@ -6,7 +6,6 @@ import android.util.Size
 
 enum class CameraMode(val title: String) {
     PHOTO("Photo"),
-    NIGHT("Night"),
     VIDEO("Video"),
     CINEMA("Pro Video"),
     MORE("More"),

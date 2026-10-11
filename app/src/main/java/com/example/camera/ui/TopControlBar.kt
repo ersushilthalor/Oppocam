@@ -401,27 +401,6 @@ fun TopControlBar(
                         )
                     }
                 }
-                CameraMode.NIGHT -> {
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0x33FFB300))
-                            .border(1.dp, Color(0xFFFFB300), RoundedCornerShape(17.dp))
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "NIGHT HDR",
-                            color = Color(0xFFFFB300),
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
             }
         }
 
@@ -517,27 +496,6 @@ fun TopControlBar(
                             text = "PRO",
                             color = Color.White,
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
-                CameraMode.NIGHT -> {
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(Color(0xB21A1A1E))
-                            .border(1.dp, Color(0xFFFFB300), RoundedCornerShape(17.dp))
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "MULTI-FUSION",
-                            color = Color(0xFFFFB300),
-                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp,
                             maxLines = 1,

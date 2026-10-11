@@ -1034,8 +1034,7 @@ private fun SimulatedModeSelectorBar(
 ) {
     val modes = listOf(
         CameraMode.PHOTO,
-        CameraMode.VIDEO,
-        CameraMode.NIGHT
+        CameraMode.VIDEO
     )
 
     Row(

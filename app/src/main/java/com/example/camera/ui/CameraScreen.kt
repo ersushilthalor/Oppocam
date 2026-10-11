@@ -234,8 +234,6 @@ fun CameraScreen(
     val proSharpness by viewModel.proSharpness.collectAsStateWithLifecycle()
     val proNoiseReduction by viewModel.proNoiseReduction.collectAsStateWithLifecycle()
 
-    val nightConfig by viewModel.nightConfig.collectAsStateWithLifecycle()
-    val nightProgress by viewModel.nightProgress.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val videoStabilizationMode by viewModel.videoStabilizationMode.collectAsStateWithLifecycle()
     val isOisEnabled by viewModel.isOisEnabled.collectAsStateWithLifecycle()
@@ -271,9 +269,6 @@ fun CameraScreen(
     val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
     val isDollyZoomActive by viewModel.isDollyZoomActive.collectAsStateWithLifecycle()
     val dollyCropState by viewModel.dollyCropState.collectAsStateWithLifecycle()
-    val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
-    val isCustomVideoPipelineSettingsOpen by viewModel.isCustomVideoPipelineSettingsOpen.collectAsStateWithLifecycle()
-    val customVideoPipelineConfig by viewModel.customVideoPipelineConfig.collectAsStateWithLifecycle()
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
@@ -306,7 +301,7 @@ fun CameraScreen(
     val isAnyWindowOpen = isPhotoFilterBarOpen ||
             isCinemaSettingsOpen || isLogProfileWindowOpen || isLutWindowOpen ||
             isManualProOpen || isMoreModesOpen ||
-            isVideoSettingsPanelOpen || isCustomVideoPipelineSettingsOpen ||
+            isVideoSettingsPanelOpen ||
             isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
             isEvControlOpen
@@ -353,8 +348,6 @@ fun CameraScreen(
                 cinemaConfig = cinemaConfig,
                 videoAdjustments = videoAdjustments,
                 isGpuRelayPreviewActive = isGpuRelayPreviewActive,
-                selectedVideoPipeline = selectedVideoPipeline,
-                customVideoPipelineConfig = customVideoPipelineConfig,
                 proSaturation = proSaturation,
                 proContrast = proContrast,
                 proHighlights = proHighlights,
@@ -411,9 +404,6 @@ fun CameraScreen(
                 dollyCropState = dollyCropState,
                 onTapToLockDollySubject = { normX, normY ->
                     viewModel.onTapToLockDollySubject(normX, normY)
-                },
-                onOpenCustomPipelineSettings = {
-                    viewModel.setCustomVideoPipelineSettingsOpen(true)
                 },
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
                 stabilizationMode = videoStabilizationMode,
@@ -502,22 +492,6 @@ fun CameraScreen(
         if (cameraMode == CameraMode.CINEMA) {
             CinemaAssistOverlays(
                 cinemaConfig = cinemaConfig,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-
-
-        // 1e. Computational Night Mode Long-Exposure HUD
-        if (cameraMode == CameraMode.NIGHT) {
-            NightModeOverlay(
-                config = nightConfig,
-                captureProgress = nightProgress,
-                onDurationChange = { dur ->
-                    viewModel.setNightConfig(nightConfig.copy(durationSeconds = dur))
-                },
-                onToggleNightHdr = {
-                    viewModel.setNightConfig(nightConfig.copy(multiFrameFusionEnabled = !nightConfig.multiFrameFusionEnabled))
-                },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -754,7 +728,6 @@ fun CameraScreen(
                 currentResolution = if (cameraMode == CameraMode.CINEMA) cinemaConfig.selectedResolution ?: selectedVideoResolution else selectedVideoResolution,
                 currentFps = if (cameraMode == CameraMode.CINEMA) cinemaConfig.videoFps else videoFps,
                 isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-                selectedVideoPipeline = selectedVideoPipeline,
                 onResolutionSelected = { res ->
                     viewModel.selectVideoResolution(res)
                     if (cameraMode == CameraMode.CINEMA) {
@@ -770,33 +743,11 @@ fun CameraScreen(
                 onUltraStabilizationToggle = {
                     viewModel.toggleUltraStabilization()
                 },
-                onVideoPipelineSelected = { pipeline ->
-                    viewModel.selectVideoPipeline(pipeline)
-                },
                 onDismiss = { viewModel.setVideoSettingsPanelOpen(false) },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
                     .padding(top = 56.dp)
-            )
-        }
-
-        // 2c. Floating Custom Video Pipeline Settings Panel (Rec.2020 Log 38 ISP Controls)
-        AnimatedVisibility(
-            visible = cameraMode == CameraMode.VIDEO && isCustomVideoPipelineSettingsOpen,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 56.dp, start = 12.dp, end = 12.dp)
-        ) {
-            com.example.camera.ui.components.CustomVideoPipelineSettingsPanel(
-                config = customVideoPipelineConfig,
-                onConfigChange = { viewModel.updateCustomVideoPipelineConfig(it) },
-                onResetDefaults = { viewModel.resetCustomVideoPipelineConfig() },
-                onDismiss = { viewModel.setCustomVideoPipelineSettingsOpen(false) },
-                modifier = Modifier.wrapContentSize()
             )
         }
 
@@ -1049,10 +1000,6 @@ fun CameraScreen(
                     viewModel.setMoreModesOpen(false)
                     viewModel.setCameraMode(CameraMode.CINEMA)
                 },
-                onSelectNight = {
-                    viewModel.setMoreModesOpen(false)
-                    viewModel.setCameraMode(CameraMode.NIGHT)
-                },
                 onSelectAiSubjectTracking = {
                     viewModel.setMoreModesOpen(false)
                     viewModel.setCameraMode(CameraMode.AI_SUBJECT_TRACKING)
@@ -1114,7 +1061,6 @@ fun CameraScreen(
             onPauseResumeRecordingClick = { viewModel.toggleVideoRecordingPause() },
             videoDurationSeconds = videoDurationSeconds,
             isCapturing = isCapturing,
-            nightCaptureProgress = nightProgress,
             isManualProOpen = isManualProOpen,
             lastCapturedMedia = lastCapturedMedia,
             activeTimerCountdown = activeTimerCountdown,

@@ -17,7 +17,6 @@ import android.util.Log
 import android.view.Surface
 import com.example.camera.model.LensInfo
 import com.example.camera.model.LensType
-import com.example.camera.videopipeline.CustomVideoPipelineRecorder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -63,8 +62,6 @@ class DualCameraRecordingRelay(
         private const val EGL_GL_COLORSPACE_KHR = 0x309D
         private const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
     }
-
-    var customPipelineRecorder: CustomVideoPipelineRecorder? = null
 
     @Volatile
     var currentVideoAdjustments: com.example.camera.model.VideoAdjustments = initialAdjustments ?: com.example.camera.model.VideoAdjustments()
@@ -278,11 +275,9 @@ class DualCameraRecordingRelay(
             pendingClockSyncOnSwitch = true
             switchCount.incrementAndGet()
             cinemaRecorder?.setActiveStreamSource(source)
-            customPipelineRecorder?.setActiveStreamSource(source)
             Log.i(TAG, "[RECORDING_RELAY] Switched active recording stream to $source (switches=${switchCount.get()})")
         } else {
             cinemaRecorder?.setActiveStreamSource(source)
-            customPipelineRecorder?.setActiveStreamSource(source)
         }
     }
 
@@ -309,7 +304,6 @@ class DualCameraRecordingRelay(
             ultraWideBufferH = h
             try { ultraWideSurfaceTexture?.setDefaultBufferSize(w, h) } catch (_: Throwable) {}
             cinemaRecorder?.updateUltraWideBufferSize(w, h)
-            customPipelineRecorder?.updateUltraWideBufferSize(w, h)
         } else {
             mainBufferW = w
             mainBufferH = h

@@ -545,7 +545,7 @@ fun LiveUiEditorDialog(
                     OutlinedTextField(
                         value = newPresetName,
                         onValueChange = { newPresetName = it },
-                        placeholder = { Text("e.g. Minimal Night, Cinema Rig") },
+                        placeholder = { Text("e.g. Minimal Photo, Cinema Rig") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,

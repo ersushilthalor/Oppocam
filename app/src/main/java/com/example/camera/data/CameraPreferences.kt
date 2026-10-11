@@ -1587,10 +1587,4 @@ class CameraPreferences(context: Context) {
             .putFloat("pref_va_tex_micro_contrast", va.textureMicroContrast)
             .apply()
     }
-
-    fun getModeNightConfig(mode: Any): NightConfig = NightConfig()
-    fun setModeNightConfig(mode: Any, config: NightConfig) {}
-    var nightConfig: NightConfig = NightConfig()
-    fun getCustomVideoPipelineConfig(): com.example.camera.videopipeline.CustomVideoPipelineConfig = com.example.camera.videopipeline.CustomVideoPipelineConfig()
-    fun saveCustomVideoPipelineConfig(config: com.example.camera.videopipeline.CustomVideoPipelineConfig) {}
 }

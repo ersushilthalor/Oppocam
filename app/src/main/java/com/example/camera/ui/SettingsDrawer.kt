@@ -49,11 +49,9 @@ import kotlin.math.roundToInt
  */
 enum class SettingsPage(val title: String, val subtitle: String, val icon: ImageVector) {
     PHOTO("Photo Settings", "Resolutions, HDR, RAW & 50MP", Icons.Outlined.CameraAlt),
-    CUSTOM_PIPELINE("Custom Pipeline Settings", "Rec.2020 Natural Log • 38 ISP Controls", Icons.Outlined.Tune),
     VIDEO("Video Settings", "Resolution, Frame Rate, Codec & Bitrate", Icons.Outlined.Videocam),
     CINEMA("Pro Video Settings", "Resolution, FPS, Bitrate, Codec, Noise Reduction, Sharpness, Log & LUTs", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
-    NIGHT_MODE("Night Mode Settings", "Multi-Frame Fusion, Exposure & Tripod", Icons.Outlined.NightsStay),
     CAMERA_LENS("Camera & Lens Settings", "Hardware lenses & Viewfinder", Icons.Outlined.Lens),
     STABILIZATION("Stabilization & Audio", "Hybrid OIS/EIS, Gyro & Wind reduction", Icons.Outlined.VideoStable),
     UI_LAYOUT("UI & Layout Settings", "Templates, Floating windows & Custom studio", Icons.Outlined.DashboardCustomize),
@@ -97,11 +95,6 @@ fun SettingsDrawer(
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     isVideoStabilizationEnabled: Boolean = true,
-    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
-    onVideoPipelineSelected: (com.example.camera.videopipeline.VideoPipelineType) -> Unit = {},
-    customVideoPipelineConfig: com.example.camera.videopipeline.CustomVideoPipelineConfig = com.example.camera.videopipeline.CustomVideoPipelineConfig(),
-    onCustomVideoPipelineConfigChange: (com.example.camera.videopipeline.CustomVideoPipelineConfig) -> Unit = {},
-    onResetCustomVideoPipelineConfig: () -> Unit = {},
     isHorizontalLockSettingEnabled: Boolean = true,
     onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isDollyZoomSettingEnabled: Boolean = false,
@@ -114,7 +107,6 @@ fun SettingsDrawer(
     cinemaCapabilities: CinemaHardwareCapabilities = CinemaHardwareCapabilities(),
     viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL,
     hybridStabilizationConfig: HybridStabilizationConfig = HybridStabilizationConfig(),
-    nightConfig: NightConfig = NightConfig(),
     tapFocusConfig: TapFocusConfig = TapFocusConfig(),
     mainCameraStabilizationMode: MainCameraStabilizationMode = MainCameraStabilizationMode.HYBRID_OIS_EIS,
     onMainCameraStabilizationModeSelected: (MainCameraStabilizationMode) -> Unit = {},
@@ -184,7 +176,6 @@ fun SettingsDrawer(
     onHybridStabilizationChange: (HybridStabilizationConfig) -> Unit = {},
     onOisToggle: (Boolean) -> Unit = {},
     onUltraStabilizationToggle: () -> Unit = {},
-    onNightConfigChange: (NightConfig) -> Unit = {},
     onTapFocusConfigChange: (TapFocusConfig) -> Unit = {},
     onAudioToggle: () -> Unit = {},
     onRawToggle: () -> Unit = {},
@@ -379,22 +370,7 @@ fun SettingsDrawer(
                             selectedPhotoFilter = selectedPhotoFilter,
                             onPhotoFilterSelected = onPhotoFilterSelected
                         )
-                        SettingsPage.CUSTOM_PIPELINE -> CustomPipelineSettingsPage(
-                            config = customVideoPipelineConfig,
-                            onConfigChange = onCustomVideoPipelineConfigChange,
-                            onResetDefaults = onResetCustomVideoPipelineConfig,
-                            isCustomActive = selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM,
-                            onToggleActive = { active ->
-                                onVideoPipelineSelected(
-                                    if (active) com.example.camera.videopipeline.VideoPipelineType.CUSTOM
-                                    else com.example.camera.videopipeline.VideoPipelineType.NORMAL
-                                )
-                            }
-                        )
                         SettingsPage.VIDEO -> VideoSettingsPage(
-                            selectedVideoPipeline = selectedVideoPipeline,
-                            onVideoPipelineSelected = onVideoPipelineSelected,
-                            onOpenCustomPipelineSettings = { currentPage = SettingsPage.CUSTOM_PIPELINE },
                             selectedVideoResolution = selectedVideoResolution,
                             onVideoResolutionSelected = onVideoResolutionSelected,
                             capabilities = capabilities,
@@ -445,10 +421,6 @@ fun SettingsDrawer(
                             onSelectPipelinePreset = onSelectPipelinePreset,
                             onOpenPipelineStudio = onOpenPipelineStudio,
                             onOpenBeforeAfter = onOpenBeforeAfter
-                        )
-                        SettingsPage.NIGHT_MODE -> NightModeSettingsPage(
-                            nightConfig = nightConfig,
-                            onNightConfigChange = onNightConfigChange
                         )
                         SettingsPage.CAMERA_LENS -> CameraLensSettingsPage(
                             availableLenses = availableLenses,
@@ -755,9 +727,6 @@ private fun PhotoSettingsPage(
 
 @Composable
 private fun VideoSettingsPage(
-    selectedVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL,
-    onVideoPipelineSelected: (com.example.camera.videopipeline.VideoPipelineType) -> Unit = {},
-    onOpenCustomPipelineSettings: () -> Unit = {},
     selectedVideoResolution: CameraResolution?,
     onVideoResolutionSelected: (CameraResolution) -> Unit,
     capabilities: HardwareCapabilities,
@@ -789,92 +758,6 @@ private fun VideoSettingsPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-        item {
-            val isCustomActive = selectedVideoPipeline == com.example.camera.videopipeline.VideoPipelineType.CUSTOM
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
-                border = BorderStroke(1.dp, if (isCustomActive) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isCustomActive) Color(0xFFFFD54F) else Color.Gray)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Custom Pipeline (Rec.2020 Log)",
-                                    color = Color.White,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = if (isCustomActive)
-                                    "ACTIVE: Pro Video Rec.2020 Natural Log replaces standard video pipeline with hardware ISP tonemap & 38 GPU shader controls."
-                                else
-                                    "Enable Pro Video Natural Profile (Rec.2020 Log baseline). When disabled, normal video mode remains untouched.",
-                                color = if (isCustomActive) Color(0xFFFFD54F).copy(alpha = 0.9f) else Color.White.copy(alpha = 0.60f),
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp
-                            )
-                        }
-                        Switch(
-                            checked = isCustomActive,
-                            onCheckedChange = { enable ->
-                                onVideoPipelineSelected(
-                                    if (enable) com.example.camera.videopipeline.VideoPipelineType.CUSTOM
-                                    else com.example.camera.videopipeline.VideoPipelineType.NORMAL
-                                )
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFFFFD54F),
-                                checkedTrackColor = Color(0xFFFFD54F).copy(alpha = 0.35f)
-                            ),
-                            modifier = Modifier.testTag("toggle_custom_video_pipeline")
-                        )
-                    }
-
-                    if (isCustomActive) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = onOpenCustomPipelineSettings,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFFD54F),
-                                contentColor = Color.Black
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("btn_open_custom_pipeline_settings")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Tune,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Tune Custom Pipeline (38 Controls)",
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
         item {
             val supportedResolutions = capabilities.supportedVideoResolutions
             if (supportedResolutions.isNotEmpty()) {
@@ -1989,54 +1872,6 @@ private fun ProManualSettingsPage(
                     onClick = onOpenBeforeAfter
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun NightModeSettingsPage(
-    nightConfig: NightConfig,
-    onNightConfigChange: (NightConfig) -> Unit
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 24.dp)
-    ) {
-        item {
-            SettingsSwitchCard(
-                title = "Multi-Frame Night Fusion",
-                description = "Aligns and fuses multiple sensor exposures to eliminate low-light noise.",
-                isChecked = nightConfig.multiFrameFusionEnabled,
-                onCheckedChange = { onNightConfigChange(nightConfig.copy(multiFrameFusionEnabled = it)) },
-                tag = "toggle_night_fusion"
-            )
-        }
-
-        item {
-            SettingsSegmentedCard(
-                title = "Default Night Duration",
-                description = "Target multi-frame exposure duration in seconds or automatic scene detection.",
-                options = listOf(
-                    0 to "AUTO",
-                    1 to "1s",
-                    2 to "2s",
-                    3 to "3s",
-                    5 to "5s"
-                ),
-                selectedOption = nightConfig.durationSeconds,
-                onOptionSelected = { onNightConfigChange(nightConfig.copy(durationSeconds = it)) }
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Tripod Auto-Detection",
-                description = "Automatically detects stationary mounting to extend exposure up to 10s.",
-                isChecked = nightConfig.tripodDetectionEnabled,
-                onCheckedChange = { onNightConfigChange(nightConfig.copy(tripodDetectionEnabled = it)) },
-                tag = "toggle_tripod_detection"
-            )
         }
     }
 }
@@ -4158,7 +3993,6 @@ fun CameraSettingsScreen(
     val selectedLens by viewModel.selectedLens.collectAsStateWithLifecycle()
     val selectedPhotoResolution by viewModel.engine.selectedPhotoResolution.collectAsStateWithLifecycle()
     val selectedVideoResolution by viewModel.engine.selectedVideoResolution.collectAsStateWithLifecycle()
-    val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
     val photoMegapixelMode by viewModel.photoMegapixelMode.collectAsStateWithLifecycle()
     val isRefocusPhotoEnabled by viewModel.isRefocusPhotoEnabled.collectAsStateWithLifecycle()
     val refocusFrameCount by viewModel.refocusFrameCount.collectAsStateWithLifecycle()
@@ -4178,7 +4012,6 @@ fun CameraSettingsScreen(
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
     val viewfinderResolution by viewModel.viewfinderResolution.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
-    val nightConfig by viewModel.nightConfig.collectAsStateWithLifecycle()
     val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
     val videoCodec by viewModel.videoCodec.collectAsStateWithLifecycle()
     val jpegQuality by viewModel.jpegQuality.collectAsStateWithLifecycle()
@@ -4206,7 +4039,6 @@ fun CameraSettingsScreen(
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
-    val customVideoPipelineConfig by viewModel.customVideoPipelineConfig.collectAsStateWithLifecycle()
 
     val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
         val oisEffective = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred
@@ -4229,11 +4061,6 @@ fun CameraSettingsScreen(
         selectedLens = selectedLens,
         selectedPhotoResolution = selectedPhotoResolution,
         selectedVideoResolution = selectedVideoResolution,
-        selectedVideoPipeline = selectedVideoPipeline,
-        onVideoPipelineSelected = { viewModel.selectVideoPipeline(it) },
-        customVideoPipelineConfig = customVideoPipelineConfig,
-        onCustomVideoPipelineConfigChange = { viewModel.updateCustomVideoPipelineConfig(it) },
-        onResetCustomVideoPipelineConfig = { viewModel.resetCustomVideoPipelineConfig() },
         photoMegapixelMode = photoMegapixelMode,
         isRefocusPhotoEnabled = isRefocusPhotoEnabled,
         refocusFrameCount = refocusFrameCount,
@@ -4256,7 +4083,6 @@ fun CameraSettingsScreen(
         cinemaCapabilities = cinemaCapabilities,
         viewfinderResolution = viewfinderResolution,
         hybridStabilizationConfig = hybridStabilizationConfig,
-        nightConfig = nightConfig,
         tapFocusConfig = tapFocusConfig,
         mainCameraStabilizationMode = mainCameraStabilizationMode,
         onMainCameraStabilizationModeSelected = { viewModel.setMainCameraStabilizationMode(it) },
@@ -4324,7 +4150,6 @@ fun CameraSettingsScreen(
         onHybridStabilizationChange = { viewModel.setHybridStabilizationConfig(it) },
         onOisToggle = { viewModel.setOisEnabled(it) },
         onUltraStabilizationToggle = { viewModel.toggleUltraStabilization() },
-        onNightConfigChange = { viewModel.setNightConfig(it) },
         onTapFocusConfigChange = { viewModel.setTapFocusConfig(it) },
         onAudioToggle = { viewModel.toggleAudio() },
         onRawToggle = { viewModel.toggleRawCapture() },
@@ -4367,82 +4192,4 @@ fun CameraSettingsScreen(
         onOpenGalleryChooser = { viewModel.setGallerySelectionDialogOpen(true) },
         onDismiss = onDismiss
     )
-}
-
-@Composable
-private fun CustomPipelineSettingsPage(
-    config: com.example.camera.videopipeline.CustomVideoPipelineConfig,
-    onConfigChange: (com.example.camera.videopipeline.CustomVideoPipelineConfig) -> Unit,
-    onResetDefaults: () -> Unit,
-    isCustomActive: Boolean,
-    onToggleActive: (Boolean) -> Unit
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 24.dp)
-    ) {
-        item {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
-                border = BorderStroke(1.dp, if (isCustomActive) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(if (isCustomActive) Color(0xFFFFD54F) else Color.Gray)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Pipeline Master Switch",
-                                color = Color.White,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (isCustomActive)
-                                "ACTIVE: Live Viewfinder & Video Recording use Rec.2020 Natural Log with real-time GPU processing."
-                            else
-                                "DISABLED: Standard Video Mode is active without custom shader processing.",
-                            color = if (isCustomActive) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.6f),
-                            fontSize = 12.sp
-                        )
-                    }
-                    Switch(
-                        checked = isCustomActive,
-                        onCheckedChange = onToggleActive,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFFFFD54F),
-                            checkedTrackColor = Color(0xFFFFD54F).copy(alpha = 0.35f)
-                        ),
-                        modifier = Modifier.testTag("custom_pipeline_page_master_toggle")
-                    )
-                }
-            }
-        }
-
-        item {
-            com.example.camera.ui.components.CustomVideoPipelineSettingsPanel(
-                config = config,
-                onConfigChange = onConfigChange,
-                onResetDefaults = onResetDefaults,
-                onDismiss = {},
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
 }

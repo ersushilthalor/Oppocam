@@ -265,20 +265,7 @@ class Camera2Engine(private val context: Context) {
 
     fun getDualCameraRecordingRelay(): DualCameraRecordingRelay? = dualCameraRecordingRelay
 
-    var isCustomPipelineRecording = false
-    var customPipelineRecorder: com.example.camera.videopipeline.CustomVideoPipelineRecorder? = null
-    var recordingVideoPipeline: com.example.camera.videopipeline.VideoPipelineType = com.example.camera.videopipeline.VideoPipelineType.NORMAL
-    val _selectedVideoPipeline = kotlinx.coroutines.flow.MutableStateFlow(com.example.camera.videopipeline.VideoPipelineType.NORMAL)
-    val selectedVideoPipeline: kotlinx.coroutines.flow.StateFlow<com.example.camera.videopipeline.VideoPipelineType> = _selectedVideoPipeline.asStateFlow()
-    val nightProgress = kotlinx.coroutines.flow.MutableStateFlow(com.example.camera.model.NightCaptureProgress())
 
-    fun setVideoPipeline(type: com.example.camera.videopipeline.VideoPipelineType) {
-        _selectedVideoPipeline.value = type
-    }
-
-    fun takeNightPhoto(config: com.example.camera.model.NightConfig, onProgress: (Float) -> Unit, onComplete: (android.net.Uri?) -> Unit) {
-        takePhoto { uri -> onComplete(uri) }
-    }
 
     fun isStandbyRecordingPipelineReady(): Boolean {
         if (!_isKeepUltraWideReady.value) return false
@@ -6996,7 +6983,6 @@ class Camera2Engine(private val context: Context) {
         _isRecordingPaused.value = false
         _isGpuRelayPreviewActive.value = false
         isSoftwareCinemaRecording = false
-        isCustomPipelineRecording = false
         videoTimerJob?.cancel()
         activeRecordingSurface = null
         activeRecordingStreamConfig = null
@@ -7012,11 +6998,6 @@ class Camera2Engine(private val context: Context) {
         try {
             cinemaSoftwareRecorder.stopRecording()
         } catch (ignored: Throwable) {}
-
-        try {
-            customPipelineRecorder?.stopAndRelease()
-        } catch (ignored: Throwable) {}
-        customPipelineRecorder = null
 
         try {
             mediaRecorder?.reset()
@@ -7081,8 +7062,6 @@ class Camera2Engine(private val context: Context) {
             stableActionHorizonEngine.start()
             stableActionHorizonEngine.startRecordingTrajectory()
         }
-
-        recordingVideoPipeline = _selectedVideoPipeline.value
 
         try {
             val chars = getCharacteristics(lens.cameraId)
@@ -7300,55 +7279,7 @@ class Camera2Engine(private val context: Context) {
 
             // Setup recording target surface:
             // 1. Cinema Mode -> CinemaSoftwareRecordingEngine
-            // 2. Custom Video Pipeline (iPhone, Samsung, Vivo) -> CustomVideoPipelineRecorder (real-time 6-stage OpenGL ES shader pipeline)
-            // 3. Normal Video Pipeline -> Standard MediaRecorder
-            val isCustomPipelineMode = !isSoftwareCinema &&
-                    currentMode == CameraMode.VIDEO &&
-                    com.example.camera.videopipeline.VideoPipelineManager.isCustomPipeline(recordingVideoPipeline)
-
-            var customRecorderSurface: Surface? = null
-            if (isCustomPipelineMode) {
-                try {
-                    val customPipeline = com.example.camera.videopipeline.VideoPipelineManager.getPipeline(recordingVideoPipeline)
-                    val isFrontLens = lens.facing == CameraCharacteristics.LENS_FACING_FRONT
-                    val sensorOrient = try {
-                        chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isFrontLens) 270 else 90)
-                    } catch (_: Exception) {
-                        if (isFrontLens) 270 else 90
-                    }
-                    val recorder = com.example.camera.videopipeline.CustomVideoPipelineRecorder(
-                        outputFile = tempFile,
-                        width = finalRecordWidth,
-                        height = finalRecordHeight,
-                        fps = targetFps,
-                        bitrate = bitrate,
-                        orientationHint = 0,
-                        pipeline = customPipeline,
-                        isFront = isFrontLens,
-                        sensorOrientation = sensorOrient,
-                        deviceRotation = currentRot,
-                        sourceBufferWidth = maxOf(videoRes.width, videoRes.height),
-                        sourceBufferHeight = minOf(videoRes.width, videoRes.height)
-                    )
-                    customRecorderSurface = recorder.prepare()
-                    customPipelineRecorder = recorder
-                    isCustomPipelineRecording = true
-                    preparedVideoGeometry = PreparedVideoGeometry(
-                        width = finalRecordWidth,
-                        height = finalRecordHeight,
-                        fps = targetFps,
-                        orientationHint = 0,
-                        encoderRotation = 0
-                    )
-                    Log.i(TAG, "Initialized dedicated CustomVideoPipelineRecorder for ${recordingVideoPipeline.title} (${finalRecordWidth}x${finalRecordHeight})")
-                } catch (t: Throwable) {
-                    Log.w(TAG, "CustomVideoPipelineRecorder hardware init unavailable, falling back to post-transcode path: ${t.message}")
-                    try { customPipelineRecorder?.stopAndRelease() } catch (_: Throwable) {}
-                    customPipelineRecorder = null
-                    isCustomPipelineRecording = false
-                    customRecorderSurface = null
-                }
-            }
+            // 2. Normal Video -> Standard MediaRecorder
 
             val recorderSurface: Surface
             if (isSoftwareCinema) {
@@ -7451,8 +7382,6 @@ class Camera2Engine(private val context: Context) {
                     orientationHint = cinemaOrientationHint,
                     encoderRotation = encoderRotation
                 )
-            } else if (customRecorderSurface != null) {
-                recorderSurface = customRecorderSurface
             } else {
                 @Suppress("DEPRECATION")
                 val mr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -7888,9 +7817,7 @@ class Camera2Engine(private val context: Context) {
                                         }
                                         configuredSession.setRepeatingRequest(reqBuilder.build(), captureCallback, backgroundHandler)
                                     }
-                                    if (isCustomPipelineRecording) {
-                                        customPipelineRecorder?.start()
-                                    } else if (!isSoftwareCinema) {
+                                    if (!isSoftwareCinema) {
                                         mediaRecorder?.start()
                                     }
                                     dualCameraRecordingRelay?.startRecording()
@@ -8023,8 +7950,7 @@ class Camera2Engine(private val context: Context) {
                                                                         synchronized(previewRequestLock) {
                                                                             fs.setRepeatingRequest(fallbackBuilder.build(), captureCallback, backgroundHandler)
                                                                         }
-                                                                        if (isCustomPipelineRecording) customPipelineRecorder?.start()
-                                                                        else if (!isSoftwareCinema) mediaRecorder?.start()
+                                                                        if (!isSoftwareCinema) mediaRecorder?.start()
                                                                         dualCameraRecordingRelay?.startRecording()
                                                                         _isRecordingVideo.value = true
                                                                         isStartingRecording.set(false)
@@ -8096,9 +8022,7 @@ class Camera2Engine(private val context: Context) {
                                         }
                                         session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
                                     }
-                                    if (isCustomPipelineRecording) {
-                                        customPipelineRecorder?.start()
-                                    } else if (!isSoftwareCinema) {
+                                    if (!isSoftwareCinema) {
                                         mediaRecorder?.start()
                                     }
                                     dualCameraRecordingRelay?.startRecording()
@@ -8157,9 +8081,7 @@ class Camera2Engine(private val context: Context) {
                                                         applyCommonSettings(safeBuilder)
                                                         fallbackSession.setRepeatingRequest(safeBuilder.build(), captureCallback, backgroundHandler)
                                                     }
-                                                    if (isCustomPipelineRecording) {
-                                                        customPipelineRecorder?.start()
-                                                    } else if (!isSoftwareCinema) {
+                                                    if (!isSoftwareCinema) {
                                                         mediaRecorder?.start()
                                                     }
                                                     dualCameraRecordingRelay?.startRecording()
@@ -8204,9 +8126,7 @@ class Camera2Engine(private val context: Context) {
                                                                     applyCommonSettings(previewTemplateBuilder)
                                                                     prevSession.setRepeatingRequest(previewTemplateBuilder.build(), captureCallback, backgroundHandler)
                                                                 }
-                                                                if (isCustomPipelineRecording) {
-                                                                    customPipelineRecorder?.start()
-                                                                } else if (!isSoftwareCinema) {
+                                                                if (!isSoftwareCinema) {
                                                                     mediaRecorder?.start()
                                                                 }
                                                                 dualCameraRecordingRelay?.startRecording()
@@ -8327,8 +8247,6 @@ class Camera2Engine(private val context: Context) {
 
         if (isSoftwareCinemaRecording) {
             cinemaSoftwareRecorder.pause()
-        } else if (isCustomPipelineRecording && customPipelineRecorder != null) {
-            customPipelineRecorder?.pause()
         } else if (mediaRecorder != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 try {
@@ -8358,8 +8276,6 @@ class Camera2Engine(private val context: Context) {
 
         if (isSoftwareCinemaRecording) {
             cinemaSoftwareRecorder.resume()
-        } else if (isCustomPipelineRecording && customPipelineRecorder != null) {
-            customPipelineRecorder?.resume()
         } else if (mediaRecorder != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 try {
@@ -8434,14 +8350,8 @@ class Camera2Engine(private val context: Context) {
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         val wasSoftwareCinema = isSoftwareCinemaRecording
         isSoftwareCinemaRecording = false
-        val wasCustomPipelineRecording = isCustomPipelineRecording
-        isCustomPipelineRecording = false
-
         val snapCinemaConfig = recordingCinemaConfig ?: cinemaConfig.value.copy()
         recordingCinemaConfig = null
-
-        val snapVideoPipeline = recordingVideoPipeline
-        recordingVideoPipeline = _selectedVideoPipeline.value
 
         val wasHorizonLockActive = _isHorizonLockEnabled.value ||
                 ((currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
@@ -8462,8 +8372,6 @@ class Camera2Engine(private val context: Context) {
 
         val lockedOrientationHint = preparedVideoGeometry?.orientationHint ?: getVideoOrientationHint()
 
-        val activeCustomRecorder = customPipelineRecorder
-        customPipelineRecorder = null
         val activeMediaRecorder = mediaRecorder
         mediaRecorder = null
         val activePfd = videoRecordingFileDescriptor
@@ -8497,20 +8405,7 @@ class Camera2Engine(private val context: Context) {
                     activeRelay.stopRecording()
                 }
 
-                var needsPipelinePostPass = true
                 val recordedFile: File? = when {
-                    wasCustomPipelineRecording -> {
-                        val framesProcessed = activeCustomRecorder?.framesProcessedCount ?: 0
-                        needsPipelinePostPass = (framesProcessed == 0L)
-                        val f = try {
-                            activeCustomRecorder?.stopAndRelease() ?: tempFile
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Error stopping CustomVideoPipelineRecorder", e)
-                            tempFile
-                        }
-                        restorePreviewSessionImmediate()
-                        f
-                    }
                     wasSoftwareCinema -> {
                         val f = try {
                             cinemaSoftwareRecorder.stopRecording()
@@ -8541,8 +8436,6 @@ class Camera2Engine(private val context: Context) {
                     horizonTrajectory = horizonTrajectory,
                     wasDollyZoomActive = wasDollyZoomActive,
                     dollyTrajectory = dollyTrajectory,
-                    snapVideoPipeline = snapVideoPipeline,
-                    needsPipelinePostPass = needsPipelinePostPass,
                     effectiveFileName = effectiveFileName,
                     effectiveMimeType = effectiveMimeType,
                     isFrontFacing = isFrontFacing,
@@ -8572,8 +8465,6 @@ class Camera2Engine(private val context: Context) {
         horizonTrajectory: List<com.example.camera.stableaction.StableActionHorizonEngine.TrajectoryPoint>,
         wasDollyZoomActive: Boolean,
         dollyTrajectory: List<com.example.camera.dollyzoom.DollyTrajectoryPoint>,
-        snapVideoPipeline: com.example.camera.videopipeline.VideoPipelineType,
-        needsPipelinePostPass: Boolean,
         effectiveFileName: String,
         effectiveMimeType: String,
         isFrontFacing: Boolean,
@@ -8638,26 +8529,7 @@ class Camera2Engine(private val context: Context) {
                 }
             }
 
-            if (needsPipelinePostPass && !isCinema && snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-                try {
-                    val procDest = File(rawRecordedFile.parentFile, "${snapVideoPipeline.id}_pipeline_${System.currentTimeMillis()}.${fileToSave.extension}")
-                    val processed = com.example.camera.videopipeline.VideoPipelineManager.processRecordedVideo(
-                        inputFile = fileToSave,
-                        outputFile = procDest,
-                        type = snapVideoPipeline,
-                        orientationDegrees = lockedOrientationHint
-                    )
-                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                        if (fileToSave != rawRecordedFile) {
-                            intermediateFiles.add(fileToSave)
-                        }
-                        fileToSave = processed
-                        gradedFile = processed
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error applying ${snapVideoPipeline.title} video pipeline to final video", e)
-                }
-            }
+
 
             // Ensure output file has valid container structure before publishing to MediaStore
             if (!validateRecordedFileIntegrity(fileToSave, effectiveMimeType)) {
@@ -8696,7 +8568,7 @@ class Camera2Engine(private val context: Context) {
             }
 
             if (!retrieverSuccess) {
-                if (isCinema || isCustomPipelineRecording) {
+                if (isCinema) {
                     finalWidth = preparedVideoGeometry?.width ?: 1920
                     finalHeight = preparedVideoGeometry?.height ?: 1080
                     finalOrientation = 0
@@ -8729,8 +8601,6 @@ class Camera2Engine(private val context: Context) {
             if (savedUri != null) {
                 val videoDisplayName = if (isCinema) {
                     "Cinema Video"
-                } else if (snapVideoPipeline != com.example.camera.videopipeline.VideoPipelineType.NORMAL) {
-                    "${snapVideoPipeline.title} Video"
                 } else {
                     "Video"
                 }
@@ -9698,145 +9568,7 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun saveBitmapToMediaStore(bitmap: Bitmap, orientationDegrees: Int): Uri? {
-        val fileName = generateUniqueImageFileName("IMG_NIGHT", "jpg")
-        val nowMs = System.currentTimeMillis()
-        val nowSec = nowMs / 1000
 
-        val contentValues = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.DATE_ADDED, nowSec)
-            put(MediaStore.Images.Media.DATE_MODIFIED, nowSec)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-                put(MediaStore.Images.Media.DATE_TAKEN, nowMs)
-            } else {
-                try {
-                    val dcimDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")
-                    if (!dcimDir.exists()) dcimDir.mkdirs()
-                    val targetFile = File(dcimDir, fileName)
-                    put(MediaStore.Images.Media.DATA, targetFile.absolutePath)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Legacy DCIM path resolution failed for $fileName", e)
-                }
-            }
-        }
-
-        val primaryUri = getMediaStorePrimaryImageUri()
-        val uri = try {
-            context.contentResolver.insert(primaryUri, contentValues)
-        } catch (t: Throwable) {
-            Log.e(TAG, "MediaStore insert on primary volume failed for night photo: ${t.message}", t)
-            try {
-                context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-            } catch (t2: Throwable) {
-                Log.e(TAG, "MediaStore insert on fallback volume failed for night photo: ${t2.message}", t2)
-                null
-            }
-        }
-
-        val orientedBitmap = if (orientationDegrees != 0) {
-            val matrix = Matrix().apply { postRotate(orientationDegrees.toFloat()) }
-            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        } else {
-            bitmap
-        }
-
-        // Compress to byte array first with EXIF ORIENTATION_NORMAL
-        val jpegBytes = try {
-            val tempFile = File.createTempFile("night_temp", ".jpg", context.cacheDir)
-            FileOutputStream(tempFile).use { fos ->
-                orientedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, fos)
-                fos.flush()
-            }
-            try {
-                val exif = android.media.ExifInterface(tempFile.absolutePath)
-                exif.setAttribute(
-                    android.media.ExifInterface.TAG_ORIENTATION,
-                    android.media.ExifInterface.ORIENTATION_NORMAL.toString()
-                )
-                exif.saveAttributes()
-            } catch (ex: Throwable) {
-                Log.d(TAG, "Night temp EXIF write warning", ex)
-            }
-            val bytes = tempFile.readBytes()
-            tempFile.delete()
-            bytes
-        } catch (e: Throwable) {
-            Log.w(TAG, "Night temp file encode failed, fallback to memory stream", e)
-            val stream = java.io.ByteArrayOutputStream()
-            orientedBitmap.compress(Bitmap.CompressFormat.JPEG, 98, stream)
-            stream.toByteArray()
-        }
-
-        if (orientedBitmap != bitmap && !orientedBitmap.isRecycled) {
-            orientedBitmap.recycle()
-        }
-
-        if (uri == null) {
-            Log.e(TAG, "MediaStore insert returned null for night photo $fileName, executing disk fallback")
-            val fallbackUri = saveDirectFileFallback(jpegBytes, fileName)
-            if (fallbackUri != null) {
-                _lastCapturedMedia.value = CapturedMedia(
-                    uri = fallbackUri,
-                    isVideo = false,
-                    timestamp = nowMs,
-                    displayName = fileName
-                )
-            }
-            return fallbackUri
-        }
-
-        try {
-            val outputStream = context.contentResolver.openOutputStream(uri)
-                ?: throw java.io.IOException("Unable to open output stream for night photo URI: $uri")
-            outputStream.use { out ->
-                out.write(jpegBytes)
-                out.flush()
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                contentValues.clear()
-                contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
-                context.contentResolver.update(uri, contentValues, null, null)
-            } else {
-                val legacyPath = contentValues.getAsString(MediaStore.Images.Media.DATA)
-                if (!legacyPath.isNullOrEmpty()) {
-                    android.media.MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("image/jpeg"), null)
-                }
-            }
-
-            Log.i(TAG, "Night photo saved successfully to MediaStore: $uri ($fileName)")
-            _lastCapturedMedia.value = CapturedMedia(
-                uri = uri,
-                isVideo = false,
-                timestamp = nowMs,
-                displayName = fileName
-            )
-            return uri
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to save night photo bytes to MediaStore (uri=$uri, file=$fileName)", e)
-            try {
-                context.contentResolver.delete(uri, null, null)
-                Log.d(TAG, "Cleaned up incomplete night MediaStore entry: $uri")
-            } catch (cleanupEx: Throwable) {
-                Log.w(TAG, "Failed to delete incomplete night MediaStore entry: $uri", cleanupEx)
-            }
-            val fallbackUri = saveDirectFileFallback(jpegBytes, fileName)
-            if (fallbackUri != null) {
-                _lastCapturedMedia.value = CapturedMedia(
-                    uri = fallbackUri,
-                    isVideo = false,
-                    timestamp = nowMs,
-                    displayName = fileName
-                )
-                return fallbackUri
-            }
-            return null
-        }
-    }
 
     private fun saveRawToMediaStore(rawImage: Image, characteristics: CameraCharacteristics) {
         val fileName = generateUniqueImageFileName("RAW", "dng")

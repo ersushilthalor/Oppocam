@@ -599,7 +599,6 @@ object CameraUiTemplates {
             UiTemplateType.STOCK_PIXEL -> ModeLayoutConfig(
                 visibleModes = listOf(
                     CameraMode.PHOTO,
-                    CameraMode.NIGHT,
                     CameraMode.VIDEO,
                     CameraMode.CINEMA,
                     CameraMode.AI_SUBJECT_TRACKING

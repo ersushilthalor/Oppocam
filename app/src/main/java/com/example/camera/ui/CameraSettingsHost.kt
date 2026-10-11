@@ -48,7 +48,6 @@ fun CameraSettingsHost(
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
     val viewfinderResolution by viewModel.viewfinderResolution.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
-    val nightConfig by viewModel.nightConfig.collectAsStateWithLifecycle()
     val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
 
     val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
@@ -97,8 +96,6 @@ fun CameraSettingsHost(
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
     val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
     val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
-    val selectedVideoPipeline by viewModel.selectedVideoPipeline.collectAsStateWithLifecycle()
-    val customVideoPipelineConfig by viewModel.customVideoPipelineConfig.collectAsStateWithLifecycle()
 
     androidx.compose.runtime.CompositionLocalProvider(
         com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
@@ -111,11 +108,6 @@ fun CameraSettingsHost(
         selectedLens = selectedLens,
         selectedPhotoResolution = selectedPhotoResolution,
         selectedVideoResolution = selectedVideoResolution,
-        selectedVideoPipeline = selectedVideoPipeline,
-        onVideoPipelineSelected = { viewModel.selectVideoPipeline(it) },
-        customVideoPipelineConfig = customVideoPipelineConfig,
-        onCustomVideoPipelineConfigChange = { viewModel.updateCustomVideoPipelineConfig(it) },
-        onResetCustomVideoPipelineConfig = { viewModel.resetCustomVideoPipelineConfig() },
         photoMegapixelMode = photoMegapixelMode,
         isRefocusPhotoEnabled = isRefocusPhotoEnabled,
         refocusFrameCount = refocusFrameCount,
@@ -146,7 +138,6 @@ fun CameraSettingsHost(
         cinemaCapabilities = cinemaCapabilities,
         viewfinderResolution = viewfinderResolution,
         hybridStabilizationConfig = hybridStabilizationConfig,
-        nightConfig = nightConfig,
         tapFocusConfig = tapFocusConfig,
         mainCameraStabilizationMode = mainCameraStabilizationMode,
         onMainCameraStabilizationModeSelected = { viewModel.setMainCameraStabilizationMode(it) },
@@ -214,7 +205,6 @@ fun CameraSettingsHost(
         onHybridStabilizationChange = { viewModel.setHybridStabilizationConfig(it) },
         onOisToggle = { viewModel.setOisEnabled(it) },
         onUltraStabilizationToggle = { viewModel.toggleUltraStabilization() },
-        onNightConfigChange = { viewModel.setNightConfig(it) },
         onTapFocusConfigChange = { viewModel.setTapFocusConfig(it) },
         onAudioToggle = { viewModel.toggleAudio() },
         onRawToggle = { viewModel.toggleRawCapture() },
