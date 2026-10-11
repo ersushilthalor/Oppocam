@@ -26,6 +26,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.camera.ui.components.FloatingSelectorDefaults
+import com.example.camera.ui.components.FloatingWindowCard
 import com.example.camera.ui.components.FrostedGlassBox
 
 @Composable
@@ -44,14 +46,13 @@ fun MoreModesDrawer(
         exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
         modifier = modifier
     ) {
-        FrostedGlassBox(
+        FloatingWindowCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 8.dp)
                 .testTag("more_modes_drawer"),
-            shape = RoundedCornerShape(24.dp),
-            elevation = 20.dp,
-            baseAlpha = 0.72f
+            shape = FloatingSelectorDefaults.CardShape,
+            elevation = 20.dp
         ) {
             Box(modifier = Modifier.padding(18.dp)) {
                 Column(

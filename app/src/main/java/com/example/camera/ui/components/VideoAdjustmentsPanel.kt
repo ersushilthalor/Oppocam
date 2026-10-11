@@ -70,22 +70,17 @@ fun VideoAdjustmentsPanel(
 
     val haptic = LocalHapticFeedback.current
 
-    Box(
+    FloatingWindowCard(
         modifier = modifier
             .fillMaxWidth()
             .wrapContentHeight()
-            .clip(RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp, bottomStart = 20.dp, bottomEnd = 20.dp))
-            .background(WindowDarkBg)
-            .border(
-                width = 1.dp,
-                color = Color.White.copy(alpha = 0.09f),
-                shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp, bottomStart = 20.dp, bottomEnd = 20.dp)
-            )
-            .testTag("video_adjustments_window")
-            .padding(horizontal = 18.dp, vertical = 16.dp)
+            .testTag("video_adjustments_window"),
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp, bottomStart = 20.dp, bottomEnd = 20.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Drag handle / subtle bar at top

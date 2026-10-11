@@ -1424,6 +1424,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cycleFlashMode() {
+        if (_cameraMode.value == CameraMode.VIDEO || _cameraMode.value == CameraMode.CINEMA) {
+            val nextMode = if (_flashMode.value == FlashMode.TORCH) FlashMode.OFF else FlashMode.TORCH
+            setFlashMode(nextMode)
+            showToast(if (nextMode == FlashMode.TORCH) "Torch: ON" else "Torch: OFF")
+            return
+        }
         val nextMode = when (_flashMode.value) {
             FlashMode.OFF -> FlashMode.AUTO
             FlashMode.AUTO -> FlashMode.ON
@@ -1472,18 +1478,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleRawCapture() {
-        val caps = engine.capabilities.value
-        if (!caps.supportsRaw) {
-            showToast("RAW format not supported by this sensor")
-            return
-        }
         val next = !_isRawCaptureEnabled.value
         _isRawCaptureEnabled.value = next
         preferences.isRawEnabled = next
         preferences.setModeRaw(_cameraMode.value, next)
         engine.isRawCaptureEnabled = next
-        engine.restartCamera()
-        showToast(if (next) "RAW (DNG + JPEG) Enabled" else "RAW Disabled")
+        val caps = engine.capabilities.value
+        if (caps.supportsRaw) {
+            engine.restartCamera()
+            showToast(if (next) "RAW (DNG + JPEG) Enabled" else "RAW Disabled")
+        } else {
+            showToast(if (next) "RAW Enabled" else "RAW Disabled")
+        }
     }
 
     fun cycleVideoQuality() {
@@ -1971,6 +1977,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setHorizonLockEnabled(enabled: Boolean) {
+        if (enabled && !_isHorizontalLockSettingEnabled.value) {
+            _isHorizontalLockSettingEnabled.value = true
+            preferences.isHorizontalLockSettingEnabled = true
+        }
         preferences.isHorizonLockActive = enabled
         engine.setHorizonLockEnabled(enabled)
         if (enabled) {
@@ -2000,6 +2010,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setDollyZoomActive(active: Boolean) {
+        if (active && !_isDollyZoomSettingEnabled.value) {
+            _isDollyZoomSettingEnabled.value = true
+            preferences.isDollyZoomSettingEnabled = true
+        }
         engine.setDollyZoomActive(active)
         showToast(if (active) "Dolly Zoom: ON (Locking subject)" else "Dolly Zoom: OFF")
     }
@@ -2114,6 +2128,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.isVideoStabilizationEnabled = isStabOn
         setHybridStabilizationConfig(updated)
         showToast("Stabilization: ${mode.title}")
+    }
+
+    fun cycleStabilizationMode() {
+        val current = hybridStabilizationConfig.value
+        when {
+            current.isUltraStabilizationEnabled -> {
+                setMainCameraStabilizationMode(MainCameraStabilizationMode.OFF)
+            }
+            _isVideoStabilizationEnabled.value -> {
+                setMainCameraStabilizationMode(MainCameraStabilizationMode.ULTRA)
+            }
+            else -> {
+                setMainCameraStabilizationMode(MainCameraStabilizationMode.HYBRID_OIS_EIS)
+            }
+        }
     }
 
     fun toggleUltraStabilization() {

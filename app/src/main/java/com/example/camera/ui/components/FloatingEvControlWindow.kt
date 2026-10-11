@@ -101,13 +101,11 @@ fun FloatingEvControlWindow(
     )
 
     // Floating glass container controlled by Settings glass style
-    FrostedGlassBox(
+    FloatingWindowCard(
         modifier = modifier
             .widthIn(min = 230.dp, max = 290.dp)
             .testTag("floating_ev_control_window"),
-        shape = RoundedCornerShape(18.dp),
-        elevation = 12.dp,
-        baseAlpha = 0.80f
+        shape = FloatingSelectorDefaults.CardShape
     ) {
         Column(
             modifier = Modifier

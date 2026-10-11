@@ -227,12 +227,13 @@ fun FrostedGlassBox(
                 }
 
                 if (!drawn) {
-                    // Graceful solid glass substrate fallback when camera preview has not started or in testing
+                    // Graceful translucent glass substrate fallback when camera preview has not started or in testing
+                    val fallbackAlpha = (0.55f * opacityMultiplier).coerceIn(0.10f, 0.75f)
                     drawRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color(0xFF141824).copy(alpha = 0.85f),
-                                Color(0xFF0A0C14).copy(alpha = 0.95f)
+                                Color(0xFF141824).copy(alpha = fallbackAlpha),
+                                Color(0xFF0A0C14).copy(alpha = (fallbackAlpha + 0.12f).coerceAtMost(0.85f))
                             )
                         )
                     )

@@ -23,6 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.camera.model.PhotoFilter
+import com.example.camera.ui.components.FloatingSelectorDefaults
+import com.example.camera.ui.components.FloatingWindowCard
 import com.example.camera.ui.components.FrostedGlassBox
 
 /**
@@ -41,16 +43,13 @@ fun PhotoFilterSelectorBar(
 ) {
     val accentColor = Color(0xFF64FFDA) // Emerald / Mint photo look accent
 
-    FrostedGlassBox(
+    FloatingWindowCard(
         modifier = modifier
             .wrapContentWidth()
             .widthIn(min = 270.dp, max = 340.dp)
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("photo_filter_selector_bar"),
-        shape = RoundedCornerShape(20.dp),
-        elevation = 14.dp,
-        baseAlpha = 0.82f,
-        baseTint = Color(0xFF0F121C)
+        shape = FloatingSelectorDefaults.CardShape
     ) {
         Column(
             modifier = Modifier

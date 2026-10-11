@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.camera.model.CinemaConfig
 import com.example.camera.model.CinemaHardwareCapabilities
+import com.example.camera.ui.components.FloatingSelectorDefaults
+import com.example.camera.ui.components.FloatingWindowCard
 import com.example.camera.ui.components.FrostedGlassBox
 
 /**
@@ -46,15 +48,13 @@ fun CinemaSettingsWindow(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    FrostedGlassBox(
+    FloatingWindowCard(
         modifier = modifier
             .wrapContentWidth()
             .widthIn(min = 280.dp, max = 340.dp)
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("cinema_settings_window"),
-        shape = RoundedCornerShape(20.dp),
-        elevation = 14.dp,
-        baseTint = Color(0xFF0F121C)
+        shape = FloatingSelectorDefaults.CardShape
     ) {
         Column(
             modifier = Modifier

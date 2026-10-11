@@ -24,6 +24,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.camera.pipeline.model.PipelinePreset
+import com.example.camera.ui.components.FloatingSelectorDefaults
+import com.example.camera.ui.components.FloatingWindowCard
 import com.example.camera.ui.components.FrostedGlassBox
 
 /**
@@ -44,16 +46,13 @@ fun PipelinePresetFloatingWindow(
 ) {
     val accentGold = Color(0xFFFFD54F)
 
-    FrostedGlassBox(
+    FloatingWindowCard(
         modifier = modifier
             .wrapContentWidth()
             .widthIn(min = 270.dp, max = 340.dp)
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag("pipeline_preset_floating_window"),
-        shape = RoundedCornerShape(20.dp),
-        elevation = 14.dp,
-        baseAlpha = 0.84f,
-        baseTint = Color(0xFF0F121C)
+        shape = FloatingSelectorDefaults.CardShape
     ) {
         Column(
             modifier = Modifier

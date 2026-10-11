@@ -319,7 +319,7 @@ fun CameraScreen(
             isVideoSettingsPanelOpen ||
             isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
-            isEvControlOpen
+            isEvControlOpen || isQuickOptionsOpen
 
     LaunchedEffect(isAnyWindowOpen) {
         com.example.camera.ui.components.BackdropBlurManager.isWindowActive = isAnyWindowOpen
@@ -718,18 +718,39 @@ fun CameraScreen(
             onToggleMegapixelMode = { viewModel.togglePhotoMegapixelMode() },
             onRawClick = { viewModel.toggleRawCapture() },
             onMotionPhotoClick = { viewModel.toggleMotionPhoto() },
-            onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
+            onPhotoFilterClick = {
+                isQuickOptionsOpen = false
+                viewModel.setPhotoFilterBarOpen(true)
+            },
             onToggleDollyZoom = { viewModel.toggleDollyZoomActive() },
             onToggleHorizonLock = { viewModel.toggleHorizonLock() },
-            onStabilizationClick = { viewModel.toggleUltraStabilization() },
-            onVideoSettingsClick = { viewModel.toggleVideoSettingsPanel() },
+            onStabilizationClick = { viewModel.cycleStabilizationMode() },
+            onVideoSettingsClick = {
+                isQuickOptionsOpen = false
+                viewModel.setVideoSettingsPanelOpen(true)
+            },
             onAudioToggle = { viewModel.toggleAudio() },
-            onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
-            onCinemaResolutionClick = { viewModel.toggleVideoSettingsPanel() },
+            onVideoAdjustmentsClick = {
+                isQuickOptionsOpen = false
+                viewModel.setVideoAdjustmentsOpen(true)
+            },
+            onCinemaResolutionClick = {
+                isQuickOptionsOpen = false
+                viewModel.setVideoSettingsPanelOpen(true)
+            },
             onCinemaAspectRatioClick = { viewModel.cycleCinemaAspectRatio() },
-            onCinemaSettingsClick = { viewModel.toggleCinemaSettings() },
-            onLogClick = { viewModel.toggleLogProfileWindow() },
-            onLutClick = { viewModel.toggleLutWindow() },
+            onCinemaSettingsClick = {
+                isQuickOptionsOpen = false
+                viewModel.setCinemaSettingsOpen(true)
+            },
+            onLogClick = {
+                isQuickOptionsOpen = false
+                viewModel.setLogProfileWindowOpen(true)
+            },
+            onLutClick = {
+                isQuickOptionsOpen = false
+                viewModel.setLutWindowOpen(true)
+            },
             onEvClick = { viewModel.toggleEvControlOpen() },
             onSettingsClick = {
                 isQuickOptionsOpen = false

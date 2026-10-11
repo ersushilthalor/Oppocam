@@ -40,6 +40,34 @@ object FloatingSelectorDefaults {
 }
 
 /**
+ * Shared floating-window container matching the frosted glass aesthetic,
+ * live optical viewfinder backdrop blur, transparency, 26dp rounded corner radius,
+ * hairline specular border, and top highlight rim of the Resolution floating window.
+ */
+@Composable
+fun FloatingWindowCard(
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = FloatingSelectorDefaults.CardShape,
+    elevation: androidx.compose.ui.unit.Dp = 14.dp,
+    baseAlpha: Float = 0.88f,
+    baseTint: Color = FloatingSelectorDefaults.BaseTint,
+    content: @Composable BoxScope.() -> Unit
+) {
+    FrostedGlassBox(
+        modifier = modifier,
+        shape = shape,
+        elevation = elevation,
+        baseAlpha = baseAlpha,
+        baseTint = baseTint,
+        borderWidth = 1.dp,
+        borderColor = Color.White.copy(alpha = 0.09f),
+        showTopHighlightRim = true
+    ) {
+        content()
+    }
+}
+
+/**
  * Common reusable container for all horizontal floating selector windows (Resolution, LUT, LOG).
  * Matches the frosted glass aesthetic, rounded corners, and compact proportions shown in the reference screenshots.
  */
@@ -49,21 +77,14 @@ fun HorizontalFloatingSelectorCard(
     shape: RoundedCornerShape = FloatingSelectorDefaults.CardShape,
     content: @Composable BoxScope.() -> Unit
 ) {
-    FrostedGlassBox(
+    FloatingWindowCard(
         modifier = modifier
             .wrapContentWidth()
             .widthIn(min = 280.dp, max = 340.dp)
             .padding(horizontal = 12.dp, vertical = 4.dp),
         shape = shape,
-        elevation = 14.dp,
-        baseAlpha = 0.88f,
-        baseTint = FloatingSelectorDefaults.BaseTint,
-        borderWidth = 1.dp,
-        borderColor = Color.White.copy(alpha = 0.09f),
-        showTopHighlightRim = true
-    ) {
-        content()
-    }
+        content = content
+    )
 }
 
 /**

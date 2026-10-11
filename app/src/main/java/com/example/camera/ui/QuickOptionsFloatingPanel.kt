@@ -30,6 +30,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.camera.model.*
+import com.example.camera.ui.components.FloatingSelectorDefaults
+import com.example.camera.ui.components.FloatingWindowCard
 
 /**
  * Compact, rounded, dark translucent floating options panel that expands downward
@@ -117,20 +119,12 @@ fun QuickOptionsFloatingPanel(
                 .padding(horizontal = 14.dp),
             contentAlignment = Alignment.TopCenter
         ) {
-            Surface(
+            FloatingWindowCard(
                 modifier = Modifier
                     .widthIn(max = 420.dp)
                     .fillMaxWidth()
-                    .shadow(
-                        elevation = 16.dp,
-                        shape = RoundedCornerShape(24.dp),
-                        ambientColor = Color.Black.copy(alpha = 0.6f),
-                        spotColor = Color.Black.copy(alpha = 0.6f)
-                    )
                     .testTag("quick_options_floating_panel"),
-                shape = RoundedCornerShape(24.dp),
-                color = Color(0xEB14171E),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f))
+                shape = FloatingSelectorDefaults.CardShape
             ) {
                 Column(
                     modifier = Modifier
