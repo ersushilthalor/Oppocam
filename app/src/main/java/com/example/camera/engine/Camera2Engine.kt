@@ -4713,6 +4713,7 @@ class Camera2Engine(private val context: Context) {
 
     private var lastStabilizedCropTime = 0L
     private var lastStabilizedCrop: Rect? = null
+    private var lastOisForceOffTimeMs = 0L
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -4727,21 +4728,29 @@ class Camera2Engine(private val context: Context) {
             // Verify actual hardware OIS and EIS states directly from CaptureResult
             val actualOisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)
             val isActualOisHwActive = (actualOisMode == CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_ON)
-            _actualOisHardwareActive.value = isActualOisHwActive
+            if (_actualOisHardwareActive.value != isActualOisHwActive) {
+                _actualOisHardwareActive.value = isActualOisHwActive
+            }
 
             val actualEisMode = result.get(CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE)
             val isActualEisHwActive = (actualEisMode == CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE_ON)
-            _actualEisHardwareActive.value = isActualEisHwActive
+            if (_actualEisHardwareActive.value != isActualEisHwActive) {
+                _actualEisHardwareActive.value = isActualEisHwActive
+            }
 
-            // When OIS is OFF: if the hardware HAL unexpectedly re-enabled OIS, force it OFF immediately
+            // When OIS is OFF: if the hardware HAL unexpectedly re-enabled OIS, force it OFF (throttled to avoid IPC flooding)
             if (!isOisAllowed && isActualOisHwActive) {
-                try {
-                    previewRequestBuilder?.let { b ->
-                        b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
-                        applyVendorOisControls(b, oisAllowed = false)
-                        captureSession?.setRepeatingRequest(b.build(), this, backgroundHandler)
-                    }
-                } catch (_: Throwable) {}
+                val nowMs = android.os.SystemClock.uptimeMillis()
+                if (nowMs - lastOisForceOffTimeMs >= 500L) {
+                    lastOisForceOffTimeMs = nowMs
+                    try {
+                        previewRequestBuilder?.let { b ->
+                            b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                            applyVendorOisControls(b, oisAllowed = false)
+                            captureSession?.setRepeatingRequest(b.build(), this, backgroundHandler)
+                        }
+                    } catch (_: Throwable) {}
+                }
             }
 
             if (_isAutoSwitchToUltraWide.value && !_isRecordingVideo.value && !isSwitchingLens.get()) {

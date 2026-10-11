@@ -104,9 +104,6 @@ object CinemaColorPipeline {
     ): Boolean {
         if (config == null) return false
         if (config.hasColorFineTuning) return true
-        if (computeCinemaColorMatrix(config, includeCreativeLut, forGpuShader = false) != null) {
-            return true
-        }
         if (config.shadows != 0.0f || config.highlights != 0.0f || config.vibrance != 0.0f) {
             return true
         }
@@ -117,6 +114,9 @@ object CinemaColorPipeline {
         val lut = config.selectedLut
         val intensity = config.lutIntensity.coerceIn(0.0f, 1.0f)
         if (includeCreativeLut && !lut.isOff && intensity > 0.001f) {
+            return true
+        }
+        if (computeCinemaColorMatrix(config, includeCreativeLut, forGpuShader = false) != null) {
             return true
         }
         return false
@@ -1048,6 +1048,11 @@ object CinemaColorPipeline {
         return floatArrayOf(r, g, b)
     }
 
+    private val lastAppliedViewState = java.util.WeakHashMap<View, Pair<CinemaConfig?, Boolean>>()
+    @Volatile
+    private var cachedCinemaRuntimeShader: Any? = null
+    private val cachedBitmapShaders = java.util.WeakHashMap<android.graphics.Bitmap, android.graphics.BitmapShader>()
+
     /**
      * Applies the Cinema color pipeline to the live Viewfinder TextureView.
      * Uses hardware AGSL RuntimeShader on Android 13+ (API 33+) when selective per-pixel grading
@@ -1059,6 +1064,15 @@ object CinemaColorPipeline {
         config: CinemaConfig?,
         includeCreativeLut: Boolean = true
     ) {
+        val stateKey = Pair(config, includeCreativeLut)
+        val prevState = synchronized(lastAppliedViewState) { lastAppliedViewState[view] }
+        if (prevState == stateKey && (config != null || view.layerType == View.LAYER_TYPE_NONE)) {
+            return
+        }
+        synchronized(lastAppliedViewState) {
+            lastAppliedViewState[view] = stateKey
+        }
+
         if (!hasActiveTransform(config, includeCreativeLut) || config == null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 try {
@@ -1086,7 +1100,8 @@ object CinemaColorPipeline {
                     0f, 0f, 1f, 0f, 0f,
                     0f, 0f, 0f, 1f, 0f
                 )
-                val shader = RuntimeShader(AGSL_CINEMA_SHADER)
+                val shader = (cachedCinemaRuntimeShader as? RuntimeShader)
+                    ?: RuntimeShader(AGSL_CINEMA_SHADER).also { cachedCinemaRuntimeShader = it }
                 shader.setFloatUniform("uMatRow0", a[0], a[1], a[2])
                 shader.setFloatUniform("uMatRow1", a[5], a[6], a[7])
                 shader.setFloatUniform("uMatRow2", a[10], a[11], a[12])
@@ -1104,11 +1119,15 @@ object CinemaColorPipeline {
                 val use3DLut = if (lutPair != null && config.lutIntensity > 0.001f) 1.0f else 0.0f
                 val lutIntensity = if (lutPair != null) config.lutIntensity.coerceIn(0f, 1f) else 0.0f
 
-                val lutShader = android.graphics.BitmapShader(
-                    bmp,
-                    android.graphics.Shader.TileMode.CLAMP,
-                    android.graphics.Shader.TileMode.CLAMP
-                )
+                val lutShader = synchronized(cachedBitmapShaders) {
+                    cachedBitmapShaders.getOrPut(bmp) {
+                        android.graphics.BitmapShader(
+                            bmp,
+                            android.graphics.Shader.TileMode.CLAMP,
+                            android.graphics.Shader.TileMode.CLAMP
+                        )
+                    }
+                }
                 shader.setInputShader("uLutStrip", lutShader)
                 shader.setFloatUniform("uUse3DLut", use3DLut)
                 shader.setFloatUniform("uLutSize", lutSize)
@@ -1259,12 +1278,6 @@ object CinemaColorPipeline {
         half4 main(float2 fragCoord) {
             half4 src = inputShader.eval(fragCoord);
             float3 inColor = float3(src.r, src.g, src.b);
-
-            // Sample cross neighbors for noise reduction & detail enhancement
-            float3 cUp = float3(inputShader.eval(fragCoord + float2(0.0, -1.0)).rgb);
-            float3 cDown = float3(inputShader.eval(fragCoord + float2(0.0, 1.0)).rgb);
-            float3 cLeft = float3(inputShader.eval(fragCoord + float2(-1.0, 0.0)).rgb);
-            float3 cRight = float3(inputShader.eval(fragCoord + float2(1.0, 0.0)).rgb);
 
             // =========================================================================
             // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
@@ -1455,59 +1468,66 @@ object CinemaColorPipeline {
             }
 
             // 12. Spatial detail / sharpening & noise reduction
-            if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
-                float lCenter = dot(c, float3(0.2126, 0.7152, 0.0722));
-                float lUp = dot(cUp, float3(0.2126, 0.7152, 0.0722));
-                float lDown = dot(cDown, float3(0.2126, 0.7152, 0.0722));
-                float lLeft = dot(cLeft, float3(0.2126, 0.7152, 0.0722));
-                float lRight = dot(cRight, float3(0.2126, 0.7152, 0.0722));
+            if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001 || uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
+                float3 cUp = float3(inputShader.eval(fragCoord + float2(0.0, -1.0)).rgb);
+                float3 cDown = float3(inputShader.eval(fragCoord + float2(0.0, 1.0)).rgb);
+                float3 cLeft = float3(inputShader.eval(fragCoord + float2(-1.0, 0.0)).rgb);
+                float3 cRight = float3(inputShader.eval(fragCoord + float2(1.0, 0.0)).rgb);
 
-                if (uLumaNoiseReduction > 0.001) {
-                    float wU = exp(-pow((lUp - lCenter) * 12.0, 2.0));
-                    float wD = exp(-pow((lDown - lCenter) * 12.0, 2.0));
-                    float wL = exp(-pow((lLeft - lCenter) * 12.0, 2.0));
-                    float wR = exp(-pow((lRight - lCenter) * 12.0, 2.0));
-                    float wSum = 1.0 + wU + wD + wL + wR;
-                    float smoothLuma = (lCenter + lUp * wU + lDown * wD + lLeft * wL + lRight * wR) / wSum;
-                    float lumaDelta = (smoothLuma - lCenter) * uLumaNoiseReduction;
-                    c = clamp(c + float3(lumaDelta), 0.0, 1.0);
+                if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
+                    float lCenter = dot(c, float3(0.2126, 0.7152, 0.0722));
+                    float lUp = dot(cUp, float3(0.2126, 0.7152, 0.0722));
+                    float lDown = dot(cDown, float3(0.2126, 0.7152, 0.0722));
+                    float lLeft = dot(cLeft, float3(0.2126, 0.7152, 0.0722));
+                    float lRight = dot(cRight, float3(0.2126, 0.7152, 0.0722));
+
+                    if (uLumaNoiseReduction > 0.001) {
+                        float wU = exp(-pow((lUp - lCenter) * 12.0, 2.0));
+                        float wD = exp(-pow((lDown - lCenter) * 12.0, 2.0));
+                        float wL = exp(-pow((lLeft - lCenter) * 12.0, 2.0));
+                        float wR = exp(-pow((lRight - lCenter) * 12.0, 2.0));
+                        float wSum = 1.0 + wU + wD + wL + wR;
+                        float smoothLuma = (lCenter + lUp * wU + lDown * wD + lLeft * wL + lRight * wR) / wSum;
+                        float lumaDelta = (smoothLuma - lCenter) * uLumaNoiseReduction;
+                        c = clamp(c + float3(lumaDelta), 0.0, 1.0);
+                    }
+
+                    if (uChromaNoiseReduction > 0.001) {
+                        float3 chrCenter = c - float3(dot(c, float3(0.2126, 0.7152, 0.0722)));
+                        float3 chrUp = cUp - float3(lUp);
+                        float3 chrDown = cDown - float3(lDown);
+                        float3 chrLeft = cLeft - float3(lLeft);
+                        float3 chrRight = cRight - float3(lRight);
+                        float wU = exp(-pow((lUp - lCenter) * 8.0, 2.0));
+                        float wD = exp(-pow((lDown - lCenter) * 8.0, 2.0));
+                        float wL = exp(-pow((lLeft - lCenter) * 8.0, 2.0));
+                        float wR = exp(-pow((lRight - lCenter) * 8.0, 2.0));
+                        float wSum = 1.0 + wU + wD + wL + wR;
+                        float3 smoothChroma = (chrCenter + chrUp * wU + chrDown * wD + chrLeft * wL + chrRight * wR) / wSum;
+                        float curLuma = dot(c, float3(0.2126, 0.7152, 0.0722));
+                        c = clamp(float3(curLuma) + mix(chrCenter, smoothChroma, uChromaNoiseReduction), 0.0, 1.0);
+                    }
                 }
 
-                if (uChromaNoiseReduction > 0.001) {
-                    float3 chrCenter = c - float3(dot(c, float3(0.2126, 0.7152, 0.0722)));
-                    float3 chrUp = cUp - float3(lUp);
-                    float3 chrDown = cDown - float3(lDown);
-                    float3 chrLeft = cLeft - float3(lLeft);
-                    float3 chrRight = cRight - float3(lRight);
-                    float wU = exp(-pow((lUp - lCenter) * 8.0, 2.0));
-                    float wD = exp(-pow((lDown - lCenter) * 8.0, 2.0));
-                    float wL = exp(-pow((lLeft - lCenter) * 8.0, 2.0));
-                    float wR = exp(-pow((lRight - lCenter) * 8.0, 2.0));
-                    float wSum = 1.0 + wU + wD + wL + wR;
-                    float3 smoothChroma = (chrCenter + chrUp * wU + chrDown * wD + chrLeft * wL + chrRight * wR) / wSum;
-                    float curLuma = dot(c, float3(0.2126, 0.7152, 0.0722));
-                    c = clamp(float3(curLuma) + mix(chrCenter, smoothChroma, uChromaNoiseReduction), 0.0, 1.0);
-                }
-            }
+                if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
+                    float3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
+                    float3 highPass = c - neighborAvg;
 
-            if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
-                float3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
-                float3 highPass = c - neighborAvg;
+                    if (uSharpening > 0.001) {
+                        c = clamp(c + highPass * (uSharpening * 2.2), 0.0, 1.0);
+                    }
 
-                if (uSharpening > 0.001) {
-                    c = clamp(c + highPass * (uSharpening * 2.2), 0.0, 1.0);
-                }
+                    if (abs(uMicroContrast) > 0.001) {
+                        float3 microDetail = sign(highPass) * pow(abs(highPass), float3(0.80));
+                        c = clamp(c + microDetail * (uMicroContrast * 0.9), 0.0, 1.0);
+                    }
 
-                if (abs(uMicroContrast) > 0.001) {
-                    float3 microDetail = sign(highPass) * pow(abs(highPass), float3(0.80));
-                    c = clamp(c + microDetail * (uMicroContrast * 0.9), 0.0, 1.0);
-                }
-
-                if (abs(uLocalContrast) > 0.001) {
-                    float lCur = dot(c, float3(0.2126, 0.7152, 0.0722));
-                    float lAvg = dot(neighborAvg, float3(0.2126, 0.7152, 0.0722));
-                    float localDelta = (lCur - lAvg) * uLocalContrast * 0.85;
-                    c = clamp(c + float3(localDelta), 0.0, 1.0);
+                    if (abs(uLocalContrast) > 0.001) {
+                        float lCur = dot(c, float3(0.2126, 0.7152, 0.0722));
+                        float lAvg = dot(neighborAvg, float3(0.2126, 0.7152, 0.0722));
+                        float localDelta = (lCur - lAvg) * uLocalContrast * 0.85;
+                        c = clamp(c + float3(localDelta), 0.0, 1.0);
+                    }
                 }
             }
 
@@ -1610,10 +1630,6 @@ object CinemaColorPipeline {
         void main() {
             vec4 src = texture2D(sTexture, vTextureCoord);
             vec3 inColor = src.rgb;
-            vec3 cUp = texture2D(sTexture, vTextureCoord + vec2(0.0, -uTexelSize.y)).rgb;
-            vec3 cDown = texture2D(sTexture, vTextureCoord + vec2(0.0, uTexelSize.y)).rgb;
-            vec3 cLeft = texture2D(sTexture, vTextureCoord + vec2(-uTexelSize.x, 0.0)).rgb;
-            vec3 cRight = texture2D(sTexture, vTextureCoord + vec2(uTexelSize.x, 0.0)).rgb;
 
             // =========================================================================
             // STAGE 1: LOG INPUT / TECHNICAL TRANSFORM (CST)
@@ -1801,59 +1817,66 @@ object CinemaColorPipeline {
             }
 
             // 12. Spatial detail / sharpening & noise reduction
-            if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
-                float lCenter = dot(c, vec3(0.2126, 0.7152, 0.0722));
-                float lUp = dot(cUp, vec3(0.2126, 0.7152, 0.0722));
-                float lDown = dot(cDown, vec3(0.2126, 0.7152, 0.0722));
-                float lLeft = dot(cLeft, vec3(0.2126, 0.7152, 0.0722));
-                float lRight = dot(cRight, vec3(0.2126, 0.7152, 0.0722));
+            if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001 || uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
+                vec3 cUp = texture2D(sTexture, vTextureCoord + vec2(0.0, -uTexelSize.y)).rgb;
+                vec3 cDown = texture2D(sTexture, vTextureCoord + vec2(0.0, uTexelSize.y)).rgb;
+                vec3 cLeft = texture2D(sTexture, vTextureCoord + vec2(-uTexelSize.x, 0.0)).rgb;
+                vec3 cRight = texture2D(sTexture, vTextureCoord + vec2(uTexelSize.x, 0.0)).rgb;
 
-                if (uLumaNoiseReduction > 0.001) {
-                    float wU = exp(-pow((lUp - lCenter) * 12.0, 2.0));
-                    float wD = exp(-pow((lDown - lCenter) * 12.0, 2.0));
-                    float wL = exp(-pow((lLeft - lCenter) * 12.0, 2.0));
-                    float wR = exp(-pow((lRight - lCenter) * 12.0, 2.0));
-                    float wSum = 1.0 + wU + wD + wL + wR;
-                    float smoothLuma = (lCenter + lUp * wU + lDown * wD + lLeft * wL + lRight * wR) / wSum;
-                    float lumaDelta = (smoothLuma - lCenter) * uLumaNoiseReduction;
-                    c = clamp(c + vec3(lumaDelta), 0.0, 1.0);
+                if (uLumaNoiseReduction > 0.001 || uChromaNoiseReduction > 0.001) {
+                    float lCenter = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                    float lUp = dot(cUp, vec3(0.2126, 0.7152, 0.0722));
+                    float lDown = dot(cDown, vec3(0.2126, 0.7152, 0.0722));
+                    float lLeft = dot(cLeft, vec3(0.2126, 0.7152, 0.0722));
+                    float lRight = dot(cRight, vec3(0.2126, 0.7152, 0.0722));
+
+                    if (uLumaNoiseReduction > 0.001) {
+                        float wU = exp(-pow((lUp - lCenter) * 12.0, 2.0));
+                        float wD = exp(-pow((lDown - lCenter) * 12.0, 2.0));
+                        float wL = exp(-pow((lLeft - lCenter) * 12.0, 2.0));
+                        float wR = exp(-pow((lRight - lCenter) * 12.0, 2.0));
+                        float wSum = 1.0 + wU + wD + wL + wR;
+                        float smoothLuma = (lCenter + lUp * wU + lDown * wD + lLeft * wL + lRight * wR) / wSum;
+                        float lumaDelta = (smoothLuma - lCenter) * uLumaNoiseReduction;
+                        c = clamp(c + vec3(lumaDelta), 0.0, 1.0);
+                    }
+
+                    if (uChromaNoiseReduction > 0.001) {
+                        vec3 chrCenter = c - vec3(dot(c, vec3(0.2126, 0.7152, 0.0722)));
+                        vec3 chrUp = cUp - vec3(lUp);
+                        vec3 chrDown = cDown - vec3(lDown);
+                        vec3 chrLeft = cLeft - vec3(lLeft);
+                        vec3 chrRight = cRight - vec3(lRight);
+                        float wU = exp(-pow((lUp - lCenter) * 8.0, 2.0));
+                        float wD = exp(-pow((lDown - lCenter) * 8.0, 2.0));
+                        float wL = exp(-pow((lLeft - lCenter) * 8.0, 2.0));
+                        float wR = exp(-pow((lRight - lCenter) * 8.0, 2.0));
+                        float wSum = 1.0 + wU + wD + wL + wR;
+                        vec3 smoothChroma = (chrCenter + chrUp * wU + chrDown * wD + chrLeft * wL + chrRight * wR) / wSum;
+                        float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                        c = clamp(vec3(curLuma) + mix(chrCenter, smoothChroma, uChromaNoiseReduction), 0.0, 1.0);
+                    }
                 }
 
-                if (uChromaNoiseReduction > 0.001) {
-                    vec3 chrCenter = c - vec3(dot(c, vec3(0.2126, 0.7152, 0.0722)));
-                    vec3 chrUp = cUp - vec3(lUp);
-                    vec3 chrDown = cDown - vec3(lDown);
-                    vec3 chrLeft = cLeft - vec3(lLeft);
-                    vec3 chrRight = cRight - vec3(lRight);
-                    float wU = exp(-pow((lUp - lCenter) * 8.0, 2.0));
-                    float wD = exp(-pow((lDown - lCenter) * 8.0, 2.0));
-                    float wL = exp(-pow((lLeft - lCenter) * 8.0, 2.0));
-                    float wR = exp(-pow((lRight - lCenter) * 8.0, 2.0));
-                    float wSum = 1.0 + wU + wD + wL + wR;
-                    vec3 smoothChroma = (chrCenter + chrUp * wU + chrDown * wD + chrLeft * wL + chrRight * wR) / wSum;
-                    float curLuma = dot(c, vec3(0.2126, 0.7152, 0.0722));
-                    c = clamp(vec3(curLuma) + mix(chrCenter, smoothChroma, uChromaNoiseReduction), 0.0, 1.0);
-                }
-            }
+                if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
+                    vec3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
+                    vec3 highPass = c - neighborAvg;
 
-            if (uSharpening > 0.001 || abs(uMicroContrast) > 0.001 || abs(uLocalContrast) > 0.001) {
-                vec3 neighborAvg = 0.25 * (cUp + cDown + cLeft + cRight);
-                vec3 highPass = c - neighborAvg;
+                    if (uSharpening > 0.001) {
+                        c = clamp(c + highPass * (uSharpening * 2.2), 0.0, 1.0);
+                    }
 
-                if (uSharpening > 0.001) {
-                    c = clamp(c + highPass * (uSharpening * 2.2), 0.0, 1.0);
-                }
+                    if (abs(uMicroContrast) > 0.001) {
+                        vec3 microDetail = sign(highPass) * pow(abs(highPass), vec3(0.80));
+                        c = clamp(c + microDetail * (uMicroContrast * 0.9), 0.0, 1.0);
+                    }
 
-                if (abs(uMicroContrast) > 0.001) {
-                    vec3 microDetail = sign(highPass) * pow(abs(highPass), vec3(0.80));
-                    c = clamp(c + microDetail * (uMicroContrast * 0.9), 0.0, 1.0);
-                }
-
-                if (abs(uLocalContrast) > 0.001) {
-                    float lCur = dot(c, vec3(0.2126, 0.7152, 0.0722));
-                    float lAvg = dot(neighborAvg, vec3(0.2126, 0.7152, 0.0722));
-                    float localDelta = (lCur - lAvg) * uLocalContrast * 0.85;
-                    c = clamp(c + vec3(localDelta), 0.0, 1.0);
+                    if (abs(uLocalContrast) > 0.001) {
+                        float lCur = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                        float lAvg = dot(neighborAvg, vec3(0.2126, 0.7152, 0.0722));
+                        float localDelta = (lCur - lAvg) * uLocalContrast * 0.85;
+                        c = clamp(c + vec3(localDelta), 0.0, 1.0);
+                    }
                 }
             }
 

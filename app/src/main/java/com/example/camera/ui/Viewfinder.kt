@@ -59,7 +59,6 @@ import androidx.compose.ui.layout.ContentScale
 import android.graphics.Bitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.cinedepth.pro.ui.blur.DepthBlurEngine
 import com.example.camera.model.CameraMode
 import com.example.camera.model.CinemaColorProfile
 import com.example.camera.model.CinemaConfig
@@ -135,15 +134,16 @@ fun Viewfinder(
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
 
-    val context = LocalContext.current
-    val depthEstimator = remember { DepthBlurEngine.getEstimator(context) }
-
-    var liveVirtualAperturePreviewBmp by remember { mutableStateOf<Bitmap?>(null) }
-    var liveDepthColormapBmp by remember { mutableStateOf<Bitmap?>(null) }
     var textureViewInstance by remember { mutableStateOf<TextureView?>(null) }
     var ultraWideTextureViewInstance by remember { mutableStateOf<TextureView?>(null) }
     val currentIsUsingUltraWideSurface by rememberUpdatedState(isUsingUltraWideSurface)
     val currentPreviewOverlapState by rememberUpdatedState(previewOverlapState)
+    val currentCameraMode by rememberUpdatedState(cameraMode)
+    val currentCinemaConfig by rememberUpdatedState(cinemaConfig)
+    val currentIsMotionPhotoEnabled by rememberUpdatedState(isMotionPhotoEnabled)
+    val currentOnMotionPhotoPreviewFrame by rememberUpdatedState(onMotionPhotoPreviewFrame)
+    val currentOnFrameLuminanceStats by rememberUpdatedState(onFrameLuminanceStats)
+    val currentFloatingWindowBlurStrength by rememberUpdatedState(floatingWindowBlurStrength)
     val ultraWideFramingCalib = remember {
         com.example.camera.engine.CameraOpticalCalibration.getUltraWideFramingCalibration()
     }
@@ -414,8 +414,11 @@ fun Viewfinder(
                                 override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
                                     if (currentIsUsingUltraWideSurface) return
 
+                                    val modeNow = currentCameraMode
+                                    val motionCallback = currentOnMotionPhotoPreviewFrame
+
                                     // Real-time Motion Photo frame buffering (30 FPS)
-                                    if (isMotionPhotoEnabled && cameraMode == CameraMode.PHOTO && onMotionPhotoPreviewFrame != null) {
+                                    if (currentIsMotionPhotoEnabled && modeNow == CameraMode.PHOTO && motionCallback != null) {
                                         val nowMs = android.os.SystemClock.uptimeMillis()
                                         if (nowMs - lastMotionSampleTime >= 33L) {
                                             lastMotionSampleTime = nowMs
@@ -428,15 +431,21 @@ fun Viewfinder(
                                                 }
                                                 motionSampleBitmap?.let { bmp ->
                                                     getBitmap(bmp)
-                                                    onMotionPhotoPreviewFrame.invoke(bmp)
+                                                    motionCallback.invoke(bmp)
                                                 }
                                             } catch (ignored: Exception) {}
                                         }
                                     }
 
-                                    if ((cameraMode == CameraMode.CINEMA || cameraMode == CameraMode.PHOTO) && onFrameLuminanceStats != null) {
+                                    val lumaCallback = currentOnFrameLuminanceStats
+                                    val needsLumaAnalysis = lumaCallback != null && (
+                                        modeNow == CameraMode.PHOTO ||
+                                        (modeNow == CameraMode.CINEMA && currentCinemaConfig?.colorProfile == CinemaColorProfile.HLG10)
+                                    )
+                                    if (needsLumaAnalysis && lumaCallback != null) {
                                         val now = android.os.SystemClock.uptimeMillis()
-                                        if (now - lastLumaSampleTime >= 100L) { // 10fps analysis rate
+                                        val intervalMs = if (modeNow == CameraMode.CINEMA) 150L else 350L
+                                        if (now - lastLumaSampleTime >= intervalMs) {
                                             lastLumaSampleTime = now
                                             try {
                                                 if (lumaSampleBitmap == null || lumaSampleBitmap?.isRecycled == true) {
@@ -450,7 +459,7 @@ fun Viewfinder(
                                                     getBitmap(bmp)
                                                     val stats = com.example.camera.engine.FrameLuminanceAnalyzer.analyzeBitmap(bmp)
                                                     if (stats != null) {
-                                                        onFrameLuminanceStats.invoke(stats)
+                                                        lumaCallback.invoke(stats)
                                                     }
                                                 }
                                             } catch (ignored: Exception) {}
@@ -461,7 +470,7 @@ fun Viewfinder(
                                     if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive) {
                                         com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                             textureView = this@apply,
-                                            blurStrength = floatingWindowBlurStrength
+                                            blurStrength = currentFloatingWindowBlurStrength
                                         )
                                     }
                                 }
@@ -482,110 +491,20 @@ fun Viewfinder(
                             )
                         }
 
-                        // Outline provider for corner radius clipping on hardware accelerated TextureView
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                            if (viewfinderCornerRadiusDp > 0) {
-                                textureView.outlineProvider = object : android.view.ViewOutlineProvider() {
-                                    override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
-                                        val radiusPx = viewfinderCornerRadiusDp * view.resources.displayMetrics.density
-                                        outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
-                                    }
-                                }
-                                textureView.clipToOutline = true
-                            } else {
-                                textureView.outlineProvider = null
-                                textureView.clipToOutline = false
-                            }
-                        }
-
-                        val effectiveLut = activeLut ?: cinemaConfig?.selectedLut
-
-                        val colorMatrix = android.graphics.ColorMatrix()
-                        var hasFilter = false
-
-                        if (cameraMode == CameraMode.PHOTO) {
-                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                            if (activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
-                                val filterMat = activePhotoFilter.toAndroidColorMatrix()
-                                if (filterMat != null) {
-                                    colorMatrix.postConcat(filterMat)
-                                    hasFilter = true
-                                }
-                            }
-                            // Real-time Pro adjustments: Saturation
-                            if (proSaturation != 0f) {
-                                val satMat = android.graphics.ColorMatrix().apply {
-                                    setSaturation((1f + proSaturation / 100f).coerceIn(0f, 3f))
-                                }
-                                colorMatrix.postConcat(satMat)
-                                hasFilter = true
-                            }
-                            // Real-time Pro adjustments: Contrast & Highlights / Shadows
-                            if (proContrast != 1.0f || proHighlights != 0f || proShadows != 0f) {
-                                val c = proContrast.coerceIn(0.5f, 2.0f)
-                                val b = ((proHighlights + proShadows) / 4f)
-                                val t = (1f - c) * 128f + b
-                                val contrastMat = android.graphics.ColorMatrix(floatArrayOf(
-                                    c, 0f, 0f, 0f, t,
-                                    0f, c, 0f, 0f, t,
-                                    0f, 0f, c, 0f, t,
-                                    0f, 0f, 0f, 1f, 0f
-                                ))
-                                colorMatrix.postConcat(contrastMat)
-                                hasFilter = true
-                            }
-                        } else if (cameraMode == CameraMode.CINEMA) {
-                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                            val effectiveConfig = if (activeLut != null && activeLut != cinemaConfig?.selectedLut) {
-                                cinemaConfig?.copy(selectedLut = activeLut)
-                            } else {
-                                cinemaConfig
-                            }
-                            com.example.camera.engine.CinemaColorPipeline.applyToView(
-                                view = textureView,
-                                config = effectiveConfig,
-                                includeCreativeLut = effectiveConfig?.isLutPreviewEnabled ?: true
-                            )
-                            textureView.invalidate()
-                            return@AndroidView
-                        } else if (cameraMode == CameraMode.VIDEO) {
-                            if (isGpuRelayPreviewActive) {
-                                // Real-time GPU relay split is actively rendering identical processed frames directly into preview surface
-                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                                return@AndroidView
-                            } else {
-                                com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
-                                return@AndroidView
-                            }
-                        } else {
-                            com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                        }
-
-                        if (hasFilter) {
-                            val filter = android.graphics.ColorMatrixColorFilter(colorMatrix)
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                try {
-                                    textureView.setRenderEffect(android.graphics.RenderEffect.createColorFilterEffect(filter))
-                                    if (textureView.layerType != android.view.View.LAYER_TYPE_NONE) {
-                                        textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
-                                    }
-                                } catch (e: Exception) {
-                                    val paint = android.graphics.Paint().apply { colorFilter = filter }
-                                    textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
-                                }
-                            } else {
-                                val paint = android.graphics.Paint().apply { colorFilter = filter }
-                                textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
-                            }
-                        } else {
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                try {
-                                    textureView.setRenderEffect(null)
-                                } catch (ignored: Exception) {}
-                            }
-                            textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
-                        }
-                        textureView.invalidate()
+                        applyTextureViewOutlineAndEffects(
+                            textureView = textureView,
+                            viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
+                            cameraMode = cameraMode,
+                            activePhotoFilter = activePhotoFilter,
+                            activeLut = activeLut,
+                            cinemaConfig = cinemaConfig,
+                            videoAdjustments = videoAdjustments,
+                            isGpuRelayPreviewActive = isGpuRelayPreviewActive,
+                            proSaturation = proSaturation,
+                            proContrast = proContrast,
+                            proHighlights = proHighlights,
+                            proShadows = proShadows
+                        )
                     },
                     modifier = Modifier
                         .fillMaxSize()
@@ -662,7 +581,10 @@ fun Viewfinder(
                                     override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
                                         if (!currentIsUsingUltraWideSurface) return
 
-                                        if (isMotionPhotoEnabled && cameraMode == CameraMode.PHOTO && onMotionPhotoPreviewFrame != null) {
+                                        val modeNow = currentCameraMode
+                                        val motionCallback = currentOnMotionPhotoPreviewFrame
+
+                                        if (currentIsMotionPhotoEnabled && modeNow == CameraMode.PHOTO && motionCallback != null) {
                                             val nowMs = android.os.SystemClock.uptimeMillis()
                                             if (nowMs - lastUwMotionSampleTime >= 33L) {
                                                 lastUwMotionSampleTime = nowMs
@@ -675,15 +597,21 @@ fun Viewfinder(
                                                     }
                                                     uwMotionSampleBitmap?.let { bmp ->
                                                         getBitmap(bmp)
-                                                        onMotionPhotoPreviewFrame.invoke(bmp)
+                                                        motionCallback.invoke(bmp)
                                                     }
                                                 } catch (ignored: Exception) {}
                                             }
                                         }
 
-                                        if ((cameraMode == CameraMode.CINEMA || cameraMode == CameraMode.PHOTO) && onFrameLuminanceStats != null) {
+                                        val lumaCallback = currentOnFrameLuminanceStats
+                                        val needsLumaAnalysis = lumaCallback != null && (
+                                            modeNow == CameraMode.PHOTO ||
+                                            (modeNow == CameraMode.CINEMA && currentCinemaConfig?.colorProfile == CinemaColorProfile.HLG10)
+                                        )
+                                        if (needsLumaAnalysis && lumaCallback != null) {
                                             val now = android.os.SystemClock.uptimeMillis()
-                                            if (now - lastUwLumaSampleTime >= 100L) {
+                                            val intervalMs = if (modeNow == CameraMode.CINEMA) 150L else 350L
+                                            if (now - lastUwLumaSampleTime >= intervalMs) {
                                                 lastUwLumaSampleTime = now
                                                 try {
                                                     if (uwLumaSampleBitmap == null || uwLumaSampleBitmap?.isRecycled == true) {
@@ -697,7 +625,7 @@ fun Viewfinder(
                                                         getBitmap(bmp)
                                                         val stats = com.example.camera.engine.FrameLuminanceAnalyzer.analyzeBitmap(bmp)
                                                         if (stats != null) {
-                                                            onFrameLuminanceStats.invoke(stats)
+                                                            lumaCallback.invoke(stats)
                                                         }
                                                     }
                                                 } catch (ignored: Exception) {}
@@ -707,7 +635,7 @@ fun Viewfinder(
                                         if (com.example.camera.ui.components.BackdropBlurManager.isWindowActive) {
                                             com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                                 textureView = this@apply,
-                                                blurStrength = floatingWindowBlurStrength
+                                                blurStrength = currentFloatingWindowBlurStrength
                                             )
                                         }
                                     }
@@ -726,105 +654,20 @@ fun Viewfinder(
                                     blurStrength = floatingWindowBlurStrength
                                 )
                             }
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                if (viewfinderCornerRadiusDp > 0) {
-                                    textureView.outlineProvider = object : android.view.ViewOutlineProvider() {
-                                        override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
-                                            val radiusPx = viewfinderCornerRadiusDp * view.resources.displayMetrics.density
-                                            outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
-                                        }
-                                    }
-                                    textureView.clipToOutline = true
-                                } else {
-                                    textureView.outlineProvider = null
-                                    textureView.clipToOutline = false
-                                }
-                            }
-
-                            val colorMatrix = android.graphics.ColorMatrix()
-                            var hasFilter = false
-
-                            if (cameraMode == CameraMode.PHOTO) {
-                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                                if (activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
-                                    val filterMat = activePhotoFilter.toAndroidColorMatrix()
-                                    if (filterMat != null) {
-                                        colorMatrix.postConcat(filterMat)
-                                        hasFilter = true
-                                    }
-                                }
-                                if (proSaturation != 0f) {
-                                    val satMat = android.graphics.ColorMatrix().apply {
-                                        setSaturation((1f + proSaturation / 100f).coerceIn(0f, 3f))
-                                    }
-                                    colorMatrix.postConcat(satMat)
-                                    hasFilter = true
-                                }
-                                if (proContrast != 1.0f || proHighlights != 0f || proShadows != 0f) {
-                                    val c = proContrast.coerceIn(0.5f, 2.0f)
-                                    val b = ((proHighlights + proShadows) / 4f)
-                                    val t = (1f - c) * 128f + b
-                                    val contrastMat = android.graphics.ColorMatrix(floatArrayOf(
-                                        c, 0f, 0f, 0f, t,
-                                        0f, c, 0f, 0f, t,
-                                        0f, 0f, c, 0f, t,
-                                        0f, 0f, 0f, 1f, 0f
-                                    ))
-                                    colorMatrix.postConcat(contrastMat)
-                                    hasFilter = true
-                                }
-                            } else if (cameraMode == CameraMode.CINEMA) {
-                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                                val effectiveConfig = if (activeLut != null && activeLut != cinemaConfig?.selectedLut) {
-                                    cinemaConfig?.copy(selectedLut = activeLut)
-                                } else {
-                                    cinemaConfig
-                                }
-                                com.example.camera.engine.CinemaColorPipeline.applyToView(
-                                    view = textureView,
-                                    config = effectiveConfig,
-                                    includeCreativeLut = effectiveConfig?.isLutPreviewEnabled ?: true
-                                )
-                                textureView.invalidate()
-                                return@AndroidView
-                            } else if (cameraMode == CameraMode.VIDEO) {
-                                if (isGpuRelayPreviewActive) {
-                                    // Real-time GPU relay split is actively rendering identical processed frames directly into preview surface
-                                    com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                                    return@AndroidView
-                                } else {
-                                    com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
-                                    return@AndroidView
-                                }
-                            } else {
-                                com.example.camera.engine.VideoAdjustmentsPipeline.clearAdjustments(textureView)
-                            }
-
-                            if (hasFilter) {
-                                val filter = android.graphics.ColorMatrixColorFilter(colorMatrix)
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                    try {
-                                        textureView.setRenderEffect(android.graphics.RenderEffect.createColorFilterEffect(filter))
-                                        if (textureView.layerType != android.view.View.LAYER_TYPE_NONE) {
-                                            textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
-                                        }
-                                    } catch (e: Exception) {
-                                        val paint = android.graphics.Paint().apply { colorFilter = filter }
-                                        textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
-                                    }
-                                } else {
-                                    val paint = android.graphics.Paint().apply { colorFilter = filter }
-                                    textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
-                                }
-                            } else {
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                    try {
-                                        textureView.setRenderEffect(null)
-                                    } catch (ignored: Exception) {}
-                                }
-                                textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
-                            }
-                            textureView.invalidate()
+                            applyTextureViewOutlineAndEffects(
+                                textureView = textureView,
+                                viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
+                                cameraMode = cameraMode,
+                                activePhotoFilter = activePhotoFilter,
+                                activeLut = activeLut,
+                                cinemaConfig = cinemaConfig,
+                                videoAdjustments = videoAdjustments,
+                                isGpuRelayPreviewActive = isGpuRelayPreviewActive,
+                                proSaturation = proSaturation,
+                                proContrast = proContrast,
+                                proHighlights = proHighlights,
+                                proShadows = proShadows
+                            )
                         },
                         modifier = Modifier
                             .fillMaxSize()
@@ -1295,5 +1138,151 @@ fun DollyZoomReticleOverlay(
         }
     }
 }
+
+private data class TextureViewEffectCacheKey(
+    val cameraMode: CameraMode,
+    val activePhotoFilter: PhotoFilter?,
+    val activeLut: CinematicLut?,
+    val cinemaConfig: CinemaConfig?,
+    val videoAdjustments: com.example.camera.model.VideoAdjustments?,
+    val isGpuRelayPreviewActive: Boolean,
+    val proSaturation: Float,
+    val proContrast: Float,
+    val proHighlights: Float,
+    val proShadows: Float
+)
+
+private val lastAppliedCornerRadius = java.util.WeakHashMap<TextureView, Int>()
+private val lastAppliedEffectKey = java.util.WeakHashMap<TextureView, TextureViewEffectCacheKey>()
+
+private fun applyTextureViewOutlineAndEffects(
+    textureView: TextureView,
+    viewfinderCornerRadiusDp: Int,
+    cameraMode: CameraMode,
+    activePhotoFilter: PhotoFilter?,
+    activeLut: CinematicLut?,
+    cinemaConfig: CinemaConfig?,
+    videoAdjustments: com.example.camera.model.VideoAdjustments?,
+    isGpuRelayPreviewActive: Boolean,
+    proSaturation: Float,
+    proContrast: Float,
+    proHighlights: Float,
+    proShadows: Float
+) {
+    val prevRadius = synchronized(lastAppliedCornerRadius) {
+        lastAppliedCornerRadius[textureView]
+    }
+    if (prevRadius != viewfinderCornerRadiusDp) {
+        synchronized(lastAppliedCornerRadius) {
+            lastAppliedCornerRadius[textureView] = viewfinderCornerRadiusDp
+        }
+        if (viewfinderCornerRadiusDp > 0) {
+            val radiusPx = viewfinderCornerRadiusDp * textureView.resources.displayMetrics.density
+            textureView.outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
+                }
+            }
+            textureView.clipToOutline = true
+        } else {
+            textureView.clipToOutline = false
+            textureView.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+        }
+    }
+
+    val currentKey = TextureViewEffectCacheKey(
+        cameraMode = cameraMode,
+        activePhotoFilter = activePhotoFilter,
+        activeLut = activeLut,
+        cinemaConfig = cinemaConfig,
+        videoAdjustments = videoAdjustments,
+        isGpuRelayPreviewActive = isGpuRelayPreviewActive,
+        proSaturation = proSaturation,
+        proContrast = proContrast,
+        proHighlights = proHighlights,
+        proShadows = proShadows
+    )
+    val prevKey = synchronized(lastAppliedEffectKey) {
+        lastAppliedEffectKey[textureView]
+    }
+    if (prevKey == currentKey) {
+        return
+    }
+    synchronized(lastAppliedEffectKey) {
+        lastAppliedEffectKey[textureView] = currentKey
+    }
+
+    if (cameraMode == CameraMode.CINEMA && cinemaConfig != null) {
+        val isLogSelected = cinemaConfig.colorProfile in listOf(
+            com.example.camera.model.CinemaColorProfile.S_LOG,
+            com.example.camera.model.CinemaColorProfile.N_LOG,
+            com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
+            com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
+        ) || cinemaConfig.isLogMode
+        val effectiveConfig = if (isLogSelected) {
+            cinemaConfig.copy(selectedLut = CinematicLut.NONE)
+        } else if (activeLut != null && activeLut != cinemaConfig.selectedLut) {
+            cinemaConfig.copy(selectedLut = activeLut)
+        } else {
+            cinemaConfig
+        }
+        com.example.camera.engine.CinemaColorPipeline.applyToView(
+            view = textureView,
+            config = effectiveConfig,
+            includeCreativeLut = !isLogSelected
+        )
+    } else if (cameraMode == CameraMode.VIDEO && videoAdjustments != null) {
+        if (isGpuRelayPreviewActive) {
+            com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, null)
+        } else {
+            com.example.camera.engine.VideoAdjustmentsPipeline.applyToView(textureView, videoAdjustments)
+        }
+    } else {
+        val hasProAdj = (proSaturation != 0f || proContrast != 1.0f || proHighlights != 0f || proShadows != 0f)
+        val hasPhotoFilter = (cameraMode == CameraMode.PHOTO && activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL)
+
+        if (hasPhotoFilter || hasProAdj) {
+            val combinedMatrix = android.graphics.ColorMatrix()
+            if (hasPhotoFilter && activePhotoFilter != null) {
+                activePhotoFilter.toAndroidColorMatrix()?.let { filterMat ->
+                    combinedMatrix.postConcat(filterMat)
+                }
+            }
+            if (hasProAdj) {
+                val sat = (1.0f + proSaturation).coerceIn(0f, 2.5f)
+                if (sat != 1.0f) {
+                    val satMat = android.graphics.ColorMatrix().apply { setSaturation(sat) }
+                    combinedMatrix.postConcat(satMat)
+                }
+                val c = proContrast.coerceIn(0.4f, 2.0f)
+                val lumDelta = (proShadows * 28f) + (proHighlights * 22f)
+                val dynContrast = (c + (proHighlights - proShadows) * 0.18f).coerceIn(0.4f, 2.2f)
+                val translate = (1f - dynContrast) * 128f + lumDelta
+                val toneMat = android.graphics.ColorMatrix(floatArrayOf(
+                    dynContrast, 0f, 0f, 0f, translate,
+                    0f, dynContrast, 0f, 0f, translate,
+                    0f, 0f, dynContrast, 0f, translate,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+                combinedMatrix.postConcat(toneMat)
+            }
+            val filter = android.graphics.ColorMatrixColorFilter(combinedMatrix)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                textureView.setRenderEffect(android.graphics.RenderEffect.createColorFilterEffect(filter))
+            } else {
+                val paint = android.graphics.Paint().apply { colorFilter = filter }
+                textureView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+            }
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                textureView.setRenderEffect(null)
+            }
+            if (textureView.layerType != android.view.View.LAYER_TYPE_NONE) {
+                textureView.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+            }
+        }
+    }
+}
+
 
 

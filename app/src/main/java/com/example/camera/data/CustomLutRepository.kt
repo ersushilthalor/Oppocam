@@ -42,6 +42,13 @@ data class CustomLutItem(
  */
 class CustomLutRepository(private val context: Context) {
 
+    companion object {
+        @Volatile
+        private var cachedJsonStr: String? = null
+        @Volatile
+        private var cachedLutList: List<CustomLutItem>? = null
+    }
+
     private val prefs = context.getSharedPreferences("pro_camera_user_prefs", Context.MODE_PRIVATE)
     private val lutsDir = File(context.filesDir, "custom_luts").apply { mkdirs() }
 
@@ -54,6 +61,11 @@ class CustomLutRepository(private val context: Context) {
 
     private fun loadSavedLuts() {
         val jsonStr = prefs.getString(PREFS_KEY_CUSTOM_LUTS, null) ?: return
+        val cached = cachedLutList
+        if (jsonStr == cachedJsonStr && cached != null) {
+            _customLuts.value = cached
+            return
+        }
         try {
             val jsonArray = JSONArray(jsonStr)
             val list = mutableListOf<CustomLutItem>()
@@ -90,6 +102,8 @@ class CustomLutRepository(private val context: Context) {
                     )
                 }
             }
+            cachedJsonStr = jsonStr
+            cachedLutList = list
             _customLuts.value = list
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load saved custom LUTs", e)
@@ -184,7 +198,10 @@ class CustomLutRepository(private val context: Context) {
                 }
                 array.put(obj)
             }
-            prefs.edit().putString(PREFS_KEY_CUSTOM_LUTS, array.toString()).apply()
+            val serialized = array.toString()
+            cachedJsonStr = serialized
+            cachedLutList = list
+            prefs.edit().putString(PREFS_KEY_CUSTOM_LUTS, serialized).apply()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to persist custom LUTs", e)
         }

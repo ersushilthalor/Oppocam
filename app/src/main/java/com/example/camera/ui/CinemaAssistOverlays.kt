@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +33,10 @@ fun CinemaAssistOverlays(
     cinemaConfig: CinemaConfig,
     modifier: Modifier = Modifier
 ) {
+    val zebraDashPathEffect = remember { PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f) }
+    val peakingDashPathEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) }
+    val waveformPath = remember { Path() }
+
     Box(modifier = modifier.fillMaxSize()) {
         // 1. Exposure Zebras Overlay
         if (cinemaConfig.zebraThreshold != ZebraThreshold.OFF) {
@@ -41,7 +46,6 @@ fun CinemaAssistOverlays(
                 val strokeWidth = 2.dp.toPx()
 
                 // Draw diagonal indicator stripes in the upper exposure highlight zones
-                val pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
                 val color = if (threshold == 100) Color(0xFFFF5252).copy(alpha = 0.55f) else Color(0xFFFFD54F).copy(alpha = 0.45f)
 
                 // Top highlight warning band
@@ -52,7 +56,7 @@ fun CinemaAssistOverlays(
                         start = Offset(x, 0f),
                         end = Offset(x + size.height * 0.35f, size.height * 0.35f),
                         strokeWidth = strokeWidth,
-                        pathEffect = pathEffect
+                        pathEffect = zebraDashPathEffect
                     )
                     x += stripeSpacing
                 }
@@ -72,7 +76,7 @@ fun CinemaAssistOverlays(
                     center = center,
                     style = Stroke(
                         width = 1.5.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
+                        pathEffect = peakingDashPathEffect
                     )
                 )
 
@@ -123,17 +127,17 @@ fun CinemaAssistOverlays(
                     drawLine(Color.White.copy(alpha = 0.2f), Offset(0f, h), Offset(w, h), strokeWidth = strokeGrid)
 
                     // Simulated live luminance parade
-                    val path = Path()
+                    waveformPath.reset()
                     val step = w / 32f
-                    path.moveTo(0f, h * 0.7f)
+                    waveformPath.moveTo(0f, h * 0.7f)
                     for (i in 0..32) {
                         val px = i * step
                         val wave = kotlin.math.sin(i * 0.45f) * (h * 0.25f)
                         val py = (h * 0.55f + wave).coerceIn(h * 0.1f, h * 0.9f)
-                        path.lineTo(px, py.toFloat())
+                        waveformPath.lineTo(px, py.toFloat())
                     }
                     drawPath(
-                        path,
+                        waveformPath,
                         color = Color(0xFF00E5FF).copy(alpha = 0.80f),
                         style = Stroke(width = 1.5.dp.toPx())
                     )
