@@ -831,6 +831,7 @@ fun CameraScreen(
                 currentResolution = if (cameraMode == CameraMode.CINEMA) cinemaConfig.selectedResolution ?: selectedVideoResolution else selectedVideoResolution,
                 currentFps = if (cameraMode == CameraMode.CINEMA) cinemaConfig.videoFps else videoFps,
                 isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
+                supportedFpsProvider = { res -> viewModel.getSupportedFpsForResolution(res) },
                 onResolutionSelected = { res ->
                     viewModel.selectVideoResolution(res)
                     if (cameraMode == CameraMode.CINEMA) {

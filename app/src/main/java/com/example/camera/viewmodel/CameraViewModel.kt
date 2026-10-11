@@ -622,9 +622,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cycleCinemaResolution() {
-        val supported = cinemaCapabilities.value.supportedResolutions.takeIf { it.isNotEmpty() }
+        val supported = cinemaCapabilities.value.supportedResolutions
+            .filterNot { it.width >= 7680 || it.height >= 7680 }
+            .takeIf { it.isNotEmpty() }
             ?: listOf(
                 CameraResolution(3840, 2160),
+                CameraResolution(2560, 1440),
                 CameraResolution(1920, 1080),
                 CameraResolution(1280, 720)
             )
@@ -632,10 +635,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val curIndex = supported.indexOfFirst { it.width == current.width && it.height == current.height }
         val nextIndex = if (curIndex >= 0 && curIndex + 1 < supported.size) curIndex + 1 else 0
         val next = supported[nextIndex]
-        updateCinemaConfig(cinemaConfig.value.copy(selectedResolution = next))
+        val supportedFps = getSupportedFpsForResolution(next)
+        val currentFps = cinemaConfig.value.videoFps
+        val targetFps = if (!supportedFps.contains(currentFps)) supportedFps.firstOrNull() ?: 30 else currentFps
+        updateCinemaConfig(cinemaConfig.value.copy(selectedResolution = next, videoFps = targetFps))
         val label = when {
-            next.width >= 7680 -> "8K"
             next.width >= 3840 -> "4K"
+            next.width >= 2560 -> "2K"
             next.width >= 1920 -> "1080p"
             else -> "720p"
         }
@@ -1905,10 +1911,38 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectVideoResolution(res: CameraResolution) {
+        val supportedFps = getSupportedFpsForResolution(res)
+        if (!supportedFps.contains(_videoFps.value)) {
+            val fallbackFps = supportedFps.firstOrNull() ?: 30
+            _videoFps.value = fallbackFps
+            preferences.videoFps = fallbackFps
+            engine.videoFps = fallbackFps
+        }
         engine.selectVideoResolution(res)
         preferences.videoWidth = res.width
         preferences.videoHeight = res.height
-        showToast("Video Resolution: ${res.displayLabel}")
+        val label = when {
+            res.width >= 3840 || res.height >= 3840 -> "4K"
+            res.width >= 2560 || res.height >= 2560 -> "2K"
+            res.width >= 1920 || res.height >= 1920 -> "1080p"
+            else -> "720p"
+        }
+        showToast("Video Resolution: $label")
+    }
+
+    fun getSupportedFpsForResolution(res: CameraResolution): List<Int> {
+        val isCinema = _cameraMode.value == CameraMode.CINEMA
+        val baseFps = engine.getSupportedFpsForResolution(res)
+        return if (isCinema) {
+            val cinemaCaps = cinemaCapabilities.value.supportedFpsList
+            val result = mutableListOf<Int>()
+            if (baseFps.contains(60) && cinemaCaps.contains(60)) result.add(60)
+            if (baseFps.contains(30) || cinemaCaps.contains(30)) result.add(30)
+            if (cinemaCaps.contains(24)) result.add(24)
+            result.ifEmpty { listOf(30) }
+        } else {
+            baseFps
+        }
     }
 
     fun setViewfinderResolution(res: ViewfinderResolution) {

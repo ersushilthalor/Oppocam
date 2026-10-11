@@ -23,11 +23,11 @@ import com.example.camera.ui.components.HorizontalFloatingSelectorCard
 
 /**
  * Video Mode Resolution & FPS Floating Window
- * Recreates the exact compact horizontal floating-card design shown in Screenshot_20261005-105022_YouTube~2.jpg:
+ * Recreates the compact horizontal floating-card design:
  * - Rounded frosted glass card floating over the preview
- * - Row 1: Size → 8K → UHD → FHD → HD
- * - Row 2: FPS → 60 → 30 (aligned right underneath 8K and UHD)
- * - Row 3: Bottom centered descriptive text ("Ultra HD resolution", etc.)
+ * - Row 1: Size → UHD → 2K → FHD → HD (8K completely removed, 2K added)
+ * - Row 2: FPS → Shows only FPS options actually supported by selected resolution & camera configuration
+ * - Row 3: Bottom centered descriptive text ("Ultra HD resolution", "2K QHD resolution", etc.)
  * - Active selections highlighted in yellow/gold
  */
 @Composable
@@ -36,23 +36,28 @@ fun FloatingVideoSettingsPanel(
     currentResolution: CameraResolution?,
     currentFps: Int,
     isUltraStabilizationEnabled: Boolean = false,
+    supportedFpsProvider: ((CameraResolution) -> List<Int>)? = null,
     onResolutionSelected: (CameraResolution) -> Unit,
     onFpsSelected: (Int) -> Unit,
     onUltraStabilizationToggle: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val is8K = currentResolution?.let { (it.width == 7680 || it.height == 7680) } == true
+    val isUhd = currentResolution?.let { (it.width == 3840 || it.height == 3840) } == true
+    val is2K = currentResolution?.let { (it.width == 2560 || it.height == 2560) } == true
     val isFhd = currentResolution?.let { (it.width == 1920 || it.height == 1920) } == true
     val isHd = currentResolution?.let { (it.width == 1280 || it.height == 1280) } == true
-    val isUhd = (currentResolution?.let { (it.width == 3840 || it.height == 3840) } == true) || (!is8K && !isFhd && !isHd)
+    val isSelectedUhd = isUhd || (!is2K && !isFhd && !isHd)
 
     val descriptionText = when {
-        is8K -> "8K UHD resolution"
+        is2K -> "2K QHD resolution"
         isFhd -> "Full HD resolution"
         isHd -> "HD resolution"
         else -> "Ultra HD resolution"
     }
+
+    val effectiveRes = currentResolution ?: CameraResolution(3840, 2160)
+    val supportedFpsList = supportedFpsProvider?.invoke(effectiveRes) ?: listOf(60, 30)
 
     AnimatedVisibility(
         visible = isOpen,
@@ -70,7 +75,7 @@ fun FloatingVideoSettingsPanel(
                     .fillMaxWidth()
                     .padding(horizontal = 18.dp, vertical = 14.dp)
             ) {
-                // Row 1: Size -> 8K -> UHD -> FHD -> HD
+                // Row 1: Size -> UHD -> 2K -> FHD -> HD
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -88,8 +93,8 @@ fun FloatingVideoSettingsPanel(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val sizeOptions = listOf(
-                            Triple("8K", CameraResolution(7680, 4320), is8K),
-                            Triple("UHD", CameraResolution(3840, 2160), isUhd),
+                            Triple("UHD", CameraResolution(3840, 2160), isSelectedUhd),
+                            Triple("2K", CameraResolution(2560, 1440), is2K),
                             Triple("FHD", CameraResolution(1920, 1080), isFhd),
                             Triple("HD", CameraResolution(1280, 720), isHd)
                         )
@@ -111,6 +116,11 @@ fun FloatingVideoSettingsPanel(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = ripple(bounded = false, radius = 22.dp)
                                         ) {
+                                            val supportedForRes = supportedFpsProvider?.invoke(res) ?: listOf(60, 30)
+                                            if (!supportedForRes.contains(currentFps)) {
+                                                val fallbackFps = supportedForRes.firstOrNull() ?: 30
+                                                onFpsSelected(fallbackFps)
+                                            }
                                             onResolutionSelected(res)
                                         }
                                         .padding(horizontal = 6.dp, vertical = 5.dp)
@@ -123,7 +133,7 @@ fun FloatingVideoSettingsPanel(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Row 2: FPS -> 60 -> 30 (strictly aligned in columns under 8K and UHD)
+                // Row 2: FPS -> Show only supported FPS options for the selected resolution & camera configuration
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -140,67 +150,42 @@ fun FloatingVideoSettingsPanel(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Slot 1 (under 8K): 60 FPS
-                        Box(
-                            modifier = Modifier.weight(1f),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            val is60 = currentFps == 60
-                            Text(
-                                text = "60",
-                                color = if (is60) FloatingSelectorDefaults.GoldAccent else FloatingSelectorDefaults.TextColor,
-                                fontSize = 14.5.sp,
-                                fontWeight = if (is60) FontWeight.Bold else FontWeight.SemiBold,
-                                letterSpacing = 0.2.sp,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = ripple(bounded = false, radius = 22.dp)
-                                    ) {
-                                        onFpsSelected(60)
-                                    }
-                                    .padding(horizontal = 6.dp, vertical = 5.dp)
-                                    .testTag("fps_option_60")
-                            )
+                        supportedFpsList.forEach { fps ->
+                            val isSelected = (currentFps == fps) || (!supportedFpsList.contains(currentFps) && fps == supportedFpsList.firstOrNull())
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "$fps",
+                                    color = if (isSelected) FloatingSelectorDefaults.GoldAccent else FloatingSelectorDefaults.TextColor,
+                                    fontSize = 14.5.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    letterSpacing = 0.2.sp,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = ripple(bounded = false, radius = 22.dp)
+                                        ) {
+                                            onFpsSelected(fps)
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 5.dp)
+                                        .testTag("fps_option_$fps")
+                                )
+                            }
                         }
 
-                        // Slot 2 (under UHD): 30 FPS
-                        Box(
-                            modifier = Modifier.weight(1f),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            val is30 = currentFps != 60 // defaults to 30 as shown in reference
-                            Text(
-                                text = "30",
-                                color = if (is30) FloatingSelectorDefaults.GoldAccent else FloatingSelectorDefaults.TextColor,
-                                fontSize = 14.5.sp,
-                                fontWeight = if (is30) FontWeight.Bold else FontWeight.SemiBold,
-                                letterSpacing = 0.2.sp,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = ripple(bounded = false, radius = 22.dp)
-                                    ) {
-                                        onFpsSelected(30)
-                                    }
-                                    .padding(horizontal = 6.dp, vertical = 5.dp)
-                                    .testTag("fps_option_30")
-                            )
+                        // Align columns under Size options by filling any remaining slots
+                        repeat(maxOf(0, 4 - supportedFpsList.size)) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
-
-                        // Slot 3 (under FHD): Spacer for alignment
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        // Slot 4 (under HD): Spacer for alignment
-                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Row 3: Descriptive text exactly matching reference screenshot
+                // Row 3: Descriptive text matching selected resolution
                 Text(
                     text = descriptionText,
                     color = FloatingSelectorDefaults.DescColor,

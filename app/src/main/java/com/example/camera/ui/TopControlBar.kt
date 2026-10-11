@@ -328,7 +328,7 @@ fun TopControlBar(
                 CameraMode.VIDEO -> {
                     val resLabel = when {
                         videoResolution?.width == 3840 || videoResolution?.height == 3840 -> "4K"
-                        videoResolution?.width == 7680 || videoResolution?.height == 7680 -> "8K"
+                        videoResolution?.width == 2560 || videoResolution?.height == 2560 -> "2K"
                         videoResolution?.width == 1920 || videoResolution?.height == 1920 -> "1080P"
                         videoResolution?.width == 1280 || videoResolution?.height == 1280 -> "720P"
                         else -> "4K"
@@ -357,8 +357,8 @@ fun TopControlBar(
                 }
                 CameraMode.CINEMA -> {
                     val resLabel = when {
-                        cinemaConfig.selectedResolution?.width == 7680 || cinemaConfig.selectedResolution?.height == 7680 -> "8K"
                         cinemaConfig.selectedResolution?.width == 3840 || cinemaConfig.selectedResolution?.height == 3840 -> "4K"
+                        cinemaConfig.selectedResolution?.width == 2560 || cinemaConfig.selectedResolution?.height == 2560 -> "2K"
                         cinemaConfig.selectedResolution?.width == 1920 || cinemaConfig.selectedResolution?.height == 1920 -> "1080p"
                         cinemaConfig.selectedResolution?.width == 1280 || cinemaConfig.selectedResolution?.height == 1280 -> "720p"
                         else -> "4K"

@@ -2043,6 +2043,7 @@ class Camera2Engine(private val context: Context) {
 
             val standardVideoQualities = listOf(
                 CameraResolution(3840, 2160), // 4K UHD
+                CameraResolution(2560, 1440), // 2K QHD
                 CameraResolution(1920, 1080), // 1080p FHD
                 CameraResolution(1280, 720),  // 720p HD
                 CameraResolution(720, 480)    // 480p SD
@@ -2055,6 +2056,9 @@ class Camera2Engine(private val context: Context) {
                         (map?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()).any {
                             (it.width.toLong() * it.height.toLong()) >= 5_000_000L
                         }
+                    } else if (standard.width == 2560 && standard.height == 1440) {
+                        videoSizes.any { it.width == 2560 && it.height == 1440 } ||
+                        videoSizes.any { (it.width.toLong() * it.height.toLong()) >= 3_500_000L }
                     } else {
                         videoSizes.any { it.width == standard.width && it.height == standard.height }
                     }
@@ -2063,13 +2067,14 @@ class Camera2Engine(private val context: Context) {
                     matched
                 } else {
                     videoSizes
-                        .filter { it.width >= 640 && it.height >= 480 }
+                        .filter { it.width >= 640 && it.height >= 480 && it.width < 7680 && it.height < 7680 }
                         .sortedByDescending { it.width.toLong() * it.height.toLong() }
                         .map { CameraResolution(it.width, it.height) }
                         .distinctBy { "${it.width}x${it.height}" }
                 }
             } else {
                 listOf(
+                    CameraResolution(2560, 1440),
                     CameraResolution(1920, 1080),
                     CameraResolution(1280, 720)
                 )
@@ -3512,12 +3517,91 @@ class Camera2Engine(private val context: Context) {
     fun selectVideoResolution(resolution: CameraResolution) {
         userSelectedVideoResolution = resolution
         _selectedVideoResolution.value = resolution
+        val supportedFps = getSupportedFpsForResolution(resolution)
+        if (!supportedFps.contains(videoFps)) {
+            videoFps = supportedFps.firstOrNull() ?: 30
+        }
         updatePreviewAspectRatio()
         if (cameraDevice != null) {
             reconfigureSession()
         } else {
             restartCamera()
         }
+    }
+
+    /**
+     * Determines which FPS options (e.g. 60, 30) are genuinely supported
+     * by the given resolution and active camera lens configuration.
+     */
+    fun getSupportedFpsForResolution(
+        resolution: CameraResolution,
+        cameraId: String? = _selectedLens.value?.cameraId
+    ): List<Int> {
+        val targetCameraId = cameraId ?: _selectedLens.value?.cameraId ?: return listOf(30)
+        val chars = try {
+            getCharacteristics(targetCameraId)
+        } catch (e: Exception) {
+            null
+        } ?: return listOf(30)
+
+        val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+        val maxFps = fpsRanges.maxOfOrNull { it.upper } ?: 30
+        val supports60FpsRange = fpsRanges.any { it.upper >= 60 }
+
+        if (!supports60FpsRange || maxFps < 60) {
+            return listOf(30)
+        }
+
+        val maxDim = maxOf(resolution.width, resolution.height)
+        val minDim = minOf(resolution.width, resolution.height)
+
+        var canDo60 = true
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        if (map != null) {
+            val size = Size(maxDim, minDim)
+            val minDurationNs = try {
+                val mrDuration = map.getOutputMinFrameDuration(MediaRecorder::class.java, size)
+                if (mrDuration > 0L) {
+                    mrDuration
+                } else {
+                    map.getOutputMinFrameDuration(SurfaceTexture::class.java, size)
+                }
+            } catch (e: Exception) {
+                0L
+            }
+
+            if (minDurationNs > 0L) {
+                // If min frame duration > 20ms (~50fps), 60 FPS is physically not supported for this resolution
+                if (minDurationNs > 20_000_000L) {
+                    canDo60 = false
+                }
+            } else {
+                // When minDuration is 0 (unreported/emulator), check hardware level
+                val hwLevel = chars.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                    ?: CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
+                val isFullOrBetter = hwLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
+                        hwLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+
+                // 4K (3840x2160) at 60fps requires FULL or LEVEL_3 hardware level
+                if (maxDim >= 3840 && minDim >= 2160 && !isFullOrBetter) {
+                    canDo60 = false
+                }
+            }
+        }
+
+        // Action / Ultra stabilization mode restrictions
+        val isUltraStab = _hybridStabilizationConfig.value.isUltraStabilizationEnabled || preferences.isUltraStabilizationEnabled
+        if (isUltraStab && (maxDim >= 3840 || minDim >= 2160)) {
+            canDo60 = false
+        }
+
+        // Front camera usually limits 4K/2K to 30fps max
+        val facing = chars.get(CameraCharacteristics.LENS_FACING)
+        if (facing == CameraCharacteristics.LENS_FACING_FRONT && maxDim >= 2560) {
+            canDo60 = false
+        }
+
+        return if (canDo60) listOf(60, 30) else listOf(30)
     }
 
     /**

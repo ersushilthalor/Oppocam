@@ -764,12 +764,21 @@ private fun VideoSettingsPage(
     ) {
         item {
             val supportedResolutions = capabilities.supportedVideoResolutions
+                .filterNot { it.width >= 7680 || it.height >= 7680 }
             if (supportedResolutions.isNotEmpty()) {
                 val current = selectedVideoResolution ?: supportedResolutions.first()
                 SettingsSegmentedCard(
                     title = "Video Resolution",
                     description = "Standard recording resolution for video mode.",
-                    options = supportedResolutions.take(3).map { it to "${it.width}x${it.height}" },
+                    options = supportedResolutions.take(4).map { res ->
+                        val label = when {
+                            res.width >= 3840 -> "4K (${res.width}x${res.height})"
+                            res.width >= 2560 -> "2K (${res.width}x${res.height})"
+                            res.width >= 1920 -> "1080p (${res.width}x${res.height})"
+                            else -> "${res.width}x${res.height}"
+                        }
+                        res to label
+                    },
                     selectedOption = current,
                     onOptionSelected = onVideoResolutionSelected
                 )
@@ -1009,10 +1018,13 @@ private fun CinemaSettingsPage(
                     CameraResolution(1280, 720)
                 )
             }
-            val resOptions = supportedResolutions.distinctBy { "${it.width}x${it.height}" }.take(4).map { res ->
+            val resOptions = supportedResolutions
+                .filterNot { it.width >= 7680 || it.height >= 7680 }
+                .distinctBy { "${it.width}x${it.height}" }
+                .take(4).map { res ->
                 val label = when {
-                    res.width >= 7680 -> "8K (${res.width}x${res.height})"
                     res.width >= 3840 -> "4K UHD (${res.width}x${res.height})"
+                    res.width >= 2560 -> "2K QHD (${res.width}x${res.height})"
                     res.width >= 1920 -> "1080p FHD (${res.width}x${res.height})"
                     else -> "720p HD (${res.width}x${res.height})"
                 }
@@ -3255,7 +3267,7 @@ private fun UiLayoutSettingsPage(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     FloatingContentToggleRow(
-                        label = "Video Resolution (HD / FHD / 4K / 8K)",
+                        label = "Video Resolution (HD / FHD / 2K / 4K)",
                         checked = floatingWindowAppearance.showVideoResolution,
                         onCheckedChange = {
                             onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoResolution = it))
