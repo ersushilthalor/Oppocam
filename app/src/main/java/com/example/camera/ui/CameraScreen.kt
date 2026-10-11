@@ -688,6 +688,29 @@ fun CameraScreen(
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
+        // Dismiss barrier behind floating windows to close them when tapping on the camera preview
+        val isAnyFloatingOverlayOpen = isQuickOptionsOpen ||
+                (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
+                (isLogProfileWindowOpen && cameraMode == CameraMode.CINEMA) ||
+                (isLutWindowOpen && cameraMode == CameraMode.CINEMA) ||
+                isEvControlOpen
+        if (isAnyFloatingOverlayOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        isQuickOptionsOpen = false
+                        viewModel.setVideoSettingsPanelOpen(false)
+                        viewModel.setLogProfileWindowOpen(false)
+                        viewModel.setLutWindowOpen(false)
+                        viewModel.setEvControlOpen(false)
+                    }
+            )
+        }
+
         // 2-alpha. Floating Quick Options Panel (Photo, Video, Cinema modes)
         QuickOptionsFloatingPanel(
             isOpen = isQuickOptionsOpen,
@@ -757,7 +780,7 @@ fun CameraScreen(
                 viewModel.setSettingsOpen(true)
             },
             onDismiss = { isQuickOptionsOpen = false },
-            accentColor = activeLayoutConfig.getComposeAccentColor(),
+            accentColor = Color(0xFFFF7A00),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -798,29 +821,6 @@ fun CameraScreen(
                 onDismiss = {
                     viewModel.setEvControlOpen(false)
                 }
-            )
-        }
-
-        // Dismiss barrier behind floating windows to close them when tapping on the camera preview
-        val isAnyFloatingOverlayOpen = isQuickOptionsOpen ||
-                (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
-                (isLogProfileWindowOpen && cameraMode == CameraMode.CINEMA) ||
-                (isLutWindowOpen && cameraMode == CameraMode.CINEMA) ||
-                isEvControlOpen
-        if (isAnyFloatingOverlayOpen) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        isQuickOptionsOpen = false
-                        viewModel.setVideoSettingsPanelOpen(false)
-                        viewModel.setLogProfileWindowOpen(false)
-                        viewModel.setLutWindowOpen(false)
-                        viewModel.setEvControlOpen(false)
-                    }
             )
         }
 

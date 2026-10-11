@@ -90,7 +90,7 @@ fun QuickOptionsFloatingPanel(
     onEvClick: () -> Unit = {},
     onSettingsClick: () -> Unit,
     onDismiss: () -> Unit,
-    accentColor: Color = Color(0xFFFFD54F),
+    accentColor: Color = Color(0xFFFF7A00),
     modifier: Modifier = Modifier
 ) {
     val resLabel = when {
@@ -123,6 +123,10 @@ fun QuickOptionsFloatingPanel(
                 modifier = Modifier
                     .widthIn(max = 420.dp)
                     .fillMaxWidth()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { /* Consumes clicks on card body to avoid backdrop barrier dismiss conflicts */ }
                     .testTag("quick_options_floating_panel"),
                 shape = FloatingSelectorDefaults.CardShape
             ) {
@@ -144,7 +148,7 @@ fun QuickOptionsFloatingPanel(
                                     label = "Dolly Zoom",
                                     statusText = if (isDollyZoomActive) "ON" else "OFF",
                                     isActive = isDollyZoomActive,
-                                    activeColor = Color(0xFF00E5FF),
+                                    activeColor = accentColor,
                                     onClick = onToggleDollyZoom,
                                     testTag = "panel_dolly_zoom_button",
                                     modifier = Modifier.weight(1f)
@@ -504,7 +508,7 @@ fun QuickOptionCircleButton(
     label: String,
     statusText: String,
     isActive: Boolean,
-    activeColor: Color = Color(0xFFFFD54F),
+    activeColor: Color = Color(0xFFFF7A00),
     onClick: () -> Unit,
     testTag: String,
     modifier: Modifier = Modifier

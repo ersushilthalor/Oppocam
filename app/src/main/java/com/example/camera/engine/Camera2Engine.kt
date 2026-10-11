@@ -1548,6 +1548,7 @@ class Camera2Engine(private val context: Context) {
     var viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL
     var selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL
     private val cinemaSoftwareRecorder by lazy { CinemaSoftwareRecordingEngine(context) }
+    private val normalVideoRecorder by lazy { NormalVideoRecordingEngine(context) }
     private var isSoftwareCinemaRecording: Boolean = false
     private var recordingCinemaConfig: CinemaConfig? = null
 
@@ -7077,6 +7078,10 @@ class Camera2Engine(private val context: Context) {
         } catch (ignored: Throwable) {}
 
         try {
+            normalVideoRecorder.stopRecording()
+        } catch (ignored: Throwable) {}
+
+        try {
             mediaRecorder?.reset()
             mediaRecorder?.release()
         } catch (ignored: Throwable) {}
@@ -7460,19 +7465,6 @@ class Camera2Engine(private val context: Context) {
                     encoderRotation = encoderRotation
                 )
             } else {
-                @Suppress("DEPRECATION")
-                val mr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    MediaRecorder(context)
-                } else {
-                    MediaRecorder()
-                }
-                mediaRecorder = mr
-
-                mr.setOnErrorListener { _, what, extra ->
-                    Log.e(TAG, "MediaRecorder runtime error: what=$what extra=$extra")
-                    onError("Hardware recording error (code=$what, extra=$extra)")
-                }
-
                 val validatedConfig = DeviceCompatibilityManager.getValidatedVideoConfig(
                     requestedWidth = finalRecordWidth,
                     requestedHeight = finalRecordHeight,
@@ -7481,251 +7473,49 @@ class Camera2Engine(private val context: Context) {
                     preferHevc = (cinemaCodec == CinemaCodec.H265),
                     prefer10Bit = is10BitRequested
                 )
-
-                var activeGeometry: PreparedVideoGeometry? = null
-
-                fun configureAndPrepare(
-                    encoder: Int,
-                    width: Int,
-                    height: Int,
-                    fps: Int,
-                    rate: Int,
-                    withAudio: Boolean,
-                    is10Bit: Boolean,
-                    orientationHint: Int,
-                    encoderRot: Int
-                ): Boolean {
-                    return try {
-                        mr.reset()
-                        var audioConfigured = false
-                        if (withAudio) {
-                            try {
-                                mr.setAudioSource(MediaRecorder.AudioSource.MIC)
-                                audioConfigured = true
-                            } catch (t: Throwable) {
-                                Log.w(TAG, "AudioSource.MIC not available: ${t.message}")
-                                audioConfigured = false
-                            }
-                        }
-
-                        mr.setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                        mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-
-                        try {
-                            videoRecordingFileDescriptor?.close()
-                        } catch (ignored: Throwable) {}
-
-                        try {
-                            if (tempFile.exists()) tempFile.delete()
-                            tempFile.createNewFile()
-                        } catch (ignored: Throwable) {}
-
-                        val pfd = ParcelFileDescriptor.open(
-                            tempFile,
-                            ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE
-                        )
-                        videoRecordingFileDescriptor = pfd
-                        mr.setOutputFile(pfd.fileDescriptor)
-
-                        mr.setVideoEncodingBitRate(rate)
-                        mr.setVideoFrameRate(fps)
-                        mr.setVideoSize(width, height)
-                        mr.setVideoEncoder(encoder)
-
-                        if (is10Bit && encoder == MediaRecorder.VideoEncoder.HEVC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            try {
-                                mr.setVideoEncodingProfileLevel(
-                                    MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
-                                    MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel51
-                                )
-                            } catch (e: Exception) {
-                                try {
-                                    mr.setVideoEncodingProfileLevel(
-                                        MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
-                                        MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel41
-                                    )
-                                } catch (ignored: Exception) {}
-                            }
-                        }
-
-                        if (audioConfigured) {
-                            try {
-                                mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                                mr.setAudioSamplingRate(48000)
-                                mr.setAudioEncodingBitRate(192000)
-                            } catch (t: Throwable) {
-                                Log.w(TAG, "AudioEncoder.AAC configuration warning: ${t.message}")
-                            }
-                        }
-
-                        mr.setOrientationHint(orientationHint)
-                        mr.prepare()
-                        activeGeometry = PreparedVideoGeometry(
-                            width = width,
-                            height = height,
-                            fps = fps,
-                            orientationHint = orientationHint,
-                            encoderRotation = encoderRot
-                        )
-                        true
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "MediaRecorder prepare failed (enc=$encoder, ${width}x${height}, audio=$withAudio): ${t.message}")
-                        false
-                    }
+                val targetCodec = if (validatedConfig.encoder == MediaRecorder.VideoEncoder.HEVC) CinemaCodec.H265 else CinemaCodec.H264
+                val activeOrientHint = if (isPortraitRecording) {
+                    if (currentRot == 180) 180 else 0
+                } else {
+                    encoderRotation
                 }
 
-                fun tryTier(
-                    encoder: Int,
-                    targetW: Int,
-                    targetH: Int,
-                    fps: Int,
-                    rate: Int,
-                    withAudio: Boolean,
-                    is10Bit: Boolean
-                ): Boolean {
-                    val reqW = if (isPortraitRecording) minOf(targetW, targetH) else maxOf(targetW, targetH)
-                    val reqH = if (isPortraitRecording) maxOf(targetW, targetH) else minOf(targetW, targetH)
-
-                    // 1. Physically correct upright dimensions (2160x3840 in portrait 9:16, 3840x2160 in landscape 16:9)
-                    // with orientationHint = 0 to avoid conflicting orientationHint + MediaStore rotation metadata.
-                    if (configureAndPrepare(
-                            encoder = encoder,
-                            width = reqW,
-                            height = reqH,
-                            fps = fps,
-                            rate = rate,
-                            withAudio = withAudio,
-                            is10Bit = is10Bit,
-                            orientationHint = 0,
-                            encoderRot = 0
-                        )
-                    ) return true
-
-                    // Fallback without audio
-                    if (withAudio) {
-                        if (configureAndPrepare(
-                                encoder = encoder,
-                                width = reqW,
-                                height = reqH,
-                                fps = fps,
-                                rate = rate,
-                                withAudio = false,
-                                is10Bit = is10Bit,
-                                orientationHint = 0,
-                                encoderRot = 0
-                            )
-                        ) return true
-                    }
-
-                    // Fallback tier: If hardware encoder strictly demands landscape dimensions (maxD x minD)
-                    val maxD = maxOf(targetW, targetH)
-                    val minD = minOf(targetW, targetH)
-                    val fallbackOrientHint = getVideoOrientationHint()
-                    if (configureAndPrepare(
-                            encoder = encoder,
-                            width = maxD,
-                            height = minD,
-                            fps = fps,
-                            rate = rate,
-                            withAudio = withAudio,
-                            is10Bit = is10Bit,
-                            orientationHint = fallbackOrientHint,
-                            encoderRot = 0
-                        )
-                    ) return true
-
-                    if (withAudio) {
-                        if (configureAndPrepare(
-                                encoder = encoder,
-                                width = maxD,
-                                height = minD,
-                                fps = fps,
-                                rate = rate,
-                                withAudio = false,
-                                is10Bit = is10Bit,
-                                orientationHint = fallbackOrientHint,
-                                encoderRot = 0
-                            )
-                        ) return true
-                    }
-                    return false
+                val sensorOrient = try {
+                    chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isFront) 270 else 90)
+                } catch (_: Exception) {
+                    if (isFront) 270 else 90
                 }
 
-                // Tier 1: Validated optimal configuration
-                var prepared = tryTier(
-                    encoder = validatedConfig.encoder,
-                    targetW = validatedConfig.width,
-                    targetH = validatedConfig.height,
-                    fps = validatedConfig.fps,
-                    rate = validatedConfig.bitrate,
-                    withAudio = isAudioEnabled,
-                    is10Bit = validatedConfig.is10Bit
-                )
-
-                // Tier 2: If failed and 10-bit was attempted, downgrade to 8-bit
-                if (!prepared && validatedConfig.is10Bit) {
-                    Log.i(TAG, "Tier 2: Downgrading 10-bit to 8-bit standard encoder")
-                    prepared = tryTier(
-                        encoder = validatedConfig.encoder,
-                        targetW = validatedConfig.width,
-                        targetH = validatedConfig.height,
+                recorderSurface = try {
+                    normalVideoRecorder.startRecording(
+                        destFile = tempFile,
+                        width = finalRecordWidth,
+                        height = finalRecordHeight,
                         fps = validatedConfig.fps,
-                        rate = minOf(validatedConfig.bitrate, 40_000_000),
-                        withAudio = isAudioEnabled,
-                        is10Bit = false
+                        bitrate = validatedConfig.bitrate,
+                        codec = targetCodec,
+                        isAudioEnabled = isAudioEnabled,
+                        orientationHint = activeOrientHint,
+                        isFront = isFront,
+                        sensorOrientation = sensorOrient,
+                        deviceRotation = currentRot
                     )
-                }
-
-                // Tier 3: Fallback to universal H.264
-                if (!prepared && validatedConfig.encoder != MediaRecorder.VideoEncoder.H264) {
-                    Log.i(TAG, "Tier 3: Fallback to universal H.264 encoder")
-                    prepared = tryTier(
-                        encoder = MediaRecorder.VideoEncoder.H264,
-                        targetW = validatedConfig.width,
-                        targetH = validatedConfig.height,
-                        fps = minOf(validatedConfig.fps, 30),
-                        rate = minOf(validatedConfig.bitrate, 30_000_000),
-                        withAudio = isAudioEnabled,
-                        is10Bit = false
-                    )
-                }
-
-                // Tier 4: Fallback to universal H.264 without audio (fixes MIC permission or busy audio HAL)
-                if (!prepared && isAudioEnabled) {
-                    Log.i(TAG, "Tier 4: Fallback to H.264 video-only (bypassing audio hardware)")
-                    prepared = tryTier(
-                        encoder = MediaRecorder.VideoEncoder.H264,
-                        targetW = minOf(validatedConfig.width, 1920),
-                        targetH = minOf(validatedConfig.height, 1080),
-                        fps = 30,
-                        rate = 20_000_000,
-                        withAudio = false,
-                        is10Bit = false
-                    )
-                }
-
-                // Tier 5: Absolute failsafe: standard 720p 30fps H.264
-                if (!prepared) {
-                    Log.i(TAG, "Tier 5: Universal 720p 30fps safe recording profile")
-                    prepared = tryTier(
-                        encoder = MediaRecorder.VideoEncoder.H264,
-                        targetW = 1280,
-                        targetH = 720,
-                        fps = 30,
-                        rate = 12_000_000,
-                        withAudio = false,
-                        is10Bit = false
-                    )
-                }
-
-                val preparedGeom = activeGeometry
-                if (!prepared || preparedGeom == null) {
-                    onError("Unable to initialize video recorder on this device")
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Failed starting normal video recording: ${t.message}", t)
+                    isStartingRecording.set(false)
+                    _isRecordingVideo.value = false
+                    try { tempFile.delete() } catch (_: Exception) {}
+                    onError("Failed starting video recording: ${t.localizedMessage ?: t.message}")
                     return
                 }
 
-                preparedVideoGeometry = preparedGeom
-                recorderSurface = mr.surface
+                preparedVideoGeometry = PreparedVideoGeometry(
+                    width = finalRecordWidth,
+                    height = finalRecordHeight,
+                    fps = targetFps,
+                    orientationHint = activeOrientHint,
+                    encoderRotation = encoderRotation
+                )
             }
                 val is10BitSession = is10BitRequested || (isSoftwareCinema && cinemaCodec == CinemaCodec.PRORES && has10BitDynamicRange)
                 val targetDynamicProfile: Long? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && is10BitSession) {
@@ -8332,14 +8122,8 @@ class Camera2Engine(private val context: Context) {
 
         if (isSoftwareCinemaRecording) {
             cinemaSoftwareRecorder.pause()
-        } else if (mediaRecorder != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                try {
-                    mediaRecorder?.pause()
-                } catch (e: Exception) {
-                    Log.w(TAG, "mediaRecorder.pause() failed: ${e.message}", e)
-                }
-            }
+        } else {
+            normalVideoRecorder.pause()
         }
 
         if (_isHorizonLockEnabled.value) {
@@ -8361,14 +8145,8 @@ class Camera2Engine(private val context: Context) {
 
         if (isSoftwareCinemaRecording) {
             cinemaSoftwareRecorder.resume()
-        } else if (mediaRecorder != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                try {
-                    mediaRecorder?.resume()
-                } catch (e: Exception) {
-                    Log.w(TAG, "mediaRecorder.resume() failed: ${e.message}", e)
-                }
-            }
+        } else {
+            normalVideoRecorder.resume()
         }
 
         if (_isHorizonLockEnabled.value) {
@@ -8502,18 +8280,20 @@ class Camera2Engine(private val context: Context) {
                     }
                     else -> {
                         activeMediaRecorder?.apply {
-                            try {
-                                stop()
-                            } catch (e: Exception) {
-                                Log.w(TAG, "MediaRecorder stop failed: ${e.message}", e)
-                            }
-                            try { reset() } catch (ignored: Throwable) {}
-                            try { release() } catch (ignored: Throwable) {}
+                            try { stop() } catch (_: Throwable) {}
+                            try { reset() } catch (_: Throwable) {}
+                            try { release() } catch (_: Throwable) {}
                         }
-                        try { activePfd?.fileDescriptor?.sync() } catch (ignored: Throwable) {}
-                        try { activePfd?.close() } catch (ignored: Throwable) {}
+                        try { activePfd?.fileDescriptor?.sync() } catch (_: Throwable) {}
+                        try { activePfd?.close() } catch (_: Throwable) {}
+                        val f = try {
+                            normalVideoRecorder.stopRecording()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error stopping normal video recorder", e)
+                            null
+                        }
                         restorePreviewSessionImmediate()
-                        tempFile
+                        f ?: tempFile
                     }
                 }
 

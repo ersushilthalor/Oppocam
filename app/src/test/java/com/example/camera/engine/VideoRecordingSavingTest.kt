@@ -114,4 +114,33 @@ class VideoRecordingSavingTest {
         assertEquals(1920, contentValues.getAsInteger(MediaStore.Video.Media.WIDTH))
         assertEquals(1080, contentValues.getAsInteger(MediaStore.Video.Media.HEIGHT))
     }
+
+    @Test
+    fun testNormalVideoRecordingEngineStartStop() {
+        val engine = NormalVideoRecordingEngine(context)
+        val testFile = File(context.cacheDir, "test_normal_rec_${System.currentTimeMillis()}.mp4")
+
+        val surface = engine.startRecording(
+            destFile = testFile,
+            width = 1920,
+            height = 1080,
+            fps = 30,
+            bitrate = 20_000_000,
+            codec = com.example.camera.model.CinemaCodec.H264,
+            isAudioEnabled = false
+        )
+
+        assertNotNull("Recorder surface must be non-null", surface)
+        assertTrue("Recording must be active", engine.isRecordingActive())
+
+        engine.pause()
+        engine.resume()
+
+        val saved = engine.stopRecording()
+        assertNotNull("Recorded file should be returned", saved)
+        assertTrue("File should exist", saved!!.exists())
+        assertTrue("File size must be greater than 32 bytes for valid MP4", saved.length() >= 32L)
+
+        saved.delete()
+    }
 }
