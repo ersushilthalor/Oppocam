@@ -158,6 +158,7 @@ fun CinemaAssistOverlays(
             com.example.camera.model.CinemaColorProfile.S_LOG,
             com.example.camera.model.CinemaColorProfile.N_LOG,
             com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
+            com.example.camera.model.CinemaColorProfile.D_LOG_2,
             com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
         ) || cinemaConfig.isLogMode
 

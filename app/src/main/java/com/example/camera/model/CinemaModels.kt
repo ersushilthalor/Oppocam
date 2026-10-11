@@ -72,6 +72,7 @@ enum class CinemaColorProfile(
     HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10"),
     HLG_2("HLG 2", "Enhanced Hybrid Log-Gamma with natural contrast, deep tonal depth, and balanced Rec.709 color rendering", "HLG 2"),
     APPLE_LOG_2("Apple Log 2", "Apple Log 2 wide-gamut log transfer curve with extended highlight latitude and parabolic shadow retention", "Apple Log 2"),
+    D_LOG_2("D-Log 2", "DJI D-Log 2 wide dynamic range logarithmic transfer curve with balanced exposure, preserved highlight/shadow latitude, neutral colorimetry, and flat grading profile", "D-Log 2"),
     SAMSUNG_APV_LOG("Samsung APV Log", "Samsung Advanced Professional Video (APV) Log profile with high-efficiency mastering curve, wide dynamic range, and clean shadow-to-highlight roll-off", "Samsung APV Log"),
     PROCESSED_JPEG("Processed JPEG", "Smartphone JPEG photo technical transform with natural contrast and saturation", "Processed JPEG")
 }
@@ -224,6 +225,7 @@ data class CinemaHardwareCapabilities(
         CinemaColorProfile.HLG10,
         CinemaColorProfile.HLG_2,
         CinemaColorProfile.APPLE_LOG_2,
+        CinemaColorProfile.D_LOG_2,
         CinemaColorProfile.SAMSUNG_APV_LOG,
         CinemaColorProfile.PROCESSED_JPEG
     )

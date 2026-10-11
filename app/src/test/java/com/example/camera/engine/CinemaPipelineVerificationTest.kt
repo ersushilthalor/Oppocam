@@ -1879,5 +1879,55 @@ class CinemaPipelineVerificationTest {
         manager.onBlurStrengthChanged(35.0f)
         assertEquals(initialTick + 2, manager.frameTickState.longValue)
     }
+
+    @Test
+    fun testDLog2ProfileCharacteristics() {
+        val dlogConfig = CinemaConfig(
+            colorProfile = CinemaColorProfile.D_LOG_2,
+            selectedLut = CinematicLut.OFF
+        )
+        // 1. Independent profile with active transform
+        assertTrue(CinemaColorPipeline.hasActiveTransform(dlogConfig, includeCreativeLut = false))
+
+        // 2. Technical transform produces neutral color balance with zero green/red cast
+        val cstMat = CinemaColorPipeline.computeCinemaColorMatrix(dlogConfig, includeCreativeLut = false, forGpuShader = true)
+        assertNotNull(cstMat)
+        val arr = cstMat!!.array
+        // Red, Green, Blue channel diagonal gains must be identical for color neutral balance
+        assertEquals("Red and Green diagonal gain must be equal", arr[0], arr[6], 0.001f)
+        assertEquals("Green and Blue diagonal gain must be equal", arr[6], arr[12], 0.001f)
+        // Pedestal offsets must be equal across R, G, B channels (no color tint)
+        assertEquals("Red and Green offset must be equal", arr[4], arr[9], 0.001f)
+        assertEquals("Green and Blue offset must be equal", arr[9], arr[14], 0.001f)
+
+        // 3. Flat log evaluation preserves dynamic range
+        val midOut = CinemaColorPipeline.evaluatePixel(0.392f, 0.392f, 0.392f, dlogConfig)
+        for (v in midOut) {
+            assertTrue("D-Log 2 mid-gray output must be bounded, got $v", v in 0.25f..0.60f)
+        }
+    }
+
+    @Test
+    fun testLutLivePreviewActiveInProVideoMode() {
+        // LUT preview with BLOCKBUSTER at 80% intensity
+        val configWithLut = CinemaConfig(
+            colorProfile = CinemaColorProfile.D_LOG_2,
+            selectedLut = CinematicLut.BLOCKBUSTER,
+            lutIntensity = 0.80f,
+            isLutPreviewEnabled = true
+        )
+        assertTrue("CinemaColorPipeline must recognize active LUT transform", 
+            CinemaColorPipeline.hasActiveTransform(configWithLut, includeCreativeLut = true))
+        assertTrue("Selective shader must be required when LUT is active", 
+            CinemaColorPipeline.requiresSelectiveShader(configWithLut, includeCreativeLut = true))
+
+        // Verify fallback matrix correctly blends intensity
+        val fullMat = CinemaColorPipeline.computeCinemaColorMatrix(configWithLut.copy(lutIntensity = 1.0f), includeCreativeLut = true, forGpuShader = false)
+        val halfMat = CinemaColorPipeline.computeCinemaColorMatrix(configWithLut.copy(lutIntensity = 0.5f), includeCreativeLut = true, forGpuShader = false)
+        assertNotNull(fullMat)
+        assertNotNull(halfMat)
+        assertFalse("Full intensity matrix must differ from half intensity matrix", 
+            fullMat!!.array.contentEquals(halfMat!!.array))
+    }
 }
 

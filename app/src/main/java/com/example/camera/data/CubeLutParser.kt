@@ -115,6 +115,7 @@ data class ParsedCubeLut(
         }
 
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        bitmap.density = android.graphics.Bitmap.DENSITY_NONE
         cachedStripBitmap = bitmap
         return bitmap
     }
@@ -559,6 +560,7 @@ object CubeLutParser {
             }
         }
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        bitmap.density = android.graphics.Bitmap.DENSITY_NONE
         presetStripCache[lut.id] = bitmap
         return bitmap
     }

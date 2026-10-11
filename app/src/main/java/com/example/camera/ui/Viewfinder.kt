@@ -701,17 +701,9 @@ fun Viewfinder(
                     )
                 }
 
-                // Clean Cinematic LUT Active Badge (Omitted when LOG profile is selected)
-                val isLogProfile = cinemaConfig?.let {
-                    it.colorProfile in listOf(
-                        com.example.camera.model.CinemaColorProfile.S_LOG,
-                        com.example.camera.model.CinemaColorProfile.N_LOG,
-                        com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
-                        com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
-                    ) || it.isLogMode
-                } ?: false
+                // Clean Cinematic LUT Active Badge
                 val badgeLut = activeLut ?: cinemaConfig?.selectedLut
-                if (cameraMode == CameraMode.CINEMA && badgeLut != null && !badgeLut.isOff && !isLogProfile) {
+                if (cameraMode == CameraMode.CINEMA && badgeLut != null && !badgeLut.isOff && cinemaConfig?.isLutPreviewEnabled != false) {
                     val displayLabel = if (badgeLut == CinematicLut.CUSTOM) {
                         cinemaConfig?.customLutName ?: badgeLut.label
                     } else {
@@ -1239,23 +1231,21 @@ private fun applyTextureViewOutlineAndEffects(
     }
 
     if (cameraMode == CameraMode.CINEMA && cinemaConfig != null) {
-        val isLogSelected = cinemaConfig.colorProfile in listOf(
-            com.example.camera.model.CinemaColorProfile.S_LOG,
-            com.example.camera.model.CinemaColorProfile.N_LOG,
-            com.example.camera.model.CinemaColorProfile.APPLE_LOG_2,
-            com.example.camera.model.CinemaColorProfile.SAMSUNG_APV_LOG
-        ) || cinemaConfig.isLogMode
-        val effectiveConfig = if (isLogSelected) {
-            cinemaConfig.copy(selectedLut = CinematicLut.NONE)
-        } else if (activeLut != null && activeLut != cinemaConfig.selectedLut) {
-            cinemaConfig.copy(selectedLut = activeLut)
+        val effectiveLut = if (cinemaConfig.isLutPreviewEnabled) {
+            activeLut ?: cinemaConfig.selectedLut
+        } else {
+            CinematicLut.OFF
+        }
+        val effectiveConfig = if (effectiveLut != cinemaConfig.selectedLut) {
+            cinemaConfig.copy(selectedLut = effectiveLut)
         } else {
             cinemaConfig
         }
+        val shouldIncludeLut = cinemaConfig.isLutPreviewEnabled && !effectiveLut.isOff
         com.example.camera.engine.CinemaColorPipeline.applyToView(
             view = textureView,
             config = effectiveConfig,
-            includeCreativeLut = !isLogSelected
+            includeCreativeLut = shouldIncludeLut
         )
     } else if (cameraMode == CameraMode.VIDEO && videoAdjustments != null) {
         if (isGpuRelayPreviewActive) {

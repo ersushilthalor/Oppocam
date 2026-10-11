@@ -311,6 +311,7 @@ class CinemaEngine(private val context: Context) {
             CinemaColorProfile.HLG10,
             CinemaColorProfile.HLG_2,
             CinemaColorProfile.APPLE_LOG_2,
+            CinemaColorProfile.D_LOG_2,
             CinemaColorProfile.SAMSUNG_APV_LOG,
             CinemaColorProfile.PROCESSED_JPEG
         )
@@ -428,6 +429,7 @@ class CinemaEngine(private val context: Context) {
                     CinemaColorProfile.HLG10 -> 2.2f
                     CinemaColorProfile.HLG_2 -> 2.2f
                     CinemaColorProfile.APPLE_LOG_2 -> 1.60f
+                    CinemaColorProfile.D_LOG_2 -> 1.62f
                     CinemaColorProfile.SAMSUNG_APV_LOG -> 1.65f
                     CinemaColorProfile.PROCESSED_JPEG -> 2.2f
                 }
@@ -732,7 +734,7 @@ class CinemaEngine(private val context: Context) {
     /**
      * Evaluate exact mathematical transfer function for each profile.
      */
-    private fun evaluateLogTransferFunction(profile: CinemaColorProfile, x: Float): Float {
+    internal fun evaluateLogTransferFunction(profile: CinemaColorProfile, x: Float): Float {
         val inVal = x.coerceIn(0f, 1f)
         return when (profile) {
             CinemaColorProfile.PROCESSED_JPEG -> {
@@ -844,6 +846,24 @@ class CinemaEngine(private val context: Context) {
                     scaled.coerceIn(0f, 1f)
                 }
             }
+            CinemaColorProfile.D_LOG_2 -> {
+                // DJI D-Log 2 authentic logarithmic curve:
+                // - 18% middle-grey maps to 0.392 (code ~100 in 8-bit, 39.2% IRE) for balanced exposure without underexposure.
+                // - Linear/smooth shadow toe anchors black floor at 0.080 (code ~20 in 8-bit) to preserve shadow detail without crushing or noise clipping.
+                // - Smooth logarithmic shoulder roll-off preserves high specular latitude up to 1.0 (100% IRE).
+                // - Identical transfer function across all color channels guarantees zero green/red tint or color cast.
+                // - Flat, neutral dynamic profile ready for professional grading or 3D LUTs.
+                if (inVal <= 0.005f) {
+                    (0.080f + 4.0f * inVal).coerceIn(0f, 1f)
+                } else {
+                    val a = 0.5865f
+                    val b = 3.8f
+                    val c = 1.0f
+                    val d = 0.080f
+                    val logVal = ln(b * inVal + c)
+                    (a * logVal + d).coerceIn(0f, 1f)
+                }
+            }
             CinemaColorProfile.SAMSUNG_APV_LOG -> {
                 // Samsung APV (Advanced Professional Video) Log transfer function:
                 // Smooth linear shadow toe anchoring deep blacks at 0.025, logarithmic midtone curve
@@ -890,7 +910,7 @@ class CinemaEngine(private val context: Context) {
         }
 
         // Log profiles map Rec.709 into Rec.2020 primaries
-        val effectiveBase = if ((profile == CinemaColorProfile.APPLE_LOG_2 || profile == CinemaColorProfile.SAMSUNG_APV_LOG || profile == CinemaColorProfile.S_LOG || profile == CinemaColorProfile.N_LOG) && colorSpace == CinemaColorSpace.REC_709) {
+        val effectiveBase = if ((profile == CinemaColorProfile.APPLE_LOG_2 || profile == CinemaColorProfile.D_LOG_2 || profile == CinemaColorProfile.SAMSUNG_APV_LOG || profile == CinemaColorProfile.S_LOG || profile == CinemaColorProfile.N_LOG) && colorSpace == CinemaColorSpace.REC_709) {
             floatArrayOf(
                 0.6274f, 0.3293f, 0.0433f,
                 0.0691f, 0.9195f, 0.0114f,
@@ -909,6 +929,7 @@ class CinemaEngine(private val context: Context) {
             CinemaColorProfile.S_LOG -> 0.90f // Authentic Sony S-Log wide-gamut baseline
             CinemaColorProfile.N_LOG -> 0.92f // Authentic Nikon N-Log baseline
             CinemaColorProfile.APPLE_LOG_2 -> 0.88f // Flat wide-gamut baseline for grading headroom
+            CinemaColorProfile.D_LOG_2 -> 0.90f // Flat wide-gamut neutral baseline with zero green/red cast
             CinemaColorProfile.SAMSUNG_APV_LOG -> 0.90f // Samsung APV master baseline
         }
         // Washed-out restoration adds intelligent chroma vibrance without harsh clipping

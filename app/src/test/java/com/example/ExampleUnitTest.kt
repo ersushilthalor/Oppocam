@@ -85,7 +85,7 @@ class ExampleUnitTest {
 
     @Test
     fun testCinemaColorProfilesExactSet() {
-        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "S_LOG", "N_LOG", "HLG10", "HLG_2", "APPLE_LOG_2", "SAMSUNG_APV_LOG")
+        val expectedProfiles = setOf("PROCESSED_JPEG", "NATIVE", "S_LOG", "N_LOG", "HLG10", "HLG_2", "APPLE_LOG_2", "D_LOG_2", "SAMSUNG_APV_LOG")
         val actualProfiles = com.example.camera.model.CinemaColorProfile.entries.map { it.name }.toSet()
         assertEquals(expectedProfiles, actualProfiles)
         assertFalse("FLAT_LOG must be completely removed", actualProfiles.contains("FLAT_LOG"))
@@ -95,6 +95,34 @@ class ExampleUnitTest {
         assertTrue("N_LOG must exist", actualProfiles.contains("N_LOG"))
         assertTrue("HLG10 must exist", actualProfiles.contains("HLG10"))
         assertTrue("HLG_2 must exist", actualProfiles.contains("HLG_2"))
+        assertTrue("D_LOG_2 must exist", actualProfiles.contains("D_LOG_2"))
+    }
+
+    @Test
+    fun testDLog2TransferFunctionAndBalance() {
+        val engine = com.example.camera.engine.CinemaEngine(androidx.test.core.app.ApplicationProvider.getApplicationContext())
+        
+        // 1. Shadow black floor preservation (pedestal around 0.08 to prevent shadow clipping)
+        val blackFloor = engine.evaluateLogTransferFunction(com.example.camera.model.CinemaColorProfile.D_LOG_2, 0.0f)
+        assertEquals(0.080f, blackFloor, 0.005f)
+
+        // 2. Middle-gray 18% reference maps to balanced log exposure (~0.39) preventing underexposure
+        val midGray = engine.evaluateLogTransferFunction(com.example.camera.model.CinemaColorProfile.D_LOG_2, 0.18f)
+        assertTrue("D-Log 2 middle gray should map to ~0.39 for balanced exposure, was $midGray", midGray in 0.38f..0.41f)
+
+        // 3. Highlight retention: 100% white retains full scale up to 1.0 without clipping
+        val peakVal = engine.evaluateLogTransferFunction(com.example.camera.model.CinemaColorProfile.D_LOG_2, 1.0f)
+        assertEquals(1.0f, peakVal, 0.001f)
+
+        // 4. Smooth monotonic curvature across dynamic range
+        val shadowVal = engine.evaluateLogTransferFunction(com.example.camera.model.CinemaColorProfile.D_LOG_2, 0.05f)
+        val midVal = engine.evaluateLogTransferFunction(com.example.camera.model.CinemaColorProfile.D_LOG_2, 0.50f)
+        val highVal = engine.evaluateLogTransferFunction(com.example.camera.model.CinemaColorProfile.D_LOG_2, 0.85f)
+        assertTrue(blackFloor < shadowVal)
+        assertTrue(shadowVal < midGray)
+        assertTrue(midGray < midVal)
+        assertTrue(midVal < highVal)
+        assertTrue(highVal < peakVal)
     }
 
     @Test

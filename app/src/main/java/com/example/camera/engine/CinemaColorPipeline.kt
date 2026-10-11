@@ -63,6 +63,7 @@ object CinemaColorPipeline {
             }
         }
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        bitmap.density = android.graphics.Bitmap.DENSITY_NONE
         bitmap
     }
 
@@ -319,6 +320,23 @@ object CinemaColorPipeline {
                 chroma.setSaturation(1.12f)
                 mat.postConcat(chroma)
                 mat
+            }
+
+            CinemaColorProfile.D_LOG_2 -> {
+                // DJI D-Log 2 Technical Transform:
+                // Purely neutral color balance with zero green/red color cast across the entire tonal range.
+                // Anchors lifted black floor (-14f pedestal offset) and normalizes middle-grey 0.392 (pivot 100f) with 1.16x midtone expansion.
+                // Perfectly balanced R, G, B diagonal matrix ensures identical channel response without color tinting.
+                val c = 1.16f
+                val pivot = 100f
+                val pedestalOffset = -14f
+                val t = (1.0f - c) * pivot + pedestalOffset
+                ColorMatrix(floatArrayOf(
+                    c, 0f, 0f, 0f, t,
+                    0f, c, 0f, 0f, t,
+                    0f, 0f, c, 0f, t,
+                    0f, 0f, 0f, 1f, 0f
+                ))
             }
 
             CinemaColorProfile.HLG10 -> {
