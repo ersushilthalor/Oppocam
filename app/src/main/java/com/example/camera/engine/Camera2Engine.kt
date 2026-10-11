@@ -125,6 +125,14 @@ class Camera2Engine(private val context: Context) {
             preferences.motionPhotoDuration = value
         }
 
+    var antiBandingMode: String = preferences.antiBanding
+        get() = preferences.antiBanding
+        set(value) {
+            field = value
+            preferences.antiBanding = value
+            updatePreviewSettings()
+        }
+
     fun onPreviewBitmapFrame(bitmap: Bitmap) {
         val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
         motionPhotoEngine.onPreviewFrame(
@@ -5141,6 +5149,25 @@ class Camera2Engine(private val context: Context) {
 
         // White Balance
         builder.set(CaptureRequest.CONTROL_AWB_MODE, whiteBalanceMode.camera2Mode)
+
+        // Anti-Banding Filter: Auto, 50Hz, 60Hz, Off
+        try {
+            val abTarget = when (antiBandingMode.uppercase()) {
+                "50HZ", "50_HZ" -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_50HZ
+                "60HZ", "60_HZ" -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_60HZ
+                "OFF" -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_OFF
+                else -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO
+            }
+            val activeId = activeLens?.cameraId ?: activeLens?.id
+            val supportedAntiBanding = activeId?.let { getCharacteristics(it)?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES) }
+            if (supportedAntiBanding == null || supportedAntiBanding.contains(abTarget)) {
+                builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, abTarget)
+            } else if (supportedAntiBanding.contains(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)) {
+                builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed applying anti-banding setting ($antiBandingMode): ${t.message}")
+        }
 
         // Focus (safely verifying camera capabilities, e.g. fixed-focus front cameras)
         when (focusMode) {

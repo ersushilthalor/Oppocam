@@ -563,7 +563,18 @@ class CinemaEngine(private val context: Context) {
         builder.set(CaptureRequest.CONTROL_AWB_MODE, config.whiteBalance.camera2Mode)
 
         // 6. Anti-Banding to prevent 50/60Hz flickering under artificial indoor lighting
-        builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+        val antiBandingMode = try {
+            com.example.camera.data.CameraPreferences(context).antiBanding
+        } catch (_: Throwable) {
+            "AUTO"
+        }
+        val targetAbMode = when (antiBandingMode.uppercase()) {
+            "50HZ", "50_HZ" -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_50HZ
+            "60HZ", "60_HZ" -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_60HZ
+            "OFF" -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_OFF
+            else -> CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO
+        }
+        builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, targetAbMode)
 
         // 7. Cinema Target FPS Range (matches chosen frame rate without sensor shutter starvation)
         val targetFps = config.videoFps

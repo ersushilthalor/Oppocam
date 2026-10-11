@@ -130,6 +130,9 @@ fun Viewfinder(
     dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
     onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
     stabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
+    doubleTapAction: String = "FLIP",
+    onDoubleTapFlip: () -> Unit = {},
+    onDoubleTapLock: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -335,8 +338,14 @@ fun Viewfinder(
                             }
                         }
                     }
-                    .pointerInput(Unit) {
+                    .pointerInput(doubleTapAction) {
                         detectTapGestures(
+                            onDoubleTap = if (doubleTapAction != "NONE") { _ ->
+                                when (doubleTapAction) {
+                                    "FLIP", "FLIP_CAMERA" -> onDoubleTapFlip()
+                                    "LOCK" -> onDoubleTapLock()
+                                }
+                            } else null,
                             onTap = { offset ->
                                 val normX = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
                                 val normY = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)

@@ -247,6 +247,7 @@ fun CameraScreen(
 
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val isCameraReady by viewModel.engine.isCameraReady.collectAsStateWithLifecycle()
+    val doubleTapAction by viewModel.doubleTapAction.collectAsStateWithLifecycle()
 
     val isUsingRearMainLens = remember(selectedLens, currentZoom) {
         selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
@@ -407,6 +408,9 @@ fun CameraScreen(
                 },
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
                 stabilizationMode = videoStabilizationMode,
+                doubleTapAction = doubleTapAction,
+                onDoubleTapFlip = { viewModel.toggleCameraFacing() },
+                onDoubleTapLock = { viewModel.toggleAeAfLock() },
                 modifier = Modifier.fillMaxSize()
             )
 

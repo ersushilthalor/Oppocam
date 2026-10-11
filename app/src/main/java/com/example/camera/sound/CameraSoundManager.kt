@@ -1,9 +1,14 @@
 package com.example.camera.sound
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaActionSound
 import android.media.SoundPool
+import android.os.Build
 import android.os.Process
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -19,6 +24,13 @@ import kotlin.math.sin
  */
 object CameraSoundManager {
     private const val TAG = "CameraSoundManager"
+
+    @Volatile
+    private var currentFeedbackMode: String = "SOUND_AND_HAPTIC"
+
+    fun setFeedbackMode(mode: String) {
+        currentFeedbackMode = mode
+    }
 
     private var actionSound: MediaActionSound? = null
     private var burstSoundPool: SoundPool? = null
@@ -195,6 +207,9 @@ object CameraSoundManager {
     }
 
     fun playShutter() {
+        if (currentFeedbackMode == "HAPTIC_ONLY" || currentFeedbackMode == "MUTE") {
+            return
+        }
         try {
             audioExecutor.execute {
                 try {
@@ -205,6 +220,59 @@ object CameraSoundManager {
             }
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to schedule shutter sound: ${t.message}")
+        }
+    }
+
+    fun performHapticFeedback(context: Context) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                val vibrator = vibratorManager?.defaultVibrator
+                if (vibrator?.hasVibrator() == true) {
+                    try {
+                        vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
+                    } catch (_: Throwable) {
+                        vibrator.vibrate(VibrationEffect.createOneShot(35L, VibrationEffect.DEFAULT_AMPLITUDE))
+                    }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                if (vibrator?.hasVibrator() == true) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator.vibrate(VibrationEffect.createOneShot(35L, VibrationEffect.DEFAULT_AMPLITUDE))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator.vibrate(35L)
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed performing haptic feedback: ${t.message}")
+        }
+    }
+
+    fun performShutterFeedback(context: Context?, feedbackSetting: String? = null) {
+        val mode = feedbackSetting ?: currentFeedbackMode
+        val isSound = mode == "SOUND_AND_HAPTIC" || mode == "SOUND_HAPTIC" || mode == "SOUND_ONLY"
+        val isHaptic = mode == "SOUND_AND_HAPTIC" || mode == "SOUND_HAPTIC" || mode == "HAPTIC_ONLY"
+
+        if (isSound) {
+            try {
+                audioExecutor.execute {
+                    try {
+                        actionSound?.play(MediaActionSound.SHUTTER_CLICK)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Failed to play shutter sound: ${t.message}")
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to schedule shutter sound: ${t.message}")
+            }
+        }
+
+        if (isHaptic && context != null) {
+            performHapticFeedback(context)
         }
     }
 

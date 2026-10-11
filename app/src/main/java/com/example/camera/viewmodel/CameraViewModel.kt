@@ -22,6 +22,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.SystemClock
+import android.view.KeyEvent
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.absoluteValue
 
@@ -389,7 +392,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun onFastShutterHoldStart() {
         if (_cameraMode.value != CameraMode.PHOTO) return
-        com.example.camera.sound.CameraSoundManager.playShutter()
+        com.example.camera.sound.CameraSoundManager.performShutterFeedback(
+            getApplication<Application>().applicationContext,
+            _shutterFeedback.value
+        )
         engine.startUltraFastContinuousCapture(
             fps = _ultraFastShutterFps.value,
             onComplete = { coverUri ->
@@ -1019,6 +1025,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
         engine.zoomTransitionController.holdAtOneXDurationMs = preferences.lensSwitchHoldDurationMs
         engine.setLensSwitchPointMm(preferences.lensSwitchPointMm)
+        engine.antiBandingMode = preferences.antiBanding
+        com.example.camera.sound.CameraSoundManager.setFeedbackMode(preferences.shutterFeedback)
 
         viewModelScope.launch {
             engine.ultraWideStreamStatus.collect { status ->
@@ -2175,7 +2183,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (is50M) {
             showToast("Processing 50MP Computational photo...")
         }
-        com.example.camera.sound.CameraSoundManager.playShutter()
+        com.example.camera.sound.CameraSoundManager.performShutterFeedback(
+            getApplication<Application>().applicationContext,
+            _shutterFeedback.value
+        )
         engine.takePhoto { uri ->
             if (uri != null) {
                 if (is50M) {
@@ -2346,10 +2357,129 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _volumeKeyAction = MutableStateFlow(preferences.volumeKeyAction)
     val volumeKeyAction: StateFlow<String> = _volumeKeyAction.asStateFlow()
 
+    private var volumeHoldJob: Job? = null
+    private val isHoldZooming = AtomicBoolean(false)
+    private var activeZoomKeyCode: Int? = null
+
+    fun getMinSupportedZoom(): Float {
+        val currentFacing = engine.selectedLens.value?.facing
+        val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
+        val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
+            ?: lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+            ?: engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        return if (ultraWideLens != null) 0.5f else 1.0f
+    }
+
+    fun getMaxSupportedZoom(): Float {
+        val currentFacing = engine.selectedLens.value?.facing
+        val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
+        val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 20.0f
+        return maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
+    }
+
+    fun handleVolumeKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_VOLUME_UP && keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return false
+        }
+        return when (_volumeKeyAction.value) {
+            "VOLUME" -> false
+            "SHUTTER" -> {
+                if (event.repeatCount == 0) {
+                    onMainActionButtonClick()
+                }
+                true
+            }
+            "ZOOM" -> {
+                if (event.repeatCount == 0) {
+                    val wasHolding = isHoldZooming.get()
+                    volumeHoldJob?.cancel()
+                    volumeHoldJob = null
+
+                    activeZoomKeyCode = keyCode
+                    isHoldZooming.set(false)
+
+                    val direction = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 1.0f else -1.0f
+
+                    volumeHoldJob = viewModelScope.launch(Dispatchers.Main) {
+                        if (!wasHolding) {
+                            delay(280L)
+                        }
+                        isHoldZooming.set(true)
+
+                        var lastTime = SystemClock.uptimeMillis()
+                        while (isActive) {
+                            delay(16L)
+                            val now = SystemClock.uptimeMillis()
+                            val dtSeconds = (now - lastTime) / 1000.0f
+                            lastTime = now
+
+                            val currentZ = _currentZoom.value
+                            // Continuous rate: 1.0x zoom change per 2.0 seconds = 0.5x / sec
+                            val delta = direction * 0.5f * dtSeconds
+                            val minZ = getMinSupportedZoom()
+                            val maxZ = getMaxSupportedZoom()
+                            val nextZ = (currentZ + delta).coerceIn(minZ, maxZ)
+
+                            if (kotlin.math.abs(nextZ - currentZ) > 0.001f) {
+                                setZoom(nextZ, isPresetTap = false)
+                            }
+                        }
+                    }
+                    true
+                } else {
+                    true
+                }
+            }
+            else -> false
+        }
+    }
+
+    fun handleVolumeKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_VOLUME_UP && keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return false
+        }
+        return when (_volumeKeyAction.value) {
+            "VOLUME" -> false
+            "SHUTTER" -> true
+            "ZOOM" -> {
+                if (activeZoomKeyCode == keyCode) {
+                    volumeHoldJob?.cancel()
+                    volumeHoldJob = null
+
+                    val wasHolding = isHoldZooming.getAndSet(false)
+                    activeZoomKeyCode = null
+
+                    if (!wasHolding) {
+                        // Discrete 1.0x change on single press from current zoom
+                        val currentZ = _currentZoom.value
+                        val step = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 1.0f else -1.0f
+                        val minZ = getMinSupportedZoom()
+                        val maxZ = getMaxSupportedZoom()
+                        val targetZ = (currentZ + step).coerceIn(minZ, maxZ)
+                        setZoom(targetZ, isPresetTap = false)
+                    }
+                    true
+                } else {
+                    true
+                }
+            }
+            else -> false
+        }
+    }
+
     fun setVolumeKeyAction(action: String) {
+        volumeHoldJob?.cancel()
+        volumeHoldJob = null
+        isHoldZooming.set(false)
+        activeZoomKeyCode = null
         _volumeKeyAction.value = action
         preferences.volumeKeyAction = action
-        showToast("Volume key set to: $action")
+        showToast("Volume key set to: ${when(action) {
+            "SHUTTER" -> "Shutter"
+            "ZOOM" -> "Zoom"
+            "VOLUME" -> "System Vol"
+            else -> action
+        }}")
     }
 
     private val _doubleTapAction = MutableStateFlow(preferences.doubleTapAction)
@@ -2358,7 +2488,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setDoubleTapAction(action: String) {
         _doubleTapAction.value = action
         preferences.doubleTapAction = action
-        showToast("Double-tap set to: $action")
+        showToast("Double-tap set to: ${when(action) {
+            "FLIP" -> "Flip Camera"
+            "LOCK" -> "Lock Focus"
+            "NONE" -> "None"
+            else -> action
+        }}")
     }
 
     private val _showHorizonLevel = MutableStateFlow(preferences.showHorizonLevel)
@@ -2375,7 +2510,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setAntiBanding(mode: String) {
         _antiBanding.value = mode
         preferences.antiBanding = mode
-        showToast("Anti-banding: $mode")
+        engine.antiBandingMode = mode
+        showToast("Anti-banding: ${when(mode.uppercase()) {
+            "AUTO" -> "Auto"
+            "50HZ" -> "50 Hz"
+            "60HZ" -> "60 Hz"
+            "OFF" -> "Off"
+            else -> mode
+        }}")
     }
 
     private val _zoomSpeed = MutableStateFlow(preferences.zoomSpeed)
@@ -2410,6 +2552,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setShutterFeedback(feedback: String) {
         _shutterFeedback.value = feedback
         preferences.shutterFeedback = feedback
+        com.example.camera.sound.CameraSoundManager.setFeedbackMode(feedback)
+        showToast("Shutter feedback: ${when(feedback) {
+            "SOUND_AND_HAPTIC" -> "All"
+            "HAPTIC_ONLY" -> "Haptic"
+            "SOUND_ONLY" -> "Sound"
+            "MUTE" -> "Mute"
+            else -> feedback
+        }}")
     }
 
     val antibandingMode: StateFlow<String> = _antiBanding.asStateFlow()

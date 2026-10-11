@@ -907,7 +907,10 @@ class CameraPreferences(context: Context) {
         set(value) = prefs.edit().putString("pref_volume_key_action", value).apply()
 
     var doubleTapAction: String
-        get() = prefs.getString("pref_double_tap_action", "FLIP_CAMERA") ?: "FLIP_CAMERA"
+        get() {
+            val v = prefs.getString("pref_double_tap_action", "FLIP") ?: "FLIP"
+            return if (v == "FLIP_CAMERA") "FLIP" else v
+        }
         set(value) = prefs.edit().putString("pref_double_tap_action", value).apply()
 
     var showHorizonLevel: Boolean
@@ -943,7 +946,10 @@ class CameraPreferences(context: Context) {
         set(value) = prefs.edit().putString("pref_preview_quality", value).apply()
 
     var shutterFeedback: String
-        get() = prefs.getString("pref_shutter_feedback", "SOUND_HAPTIC") ?: "SOUND_HAPTIC"
+        get() {
+            val v = prefs.getString("pref_shutter_feedback", "SOUND_AND_HAPTIC") ?: "SOUND_AND_HAPTIC"
+            return if (v == "SOUND_HAPTIC") "SOUND_AND_HAPTIC" else v
+        }
         set(value) = prefs.edit().putString("pref_shutter_feedback", value).apply()
 
     var autoHdrEnabled: Boolean
