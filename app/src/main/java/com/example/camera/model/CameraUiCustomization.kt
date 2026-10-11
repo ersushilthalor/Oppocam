@@ -149,6 +149,7 @@ enum class TopControlItem(val id: String, val label: String) {
     MOTION_PHOTO("motion_photo", "Motion Photo"),
     STABILIZATION("stabilization", "Video Stabilization (OFF/EIS/EIS+)"),
     PIPELINE("pipeline", "Custom Pipeline"),
+    SIX_DOT_MENU("six_dot_menu", "Quick Options Menu (6-Dot)"),
     SETTINGS("settings", "Settings Gear")
 }
 
@@ -207,7 +208,7 @@ data class ModeLayoutConfig(
         return topIconPositions[item] ?: when (item) {
             TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
             TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
-            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
+            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
         }
     }
 
@@ -541,52 +542,48 @@ object CameraUiTemplates {
                     TopControlItem.LOG,
                     TopControlItem.LUT,
                     TopControlItem.RESOLUTION,
-                    TopControlItem.PRO_VIDEO_SETTINGS
+                    TopControlItem.SIX_DOT_MENU
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
                     TopControlItem.LOG to TopIconPosition.CENTER,
                     TopControlItem.LUT to TopIconPosition.CENTER,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
-                    TopControlItem.PRO_VIDEO_SETTINGS to TopIconPosition.RIGHT
+                    TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT
                 ),
                 hiddenTopControls = emptySet()
             )
             CameraMode.VIDEO -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
-                    TopControlItem.TIMER,
+                    TopControlItem.STABILIZATION,
                     TopControlItem.RESOLUTION,
-                    TopControlItem.EV,
-                    TopControlItem.VIDEO_ADJUSTMENTS,
-                    TopControlItem.SETTINGS
+                    TopControlItem.TIMER,
+                    TopControlItem.SIX_DOT_MENU
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
-                    TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.STABILIZATION to TopIconPosition.LEFT,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
-                    TopControlItem.EV to TopIconPosition.CENTER,
-                    TopControlItem.VIDEO_ADJUSTMENTS to TopIconPosition.RIGHT,
-                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                    TopControlItem.TIMER to TopIconPosition.RIGHT,
+                    TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT
                 ),
                 hiddenTopControls = emptySet()
             )
             CameraMode.PHOTO -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
-                    TopControlItem.TIMER,
+                    TopControlItem.MOTION_PHOTO,
                     TopControlItem.RESOLUTION,
-                    TopControlItem.RAW,
-                    TopControlItem.GRID,
-                    TopControlItem.SETTINGS
+                    TopControlItem.PIPELINE,
+                    TopControlItem.SIX_DOT_MENU
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
-                    TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.MOTION_PHOTO to TopIconPosition.LEFT,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
-                    TopControlItem.RAW to TopIconPosition.CENTER,
-                    TopControlItem.GRID to TopIconPosition.RIGHT,
-                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                    TopControlItem.PIPELINE to TopIconPosition.RIGHT,
+                    TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT
                 ),
                 hiddenTopControls = emptySet()
             )

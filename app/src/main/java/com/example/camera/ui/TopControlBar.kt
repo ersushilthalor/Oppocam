@@ -101,6 +101,38 @@ fun Modifier.topControlStyle(
 }
 
 /**
+ * Exact 6-dot grid icon style (3 horizontal columns x 2 vertical rows = 6 dots)
+ * matching the ColorOS / Oppo camera UI more-options button.
+ */
+@Composable
+fun SixDotGridIcon(
+    tint: Color,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier.size(18.dp)) {
+        val dotRadius = 1.7.dp.toPx()
+        val spacingX = 5.2.dp.toPx()
+        val spacingY = 5.0.dp.toPx()
+        val centerX = size.width / 2f
+        val centerY = size.height / 2f
+
+        // 3 horizontal columns x 2 vertical rows = 6 dots grid
+        val colOffsets = listOf(-spacingX, 0f, spacingX)
+        val rowOffsets = listOf(-spacingY / 2f, spacingY / 2f)
+
+        for (dx in colOffsets) {
+            for (dy in rowOffsets) {
+                drawCircle(
+                    color = tint,
+                    radius = dotRadius,
+                    center = androidx.compose.ui.geometry.Offset(centerX + dx, centerY + dy)
+                )
+            }
+        }
+    }
+}
+
+/**
  * Master Top Control Bar matching the reference UI design.
  * Exactly 6 beautifully aligned elements across a pure dark glass bar:
  * [Flash]  [Timer/Action]  [Pill 1]  [Pill 2]  [Grid/Assist]  [Settings]
@@ -160,6 +192,10 @@ fun TopControlBar(
     isLutWindowOpen: Boolean = false,
     stabilizationMode: VideoStabilizationMode = VideoStabilizationMode.EIS,
     onStabilizationClick: () -> Unit = {},
+    isUltraStabilizationEnabled: Boolean = false,
+    isVideoStabilizationEnabled: Boolean = true,
+    isQuickOptionsOpen: Boolean = false,
+    onQuickOptionsToggle: () -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
 ) {
@@ -293,34 +329,30 @@ fun TopControlBar(
                     val resLabel = when {
                         videoResolution?.width == 3840 || videoResolution?.height == 3840 -> "4K"
                         videoResolution?.width == 7680 || videoResolution?.height == 7680 -> "8K"
-                        videoResolution?.width == 1920 || videoResolution?.height == 1920 -> "1080"
-                        videoResolution?.width == 1280 || videoResolution?.height == 1280 -> "720"
+                        videoResolution?.width == 1920 || videoResolution?.height == 1920 -> "1080P"
+                        videoResolution?.width == 1280 || videoResolution?.height == 1280 -> "720P"
                         else -> "4K"
                     }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    Box(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(17.dp))
+                            .background(Color(0xB21A1A1E))
+                            .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
+                            .clickable { onVideoSettingsClick() }
+                            .padding(horizontal = 12.dp)
+                            .testTag("video_top_bar_resolution_fps_pill"),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(17.dp))
-                                .background(Color(0xB21A1A1E))
-                                .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                                .clickable { onVideoSettingsClick() }
-                                .padding(horizontal = 10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = resLabel,
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
+                        Text(
+                            text = "$resLabel · $videoFps",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
                 CameraMode.CINEMA -> {
@@ -782,6 +814,45 @@ fun TopControlBar(
             }
         }
 
+        val sixDotMenuButton = @Composable {
+            IconButton(
+                onClick = onQuickOptionsToggle,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isQuickOptionsOpen) accentColor else null
+                    )
+                    .testTag("top_bar_six_dot_menu_button")
+            ) {
+                SixDotGridIcon(
+                    tint = if (isQuickOptionsOpen) accentColor else Color.White.copy(alpha = 0.95f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
+        val stabilizationButton = @Composable {
+            val isSteadyActive = isUltraStabilizationEnabled || isVideoStabilizationEnabled
+            IconButton(
+                onClick = onStabilizationClick,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isSteadyActive) accentColor else null
+                    )
+                    .testTag("video_top_bar_stabilization_button")
+            ) {
+                Icon(
+                    imageVector = if (isUltraStabilizationEnabled) Icons.Filled.DirectionsRun else Icons.Outlined.Shield,
+                    contentDescription = if (isUltraStabilizationEnabled) "Ultra Action Steady: ON" else if (isSteadyActive) "Stabilization: EIS" else "Stabilization: OFF",
+                    tint = if (isSteadyActive) accentColor else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
         @Composable
         fun RenderItem(item: TopControlItem) {
             Box(
@@ -798,21 +869,32 @@ fun TopControlBar(
                     TopControlItem.LOG -> logButton()
                     TopControlItem.LUT -> lutButton()
                     TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
-                    TopControlItem.STABILIZATION -> { /* EIS is configurable only in Settings */ }
+                    TopControlItem.STABILIZATION -> stabilizationButton()
                     TopControlItem.EV -> evButton()
                     TopControlItem.HORIZON_LOCK -> horizonLockButton()
                     TopControlItem.DOLLY_ZOOM -> dollyZoomButton()
                     TopControlItem.VIDEO_ADJUSTMENTS -> videoAdjustmentsButton()
                     TopControlItem.MOTION_PHOTO -> motionPhotoButton()
                     TopControlItem.PIPELINE -> pipelineButton()
+                    TopControlItem.SIX_DOT_MENU -> sixDotMenuButton()
                     TopControlItem.SETTINGS -> settingsButton()
                 }
             }
         }
 
-        // Render Top Controls according to layoutConfig and position (EIS is configurable only in Settings)
-        val visibleItems = layoutConfig.topControlsOrder
-            .filterNot { layoutConfig.hiddenTopControls.contains(it) || it == TopControlItem.STABILIZATION }
+        // Render Top Controls according to layoutConfig and position
+        val visibleItems = run {
+            var items = layoutConfig.topControlsOrder
+                .filterNot { layoutConfig.hiddenTopControls.contains(it) }
+            if (!items.contains(TopControlItem.SIX_DOT_MENU) && !layoutConfig.hiddenTopControls.contains(TopControlItem.SIX_DOT_MENU)) {
+                items = if (items.contains(TopControlItem.SETTINGS)) {
+                    items.map { if (it == TopControlItem.SETTINGS) TopControlItem.SIX_DOT_MENU else it }
+                } else {
+                    items + TopControlItem.SIX_DOT_MENU
+                }
+            }
+            items
+        }
 
         val leftItems = visibleItems.filter { layoutConfig.getIconPosition(it) == TopIconPosition.LEFT }
         val centerItems = visibleItems.filter { layoutConfig.getIconPosition(it) == TopIconPosition.CENTER }

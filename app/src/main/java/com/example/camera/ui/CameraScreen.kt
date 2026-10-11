@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.ScreenLockRotation
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -184,6 +185,19 @@ fun CameraScreen(
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     val isEvControlOpen by viewModel.isEvControlOpen.collectAsStateWithLifecycle()
+    val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
+
+    var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(cameraMode) {
+        isQuickOptionsOpen = false
+    }
+
+    if (isQuickOptionsOpen) {
+        BackHandler {
+            isQuickOptionsOpen = false
+        }
+    }
 
     if (isEvControlOpen) {
         BackHandler {
@@ -663,8 +677,70 @@ fun CameraScreen(
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             isProActive = isManualProOpen,
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
+            isAudioEnabled = isAudioEnabled,
+            onAudioToggle = { viewModel.toggleAudio() },
+            isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+            isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
+            onStabilizationClick = { viewModel.toggleUltraStabilization() },
+            isQuickOptionsOpen = isQuickOptionsOpen,
+            onQuickOptionsToggle = { isQuickOptionsOpen = !isQuickOptionsOpen },
             layoutConfig = activeLayoutConfig,
             modifier = Modifier.align(Alignment.TopCenter)
+        )
+
+        // 2-alpha. Floating Quick Options Panel (Photo, Video, Cinema modes)
+        QuickOptionsFloatingPanel(
+            isOpen = isQuickOptionsOpen,
+            cameraMode = cameraMode,
+            flashMode = flashMode,
+            timerMode = timerMode,
+            gridType = gridType,
+            photoMegapixelMode = photoMegapixelMode,
+            isRawEnabled = isRawEnabled,
+            isMotionPhotoEnabled = isMotionPhotoEnabled,
+            activePhotoFilter = selectedPhotoFilter,
+            isPipelineActive = isCustomPipelineEnabled,
+            videoResolution = selectedVideoResolution,
+            videoFps = videoFps,
+            isAudioEnabled = isAudioEnabled,
+            isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+            isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
+            isHorizonLockEnabled = isHorizonLockEnabled,
+            isDollyZoomActive = isDollyZoomActive,
+            hasActiveVideoAdjustments = !videoAdjustments.isDefault,
+            cinemaConfig = cinemaConfig,
+            isEvOpen = isEvControlOpen,
+            exposureCompensation = exposureCompensation,
+            evStepSize = capabilities.exposureCompensationStep,
+            onFlashClick = { viewModel.cycleFlashMode() },
+            onTimerClick = { viewModel.cycleTimerMode() },
+            onGridClick = { viewModel.cycleGridType() },
+            onToggleMegapixelMode = { viewModel.togglePhotoMegapixelMode() },
+            onRawClick = { viewModel.toggleRawCapture() },
+            onMotionPhotoClick = { viewModel.toggleMotionPhoto() },
+            onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
+            onToggleDollyZoom = { viewModel.toggleDollyZoomActive() },
+            onToggleHorizonLock = { viewModel.toggleHorizonLock() },
+            onStabilizationClick = { viewModel.toggleUltraStabilization() },
+            onVideoSettingsClick = { viewModel.toggleVideoSettingsPanel() },
+            onAudioToggle = { viewModel.toggleAudio() },
+            onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
+            onCinemaResolutionClick = { viewModel.toggleVideoSettingsPanel() },
+            onCinemaAspectRatioClick = { viewModel.cycleCinemaAspectRatio() },
+            onCinemaSettingsClick = { viewModel.toggleCinemaSettings() },
+            onLogClick = { viewModel.toggleLogProfileWindow() },
+            onLutClick = { viewModel.toggleLutWindow() },
+            onEvClick = { viewModel.toggleEvControlOpen() },
+            onSettingsClick = {
+                isQuickOptionsOpen = false
+                viewModel.setSettingsOpen(true)
+            },
+            onDismiss = { isQuickOptionsOpen = false },
+            accentColor = activeLayoutConfig.getComposeAccentColor(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 58.dp)
         )
 
         // 2a. Transparent Floating EV Control Window (Video Mode & Cinema Mode)
@@ -705,7 +781,8 @@ fun CameraScreen(
         }
 
         // Dismiss barrier behind floating windows to close them when tapping on the camera preview
-        val isAnyFloatingOverlayOpen = (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
+        val isAnyFloatingOverlayOpen = isQuickOptionsOpen ||
+                (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
                 (isLogProfileWindowOpen && cameraMode == CameraMode.CINEMA) ||
                 (isLutWindowOpen && cameraMode == CameraMode.CINEMA) ||
                 isEvControlOpen
@@ -717,6 +794,7 @@ fun CameraScreen(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
+                        isQuickOptionsOpen = false
                         viewModel.setVideoSettingsPanelOpen(false)
                         viewModel.setLogProfileWindowOpen(false)
                         viewModel.setLutWindowOpen(false)
