@@ -271,11 +271,17 @@ object DeviceCompatibilityManager {
             return Range(30, 30)
         }
 
-        return available.firstOrNull { it.upper == targetFps && it.lower == targetFps }
-            ?: available.firstOrNull { it.upper == targetFps }
-            ?: available.firstOrNull { it.upper >= targetFps && it.lower <= targetFps }
-            ?: available.maxByOrNull { it.upper }
-            ?: available.first()
+        val exactFixed = available.firstOrNull { it.upper == targetFps && it.lower == targetFps }
+        if (exactFixed != null) return exactFixed
+
+        val matchedUpper = available.filter { it.upper == targetFps }.maxByOrNull { it.lower }
+        if (matchedUpper != null) return matchedUpper
+
+        val higherUpper = available.filter { it.upper >= targetFps }
+            .minWithOrNull(compareBy({ it.upper - targetFps }, { -it.lower }))
+        if (higherUpper != null) return higherUpper
+
+        return available.maxWithOrNull(compareBy({ it.upper }, { it.lower })) ?: available.first()
     }
 
     /**

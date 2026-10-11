@@ -2195,6 +2195,20 @@ class Camera2Engine(private val context: Context) {
             val targetMax = maxOf(targetRecRes.width, targetRecRes.height)
             val targetMin = minOf(targetRecRes.width, targetRecRes.height)
 
+            val isRecordingActive = (_isRecordingVideo.value || isStartingRecording.get())
+            if (targetMax >= 3840 && isRecordingActive) {
+                // When 4K recording is active, output preview at 1080p matching the recording aspect ratio.
+                // This eliminates camera ISP bandwidth bottlenecks from dual concurrent 4K pipelines,
+                // while the recorder surface receives the full native 4K stream with zero frame drops.
+                val hd16to9 = previewSizes.filter {
+                    val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+                    kotlin.math.abs(r - streamRatio) < 0.08f && maxOf(it.width, it.height) <= 1920
+                }.maxByOrNull { it.width.toLong() * it.height.toLong() }
+                if (hd16to9 != null) {
+                    return hd16to9
+                }
+            }
+
             // 1. Direct exact match in SurfaceTexture preview sizes
             val exactMatch = previewSizes.firstOrNull {
                 maxOf(it.width, it.height) == targetMax && minOf(it.width, it.height) == targetMin
@@ -5255,6 +5269,16 @@ class Camera2Engine(private val context: Context) {
         // Preserve video recording capture intent and target FPS range across lens switches & setting updates
         if (_isRecordingVideo.value) {
             builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+            // Optimize edge and noise reduction for real-time 4K recording throughput
+            if (proSharpness.value <= 50f) {
+                builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+            }
+            if (proNoiseReduction.value <= 50f) {
+                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+            }
+            try {
+                builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_FAST)
+            } catch (_: Throwable) {}
         }
         if (isVideoMode) {
             val activeLens = activeSessionLens ?: _selectedLens.value
@@ -6899,10 +6923,19 @@ class Camera2Engine(private val context: Context) {
 
     private fun findBestFpsRange(chars: CameraCharacteristics, targetFps: Int): Range<Int>? {
         val availableFpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return null
-        return availableFpsRanges.firstOrNull { it.upper == targetFps && it.lower == targetFps }
-            ?: availableFpsRanges.firstOrNull { it.upper == targetFps }
-            ?: availableFpsRanges.firstOrNull { it.upper >= targetFps && it.lower <= targetFps }
-            ?: availableFpsRanges.maxByOrNull { it.upper }
+        if (availableFpsRanges.isEmpty()) return null
+
+        val exactFixed = availableFpsRanges.firstOrNull { it.upper == targetFps && it.lower == targetFps }
+        if (exactFixed != null) return exactFixed
+
+        val matchedUpper = availableFpsRanges.filter { it.upper == targetFps }.maxByOrNull { it.lower }
+        if (matchedUpper != null) return matchedUpper
+
+        val higherUpper = availableFpsRanges.filter { it.upper >= targetFps }
+            .minWithOrNull(compareBy({ it.upper - targetFps }, { -it.lower }))
+        if (higherUpper != null) return higherUpper
+
+        return availableFpsRanges.maxWithOrNull(compareBy({ it.upper }, { it.lower }))
     }
 
     /**

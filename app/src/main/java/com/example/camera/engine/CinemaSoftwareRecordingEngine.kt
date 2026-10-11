@@ -1251,7 +1251,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             if (videoFormatStartTime == 0L && videoTrackIndex >= 0) {
                 videoFormatStartTime = now
             }
-            val audioTimedOut = videoFormatStartTime > 0L && (now - videoFormatStartTime > 600L)
+            val audioTimedOut = videoFormatStartTime > 0L && (now - videoFormatStartTime > 250L)
 
             // Can start if video track is ready, AND (audio is not expected, or audio track is ready, or audio timed out)
             val canStart = videoTrackIndex >= 0 && (!isAudioPending || audioTimedOut)
@@ -1338,6 +1338,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private val localTexMatrix = FloatArray(16)
     private val matrixValues = FloatArray(9)
     private val finalTexMatrix = FloatArray(16)
+    private val cachedMatrix2d = android.graphics.Matrix()
 
     fun updateLiveCinemaConfig(newConfig: CinemaConfig) {
         currentCinemaConfig = newConfig
@@ -1668,22 +1669,21 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             }
         }
 
-        val matrix2d = android.graphics.Matrix().apply {
-            postTranslate(-0.5f, -0.5f)
-            // 1. Uniform center-crop scaling in the viewport's upright coordinate axes
-            postScale(scaleX, effScaleY)
-            // 2. Rotate to align with sensor buffer coordinates
-            if (netRotationDeg != 0f) {
-                postRotate(netRotationDeg)
-            }
-            // 3. Apply horizontal selfie mirror only if stMatrix hasn't already applied FLIP_H
-            if (isFront != isStMirrored) {
-                postScale(-1.0f, 1.0f)
-            }
-            postTranslate(0.5f, 0.5f)
+        cachedMatrix2d.reset()
+        cachedMatrix2d.postTranslate(-0.5f, -0.5f)
+        // 1. Uniform center-crop scaling in the viewport's upright coordinate axes
+        cachedMatrix2d.postScale(scaleX, effScaleY)
+        // 2. Rotate to align with sensor buffer coordinates
+        if (netRotationDeg != 0f) {
+            cachedMatrix2d.postRotate(netRotationDeg)
         }
+        // 3. Apply horizontal selfie mirror only if stMatrix hasn't already applied FLIP_H
+        if (isFront != isStMirrored) {
+            cachedMatrix2d.postScale(-1.0f, 1.0f)
+        }
+        cachedMatrix2d.postTranslate(0.5f, 0.5f)
 
-        matrix2d.getValues(matrixValues)
+        cachedMatrix2d.getValues(matrixValues)
         // Convert 3x3 affine matrix to 4x4 OpenGL column-major matrix
         localTexMatrix[0] = matrixValues[0]; localTexMatrix[1] = matrixValues[3]; localTexMatrix[2] = 0f; localTexMatrix[3] = 0f
         localTexMatrix[4] = matrixValues[1]; localTexMatrix[5] = matrixValues[4]; localTexMatrix[6] = 0f; localTexMatrix[7] = 0f
@@ -1836,9 +1836,12 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             val display = eglDisplay
             val surface = eglSurface
             if (display != null && surface != null) {
-                GLES20.glFinish()
                 EGLExt.eglPresentationTimeANDROID(display, surface, adjustedPtsNs)
-                EGL14.eglSwapBuffers(display, surface)
+                val swapped = EGL14.eglSwapBuffers(display, surface)
+                if (swapped) {
+                    encodedVideoFramesCount.incrementAndGet()
+                    CameraPerformanceMonitor.onRecordingFrame()
+                }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Error rendering real-time cinema frame on GPU", t)
