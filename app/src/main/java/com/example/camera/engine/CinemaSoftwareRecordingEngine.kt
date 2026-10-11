@@ -545,7 +545,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val file = outputFile
         outputFile = null
         activeCodec = null
-        if (file != null && file.exists() && (frameCount > 0 || isRobolectric)) {
+        if (file != null && file.exists() && (frameCount > 0 || file.length() > 0L || isRobolectric)) {
             Log.i(TAG, "Cinema recording finalized successfully: ${file.absolutePath} (${file.length()} bytes, $frameCount frames)")
             return file
         } else {

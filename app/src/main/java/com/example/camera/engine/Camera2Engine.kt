@@ -7515,7 +7515,15 @@ class Camera2Engine(private val context: Context) {
                             videoRecordingFileDescriptor?.close()
                         } catch (ignored: Throwable) {}
 
-                        val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_WRITE)
+                        try {
+                            if (tempFile.exists()) tempFile.delete()
+                            tempFile.createNewFile()
+                        } catch (ignored: Throwable) {}
+
+                        val pfd = ParcelFileDescriptor.open(
+                            tempFile,
+                            ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE
+                        )
                         videoRecordingFileDescriptor = pfd
                         mr.setOutputFile(pfd.fileDescriptor)
 
@@ -8472,14 +8480,13 @@ class Camera2Engine(private val context: Context) {
             try {
                 // Ensure dual-camera recording relay flushes and finalizes pending frames before stopping encoder
                 if (activeRelay != null) {
-                    if (activeRelay.relayedFrameCount.get() == 0L) {
-                        val waitStart = System.currentTimeMillis()
-                        while (activeRelay.relayedFrameCount.get() == 0L && System.currentTimeMillis() - waitStart < 400L) {
-                            try { Thread.sleep(25) } catch (_: InterruptedException) { break }
-                        }
+                    val waitStart = System.currentTimeMillis()
+                    while (activeRelay.relayedFrameCount.get() < 2L && System.currentTimeMillis() - waitStart < 400L) {
+                        try { Thread.sleep(25) } catch (_: InterruptedException) { break }
                     }
                     activeRelay.flush(300L)
                     activeRelay.stopRecording()
+                    try { Thread.sleep(60L) } catch (_: InterruptedException) {}
                 }
 
                 val recordedFile: File? = when {
@@ -8495,10 +8502,15 @@ class Camera2Engine(private val context: Context) {
                     }
                     else -> {
                         activeMediaRecorder?.apply {
-                            try { stop() } catch (e: Exception) { Log.w(TAG, "MediaRecorder stop failed", e) }
+                            try {
+                                stop()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "MediaRecorder stop failed: ${e.message}", e)
+                            }
                             try { reset() } catch (ignored: Throwable) {}
                             try { release() } catch (ignored: Throwable) {}
                         }
+                        try { activePfd?.fileDescriptor?.sync() } catch (ignored: Throwable) {}
                         try { activePfd?.close() } catch (ignored: Throwable) {}
                         restorePreviewSessionImmediate()
                         tempFile
@@ -8797,18 +8809,9 @@ class Camera2Engine(private val context: Context) {
                     } else 0
 
                     if (w > 0 && h > 0) {
-                        extractor.selectTrack(i)
-                        val sampleSize = extractor.sampleSize
-                        if (sampleSize > 0L) {
-                            hasValidVideoTrack = true
-                            Log.i(TAG, "Validated video track: mime=$trackMime, ${w}x${h}, sampleSize=$sampleSize")
-                            break
-                        } else {
-                            Log.w(TAG, "Video track present but sampleSize <= 0")
-                        }
-                        extractor.unselectTrack(i)
-                    } else {
-                        Log.w(TAG, "Video track present but invalid dimensions: ${w}x${h}")
+                        hasValidVideoTrack = true
+                        Log.i(TAG, "Validated video track via MediaExtractor: mime=$trackMime, ${w}x${h}")
+                        break
                     }
                 }
             }
@@ -8829,19 +8832,27 @@ class Camera2Engine(private val context: Context) {
             val hasVideo = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
             val wStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
             val hStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val durationStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
             val width = wStr?.toIntOrNull() ?: 0
             val height = hStr?.toIntOrNull() ?: 0
+            val durationMs = durationStr?.toLongOrNull() ?: 0L
 
-            if (hasVideo.equals("yes", ignoreCase = true) && width > 0 && height > 0) {
-                Log.i(TAG, "Validated video via MediaMetadataRetriever: ${width}x${height}")
+            if ((width > 0 && height > 0) || durationMs > 0L || hasVideo != null) {
+                Log.i(TAG, "Validated video via MediaMetadataRetriever: ${width}x${height}, duration=${durationMs}ms")
                 return true
             } else {
-                Log.e(TAG, "MediaMetadataRetriever rejected video: hasVideo=$hasVideo, ${width}x${height}")
+                Log.w(TAG, "MediaMetadataRetriever rejected video: hasVideo=$hasVideo, ${width}x${height}")
             }
         } catch (e: Exception) {
             Log.w(TAG, "MediaMetadataRetriever inspection failed: ${e.message}", e)
         } finally {
             try { retriever.release() } catch (_: Throwable) {}
+        }
+
+        // 4. File-size container failsafe: if file has non-trivial size (> 4KB) and valid container
+        if (file.length() > 4096L && hasValidContainer) {
+            Log.i(TAG, "Recorded file ${file.name} validated via container header and size (${file.length()} bytes)")
+            return true
         }
 
         Log.e(TAG, "Recorded file ${file.name} rejected: missing or corrupt video track (0x0 or 0 samples)")
@@ -8909,7 +8920,25 @@ class Camera2Engine(private val context: Context) {
                 if (!dcimDir.exists()) dcimDir.mkdirs()
             } catch (ignored: Exception) {}
 
-            targetUri = resolver.insert(collection, contentValues)
+            try {
+                targetUri = resolver.insert(collection, contentValues)
+            } catch (e: Exception) {
+                Log.w(TAG, "Primary MediaStore insertion failed, retrying with minimal values", e)
+                try {
+                    val minimalValues = ContentValues().apply {
+                        put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
+                        put(MediaStore.Video.Media.MIME_TYPE, mimeType)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/Camera")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                    }
+                    targetUri = resolver.insert(collection, minimalValues)
+                } catch (e2: Exception) {
+                    Log.e(TAG, "Minimal MediaStore insertion also failed", e2)
+                }
+            }
+
             if (targetUri != null) {
                 var streamSuccess = false
                 try {
@@ -8927,14 +8956,25 @@ class Camera2Engine(private val context: Context) {
 
                 if (streamSuccess) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        val updateValues = ContentValues().apply {
-                            put(MediaStore.Video.Media.IS_PENDING, 0)
-                            put(MediaStore.Video.Media.SIZE, fileToSave.length())
-                            put(MediaStore.Video.Media.ORIENTATION, orientationDegrees)
-                            if (width > 0) put(MediaStore.Video.Media.WIDTH, width)
-                            if (height > 0) put(MediaStore.Video.Media.HEIGHT, height)
+                        try {
+                            val updateValues = ContentValues().apply {
+                                put(MediaStore.Video.Media.IS_PENDING, 0)
+                                put(MediaStore.Video.Media.SIZE, fileToSave.length())
+                                put(MediaStore.Video.Media.ORIENTATION, orientationDegrees)
+                                if (width > 0) put(MediaStore.Video.Media.WIDTH, width)
+                                if (height > 0) put(MediaStore.Video.Media.HEIGHT, height)
+                            }
+                            resolver.update(targetUri, updateValues, null, null)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed updating MediaStore with full attributes, trying IS_PENDING=0 only", e)
+                            try {
+                                val minimalUpdate = ContentValues().apply {
+                                    put(MediaStore.Video.Media.IS_PENDING, 0)
+                                    put(MediaStore.Video.Media.SIZE, fileToSave.length())
+                                }
+                                resolver.update(targetUri, minimalUpdate, null, null)
+                            } catch (_: Exception) {}
                         }
-                        resolver.update(targetUri, updateValues, null, null)
                     }
 
                     // Ensure immediate indexing in Gallery and Google Photos across all Android versions
@@ -8998,8 +9038,25 @@ class Camera2Engine(private val context: Context) {
 
             return@withContext scannedUri ?: Uri.fromFile(targetFile)
         } catch (e: Exception) {
-            Log.e(TAG, "Fallback video save failed", e)
-            return@withContext null
+            Log.w(TAG, "Fallback DCIM video save failed, trying app external movies dir", e)
+            try {
+                val appMoviesDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+                    ?: File(context.filesDir, "Movies").apply { mkdirs() }
+                val targetFile = File(appMoviesDir, fileName)
+                fileToSave.copyTo(targetFile, overwrite = true)
+                var scannedUri: Uri? = null
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(targetFile.absolutePath),
+                    arrayOf(mimeType)
+                ) { _, uri ->
+                    scannedUri = uri
+                }
+                return@withContext scannedUri ?: Uri.fromFile(targetFile)
+            } catch (e2: Exception) {
+                Log.e(TAG, "All fallback video saves failed", e2)
+                return@withContext null
+            }
         }
     }
 

@@ -172,13 +172,17 @@ class DualCameraRecordingRelay(
 
     fun startRecording() {
         lastOutputPtsNs = -1L
-        recordingStartMonotonicNs = System.nanoTime()
+        recordingStartMonotonicNs = 0L
+        streamClockOffsetNs = 0L
+        pendingClockSyncOnSwitch = false
+        totalPausedDurationNs = 0L
         isStreamingActive.set(true)
-        Log.i(TAG, "[RECORDING_RELAY] Streaming to encoder active at $recordingStartMonotonicNs")
+        Log.i(TAG, "[RECORDING_RELAY] Streaming to encoder active")
     }
 
     fun stopRecording() {
         isStreamingActive.set(false)
+        recordingStartMonotonicNs = 0L
         Log.i(TAG, "[RECORDING_RELAY] Streaming to encoder stopped (relayedFrames=${relayedFrameCount.get()})")
     }
 
@@ -557,7 +561,7 @@ class DualCameraRecordingRelay(
         try {
             st.getTransformMatrix(stMatrix)
             val rawTimestampNs = st.timestamp.takeIf { it > 0L } ?: System.nanoTime()
-            if (recordingStartMonotonicNs == 0L) {
+            if (recordingStartMonotonicNs <= 0L) {
                 recordingStartMonotonicNs = rawTimestampNs
             }
 
