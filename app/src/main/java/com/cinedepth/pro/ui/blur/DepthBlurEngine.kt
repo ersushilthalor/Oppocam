@@ -1039,4 +1039,59 @@ object DepthBlurEngine {
             throw t
         }
     }
+
+    private const val REFINEMENT_SHADER_SRC = """
+        uniform shader image;
+        uniform shader depthMap;
+        uniform float2 resolution;
+        uniform float edgeRefine;
+
+        half4 main(float2 fragCoord) {
+            half4 d = depthMap.eval(fragCoord);
+            return d;
+        }
+    """
+
+    private const val BOKEH_SHADER_SRC = """
+        uniform shader image;
+        uniform shader refinedDepthMap;
+        uniform shader contourMatte;
+        uniform shader segMask;
+        uniform float hasSegMask;
+        uniform float2 resolution;
+        uniform float focus;
+        uniform float focusDeadZone;
+        uniform float falloffWidth;
+        uniform float edgeExpand;
+        uniform float maxBlurRadius;
+        uniform float effectType;
+        uniform float highlightBoost;
+        uniform float vignetteStrength;
+        uniform float highResScale;
+
+        half4 main(float2 fragCoord) {
+            half4 c = image.eval(fragCoord);
+            return c;
+        }
+    """
+
+    private const val CONTOUR_MATTE_SHADER_SRC = """
+        uniform shader image;
+        uniform shader refinedDepthMap;
+        uniform shader segMask;
+        uniform float hasSegMask;
+        uniform float2 resolution;
+        uniform float focus;
+        uniform float focusDeadZone;
+        uniform float falloffWidth;
+        uniform float edgeSoftness;
+        uniform float edgeExpand;
+        uniform float quality;
+        uniform float refineStrength;
+
+        half4 main(float2 fragCoord) {
+            half4 d = refinedDepthMap.eval(fragCoord);
+            return half4(d.r, d.r, d.r, 1.0);
+        }
+    """
 }

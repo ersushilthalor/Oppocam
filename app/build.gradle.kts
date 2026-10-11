@@ -1,198 +1,104 @@
-import java.util.Base64
-
 plugins {
-  alias(libs.plugins.android.application)
-  alias(libs.plugins.kotlin.compose)
-  alias(libs.plugins.google.devtools.ksp)
-  alias(libs.plugins.roborazzi)
-  alias(libs.plugins.secrets)
-}
-
-// Automatically decode debug.keystore from debug.keystore.base64 if it is missing (e.g. in CI or on fresh clone)
-val debugKeystoreFile = file("${rootDir}/debug.keystore")
-val base64KeystoreFile = file("${rootDir}/debug.keystore.base64")
-if (!debugKeystoreFile.exists() && base64KeystoreFile.exists()) {
-  try {
-    val decoded = Base64.getDecoder().decode(base64KeystoreFile.readText().trim())
-    debugKeystoreFile.writeBytes(decoded)
-  } catch (e: Exception) {
-    logger.warn("Could not decode debug.keystore.base64: ${e.message}")
-  }
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.devtools.ksp)
 }
 
 android {
-  namespace = "com.example"
-  compileSdk = 35
+    namespace = "com.example"
+    compileSdk = 36
 
-  defaultConfig {
-    applicationId = "com.aistudio.oppocam.prolog"
-    minSdk = 24
-    targetSdk = 35
-    versionCode = 1
-    versionName = "1.0"
+    defaultConfig {
+        applicationId = "com.aistudio.camerapro.pqvwx"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = "1.0"
 
-    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-    ndk {
-      abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-  }
 
-  signingConfigs {
-    getByName("debug") {
-      val customDebugKeystore = file("${rootDir}/debug.keystore")
-      if (customDebugKeystore.exists()) {
-        storeFile = customDebugKeystore
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
-      }
-    }
-    create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      val uploadFile = file(keystorePath)
-      val uploadPassword = System.getenv("STORE_PASSWORD")
-      if (uploadFile.exists() && !uploadPassword.isNullOrBlank()) {
-        storeFile = uploadFile
-        storePassword = uploadPassword
-        keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
-        keyPassword = System.getenv("KEY_PASSWORD") ?: uploadPassword
-      } else {
-        val customDebugKeystore = file("${rootDir}/debug.keystore")
-        if (customDebugKeystore.exists()) {
-          storeFile = customDebugKeystore
-          storePassword = "android"
-          keyAlias = "androiddebugkey"
-          keyPassword = "android"
+    signingConfigs {
+        create("debugConfig") {
+            storeFile = file("${rootDir}/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
-      }
-      enableV1Signing = true
-      enableV2Signing = true
     }
-  }
 
-  buildTypes {
-    release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
-      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+    buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debugConfig")
+        }
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
     }
-    debug {
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
-  }
-  compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
-  }
-  buildFeatures {
-    compose = true
-    buildConfig = true
-  }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
-  dependenciesInfo {
-    includeInApk = false
-    includeInBundle = false
-  }
-  packaging {
-    resources {
-      excludes += listOf(
-        "/META-INF/{AL2.0,LGPL2.1}",
-        "/META-INF/DEPENDENCIES",
-        "/META-INF/LICENSE*",
-        "/META-INF/NOTICE*"
-      )
+
+    buildFeatures {
+        compose = true
     }
-  }
 }
 
-// Ensure a safe empty fallback properties file exists in the build cache directory
-// so that neither .env nor .env.example is strictly required for Gradle/APK builds.
-val fallbackSecretsFile = file("${rootDir}/build/secrets.defaults.properties")
-if (!fallbackSecretsFile.exists()) {
-  fallbackSecretsFile.parentFile?.mkdirs()
-  fallbackSecretsFile.createNewFile()
-}
-
-secrets {
-  propertiesFileName = ".env"
-  defaultPropertiesFileName = if (file("${rootDir}/.env.example").exists()) {
-    ".env.example"
-  } else {
-    "build/secrets.defaults.properties"
-  }
-  ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
-}
-
-// Some unused dependencies are commented out below instead of being removed.
-// This makes it easy to add them back in the future if needed.
 dependencies {
-  implementation(platform(libs.androidx.compose.bom))
-  // implementation(platform(libs.firebase.bom))
-  // implementation(libs.accompanist.permissions)
-  implementation(libs.androidx.activity.compose)
-  implementation(libs.androidx.camera.camera2)
-  implementation(libs.androidx.camera.core)
-  implementation(libs.androidx.camera.lifecycle)
-  implementation(libs.androidx.camera.view)
-  implementation(libs.mlkit.objectdetector)
-  implementation(libs.androidx.compose.material.icons.core)
-  implementation(libs.androidx.compose.material.icons.extended)
-  implementation(libs.androidx.compose.material3)
-  implementation(libs.androidx.compose.ui)
-  implementation(libs.androidx.compose.ui.graphics)
-  implementation(libs.androidx.compose.ui.tooling.preview)
-  implementation(libs.androidx.core.ktx)
-  // implementation(libs.androidx.datastore.preferences)
-  implementation(libs.androidx.lifecycle.runtime.compose)
-  implementation(libs.androidx.lifecycle.runtime.ktx)
-  implementation(libs.androidx.lifecycle.viewmodel.compose)
-  // implementation(libs.androidx.navigation.compose)
-  implementation(libs.androidx.room.ktx)
-  implementation(libs.androidx.room.runtime)
-  implementation(libs.coil.compose)
-  // implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
-  // Uncomment to use Firestore:
-  // implementation(libs.firebase.firestore)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.activity.compose)
 
-  // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
-  // Sign-In via Credential Manager:
-  // implementation(libs.firebase.auth)
-  // implementation(libs.androidx.credentials)
-  // implementation(libs.androidx.credentials.play.services)
-  // implementation(libs.googleid)
-  // implementation(libs.firebase.appcheck.recaptcha)
-  // implementation(libs.firebase.appcheck.debug)
-  implementation(libs.kotlinx.coroutines.android)
-  implementation(libs.kotlinx.coroutines.core)
-  // implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
-  implementation(libs.okhttp)
-  // implementation(libs.play.services.location)
-  // implementation(libs.retrofit)
-  implementation(libs.mlkit.segmentation.selfie)
-  implementation(libs.mlkit.face.detection)
-  implementation(libs.onnxruntime.android)
-  implementation(libs.tensorflow.lite)
-  implementation(libs.tensorflow.lite.gpu)
-  implementation(libs.tensorflow.lite.gpu.api)
-  testImplementation(libs.androidx.compose.ui.test.junit4)
-  testImplementation(libs.androidx.core)
-  testImplementation(libs.androidx.junit)
-  testImplementation(libs.junit)
-  testImplementation(libs.kotlinx.coroutines.test)
-  testImplementation(libs.robolectric)
-  testImplementation(libs.roborazzi)
-  testImplementation(libs.roborazzi.compose)
-  testImplementation(libs.roborazzi.junit.rule)
-  androidTestImplementation(platform(libs.androidx.compose.bom))
-  androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-  androidTestImplementation(libs.androidx.espresso.core)
-  androidTestImplementation(libs.androidx.junit)
-  androidTestImplementation(libs.androidx.runner)
-  debugImplementation(libs.androidx.compose.ui.test.manifest)
-  debugImplementation(libs.androidx.compose.ui.tooling)
-  "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.material.icons.extended)
+
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.coil.compose)
+
+    // CameraX
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+
+    // Room
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
+    // ML Kit
+    implementation(libs.mlkit.segmentation.selfie)
+    implementation(libs.mlkit.face.detection)
+    implementation(libs.mlkit.objectdetector)
+
+    // TensorFlow Lite
+    implementation(libs.tensorflow.lite)
+    implementation(libs.tensorflow.lite.gpu)
+    implementation(libs.tensorflow.lite.gpu.api)
+
+    // Coroutines
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.coroutines.core)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+}
+
+dependencies {
+    implementation(libs.moshi.kotlin)
+    ksp(libs.moshi.kotlin.codegen)
 }
