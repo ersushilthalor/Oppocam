@@ -231,22 +231,37 @@ fun Viewfinder(
         }
     }
 
-    // Direct preview stream visibility without overlap crossfade animation
-    LaunchedEffect(isUsingUltraWideSurface) {
-        val isUw = isUsingUltraWideSurface
-        textureViewInstance?.let { tv ->
-            val mainAlpha = if (!isUw) 1f else 0f
-            tv.alpha = mainAlpha
-            tv.translationZ = if (!isUw) 2f else 0f
-            (tv.parent as? android.view.View)?.translationZ = if (!isUw) 2f else 0f
-            tv.visibility = android.view.View.VISIBLE
-        }
-        ultraWideTextureViewInstance?.let { tv ->
-            val uwAlpha = if (isUw) 1f else 0f
-            tv.alpha = uwAlpha
-            tv.translationZ = if (isUw) 2f else 0f
-            (tv.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
-            tv.visibility = android.view.View.VISIBLE
+    // Dynamic preview stream visibility and smooth overlap blending
+    LaunchedEffect(previewOverlapState, isUsingUltraWideSurface) {
+        if (previewOverlapState.isOverlapping) {
+            textureViewInstance?.let { tv ->
+                tv.alpha = previewOverlapState.mainAlpha
+                tv.translationZ = 1f
+                (tv.parent as? android.view.View)?.translationZ = 1f
+                tv.visibility = android.view.View.VISIBLE
+            }
+            ultraWideTextureViewInstance?.let { tv ->
+                tv.alpha = previewOverlapState.ultraWideAlpha
+                tv.translationZ = 2f
+                (tv.parent as? android.view.View)?.translationZ = 2f
+                tv.visibility = android.view.View.VISIBLE
+            }
+        } else {
+            val isUw = isUsingUltraWideSurface
+            textureViewInstance?.let { tv ->
+                val mainAlpha = if (!isUw) 1f else 0f
+                tv.alpha = mainAlpha
+                tv.translationZ = if (!isUw) 2f else 0f
+                (tv.parent as? android.view.View)?.translationZ = if (!isUw) 2f else 0f
+                tv.visibility = android.view.View.VISIBLE
+            }
+            ultraWideTextureViewInstance?.let { tv ->
+                val uwAlpha = if (isUw) 1f else 0f
+                tv.alpha = uwAlpha
+                tv.translationZ = if (isUw) 2f else 0f
+                (tv.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
+                tv.visibility = android.view.View.VISIBLE
+            }
         }
     }
 
@@ -488,10 +503,11 @@ fun Viewfinder(
                     },
                     update = { textureView ->
                         val isUw = currentIsUsingUltraWideSurface
-                        textureView.alpha = if (!isUw) 1f else 0f
-                        textureView.visibility = if (!isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                        textureView.translationZ = if (!isUw) 2f else 1f
-                        (textureView.parent as? android.view.View)?.translationZ = if (!isUw) 2f else 1f
+                        val isOverlapping = currentPreviewOverlapState.isOverlapping
+                        textureView.alpha = if (isOverlapping) currentPreviewOverlapState.mainAlpha else (if (!isUw) 1f else 0f)
+                        textureView.visibility = if (isOverlapping || !isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                        textureView.translationZ = if (isOverlapping) 1f else (if (!isUw) 2f else 1f)
+                        (textureView.parent as? android.view.View)?.translationZ = if (isOverlapping) 1f else (if (!isUw) 2f else 1f)
                         // Sample background blur frame when windows are active
                         if (!isUw && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                             com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
@@ -517,7 +533,7 @@ fun Viewfinder(
                     },
                     modifier = Modifier
                         .fillMaxSize()
-                        .zIndex(if (!currentIsUsingUltraWideSurface) 2f else 1f)
+                        .zIndex(if (currentPreviewOverlapState.isOverlapping) 1f else if (!currentIsUsingUltraWideSurface) 2f else 1f)
                         .onGloballyPositioned { coordinates ->
                             val pos = coordinates.positionInRoot()
                             val sz = coordinates.size
@@ -653,10 +669,11 @@ fun Viewfinder(
                         },
                         update = { textureView ->
                             val isUw = currentIsUsingUltraWideSurface
-                            textureView.alpha = if (isUw) 1f else 0f
+                            val isOverlapping = currentPreviewOverlapState.isOverlapping
+                            textureView.alpha = if (isOverlapping) currentPreviewOverlapState.ultraWideAlpha else (if (isUw) 1f else 0f)
                             textureView.visibility = android.view.View.VISIBLE
-                            textureView.translationZ = if (isUw) 2f else 0f
-                            (textureView.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
+                            textureView.translationZ = if (isOverlapping) 2f else (if (isUw) 2f else 0f)
+                            (textureView.parent as? android.view.View)?.translationZ = if (isOverlapping) 2f else (if (isUw) 2f else 0f)
                             if (isUw && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {
                                 com.example.camera.ui.components.BackdropBlurManager.onViewfinderFrame(
                                     textureView = textureView,
@@ -680,7 +697,7 @@ fun Viewfinder(
                         },
                         modifier = Modifier
                             .fillMaxSize()
-                            .zIndex(if (currentIsUsingUltraWideSurface) 2f else 1f)
+                            .zIndex(if (currentPreviewOverlapState.isOverlapping) 2f else if (currentIsUsingUltraWideSurface) 2f else 1f)
                     )
                 }
 

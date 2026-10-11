@@ -702,10 +702,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF,
             switchPointMm = preferences.lensSwitchPointMm,
             lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
-            lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec
+            lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec,
+            isLensSwitchOverlapAnimationEnabled = preferences.isLensSwitchOverlapAnimationEnabled
         )
     )
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
+
+    private val _isLensSwitchOverlapAnimationEnabled = MutableStateFlow(preferences.isLensSwitchOverlapAnimationEnabled)
+    val isLensSwitchOverlapAnimationEnabled: StateFlow<Boolean> = _isLensSwitchOverlapAnimationEnabled.asStateFlow()
+
+    fun setLensSwitchOverlapAnimationEnabled(enabled: Boolean) {
+        _isLensSwitchOverlapAnimationEnabled.value = enabled
+        preferences.isLensSwitchOverlapAnimationEnabled = enabled
+        engine.setLensSwitchOverlapAnimationEnabled(enabled)
+        _instantSwitchState.update { it.copy(isLensSwitchOverlapAnimationEnabled = enabled) }
+        showToast("Lens Switch Overlap Animation: ${if (enabled) "Enabled" else "Disabled"}")
+    }
 
     private val _lensSwitchOverlapDurationSec = MutableStateFlow(preferences.lensSwitchOverlapDurationSec)
     val lensSwitchOverlapDurationSec: StateFlow<Float> = _lensSwitchOverlapDurationSec.asStateFlow()
@@ -1024,6 +1036,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
         engine.zoomTransitionController.holdAtOneXDurationMs = preferences.lensSwitchHoldDurationMs
+        engine.setLensSwitchOverlapAnimationEnabled(preferences.isLensSwitchOverlapAnimationEnabled)
         engine.setLensSwitchPointMm(preferences.lensSwitchPointMm)
         engine.antiBandingMode = preferences.antiBanding
         com.example.camera.sound.CameraSoundManager.setFeedbackMode(preferences.shutterFeedback)

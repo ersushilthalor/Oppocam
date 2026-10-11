@@ -64,6 +64,7 @@ class CameraPreferences(context: Context) {
         const val MIN_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
+        private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
     }
 
     var lensSwitchHoldDurationSec: Float
@@ -83,6 +84,10 @@ class CameraPreferences(context: Context) {
 
     val lensSwitchHoldDurationMs: Long
         get() = (lensSwitchHoldDurationSec * 1000f + 0.5f).toLong()
+
+    var isLensSwitchOverlapAnimationEnabled: Boolean
+        get() = prefs.getBoolean(KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED, value).apply()
 
     var lensSwitchOverlapDurationSec: Float
         get() = prefs.getFloat(

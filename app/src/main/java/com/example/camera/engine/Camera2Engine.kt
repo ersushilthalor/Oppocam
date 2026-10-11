@@ -230,6 +230,14 @@ class Camera2Engine(private val context: Context) {
     )
     val previewOverlapState: StateFlow<PreviewOverlapState> = zoomTransitionController.previewOverlapState
 
+    val isLensSwitchOverlapAnimationEnabled: Boolean
+        get() = zoomTransitionController.isOverlapAnimationEnabled
+
+    fun setLensSwitchOverlapAnimationEnabled(enabled: Boolean) {
+        zoomTransitionController.isOverlapAnimationEnabled = enabled
+        preferences.isLensSwitchOverlapAnimationEnabled = enabled
+    }
+
     @Volatile
     private var ultraWideViewfinderSurfaceTexture: SurfaceTexture? = null
     @Volatile

@@ -212,6 +212,8 @@ fun SettingsDrawer(
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     lensSwitchHoldDurationSec: Float = 0.10f,
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
+    isLensSwitchOverlapAnimationEnabled: Boolean = false,
+    onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -436,6 +438,8 @@ fun SettingsDrawer(
                             onLensSwitchOverlapDurationChange = onLensSwitchOverlapDurationChange,
                             lensSwitchHoldDurationSec = lensSwitchHoldDurationSec,
                             onLensSwitchHoldDurationChange = onLensSwitchHoldDurationChange,
+                            isLensSwitchOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled,
+                            onLensSwitchOverlapAnimationToggle = onLensSwitchOverlapAnimationToggle,
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
                             onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
                             onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
@@ -1891,6 +1895,8 @@ private fun CameraLensSettingsPage(
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     lensSwitchHoldDurationSec: Float = 0.10f,
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
+    isLensSwitchOverlapAnimationEnabled: Boolean = false,
+    onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
@@ -1929,7 +1935,18 @@ private fun CameraLensSettingsPage(
         item {
             LensSwitchHoldDurationSettingCard(
                 holdDurationSec = lensSwitchHoldDurationSec,
-                onHoldDurationChange = onLensSwitchHoldDurationChange
+                onHoldDurationChange = onLensSwitchHoldDurationChange,
+                isOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Lens Switch Overlap Animation",
+                description = "Smoothly blend the cropped Ultra-Wide 1x preview into the native Main 1x preview using the selected hold duration, eliminating abrupt hold steps.",
+                isChecked = isLensSwitchOverlapAnimationEnabled,
+                onCheckedChange = onLensSwitchOverlapAnimationToggle,
+                tag = "toggle_lens_switch_overlap_animation"
             )
         }
 
@@ -2038,14 +2055,23 @@ private fun CameraLensSettingsPage(
 @Composable
 private fun LensSwitchHoldDurationSettingCard(
     holdDurationSec: Float,
-    onHoldDurationChange: (Float) -> Unit
+    onHoldDurationChange: (Float) -> Unit,
+    isOverlapAnimationEnabled: Boolean = false
 ) {
     val roundedDuration = ((holdDurationSec.coerceIn(0.05f, 0.30f) * 20f).roundToInt() / 20f).coerceIn(0.05f, 0.30f)
     val isDefault = kotlin.math.abs(roundedDuration - 0.10f) < 0.001f
-    val displayValue = if (isDefault) {
-        String.format(java.util.Locale.US, "%.2f sec (Default)", roundedDuration)
+    val displayValue = if (isOverlapAnimationEnabled) {
+        if (isDefault) {
+            String.format(java.util.Locale.US, "%.2f sec (Default • Overlap Blend)", roundedDuration)
+        } else {
+            String.format(java.util.Locale.US, "%.2f sec (Overlap Blend)", roundedDuration)
+        }
     } else {
-        String.format(java.util.Locale.US, "%.2f sec", roundedDuration)
+        if (isDefault) {
+            String.format(java.util.Locale.US, "%.2f sec (Default)", roundedDuration)
+        } else {
+            String.format(java.util.Locale.US, "%.2f sec", roundedDuration)
+        }
     }
 
     val options = listOf(
@@ -2102,7 +2128,11 @@ private fun LensSwitchHoldDurationSettingCard(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Hold duration at 1x field of view on the Ultra-Wide lens before switching to the Main lens (.5x → 1x).",
+                            text = if (isOverlapAnimationEnabled) {
+                                "Duration used for the Overlap Animation (.5x → 1x). Smoothly blends cropped Ultra-Wide 1x into native Main 1x over this exact duration."
+                            } else {
+                                "Hold duration at 1x field of view on the Ultra-Wide lens before switching to the Main lens (.5x → 1x)."
+                            },
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
                             lineHeight = 16.sp
@@ -2126,7 +2156,7 @@ private fun LensSwitchHoldDurationSettingCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Current Hold Time",
+                        text = if (isOverlapAnimationEnabled) "Animation Duration" else "Current Hold Time",
                         color = Color.White.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
@@ -4178,6 +4208,8 @@ fun CameraSettingsScreen(
         onLensSwitchOverlapDurationChange = { viewModel.setLensSwitchOverlapDuration(it) },
         lensSwitchHoldDurationSec = viewModel.lensSwitchHoldDurationSec.collectAsStateWithLifecycle().value,
         onLensSwitchHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
+        isLensSwitchOverlapAnimationEnabled = viewModel.isLensSwitchOverlapAnimationEnabled.collectAsStateWithLifecycle().value,
+        onLensSwitchOverlapAnimationToggle = { viewModel.setLensSwitchOverlapAnimationEnabled(it) },
         onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
         onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },

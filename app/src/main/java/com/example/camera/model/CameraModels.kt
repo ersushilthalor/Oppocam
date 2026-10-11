@@ -346,7 +346,8 @@ data class MotorolaInstantSwitchState(
     val switchPointMm: Float = 23.0f,
     val displayedPreviewSource: PreviewStreamSource = PreviewStreamSource.MAIN,
     val lensSwitchOverlapDurationSec: Float = 0.3f,
-    val lensSwitchHoldDurationSec: Float = 0.10f
+    val lensSwitchHoldDurationSec: Float = 0.10f,
+    val isLensSwitchOverlapAnimationEnabled: Boolean = false
 )
 
 /**

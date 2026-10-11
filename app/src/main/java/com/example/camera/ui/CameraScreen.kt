@@ -1217,12 +1217,30 @@ fun CameraPermissionPrompt(
                     .background(Color(0xFFC9E0FF)),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = com.example.R.drawable.ic_app_camera_icon),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val hasBitmap = remember {
+                    try {
+                        context.resources.openRawResource(com.example.R.drawable.ic_app_camera_icon).close()
+                        true
+                    } catch (e: Throwable) {
+                        false
+                    }
+                }
+                if (hasBitmap) {
+                    Image(
+                        painter = painterResource(id = com.example.R.drawable.ic_app_camera_icon),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.CameraAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(52.dp),
+                        tint = Color(0xFF1E3A8A)
+                    )
+                }
             }
 
             Text(

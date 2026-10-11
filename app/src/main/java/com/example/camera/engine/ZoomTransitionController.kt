@@ -67,6 +67,7 @@ class ZoomTransitionController(
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
     var holdAtOneXDurationMs: Long = DEFAULT_HOLD_AT_ONE_X_DURATION_MS
+    var isOverlapAnimationEnabled: Boolean = false
 
     private val _isTransitionActive = MutableStateFlow(false)
     val isTransitionActive: StateFlow<Boolean> = _isTransitionActive.asStateFlow()
@@ -256,18 +257,64 @@ class ZoomTransitionController(
                 onZoomUpdate(1.0f)
                 onApplyZoomToEngine(1.0f, true)
 
-                // 3. Once Ultra-Wide reaches exact 1x field of view, hold that view for the selected hold duration
+                // 3. Ultra-Wide is at exact 1x field of view.
                 val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
-                delay(holdDuration)
 
-                // 4. After the 100 ms hold, switch instantly to physical 1x Main lens with zero intentional delay
-                onSelectLensOnEngine(mainWideLens, 1.0f, false)
-                setSteadyStatePreview(false)
-                _isTransitionActive.value = false
-                activeTransitionJob = null
+                if (isOverlapAnimationEnabled) {
+                    // Activate physical Main lens stream concurrently under Ultra-Wide layer
+                    onSelectLensOnEngine(mainWideLens, 1.0f, true)
 
-                onComplete(1.0f, mainWideLens)
-                return@launch
+                    // Smoothly blend the cropped Ultra-Wide 1x preview into the native Main 1x preview
+                    // during the selected hold duration (e.g. 100ms), with no extra hold or delay.
+                    val blendStartTime = SystemClock.uptimeMillis()
+                    while (isActive) {
+                        val now = SystemClock.uptimeMillis()
+                        val blendElapsed = now - blendStartTime
+                        if (blendElapsed >= holdDuration) break
+
+                        val progress = (blendElapsed.toFloat() / holdDuration.toFloat()).coerceIn(0f, 1f)
+                        val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
+                        val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
+                        // Main preview is fully opaque underneath so no black background shows through
+                        val mainAlpha = 1.0f
+
+                        _previewOverlapState.value = PreviewOverlapState(
+                            isOverlapping = true,
+                            mainAlpha = mainAlpha,
+                            ultraWideAlpha = uwAlpha,
+                            activeSource = PreviewStreamSource.MAIN,
+                            overlapProgress = progress,
+                            topSource = PreviewStreamSource.ULTRAWIDE
+                        )
+
+                        val nextTick = minOf(blendStartTime + holdDuration, now + 16L)
+                        val waitMs = nextTick - SystemClock.uptimeMillis()
+                        if (waitMs > 0) {
+                            delay(waitMs)
+                        }
+                    }
+
+                    // Finalize steady state lens selection on engine
+                    onSelectLensOnEngine(mainWideLens, 1.0f, false)
+                    setSteadyStatePreview(false)
+                    _isTransitionActive.value = false
+                    activeTransitionJob = null
+
+                    onComplete(1.0f, mainWideLens)
+                    return@launch
+                } else {
+                    // Original Lens Switch Hold Duration behavior preserved exactly
+                    delay(holdDuration)
+
+                    // After the hold duration, switch instantly to physical 1x Main lens
+                    onSelectLensOnEngine(mainWideLens, 1.0f, false)
+                    setSteadyStatePreview(false)
+                    _isTransitionActive.value = false
+                    activeTransitionJob = null
+
+                    onComplete(1.0f, mainWideLens)
+                    return@launch
+                }
             }
 
             // Reuse the actual zoom slider logarithmic mapping to anchor start and target positions
