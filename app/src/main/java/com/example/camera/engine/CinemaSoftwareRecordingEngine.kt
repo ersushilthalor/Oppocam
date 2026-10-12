@@ -1329,11 +1329,37 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
     fun isPaused(): Boolean = isPaused.get()
 
-    private var isFrontFacing: Boolean = false
-    private var cameraSensorOrientation: Int = 90
+    @Volatile
+    var isFrontFacing: Boolean = false
+        private set
+    @Volatile
+    var cameraSensorOrientation: Int = 90
+        private set
     private var activeDeviceRotation: Int = 0
     private var cameraBufferWidth: Int = 1920
     private var cameraBufferHeight: Int = 1080
+
+    @Volatile
+    var stabilizationOffsetX: Float = 0f
+        private set
+    @Volatile
+    var stabilizationOffsetY: Float = 0f
+        private set
+    @Volatile
+    var stabilizationCropScale: Float = 1.0f
+        private set
+
+    fun updateCameraFacing(isFront: Boolean, sensorOrientation: Int) {
+        isFrontFacing = isFront
+        cameraSensorOrientation = sensorOrientation
+        Log.i(TAG, "[CINEMA_ENGINE] Updated camera facing: isFront=$isFront, sensorOrientation=$sensorOrientation")
+    }
+
+    fun updateStabilizationOffset(offsetX: Float, offsetY: Float, cropScale: Float) {
+        stabilizationOffsetX = offsetX
+        stabilizationOffsetY = offsetY
+        stabilizationCropScale = cropScale.coerceIn(1.0f, 1.15f)
+    }
 
     private val localTexMatrix = FloatArray(16)
     private val matrixValues = FloatArray(9)
@@ -1671,8 +1697,10 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         cachedMatrix2d.reset()
         cachedMatrix2d.postTranslate(-0.5f, -0.5f)
-        // 1. Uniform center-crop scaling in the viewport's upright coordinate axes
-        cachedMatrix2d.postScale(scaleX, effScaleY)
+        // 1. Uniform center-crop scaling in the viewport's upright coordinate axes with stabilization crop
+        val effectiveScaleX = scaleX * stabilizationCropScale
+        val effectiveScaleY = effScaleY * stabilizationCropScale
+        cachedMatrix2d.postScale(effectiveScaleX, effectiveScaleY)
         // 2. Rotate to align with sensor buffer coordinates
         if (netRotationDeg != 0f) {
             cachedMatrix2d.postRotate(netRotationDeg)
@@ -1681,7 +1709,18 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         if (isFront != isStMirrored) {
             cachedMatrix2d.postScale(-1.0f, 1.0f)
         }
-        cachedMatrix2d.postTranslate(0.5f, 0.5f)
+        val maxAllowedShift = (stabilizationCropScale - 1.0f) * 0.45f
+        val safeShiftX = stabilizationOffsetX.coerceIn(-maxAllowedShift, maxAllowedShift)
+        val safeShiftY = stabilizationOffsetY.coerceIn(-maxAllowedShift, maxAllowedShift)
+        val (orientedShiftX, orientedShiftY) = when (normRot) {
+            90 -> -safeShiftY to safeShiftX
+            180 -> -safeShiftX to -safeShiftY
+            270 -> safeShiftY to -safeShiftX
+            else -> safeShiftX to safeShiftY
+        }
+        val finalShiftX = if (isFront) -orientedShiftX else orientedShiftX
+        val finalShiftY = orientedShiftY
+        cachedMatrix2d.postTranslate(0.5f + finalShiftX, 0.5f + finalShiftY)
 
         cachedMatrix2d.getValues(matrixValues)
         // Convert 3x3 affine matrix to 4x4 OpenGL column-major matrix

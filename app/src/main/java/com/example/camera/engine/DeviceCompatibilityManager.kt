@@ -241,7 +241,7 @@ object DeviceCompatibilityManager {
         // Clamp bitrate to avoid encoder buffer overflow on lower-end SoCs
         val maxSafeBitrate = when (socVendor) {
             SocVendor.UNISOC -> 25_000_000
-            SocVendor.MEDIATEK -> if (requestedWidth >= 3840) 60_000_000 else 35_000_000
+            SocVendor.MEDIATEK -> if (maxOf(requestedWidth, requestedHeight) >= 3840) 60_000_000 else 35_000_000
             else -> 100_000_000
         }
         val safeBitrate = requestedBitrate.coerceAtMost(maxSafeBitrate)

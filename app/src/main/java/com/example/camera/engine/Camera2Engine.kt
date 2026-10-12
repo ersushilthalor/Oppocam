@@ -1353,6 +1353,7 @@ class Camera2Engine(private val context: Context) {
         val reqH = minOf(requested.width, requested.height)
         val lens = _availableLenses.value.firstOrNull { it.cameraId == cameraId }
         val isUltraWide = (lens?.lensType == LensType.ULTRAWIDE) || (lens?.isPhysical == true && lens.lensType == LensType.ULTRAWIDE)
+        val is2K = (reqW == 2560 && reqH == 1440) || (reqW in 2400..2800)
 
         if (supportedSizes.isEmpty()) {
             val cached = lensSupportedVideoResolutions[cameraId]
@@ -1361,6 +1362,13 @@ class Camera2Engine(private val context: Context) {
                     maxOf(it.width, it.height) == reqW && minOf(it.width, it.height) == reqH
                 }
                 if (exact != null) return requested
+                if (is2K) {
+                    val exact2K = cached.firstOrNull { maxOf(it.width, it.height) == 2560 && minOf(it.width, it.height) == 1440 }
+                    if (exact2K != null) return CameraResolution(exact2K.width, exact2K.height)
+                    val size4K = cached.firstOrNull { maxOf(it.width, it.height) >= 3840 }
+                    if (size4K != null) return CameraResolution(size4K.width, size4K.height)
+                    return requested
+                }
                 if (reqW >= 3840 && isUltraWide) {
                     val highest43Cached = cached.filter {
                         val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
@@ -1388,6 +1396,14 @@ class Camera2Engine(private val context: Context) {
             maxOf(it.width, it.height) == reqW && minOf(it.width, it.height) == reqH
         }
         if (isExactSupported) return requested
+
+        if (is2K) {
+            val exact2K = supportedSizes.firstOrNull { maxOf(it.width, it.height) == 2560 && minOf(it.width, it.height) == 1440 }
+            if (exact2K != null) return CameraResolution(exact2K.width, exact2K.height)
+            val size4K = supportedSizes.firstOrNull { maxOf(it.width, it.height) == 3840 && minOf(it.width, it.height) == 2160 }
+            if (size4K != null) return CameraResolution(size4K.width, size4K.height)
+            return requested
+        }
 
         // When 4K recording is requested on ultra-wide sensors that cannot provide 8.3MP native 16:9 pixels (e.g. 8MP sensor):
         // capture using the highest suitable supported 4:3 sensor stream (e.g. 3264x2448) which will be cropped to 9:16 for
@@ -3272,6 +3288,12 @@ class Camera2Engine(private val context: Context) {
                 if (switchGen != lensSwitchGeneration.get()) {
                     return@synchronized
                 }
+                val isTargetFront = (lens.facing == CameraCharacteristics.LENS_FACING_FRONT)
+                if (isTargetFront) {
+                    // Release standby ultra-wide camera when switching to front camera
+                    // to prevent camera hardware resource conflicts (e.g. max cameras in use)
+                    releaseUltraWideStandby()
+                }
                 val oldSession = captureSession
                 val oldDevice = cameraDevice
                 captureSession = null
@@ -3383,7 +3405,15 @@ class Camera2Engine(private val context: Context) {
                                 }
 
                                 val relay = dualCameraRecordingRelay
+                                val isTargetFront = (lens.facing == CameraCharacteristics.LENS_FACING_FRONT)
+                                val targetSensorOrient = try {
+                                    getCharacteristics(lens.cameraId)?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: (if (isTargetFront) 270 else 90)
+                                } catch (_: Exception) {
+                                    if (isTargetFront) 270 else 90
+                                }
+                                _sensorOrientation.value = targetSensorOrient
                                 if (relay != null) {
+                                    relay.updateCameraFacing(isTargetFront, targetSensorOrient)
                                     val targetSource = if (lens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                                     relay.setActiveSource(targetSource)
                                     val requestedRes = activeRecordingStreamConfig?.videoResolution
@@ -3394,6 +3424,9 @@ class Camera2Engine(private val context: Context) {
                                         width = effectiveRes.width,
                                         height = effectiveRes.height
                                     )
+                                }
+                                if (isSoftwareCinemaRecording) {
+                                    cinemaSoftwareRecorder.updateCameraFacing(isTargetFront, targetSensorOrient)
                                 }
                                 val recSurf = relay?.getRecorderSurfaceForLens(lens) ?: activeRecordingSurface
                                 if (recSurf != null && recSurf.isValid) {
@@ -3446,6 +3479,13 @@ class Camera2Engine(private val context: Context) {
                                                     Log.e(TAG, "Failed repeating request after lens switch in recording", e)
                                                 }
                                                 completeLensSwitch(lens)
+                                                if (!isTargetFront && _isKeepUltraWideReady.value) {
+                                                    val recConf = activeRecordingStreamConfig
+                                                    val is4k = recConf != null && maxOf(recConf.videoResolution.width, recConf.videoResolution.height) >= 3840
+                                                    if (!is4k) {
+                                                        ensureUltraWideSimultaneousReady()
+                                                    }
+                                                }
                                             }
 
                                             override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -4889,11 +4929,11 @@ class Camera2Engine(private val context: Context) {
                 dollyZoomEngine.onFrameFaces(faces, activeArray, sensorOrientation, isFront)
             }
 
-            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
+            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value
             val isStabActive = isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
 
             if (isVideoMode && isStabActive) {
-                val lens = _selectedLens.value
+                val lens = activeSessionLens ?: _selectedLens.value
                 if (lens != null) {
                     try {
                         val chars = getCharacteristics(lens.cameraId)
@@ -4903,18 +4943,36 @@ class Camera2Engine(private val context: Context) {
                         val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: SizeF(6.4f, 4.8f)
 
                         if (activeArray != null) {
+                            val isOisActive = isOisAllowed && _actualOisHardwareActive.value
                             val crop = gyroStabilizationEngine.computeStabilizedCrop(
                                 result = result,
                                 activeArray = activeArray,
                                 baseZoom = currentZoom,
                                 focalLengthMm = focalLength,
-                                sensorPhysicalSizeMm = sensorSize
+                                sensorPhysicalSizeMm = sensorSize,
+                                isOisActive = isOisActive
                             )
-                            if (crop != null) {
+                            val offX = gyroStabilizationEngine.normalizedOffsetX
+                            val offY = gyroStabilizationEngine.normalizedOffsetY
+                            val cropScale = gyroStabilizationEngine.currentCropScale
+
+                            // Pass real-time smooth offsets directly to GPU rendering relay for zero request churn
+                            dualCameraRecordingRelay?.updateStabilizationOffset(offX, offY, cropScale)
+                            if (isSoftwareCinemaRecording) {
+                                cinemaSoftwareRecorder.updateStabilizationOffset(offX, offY, cropScale)
+                            }
+
+                            // Only apply HAL crop when not actively recording with GPU relay to avoid 4K request churn
+                            if (!_isRecordingVideo.value && crop != null) {
                                 applyStabilizedCrop(crop)
                             }
                         }
                     } catch (ignored: Exception) {}
+                }
+            } else {
+                dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
+                if (isSoftwareCinemaRecording) {
+                    cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
                 }
             }
 
@@ -5363,15 +5421,23 @@ class Camera2Engine(private val context: Context) {
         // Preserve video recording capture intent and target FPS range across lens switches & setting updates
         if (_isRecordingVideo.value) {
             builder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
-            // Optimize edge and noise reduction for real-time 4K recording throughput
-            if (proSharpness.value <= 50f) {
+            val is4kOrHigher = (_selectedVideoResolution.value?.let { maxOf(it.width, it.height) >= 3840 } == true) ||
+                    (activeRecordingStreamConfig?.videoResolution?.let { maxOf(it.width, it.height) >= 3840 } == true)
+            // Optimize edge, noise reduction, hot pixel, shading and aberration modes for real-time 4K recording throughput
+            if (is4kOrHigher || proSharpness.value <= 50f) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
-            if (proNoiseReduction.value <= 50f) {
+            if (is4kOrHigher || proNoiseReduction.value <= 50f) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
             }
             try {
                 builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_FAST)
+            } catch (_: Throwable) {}
+            try {
+                builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_FAST)
+            } catch (_: Throwable) {}
+            try {
+                builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_FAST)
             } catch (_: Throwable) {}
         }
         if (isVideoMode) {
@@ -7281,9 +7347,15 @@ class Camera2Engine(private val context: Context) {
 
             val is16To9Requested = kotlin.math.abs((reqMaxDim.toFloat() / reqMinDim.toFloat()) - (16f / 9f)) < 0.08f
             val is4KRequested = reqMaxDim >= 3840
+            val is2KRequested = (reqMaxDim == 2560 && reqMinDim == 1440) || (reqMaxDim in 2400..2800) || (isCinema && reqMaxDim == 2560)
             val isUltraWideLens = (lens.lensType == LensType.ULTRAWIDE)
 
-            val videoRes = if (is4KRequested && isUltraWideLens) {
+            val videoRes = if (is2KRequested) {
+                // True 2K Output: Preserve selected 2K resolution (2560x1440 or cinema 2560x1080) throughout
+                // encoder configuration and final output saving. Sensor stream is supplied at highest available
+                // supported stream (e.g. 4K UHD or native 2K) and rendered/encoded at exact 2K dimensions.
+                requestedRes
+            } else if (is4KRequested && isUltraWideLens) {
                 // The 8MP ultra-wide sensor cannot provide 8.3MP native pixels for a full 4K frame,
                 // so capture using the highest suitable supported 4:3 sensor stream and crop it to 9:16
                 // for both the live viewfinder and final video. Keep the encoder output at 4K (2160x3840 in portrait);
@@ -7375,8 +7447,9 @@ class Camera2Engine(private val context: Context) {
                 videoBitrateOption.bps
             } else {
                 when {
-                    videoRes.width >= 3840 -> 40_000_000
-                    videoRes.width >= 1920 -> 20_000_000
+                    videoRes.width >= 3840 || videoRes.height >= 3840 -> 40_000_000
+                    videoRes.width >= 2560 || videoRes.height >= 2560 -> 28_000_000
+                    videoRes.width >= 1920 || videoRes.height >= 1920 -> 20_000_000
                     else -> 10_000_000
                 }
             }
@@ -8015,7 +8088,8 @@ class Camera2Engine(private val context: Context) {
                                     _isRecordingVideo.value = true
                                     isStartingRecording.set(false)
                                     startVideoTimer()
-                                    if (_isKeepUltraWideReady.value) {
+                                    val is4kRec = maxOf(videoRes.width, videoRes.height) >= 3840
+                                    if (_isKeepUltraWideReady.value && !is4kRec) {
                                         ensureUltraWideSimultaneousReady()
                                     }
                                     if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {
@@ -8074,7 +8148,8 @@ class Camera2Engine(private val context: Context) {
                                                     _isRecordingVideo.value = true
                                                     isStartingRecording.set(false)
                                                     startVideoTimer()
-                                                    if (_isKeepUltraWideReady.value) {
+                                                    val is4kRec = maxOf(videoRes.width, videoRes.height) >= 3840
+                                                    if (_isKeepUltraWideReady.value && !is4kRec) {
                                                         ensureUltraWideSimultaneousReady()
                                                     }
                                                     if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {

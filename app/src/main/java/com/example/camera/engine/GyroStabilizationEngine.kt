@@ -82,6 +82,18 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
     // Dynamic crop margin state (~5% to 10%)
     private var dynamicCropMargin: Float = MIN_CROP_MARGIN
 
+    @Volatile
+    var normalizedOffsetX: Float = 0f
+        private set
+
+    @Volatile
+    var normalizedOffsetY: Float = 0f
+        private set
+
+    @Volatile
+    var currentCropScale: Float = 1.0f
+        private set
+
     fun start() {
         if (gyroSensor == null || sensorManager == null) {
             Log.w(TAG, "Hardware Gyroscope not available on this device")
@@ -99,6 +111,9 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
             velocityDx = 0f
             velocityDy = 0f
             dynamicCropMargin = MIN_CROP_MARGIN
+            normalizedOffsetX = 0f
+            normalizedOffsetY = 0f
+            currentCropScale = 1.0f
             try {
                 val registered = sensorManager.registerListener(this, gyroSensor, SensorManager.SENSOR_DELAY_GAME)
                 if (!registered) {
@@ -127,6 +142,9 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
             } catch (ignored: Exception) {}
             gyroRingBuffer.clear()
             lastMidFrameTimestamp = 0L
+            normalizedOffsetX = 0f
+            normalizedOffsetY = 0f
+            currentCropScale = 1.0f
             Log.d(TAG, "GyroStabilization sensor listening stopped")
         }
     }
@@ -224,7 +242,8 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
         activeArray: Rect,
         baseZoom: Float = 1.0f,
         focalLengthMm: Float = 4.38f,
-        sensorPhysicalSizeMm: SizeF = SizeF(6.4f, 4.8f)
+        sensorPhysicalSizeMm: SizeF = SizeF(6.4f, 4.8f),
+        isOisActive: Boolean = false
     ): Rect? {
         if (!isSensorRunning.get()) return null
 
@@ -328,14 +347,17 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
         val cropW = (activeArray.width() / effectiveScale).toInt().coerceIn(100, activeArray.width())
         val cropH = (activeArray.height() / effectiveScale).toInt().coerceIn(100, activeArray.height())
 
-        // 6. Convert angular shake to pixel offsets on active sensor array
+        // 6. Convert angular shake to pixel offsets on active sensor array.
+        // When hardware OIS is active, voice-coil motors physically absorb high-frequency optical shake.
+        // EIS coordinates gracefully by dampening residual motion compensation to prevent over-correction or fighting OIS.
+        val oisDampingFactor = if (isOisActive) 0.50f else 1.0f
         val fSensorW = if (sensorPhysicalSizeMm.width > 0.1f) sensorPhysicalSizeMm.width else 6.4f
         val fSensorH = if (sensorPhysicalSizeMm.height > 0.1f) sensorPhysicalSizeMm.height else 4.8f
         val focalPxX = activeArray.width() * (focalLengthMm / fSensorW)
         val focalPxY = activeArray.height() * (focalLengthMm / fSensorH)
 
-        val rawShiftX = (errYaw * focalPxX)
-        val rawShiftY = (-errPitch * focalPxY)
+        val rawShiftX = (errYaw * focalPxX) * oisDampingFactor
+        val rawShiftY = (-errPitch * focalPxY) * oisDampingFactor
 
         val maxShiftX = ((activeArray.width() - cropW) / 2).toFloat().coerceAtLeast(1f)
         val maxShiftY = ((activeArray.height() - cropH) / 2).toFloat().coerceAtLeast(1f)
@@ -360,11 +382,17 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
         currentOffsetDy += velocityDy * frameDt
 
         // Clamp securely inside bounds
-        val clampedShiftX = currentOffsetDx.toInt().coerceIn(-maxShiftX.toInt(), maxShiftX.toInt())
-        val clampedShiftY = currentOffsetDy.toInt().coerceIn(-maxShiftY.toInt(), maxShiftY.toInt())
+        val clampedShiftX = currentOffsetDx.coerceIn(-maxShiftX, maxShiftX)
+        val clampedShiftY = currentOffsetDy.coerceIn(-maxShiftY, maxShiftY)
 
-        val centerX = (activeArray.width() / 2) + clampedShiftX
-        val centerY = (activeArray.height() / 2) + clampedShiftY
+        val activeW = activeArray.width().toFloat().coerceAtLeast(1f)
+        val activeH = activeArray.height().toFloat().coerceAtLeast(1f)
+        normalizedOffsetX = -(clampedShiftX / activeW)
+        normalizedOffsetY = -(clampedShiftY / activeH)
+        currentCropScale = dynamicCropMargin
+
+        val centerX = (activeArray.width() / 2) + clampedShiftX.toInt()
+        val centerY = (activeArray.height() / 2) + clampedShiftY.toInt()
 
         val left = (centerX - cropW / 2).coerceIn(0, activeArray.width() - cropW)
         val top = (centerY - cropH / 2).coerceIn(0, activeArray.height() - cropH)

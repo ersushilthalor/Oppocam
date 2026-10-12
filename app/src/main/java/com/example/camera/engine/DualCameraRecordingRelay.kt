@@ -80,9 +80,38 @@ class DualCameraRecordingRelay(
     val switchCount = AtomicInteger(0)
     val relayedFrameCount = AtomicLong(0L)
 
-    private val cameraSensorOrientation: Int = sensorOrientation
+    @Volatile
+    var cameraSensorOrientation: Int = sensorOrientation
+        private set
     private val activeDeviceRotation: Int = deviceRotation
-    private val isFrontFacing: Boolean = isFront
+    @Volatile
+    var isFrontFacing: Boolean = isFront
+        private set
+    @Volatile
+    var stabilizationOffsetX: Float = 0f
+        private set
+    @Volatile
+    var stabilizationOffsetY: Float = 0f
+        private set
+    @Volatile
+    var stabilizationCropScale: Float = 1.0f
+        private set
+
+    fun updateCameraFacing(isFront: Boolean, sensorOrientation: Int) {
+        isFrontFacing = isFront
+        cameraSensorOrientation = sensorOrientation
+        pendingClockSyncOnSwitch = true
+        switchCount.incrementAndGet()
+        cinemaRecorder?.updateCameraFacing(isFront, sensorOrientation)
+        Log.i(TAG, "[RECORDING_RELAY] Updated camera facing: isFront=$isFront, sensorOrientation=$sensorOrientation")
+    }
+
+    fun updateStabilizationOffset(offsetX: Float, offsetY: Float, cropScale: Float) {
+        stabilizationOffsetX = offsetX
+        stabilizationOffsetY = offsetY
+        stabilizationCropScale = cropScale.coerceIn(1.0f, 1.15f)
+    }
+
     private val matrixValues = FloatArray(9)
     private val localTexMatrix = FloatArray(16)
     private val cachedMatrix2d = android.graphics.Matrix()
@@ -99,6 +128,8 @@ class DualCameraRecordingRelay(
     private var vadjHandles: VideoAdjustmentsPipeline.VideoAdjustmentsShaderHandles? = null
     private var mainOesTexId: Int = 0
     private var ultraWideOesTexId: Int = 0
+    private var vboVertexBufferId: Int = 0
+    private var vboTexCoordBufferId: Int = 0
 
     val isRelayPreviewActive: Boolean
         get() = (eglPreviewSurface != null && eglPreviewSurface != EGL14.EGL_NO_SURFACE)
@@ -499,6 +530,19 @@ class DualCameraRecordingRelay(
                 position(0)
             }
 
+        // Hardware-accelerated GPU VBOs for zero CPU-to-GPU memory copies during 4K recording
+        val vbos = IntArray(2)
+        GLES20.glGenBuffers(2, vbos, 0)
+        vboVertexBufferId = vbos[0]
+        vboTexCoordBufferId = vbos[1]
+        if (vboVertexBufferId != 0 && vboTexCoordBufferId != 0) {
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboVertexBufferId)
+            GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, 4 * 3 * 4, vertexBuffer, GLES20.GL_STATIC_DRAW)
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboTexCoordBufferId)
+            GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, 4 * 2 * 4, texCoordBuffer, GLES20.GL_STATIC_DRAW)
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
+        }
+
         Matrix.setIdentityM(mvpMatrix, 0)
         // Standard vertical flip from OpenGL bottom-left texture origin to ANativeWindow top-left sensor buffer origin
         Matrix.setIdentityM(relayTexMatrix, 0)
@@ -643,7 +687,21 @@ class DualCameraRecordingRelay(
 
                 val vb = vertexBuffer
                 val tb = texCoordBuffer
-                if (vb != null && tb != null && aPos >= 0 && aTex >= 0) {
+                if (vboVertexBufferId != 0 && vboTexCoordBufferId != 0 && aPos >= 0 && aTex >= 0) {
+                    GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboVertexBufferId)
+                    GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, 0)
+                    GLES20.glEnableVertexAttribArray(aPos)
+
+                    GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboTexCoordBufferId)
+                    GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 0, 0)
+                    GLES20.glEnableVertexAttribArray(aTex)
+
+                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+                    GLES20.glDisableVertexAttribArray(aPos)
+                    GLES20.glDisableVertexAttribArray(aTex)
+                    GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
+                } else if (vb != null && tb != null && aPos >= 0 && aTex >= 0) {
                     vb.position(0)
                     GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, vb)
                     GLES20.glEnableVertexAttribArray(aPos)
@@ -807,14 +865,27 @@ class DualCameraRecordingRelay(
 
         cachedMatrix2d.reset()
         cachedMatrix2d.postTranslate(-0.5f, -0.5f)
-        cachedMatrix2d.postScale(scaleX, effScaleY)
+        val effectiveScaleX = scaleX * stabilizationCropScale
+        val effectiveScaleY = effScaleY * stabilizationCropScale
+        cachedMatrix2d.postScale(effectiveScaleX, effectiveScaleY)
         if (netRotationDeg != 0f) {
             cachedMatrix2d.postRotate(netRotationDeg)
         }
         if (isFront != isStMirrored) {
             cachedMatrix2d.postScale(-1.0f, 1.0f)
         }
-        cachedMatrix2d.postTranslate(0.5f, 0.5f)
+        val maxAllowedShift = (stabilizationCropScale - 1.0f) * 0.45f
+        val safeShiftX = stabilizationOffsetX.coerceIn(-maxAllowedShift, maxAllowedShift)
+        val safeShiftY = stabilizationOffsetY.coerceIn(-maxAllowedShift, maxAllowedShift)
+        val (orientedShiftX, orientedShiftY) = when (normRot) {
+            90 -> -safeShiftY to safeShiftX
+            180 -> -safeShiftX to -safeShiftY
+            270 -> safeShiftY to -safeShiftX
+            else -> safeShiftX to safeShiftY
+        }
+        val finalShiftX = if (isFront) -orientedShiftX else orientedShiftX
+        val finalShiftY = orientedShiftY
+        cachedMatrix2d.postTranslate(0.5f + finalShiftX, 0.5f + finalShiftY)
 
         cachedMatrix2d.getValues(matrixValues)
         localTexMatrix[0] = matrixValues[0]; localTexMatrix[1] = matrixValues[3]; localTexMatrix[2] = 0f; localTexMatrix[3] = 0f
@@ -878,6 +949,11 @@ class DualCameraRecordingRelay(
                     }
                     mainOesTexId = 0
                     ultraWideOesTexId = 0
+                    if (vboVertexBufferId != 0 || vboTexCoordBufferId != 0) {
+                        GLES20.glDeleteBuffers(2, intArrayOf(vboVertexBufferId, vboTexCoordBufferId), 0)
+                        vboVertexBufferId = 0
+                        vboTexCoordBufferId = 0
+                    }
 
                     val display = eglDisplay
                     if (display != null && display != EGL14.EGL_NO_DISPLAY) {

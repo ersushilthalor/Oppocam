@@ -135,6 +135,35 @@ fun BottomControlBar(
                             .scale(layoutConfig.zoomCapsuleScale)
                             .testTag("master_zoom_capsule")
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(Color(0x991E1E24))
+                            .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                            .clickable { onFlipCameraClick() }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                            .testTag("front_camera_capsule"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.FlipCameraAndroid,
+                                contentDescription = "Front Camera",
+                                tint = Color.White,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = "1x Front",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
 
                 // Separate Filter icon positioned to the right side of the zoom slider in Photo Mode
@@ -313,8 +342,26 @@ fun BottomControlBar(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Left: Gallery Thumbnail
-                        if (layoutConfig.showGalleryButton) {
+                        // Left: Flip Camera button during active recording, or Gallery Thumbnail
+                        if (isRecordingVideo) {
+                            Box(
+                                modifier = Modifier
+                                    .size(layoutConfig.flipButtonSizeDp.dp.coerceAtLeast(50.dp))
+                                    .clip(CircleShape)
+                                    .background(Color(0xB21E1E24))
+                                    .border(1.5.dp, Color.White.copy(alpha = 0.35f), CircleShape)
+                                    .clickable { onFlipCameraClick() }
+                                    .testTag("flip_camera_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.FlipCameraAndroid,
+                                    contentDescription = "Flip Camera",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        } else if (layoutConfig.showGalleryButton) {
                             Box(
                                 modifier = Modifier
                                     .size(layoutConfig.galleryThumbSizeDp.dp)
