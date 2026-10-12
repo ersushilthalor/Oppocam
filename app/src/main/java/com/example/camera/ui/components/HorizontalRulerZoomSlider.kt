@@ -61,6 +61,7 @@ fun normalizedToZoomLog(t: Float, minZ: Float, maxZ: Float): Float {
 
 const val RULER_TOTAL_TICKS = 120
 val RULER_TICK_SPACING_DP = 6.5.dp
+const val ZOOM_SLIDER_DRAG_SENSITIVITY = 1.25f
 
 /**
  * Flagship Horizontal Ruler Zoom Slider matching the reference camera UI:
@@ -233,7 +234,7 @@ fun HorizontalRulerZoomSlider(
                                         // Apply the full initial finger movement from touch-down so zero drag distance is lost
                                         val minZ = safeMinZoomState.value
                                         val maxZ = safeMaxZoomState.value
-                                        val deltaNorm = -totalDx / totalRulerWidthPx
+                                        val deltaNorm = (-totalDx * ZOOM_SLIDER_DRAG_SENSITIVITY) / totalRulerWidthPx
                                         accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                                         val newZoom = normalizedToZoomLog(accumulatedNorm, minZ, maxZ)
                                         activeZoom = newZoom
@@ -247,7 +248,7 @@ fun HorizontalRulerZoomSlider(
                                         if (abs(stepDx) > 0.01f) {
                                             val minZ = safeMinZoomState.value
                                             val maxZ = safeMaxZoomState.value
-                                            val deltaNorm = -stepDx / totalRulerWidthPx
+                                            val deltaNorm = (-stepDx * ZOOM_SLIDER_DRAG_SENSITIVITY) / totalRulerWidthPx
                                             accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                                             val newZoom = normalizedToZoomLog(accumulatedNorm, minZ, maxZ)
                                             activeZoom = newZoom

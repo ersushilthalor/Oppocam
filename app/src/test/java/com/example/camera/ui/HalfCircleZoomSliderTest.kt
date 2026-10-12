@@ -103,4 +103,19 @@ class HalfCircleZoomSliderTest {
         assertTrue(presetsStandard.contains(1.0f))
         assertTrue(!presetsStandard.contains(10.0f))
     }
+
+    @Test
+    fun `test zoom slider drag sensitivity increases responsiveness`() {
+        val sensitivity = com.example.camera.ui.components.ZOOM_SLIDER_DRAG_SENSITIVITY
+        assertTrue("Sensitivity should be slightly above baseline 1.0f", sensitivity > 1.0f)
+        assertTrue("Sensitivity should not be excessively high to preserve smooth control", sensitivity <= 1.5f)
+
+        val totalRulerWidthPx = 120 * 15f
+        val stepDx = -20f // User drags left to zoom in
+
+        val baselineDelta = -stepDx / totalRulerWidthPx
+        val responsiveDelta = (-stepDx * sensitivity) / totalRulerWidthPx
+
+        assertTrue("Responsive delta should be strictly greater than baseline delta", responsiveDelta > baselineDelta)
+    }
 }

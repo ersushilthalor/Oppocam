@@ -1064,7 +1064,7 @@ fun MasterZoomCapsule(
                             val minZ = minZoomState.value
                             val maxZ = maxZoomState.value
                             // Apply full distance from initial touch-down so zero drag distance is lost
-                            val deltaNorm = -totalDx / totalRulerWidthPx
+                            val deltaNorm = (-totalDx * com.example.camera.ui.components.ZOOM_SLIDER_DRAG_SENSITIVITY) / totalRulerWidthPx
                             accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                             val newZoom = com.example.camera.ui.components.normalizedToZoomLog(
                                 accumulatedNorm,
@@ -1081,7 +1081,7 @@ fun MasterZoomCapsule(
                             if (kotlin.math.abs(stepDx) > 0.01f) {
                                 val minZ = minZoomState.value
                                 val maxZ = maxZoomState.value
-                                val deltaNorm = -stepDx / totalRulerWidthPx
+                                val deltaNorm = (-stepDx * com.example.camera.ui.components.ZOOM_SLIDER_DRAG_SENSITIVITY) / totalRulerWidthPx
                                 accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                                 val newZoom = com.example.camera.ui.components.normalizedToZoomLog(
                                     accumulatedNorm,
