@@ -974,7 +974,7 @@ fun MasterZoomCapsule(
     }
     val presets = remember(isFrontCamera, hasRealUltraWide, customPresets) {
         if (isFrontCamera) {
-            if (hasRealUltraWide) listOf(0.5f, 1.0f) else listOf(1.0f)
+            listOf(0.8f, 1.0f)
         } else {
             customPresets?.takeIf { it.isNotEmpty() } ?: if (hasRealUltraWide) {
                 listOf(0.5f, 1.0f, 2.0f, 3.0f)
@@ -994,13 +994,17 @@ fun MasterZoomCapsule(
     // Do NOT dynamically change the slider range based on which physical lens is currently active.
     // If a real Ultra-wide lens exists on the device, the slider must always allow the full range starting from 0.5x.
     // Keep minZoom and maxZoom invariant across active lens state so 0.5x <-> 10x is smooth, continuous and bidirectional.
-    val minZoom = if (hasRealUltraWide) 0.5f else 1.0f
+    val minZoom = if (isFrontCamera) 0.8f else if (hasRealUltraWide) 0.5f else 1.0f
     val maxLensZoom = remember(displayedLenses, selectedLens?.facing) {
         displayedLenses
             .filter { selectedLens == null || it.facing == selectedLens.facing }
-            .maxOfOrNull { it.maxZoomRatio } ?: 20.0f
+            .maxOfOrNull { it.maxZoomRatio } ?: (if (isFrontCamera) 10.0f else 20.0f)
     }
-    val maxZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
+    val maxZoom = if (isFrontCamera) {
+        maxOf(capabilities.maxZoom, maxLensZoom, 10.0f)
+    } else {
+        maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
+    }
 
     var liveZoom by remember { mutableFloatStateOf(currentZoom.coerceIn(minZoom, maxZoom)) }
     LaunchedEffect(currentZoom, minZoom, maxZoom) {
@@ -1138,6 +1142,7 @@ fun MasterZoomCapsule(
 
                         val label = when (preset) {
                             0.5f -> "0.5"
+                            0.8f -> "0.8"
                             1.0f -> "1x"
                             2.0f -> "2"
                             3.0f -> "3"
@@ -1172,7 +1177,7 @@ fun MasterZoomCapsule(
                                     if (isActive) {
                                         liveZoom = preset
                                         isSliderOpen = true
-                                    } else if (preset == 0.5f && !hasRealUltraWide) {
+                                    } else if (preset == 0.5f && !hasRealUltraWide && !isFrontCamera) {
                                         onShowToast("Ultra-Wide lens is not available on this device")
                                     } else if (preset > maxZoom) {
                                         onShowToast("${preset.toInt()}x zoom is not supported on this device")

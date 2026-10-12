@@ -193,7 +193,6 @@ fun SettingsDrawer(
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit = {},
-    onKeepFrontCameraReadyToggle: (Boolean) -> Unit = {},
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit = {},
     floatingWindowAppearance: FloatingWindowAppearanceConfig = FloatingWindowAppearanceConfig.GLASSMORPHISM,
     onFloatingWindowTransparencyChange: (Float) -> Unit = {},
@@ -443,7 +442,6 @@ fun SettingsDrawer(
                             onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
                             onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
                             onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
-                            onKeepFrontCameraReadyToggle = onKeepFrontCameraReadyToggle,
                             onShowFrontCameraPreviewToggle = onShowFrontCameraPreviewToggle,
                             viewfinderFps = viewfinderFps,
                             onViewfinderFpsSelected = onViewfinderFpsSelected,
@@ -1913,7 +1911,6 @@ private fun CameraLensSettingsPage(
     onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
-    onKeepFrontCameraReadyToggle: (Boolean) -> Unit,
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit,
     viewfinderFps: Int,
     onViewfinderFpsSelected: (Int) -> Unit,
@@ -2000,16 +1997,6 @@ private fun CameraLensSettingsPage(
                 isChecked = instantSwitchState.isShowUltraWidePreview,
                 onCheckedChange = onShowUltraWidePreviewToggle,
                 tag = "toggle_uw_preview"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Front Camera Standby",
-                description = "Maintains front camera sensor ready for instantaneous switching.",
-                isChecked = instantSwitchState.isKeepFrontCameraReady,
-                onCheckedChange = onKeepFrontCameraReadyToggle,
-                tag = "toggle_front_standby"
             )
         }
 
@@ -4226,7 +4213,6 @@ fun CameraSettingsScreen(
         onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
         onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
-        onKeepFrontCameraReadyToggle = { viewModel.setKeepFrontCameraReady(it) },
         onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },
         floatingWindowAppearance = floatingWindowAppearance,
         onFloatingWindowTransparencyChange = { viewModel.setFloatingWindowTransparency(it) },

@@ -5491,7 +5491,9 @@ class Camera2Engine(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 if (zoomRange != null) {
-                    val desiredZoom = if (isLogicalMulti && !isRunningOnPhysicalStream) {
+                    val desiredZoom = if (lens.lensType == LensType.FRONT) {
+                        digitalCrop
+                    } else if (isLogicalMulti && !isRunningOnPhysicalStream) {
                         effectiveUiZoom
                     } else {
                         digitalCrop
@@ -5650,7 +5652,13 @@ class Camera2Engine(private val context: Context) {
             ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
             ?: backLenses.firstOrNull()
 
-        val minAllowedZoom = if (ultraWideLens != null) 0.5f else 1.0f
+        val minAllowedZoom = if (currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT) {
+            0.8f
+        } else if (ultraWideLens != null) {
+            0.5f
+        } else {
+            1.0f
+        }
         val maxCapabilityZoom = maxOf(
             _availableLenses.value
                 .filter { it.facing == currentLens.facing }
@@ -5668,22 +5676,8 @@ class Camera2Engine(private val context: Context) {
             preferences.currentZoom = clampedZoom
         }
 
-        // If front selfie camera, apply digital zoom on active stream,
-        // or switch to rear lens if user explicitly tapped a rear zoom preset (.5x or 1x)
+        // If front selfie camera, apply digital zoom on active stream
         if (currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT) {
-            val switchPoint = _lensSwitchPointMm.value
-            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
-            if (isPresetTap && clampedZoom < (switchZoom * 1.1f)) {
-                val backTarget = if (clampedZoom < switchZoom) {
-                    ultraWideLens
-                } else {
-                    mainWideLens
-                }
-                if (backTarget != null) {
-                    selectLens(backTarget, preserveZoom = false)
-                    return
-                }
-            }
             if (isSwitchingLens.get()) {
                 pendingZoomWhileSwitching = clampedZoom
                 pendingZoomPresetTapWhileSwitching = isPresetTap

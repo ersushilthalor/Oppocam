@@ -1,5 +1,6 @@
 package com.example.camera.engine
 
+import android.hardware.camera2.CameraCharacteristics
 import android.os.SystemClock
 import com.example.camera.model.LensInfo
 import com.example.camera.model.LensType
@@ -183,7 +184,8 @@ class ZoomTransitionController(
                 ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
                 ?: lensesForFacing.firstOrNull()
 
-            val minZoom = if (ultraWideLens != null) 0.5f else 1.0f
+            val isFrontCamera = currentFacing == CameraCharacteristics.LENS_FACING_FRONT
+            val minZoom = if (isFrontCamera) 0.8f else if (ultraWideLens != null) 0.5f else 1.0f
             val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: 20.0f
             val maxZoom = maxOf(maxLensZoom, 20.0f)
 
@@ -196,7 +198,7 @@ class ZoomTransitionController(
                 onZoomUpdate(endZ)
                 onApplyZoomToEngine(endZ, false)
                 val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
-                setSteadyStatePreview(endZ < switchZoom)
+                setSteadyStatePreview(!isFrontCamera && endZ < switchZoom)
                 _isTransitionActive.value = false
                 onComplete(endZ, targetLens)
                 return@launch
@@ -209,7 +211,7 @@ class ZoomTransitionController(
             // Determine if this transition is switching from Ultra-Wide to Main lens across the switch point
             val isStartingOnUltraWide = (currentLens?.lensType == LensType.ULTRAWIDE || startZ < switchZoom)
             val isCrossingOrAtSwitchPoint = (endZ >= switchZoom - 0.05f)
-            val isUltraWideToMainSwitch = isStartingOnUltraWide &&
+            val isUltraWideToMainSwitch = !isFrontCamera && isStartingOnUltraWide &&
                 isCrossingOrAtSwitchPoint &&
                 ultraWideLens != null && mainWideLens != null &&
                 (targetLens == null || targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE || targetLens.lensType == LensType.TELEPHOTO || targetLens.lensType == LensType.TELEPHOTO_3X)
@@ -421,7 +423,7 @@ class ZoomTransitionController(
             onZoomUpdate(endZ)
             onApplyZoomToEngine(endZ, true)
 
-            setSteadyStatePreview(endZ < switchZoom)
+            setSteadyStatePreview(!isFrontCamera && endZ < switchZoom)
             _isTransitionActive.value = false
             activeTransitionJob = null
 

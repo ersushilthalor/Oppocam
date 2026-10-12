@@ -259,6 +259,11 @@ object CameraOpticalCalibration {
             LensType.TELEPHOTO, LensType.TELEPHOTO_3X -> {
                 (uiZoom / base).coerceAtLeast(1.0f)
             }
+            LensType.FRONT -> {
+                // 0.8x: true, full sensor field of view with no digital crop (1.0f).
+                // 1x: slightly cropped view of the same front camera sensor (1.25x), narrower FOV than 0.8x.
+                (uiZoom / 0.8f).coerceAtLeast(1.0f)
+            }
             else -> {
                 uiZoom.coerceAtLeast(1.0f)
             }
@@ -281,6 +286,9 @@ object CameraOpticalCalibration {
         switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
         isContinuousTransition: Boolean = false
     ): LensType {
+        if (currentLensType == LensType.FRONT) {
+            return LensType.FRONT
+        }
         val clampedSwitch = switchPointMm.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
         val switchZoom = switchPointToZoom(clampedSwitch, DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
 
