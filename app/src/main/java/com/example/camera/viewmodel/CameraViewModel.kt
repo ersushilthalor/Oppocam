@@ -468,8 +468,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val lenses = engine.availableLenses.value
         val hasUW = lenses.any { it.lensType == LensType.ULTRAWIDE }
-        // Calibrated 1x equivalent focal length for optical switch points (~21.6mm eq, placing 28mm at ~1.3x)
-        val mainEqFocal = 21.6f
+        // 1x equivalent focal length for optical switch points (23mm Main lens: e.g. 40mm -> 40 / 23 = 1.7x)
+        val mainEqFocal = CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM // 23.0f
         val currentSwitchPointMm = preferences.lensSwitchPointMm
         val nonDefaultSwitchPoints = mutableListOf<Float>()
         if (preferences.isIncludeLensSwitchPointsInPresetsEnabled) {

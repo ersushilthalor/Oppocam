@@ -45,10 +45,10 @@ class ViewfinderResolutionAndPresetTest {
 
         val presets = viewModel.activeZoomPresets.value
 
-        // Must contain ~1.3x between 1.0x and 2.0x
-        val switchPointZoom = presets.firstOrNull { it in 1.2f..1.4f }
-        assertNotNull("Must include switch point around 1.3x in zoom presets", switchPointZoom)
-        assertEquals(1.3f, switchPointZoom!!, 0.05f)
+        // Must contain ~1.2x (28 / 23) between 1.0x and 2.0x
+        val switchPointZoom = presets.firstOrNull { it in 1.15f..1.25f }
+        assertNotNull("Must include switch point around 1.2x (28 / 23) in zoom presets", switchPointZoom)
+        assertEquals(1.2f, switchPointZoom!!, 0.05f)
 
         // Must be correctly positioned between 1.0x and 2.0x
         val idx1x = presets.indexOf(1.0f)
@@ -66,7 +66,29 @@ class ViewfinderResolutionAndPresetTest {
         // When toggled back off, non-default switch point is removed
         viewModel.setIncludeLensSwitchPointsInPresets(false)
         val revertedPresets = viewModel.activeZoomPresets.value
-        assertFalse("Reverted presets must not contain 1.3x", revertedPresets.any { it in 1.2f..1.4f })
+        assertFalse("Reverted presets must not contain 1.2x", revertedPresets.any { it in 1.15f..1.25f })
+    }
+
+    @Test
+    fun test40mmLensSwitchPointAddedToZoomPresetsCalculatedDividedBy23() {
+        // Enable switch points toggle
+        viewModel.setIncludeLensSwitchPointsInPresets(true)
+
+        // Select 40mm switch point: 40 / 23 ≈ 1.7391x -> rounded to 1.7x
+        viewModel.setLensSwitchPointMm(40.0f)
+
+        val presets = viewModel.activeZoomPresets.value
+        val switchPointZoom = presets.firstOrNull { it in 1.65f..1.75f }
+        assertNotNull("Must include switch point around 1.7x (40 / 23) in zoom presets", switchPointZoom)
+        assertEquals(1.7f, switchPointZoom!!, 0.05f)
+
+        // Must be positioned between 1.0x and 2.0x
+        val idx1x = presets.indexOf(1.0f)
+        val idxSwitch = presets.indexOf(switchPointZoom)
+        val idx2x = presets.indexOf(2.0f)
+
+        assertTrue("1.0x must precede switch point", idx1x >= 0 && idx1x < idxSwitch)
+        assertTrue("Switch point must precede 2.0x", idxSwitch < idx2x)
     }
 
     @Test
