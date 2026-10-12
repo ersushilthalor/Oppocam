@@ -1335,9 +1335,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val currentLens = engine.selectedLens.value
         val currentZ = _currentZoom.value
 
+        val switchPoint = engine.lensSwitchPointMm.value
+        val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+
         val targetZ = when (lens.lensType) {
             LensType.ULTRAWIDE -> 0.5f
-            LensType.WIDE -> 1.0f
+            LensType.WIDE -> if (kotlin.math.abs(switchPoint - 23.0f) < 0.5f) 1.0f else switchZoom
             LensType.TELEPHOTO -> 2.0f
             LensType.TELEPHOTO_3X -> 3.0f
             else -> lens.baseZoomRatio
@@ -1346,8 +1349,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val isDifferentLens = currentLens == null || currentLens.id != lens.id || currentLens.lensType != lens.lensType
         val isBetweenMainAndUw = (currentLens?.lensType == LensType.WIDE && lens.lensType == LensType.ULTRAWIDE) ||
                 (currentLens?.lensType == LensType.ULTRAWIDE && lens.lensType == LensType.WIDE) ||
-                (lens.lensType == LensType.ULTRAWIDE && currentZ > 0.65f) ||
-                (lens.lensType == LensType.WIDE && currentZ <= 0.65f)
+                (lens.lensType == LensType.ULTRAWIDE && currentZ >= switchZoom) ||
+                (lens.lensType == LensType.WIDE && currentZ < switchZoom)
 
         if (instant) {
             engine.zoomTransitionController.cancelTransition()
@@ -1716,10 +1719,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clampedFrom = fromZoom.coerceIn(minZoom, maxZoom)
         val clampedTarget = targetZoom.coerceIn(minZoom, maxZoom)
 
-        val resolvedTargetLens = targetLens ?: if (clampedTarget >= 1.0f && clampedFrom < 1.0f) {
+        val switchPoint = engine.lensSwitchPointMm.value
+        val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+
+        val resolvedTargetLens = targetLens ?: if (clampedTarget >= switchZoom && clampedFrom < switchZoom) {
             lensesForFacing.firstOrNull { it.isPrimaryMain }
                 ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
                 ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
+        } else if (clampedTarget < switchZoom && clampedFrom >= switchZoom) {
+            ultraWideLens
         } else {
             null
         }
@@ -1804,14 +1812,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val currentLensType = engine.selectedLens.value?.lensType
 
         if (kotlin.math.abs(clamped - currentZ) >= 0.05f) {
-            val targetLens = when {
-                clamped < 1.0f -> ultraWideLens
-                clamped >= 2.8f -> lensesForFacing.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
-                    ?: lensesForFacing.firstOrNull { it.isPrimaryMain || it.lensType == LensType.WIDE }
-                clamped >= 1.8f -> lensesForFacing.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical }
-                    ?: lensesForFacing.firstOrNull { it.isPrimaryMain || it.lensType == LensType.WIDE }
-                else -> lensesForFacing.firstOrNull { it.isPrimaryMain }
-                    ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
+            val switchPoint = engine.lensSwitchPointMm.value
+            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+            val hasTele2x = lensesForFacing.any { it.lensType == LensType.TELEPHOTO && it.isPhysical }
+            val hasTele3x = lensesForFacing.any { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
+            val targetType = CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = engine.selectedLens.value?.lensType ?: LensType.WIDE,
+                targetZoom = clamped,
+                hasUltraWide = ultraWideLens != null,
+                hasTelephoto2x = hasTele2x,
+                hasTelephoto3x = hasTele3x,
+                isPresetTap = true,
+                switchPointMm = switchPoint,
+                isContinuousTransition = false
+            )
+            val mainWideLens = lensesForFacing.firstOrNull { it.isPrimaryMain }
+                ?: lensesForFacing.firstOrNull { it.lensType == LensType.WIDE }
+            val targetLens = when (targetType) {
+                LensType.ULTRAWIDE -> ultraWideLens
+                LensType.TELEPHOTO_3X -> lensesForFacing.firstOrNull { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical } ?: mainWideLens
+                LensType.TELEPHOTO -> lensesForFacing.firstOrNull { it.lensType == LensType.TELEPHOTO && it.isPhysical } ?: mainWideLens
+                else -> mainWideLens
             }
             startContinuousZoomTransition(
                 fromZoom = currentZ,

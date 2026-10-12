@@ -565,4 +565,202 @@ class ZoomTransitionVerificationTest {
             viewModel.setLensSwitchHoldDuration(0.10f)
         }
     }
+
+    @Test
+    fun testSelectedSwitchPointHoldDurationAppliesToFortyMmAndAllSwitchPoints() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val switchPoints = listOf(23.0f, 28.0f, 32.0f, 40.0f, 50.0f, 85.0f)
+            val expectedHoldMs = 150L
+
+            for (switchPointMm in switchPoints) {
+                val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
+
+                val reachedSwitchPointTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val reachedSwitchPointZoom = java.util.concurrent.atomic.AtomicReference<Float>(null)
+                val switchedMainTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val switchedLensRef = java.util.concurrent.atomic.AtomicReference<LensInfo?>(null)
+                val switchOccurredBeforeHold = java.util.concurrent.atomic.AtomicBoolean(false)
+
+                val controller = ZoomTransitionController(
+                    onApplyZoomToEngine = { zoom, _ ->
+                        if (zoom >= switchZoom - 0.01f && reachedSwitchPointTime.get() < 0L) {
+                            reachedSwitchPointTime.set(android.os.SystemClock.uptimeMillis())
+                            reachedSwitchPointZoom.set(zoom)
+                        }
+                    },
+                    onSelectLensOnEngine = { lens, targetZoom, _ ->
+                        val now = android.os.SystemClock.uptimeMillis()
+                        switchedMainTime.set(now)
+                        switchedLensRef.set(lens)
+                        val reached = reachedSwitchPointTime.get()
+                        if (reached > 0L && (now - reached) < (expectedHoldMs - 25L)) {
+                            switchOccurredBeforeHold.set(true)
+                        }
+                    }
+                )
+
+                // Reusing the existing 1x hold duration setting and behavior
+                controller.holdAtOneXDurationMs = expectedHoldMs
+
+                val job = controller.startTransition(
+                    fromZoom = 0.5f,
+                    targetZoom = switchZoom,
+                    targetLens = mainLens,
+                    availableLenses = listOf(uwLens, mainLens),
+                    currentLens = uwLens,
+                    switchPointMm = switchPointMm,
+                    scope = this,
+                    durationMs = 50L,
+                    onZoomUpdate = {},
+                    onComplete = { _, _ -> }
+                )
+
+                job.join()
+
+                assertTrue("Exact switch point FOV must be reached on Ultra-Wide before switch for ${switchPointMm}mm", reachedSwitchPointTime.get() > 0L)
+                assertTrue("Physical Main lens must be selected for ${switchPointMm}mm", switchedMainTime.get() > 0L)
+                assertEquals("Switched lens must be Main lens for ${switchPointMm}mm", mainLens.id, switchedLensRef.get()?.id)
+                assertFalse("Switch must NOT occur before selected hold duration ($expectedHoldMs ms) for ${switchPointMm}mm", switchOccurredBeforeHold.get())
+
+                val actualHold = switchedMainTime.get() - reachedSwitchPointTime.get()
+                assertTrue(
+                    "Hold duration at ${switchPointMm}mm must be at least ${expectedHoldMs - 20L}ms, was ${actualHold}ms",
+                    actualHold >= (expectedHoldMs - 20L)
+                )
+
+                // Verify matching digital crops: Ultra-Wide crop * 16mm == Main crop * 23mm == switchPointMm
+                val uwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(switchPointMm)
+                val mainCrop = CameraOpticalCalibration.calculateMainCropForSwitchPoint(switchPointMm)
+                val effectiveUwFocal = 16.0f * uwCrop
+                val effectiveMainFocal = 23.0f * mainCrop
+                assertEquals(
+                    "Ultra-Wide and Main effective focal lengths must match switchPoint ${switchPointMm}mm",
+                    effectiveMainFocal,
+                    effectiveUwFocal,
+                    0.25f
+                )
+            }
+        }
+    }
+
+    @Test
+    fun testSwitchPointFortyMmDoesNotSwitchAtOneXFirst() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            viewModel.setLensSwitchPointMm(40.0f)
+            assertEquals(40.0f, viewModel.lensSwitchPointMm.value, 0.001f)
+            val switchZoom40 = CameraOpticalCalibration.switchPointToZoom(40.0f) // ~1.7391x
+
+            // 1. Zoom from 0.5x to 1.0x (23mm): below 40mm, so MUST stay on Ultra-Wide and NEVER switch to Main
+            viewModel.selectLens(uwLens, instant = true)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
+
+            // Target 1.0x
+            val targetAt1x = CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.ULTRAWIDE,
+                targetZoom = 1.0f,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = true,
+                switchPointMm = 40.0f
+            )
+            assertEquals("At 1.0x with 40mm switch point, target lens must remain Ultra-Wide", LensType.ULTRAWIDE, targetAt1x)
+
+            // Continuous transition to 1.0x must stay on Ultra-Wide
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            // Wait briefly for transition
+            kotlinx.coroutines.delay(100)
+            assertEquals("Active lens must stay on Ultra-Wide at 1.0x when switch point is 40mm", uwLens.id, viewModel.engine.selectedLens.value?.id)
+
+            // 2. Zoom to 40mm (~1.74x): Ultra-Wide digitally crops to 40mm, holds, and switches to Main at 40mm
+            val targetAt40mm = CameraOpticalCalibration.resolveTargetLensType(
+                currentLensType = LensType.ULTRAWIDE,
+                targetZoom = switchZoom40,
+                hasUltraWide = true,
+                hasTelephoto2x = false,
+                hasTelephoto3x = false,
+                isPresetTap = true,
+                switchPointMm = 40.0f
+            )
+            assertEquals("At 40mm switch point zoom, target lens must be Main Wide", LensType.WIDE, targetAt40mm)
+
+            // Restore switch point to default 23mm
+            viewModel.setLensSwitchPointMm(23.0f)
+        }
+    }
+
+    @Test
+    fun testAllSixHoldDurationsApplyAtFortyMmSwitchPoint() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val testValues = listOf(0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+            val expectedMs = listOf(50L, 100L, 150L, 200L, 250L, 300L)
+            val switchPointMm = 40.0f
+            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
+
+            for (i in testValues.indices) {
+                val value = testValues[i]
+                val expectedHoldMs = expectedMs[i]
+
+                val reachedFortyMmTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val switchedMainTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val switchOccurredBeforeHold = java.util.concurrent.atomic.AtomicBoolean(false)
+
+                val controller = ZoomTransitionController(
+                    onApplyZoomToEngine = { zoom, _ ->
+                        if (zoom >= switchZoom - 0.01f && reachedFortyMmTime.get() < 0L) {
+                            reachedFortyMmTime.set(android.os.SystemClock.uptimeMillis())
+                        }
+                    },
+                    onSelectLensOnEngine = { lens, _, _ ->
+                        val now = android.os.SystemClock.uptimeMillis()
+                        switchedMainTime.set(now)
+                        val reached = reachedFortyMmTime.get()
+                        if (reached > 0L && (now - reached) < (expectedHoldMs - 25L)) {
+                            switchOccurredBeforeHold.set(true)
+                        }
+                    }
+                )
+
+                controller.holdAtOneXDurationMs = expectedHoldMs
+
+                val job = controller.startTransition(
+                    fromZoom = 0.5f,
+                    targetZoom = switchZoom,
+                    targetLens = mainLens,
+                    availableLenses = listOf(uwLens, mainLens),
+                    currentLens = uwLens,
+                    switchPointMm = switchPointMm,
+                    scope = this,
+                    durationMs = 50L,
+                    onZoomUpdate = {},
+                    onComplete = { _, _ -> }
+                )
+
+                job.join()
+
+                assertTrue("40mm exact FOV must be reached before lens switch", reachedFortyMmTime.get() > 0L)
+                assertTrue("Physical Main lens must be selected", switchedMainTime.get() > 0L)
+                assertFalse("Switch must NOT occur before selected hold duration ($expectedHoldMs ms)", switchOccurredBeforeHold.get())
+
+                val actualHoldDuration = switchedMainTime.get() - reachedFortyMmTime.get()
+                assertTrue(
+                    "Hold duration for $value sec at 40mm must be at least ${expectedHoldMs - 20L}ms, was ${actualHoldDuration}ms",
+                    actualHoldDuration >= (expectedHoldMs - 20L)
+                )
+            }
+        }
+    }
 }

@@ -2142,9 +2142,9 @@ private fun LensSwitchHoldDurationSettingCard(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (isOverlapAnimationEnabled) {
-                                "Duration used for the Overlap Animation (.5x → 1x). Smoothly blends cropped Ultra-Wide 1x into native Main 1x over this exact duration."
+                                "Duration used for the Overlap Animation. Smoothly blends cropped Ultra-Wide into native Main lens over this exact duration."
                             } else {
-                                "Hold duration at 1x field of view on the Ultra-Wide lens before switching to the Main lens (.5x → 1x)."
+                                "Hold duration at the selected switch point field of view on the Ultra-Wide lens before switching to the Main lens."
                             },
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,

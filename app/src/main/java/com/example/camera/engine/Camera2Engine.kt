@@ -5526,7 +5526,9 @@ class Camera2Engine(private val context: Context) {
             // Fallback for devices without CONTROL_ZOOM_RATIO or legacy hardware: precise SCALER_CROP_REGION
             val maxDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
             val safeMaxZoom = if (lens.lensType == LensType.ULTRAWIDE) {
-                CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
+                val baseUwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
+                val switchZ = CameraOpticalCalibration.switchPointToZoom(_lensSwitchPointMm.value)
+                maxOf(baseUwCrop, baseUwCrop * (effectiveUiZoom / switchZ))
             } else {
                 maxOf(maxDigitalZoom, lens.maxZoomRatio, 20.0f)
             }
@@ -5741,8 +5743,8 @@ class Camera2Engine(private val context: Context) {
 
         val activeLens = activeSessionLens ?: currentLens
         val isContinuous = isContinuousTransition || isContinuousZoomTransitionActive
-        val effectiveTargetLens = if (isContinuous && activeLens.lensType == LensType.ULTRAWIDE && pZoom <= 1.0f) {
-            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally all the way to 1.0x FOV
+        val effectiveTargetLens = if (isContinuous && activeLens.lensType == LensType.ULTRAWIDE && pZoom < switchZoom) {
+            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally all the way to switchZoom FOV
             ultraWideLens ?: targetLens
         } else {
             targetLens
