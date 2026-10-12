@@ -2862,12 +2862,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun showToast(message: String) {
-        _toastMessage.value = message
-        toastDismissJob?.cancel()
-        toastDismissJob = viewModelScope.launch {
-            delay(2500)
-            _toastMessage.value = null
-        }
+        // Disabled: do not display feature toggle pop-up toasts in any camera mode
     }
 
     override fun onCleared() {
