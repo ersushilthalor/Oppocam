@@ -454,6 +454,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun refreshActiveZoomPresets() {
+        val currentLens = engine.selectedLens.value ?: engine.availableLenses.value.firstOrNull()
+        val isFront = currentLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        if (isFront) {
+            _activeZoomPresets.value = listOf(0.8f, 1.0f)
+            return
+        }
+
         val lenses = engine.availableLenses.value
         val hasUW = lenses.any { it.lensType == LensType.ULTRAWIDE }
         // Calibrated 1x equivalent focal length for optical switch points (~21.6mm eq, placing 28mm at ~1.3x)
@@ -831,8 +838,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (frontLens != null) {
             _currentZoom.value = 1.0f
             preferences.setModeZoom(_cameraMode.value, 1.0f)
+            preferences.lastFacing = frontLens.facing
+            preferences.saveLastLens(frontLens)
+            preferences.setModeLens(_cameraMode.value, frontLens)
             selectLens(frontLens, instant = true)
-            engine.setZoom(1.0f, isPresetTap = false)
+            refreshActiveZoomPresets()
         } else {
             toggleCameraFacing()
         }
@@ -845,7 +855,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             it.facing == CameraCharacteristics.LENS_FACING_BACK
         }
         if (mainLens != null) {
-            selectLens(mainLens)
+            preferences.lastFacing = mainLens.facing
+            preferences.saveLastLens(mainLens)
+            preferences.setModeLens(_cameraMode.value, mainLens)
+            selectLens(mainLens, instant = true)
+            refreshActiveZoomPresets()
         }
     }
 
@@ -1131,6 +1145,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     preferences.currentZoom = zoom
                     preferences.setModeZoom(_cameraMode.value, zoom)
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            engine.selectedLens.collect {
+                refreshActiveZoomPresets()
             }
         }
     }
@@ -1445,17 +1465,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         if (targetLens != null) {
             val isTargetFront = targetFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+            preferences.lastFacing = targetFacing
+            preferences.saveLastLens(targetLens)
+            preferences.setModeLens(_cameraMode.value, targetLens)
             if (isTargetFront) {
                 _currentZoom.value = 1.0f
                 preferences.setModeZoom(_cameraMode.value, 1.0f)
                 engine.selectLens(targetLens, preserveZoom = false, targetZoom = 1.0f)
-                engine.setZoom(1.0f, isPresetTap = false)
             } else {
                 engine.selectLens(targetLens)
             }
-            preferences.lastFacing = targetFacing
-            preferences.saveLastLens(targetLens)
-            preferences.setModeLens(_cameraMode.value, targetLens)
+            refreshActiveZoomPresets()
             val label = if (isTargetFront) "Front Camera" else "Rear Camera"
             showToast("Switched to $label")
         }
@@ -1824,8 +1844,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ?: engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
 
         val minZoom = if (isFrontCamera) 0.8f else if (ultraWideLens != null) 0.5f else 1.0f
-        val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: (if (isFrontCamera) 10.0f else 20.0f)
-        val maxZoom = maxOf(engine.capabilities.value.maxZoom, maxLensZoom, if (isFrontCamera) 10.0f else 20.0f)
+        val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: (if (isFrontCamera) 1.0f else 20.0f)
+        val maxZoom = if (isFrontCamera) 1.0f else maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
         val clamped = zoom.coerceIn(minZoom, maxZoom)
 
         // Cancel running transition if user initiates a new manual zoom action or slider gesture
@@ -1842,15 +1862,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val currentLensType = engine.selectedLens.value?.lensType
         val switchPoint = engine.lensSwitchPointMm.value
         val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
-        val isSwitchPointCrossing = (currentLensType == LensType.ULTRAWIDE && clamped >= switchZoom) ||
-                (currentLensType == LensType.WIDE && clamped < switchZoom)
+        val isCrossingSwitch = !isFrontCamera && (
+            (currentLensType == LensType.ULTRAWIDE && (clamped >= 0.95f || clamped >= switchZoom - 0.05f)) ||
+            (currentLensType == LensType.WIDE && clamped < switchZoom) ||
+            (currentZ < switchZoom && clamped >= switchZoom) ||
+            (currentZ >= switchZoom && clamped < switchZoom)
+        )
 
-        if (kotlin.math.abs(clamped - currentZ) >= 0.05f || isSwitchPointCrossing) {
+        if (kotlin.math.abs(clamped - currentZ) >= 0.05f || isCrossingSwitch) {
             val targetLens = if (isFrontCamera) {
                 engine.selectedLens.value
             } else {
-                val switchPoint = engine.lensSwitchPointMm.value
-                val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
                 val hasTele2x = lensesForFacing.any { it.lensType == LensType.TELEPHOTO && it.isPhysical }
                 val hasTele3x = lensesForFacing.any { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
                 val targetType = CameraOpticalCalibration.resolveTargetLensType(

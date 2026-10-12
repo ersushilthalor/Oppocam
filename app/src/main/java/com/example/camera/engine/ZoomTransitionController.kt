@@ -192,21 +192,12 @@ class ZoomTransitionController(
             val startZ = ((fromZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
             val endZ = ((targetZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
 
-            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
-
-            // Determine if this transition is switching from Ultra-Wide to Main lens across the switch point
-            val isStartingOnUltraWide = (currentLens?.lensType == LensType.ULTRAWIDE || startZ < switchZoom)
-            val isCrossingOrAtSwitchPoint = (endZ >= switchZoom - 0.05f || targetLens?.isPrimaryMain == true || targetLens?.lensType == LensType.WIDE)
-            val isUltraWideToMainSwitch = !isFrontCamera && isStartingOnUltraWide &&
-                isCrossingOrAtSwitchPoint &&
-                ultraWideLens != null && mainWideLens != null &&
-                (targetLens == null || targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE || targetLens.lensType == LensType.TELEPHOTO || targetLens.lensType == LensType.TELEPHOTO_3X)
-
-            // If start and target are practically identical, finish immediately without delay unless performing an Ultra-Wide to Main lens switch
-            if (abs(endZ - startZ) < 0.005f && !isUltraWideToMainSwitch) {
+            // If start and target are practically identical, finish immediately without delay
+            if (abs(endZ - startZ) < 0.005f) {
                 _currentInterpolatedZoom.value = endZ
                 onZoomUpdate(endZ)
                 onApplyZoomToEngine(endZ, false)
+                val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
                 setSteadyStatePreview(!isFrontCamera && endZ < switchZoom)
                 _isTransitionActive.value = false
                 onComplete(endZ, targetLens)
@@ -215,14 +206,26 @@ class ZoomTransitionController(
 
             _isTransitionActive.value = true
 
+            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
+
+            // Determine if this transition is switching from Ultra-Wide to Main lens across the switch point or to 1x
+            val isStartingOnUltraWide = (currentLens?.lensType == LensType.ULTRAWIDE || startZ < switchZoom)
+            val isTappingOneX = abs(endZ - 1.0f) < 0.05f
+            val isCrossingOrAtSwitchPoint = (endZ >= switchZoom - 0.05f) || isTappingOneX
+            val effectiveSwitchZoom = if (isTappingOneX && switchZoom > 1.0f) 1.0f else switchZoom
+            val isUltraWideToMainSwitch = !isFrontCamera && isStartingOnUltraWide &&
+                isCrossingOrAtSwitchPoint &&
+                ultraWideLens != null && mainWideLens != null &&
+                (targetLens == null || targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE || targetLens.lensType == LensType.TELEPHOTO || targetLens.lensType == LensType.TELEPHOTO_3X)
+
             if (isUltraWideToMainSwitch) {
-                // 1. Keep view on Ultra-Wide lens; digitally crop Ultra-Wide to the selected focal length (switchZoom)
+                // 1. Keep view on Ultra-Wide lens; digitally crop Ultra-Wide to the selected focal length (effectiveSwitchZoom)
                 setSteadyStatePreview(true)
                 val startNorm = zoomToNormalizedLog(startZ, minZoom, maxZoom)
-                val switchNorm = zoomToNormalizedLog(switchZoom, minZoom, maxZoom)
+                val switchNorm = zoomToNormalizedLog(effectiveSwitchZoom, minZoom, maxZoom)
                 val endNorm = zoomToNormalizedLog(endZ, minZoom, maxZoom)
 
-                val isTargetNearSwitch = abs(endZ - switchZoom) <= 0.08f || endZ <= switchZoom + 0.05f
+                val isTargetNearSwitch = abs(endZ - effectiveSwitchZoom) <= 0.08f || endZ <= effectiveSwitchZoom + 0.05f
 
                 // Allocate duration proportionally if transitioning further beyond switch point
                 val uwPhaseDurationMs = if (isTargetNearSwitch) {
@@ -248,7 +251,7 @@ class ZoomTransitionController(
                     val currentNorm = (startNorm + (switchNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
                     val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                    val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, switchZoom)
+                    val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, effectiveSwitchZoom)
 
                     if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
                         lastDispatchedZoom = currentZ
@@ -271,16 +274,16 @@ class ZoomTransitionController(
                 }
 
                 // Ensure Ultra-Wide reaches the exact selected focal length field of view
-                _currentInterpolatedZoom.value = switchZoom
-                onZoomUpdate(switchZoom)
-                onApplyZoomToEngine(switchZoom, true)
+                _currentInterpolatedZoom.value = effectiveSwitchZoom
+                onZoomUpdate(effectiveSwitchZoom)
+                onApplyZoomToEngine(effectiveSwitchZoom, true)
 
                 // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
                 val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
 
                 if (isOverlapAnimationEnabled) {
-                    // Activate physical Main lens stream concurrently under Ultra-Wide layer at switchZoom
-                    onSelectLensOnEngine(mainWideLens, switchZoom, true)
+                    // Activate physical Main lens stream concurrently under Ultra-Wide layer at effectiveSwitchZoom
+                    onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
                     val blendStartTime = SystemClock.uptimeMillis()
                     while (isActive) {
@@ -314,23 +317,23 @@ class ZoomTransitionController(
                 }
 
                 // 3. Switch to the main lens with matching digital crop, maintaining identical FOV throughout
-                onSelectLensOnEngine(mainWideLens, switchZoom, false)
+                onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, false)
                 setSteadyStatePreview(false)
 
                 if (isTargetNearSwitch) {
-                    _currentInterpolatedZoom.value = switchZoom
-                    onZoomUpdate(switchZoom)
-                    onApplyZoomToEngine(switchZoom, false)
+                    _currentInterpolatedZoom.value = endZ
+                    onZoomUpdate(endZ)
+                    onApplyZoomToEngine(endZ, false)
                     _isTransitionActive.value = false
                     activeTransitionJob = null
 
-                    onComplete(switchZoom, mainWideLens)
+                    onComplete(endZ, mainWideLens)
                     return@launch
                 } else {
-                    // Target is beyond switch point: smoothly continue on Main lens from switchZoom to endZ
+                    // Target is beyond switch point: smoothly continue on Main lens from effectiveSwitchZoom to endZ
                     val mainPhaseDurationMs = (transitionDurationMs - uwPhaseDurationMs).coerceAtLeast(60L)
                     val mainStartTime = SystemClock.uptimeMillis()
-                    lastDispatchedZoom = switchZoom
+                    lastDispatchedZoom = effectiveSwitchZoom
                     lastDispatchedTime = 0L
 
                     while (isActive) {
@@ -343,7 +346,7 @@ class ZoomTransitionController(
                         val currentNorm = (switchNorm + (endNorm - switchNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                        val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(switchZoom, maxZoom)
+                        val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(effectiveSwitchZoom, maxZoom)
 
                         if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
                             lastDispatchedZoom = currentZ

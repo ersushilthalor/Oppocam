@@ -2374,7 +2374,7 @@ class Camera2Engine(private val context: Context) {
             nextLens.lensType != currentActive?.lensType
         )
 
-        if (nextLens != null && isHardwareMismatch) {
+        if (nextLens != null && isHardwareMismatch && nextLens.facing == currentActive?.facing) {
             selectLens(nextLens, preserveZoom = true, targetZoom = currentZoom, isContinuousTransition = nextIsContinuous)
         } else {
             scheduleZoomPreviewUpdate(immediate = true, explicitZoom = currentZoom)
@@ -5641,9 +5641,11 @@ class Camera2Engine(private val context: Context) {
      * Set Zoom (.5x to 10x) with seamless automatic lens switching and hysteresis
      */
     fun setZoom(zoom: Float, isPresetTap: Boolean = false, isContinuousTransition: Boolean = false) {
-        val currentLens = _selectedLens.value ?: return
+        val inFlightLens = activeSwitchingTargetLens ?: _targetLens.value
+        val currentLens = inFlightLens ?: _selectedLens.value ?: return
         isContinuousZoomTransitionActive = isContinuousTransition || zoomTransitionController.isTransitionActive.value
 
+        val isFront = currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT
         val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
         val ultraWideLens = backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
             ?: backLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
@@ -5652,22 +5654,26 @@ class Camera2Engine(private val context: Context) {
             ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
             ?: backLenses.firstOrNull()
 
-        val minAllowedZoom = if (currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT) {
+        val minAllowedZoom = if (isFront) {
             0.8f
         } else if (ultraWideLens != null) {
             0.5f
         } else {
             1.0f
         }
-        val maxCapabilityZoom = maxOf(
-            _availableLenses.value
-                .filter { it.facing == currentLens.facing }
-                .map { it.maxZoomRatio }
-                .maxOrNull() ?: 20.0f,
-            currentLens.maxZoomRatio,
-            capabilities.value.maxZoom,
-            20.0f
-        )
+        val maxCapabilityZoom = if (isFront) {
+            1.0f
+        } else {
+            maxOf(
+                _availableLenses.value
+                    .filter { it.facing == currentLens.facing }
+                    .map { it.maxZoomRatio }
+                    .maxOrNull() ?: 20.0f,
+                currentLens.maxZoomRatio,
+                capabilities.value.maxZoom,
+                20.0f
+            )
+        }
         val clampedZoom = zoom.coerceIn(minAllowedZoom, maxCapabilityZoom)
 
         currentZoom = clampedZoom
@@ -5677,7 +5683,7 @@ class Camera2Engine(private val context: Context) {
         }
 
         // If front selfie camera, apply digital zoom on active stream
-        if (currentLens.facing == CameraCharacteristics.LENS_FACING_FRONT) {
+        if (isFront) {
             if (isSwitchingLens.get()) {
                 pendingZoomWhileSwitching = clampedZoom
                 pendingZoomPresetTapWhileSwitching = isPresetTap
@@ -5738,10 +5744,10 @@ class Camera2Engine(private val context: Context) {
         val activeLens = activeSessionLens ?: currentLens
         val isContinuous = isContinuousTransition || isContinuousZoomTransitionActive
         val effectiveTargetLens = if (isContinuousZoomTransitionActive && activeLens.lensType == LensType.ULTRAWIDE) {
-            // Keep on Ultra-Wide during controlled continuous transition so it holds FOV at switch point until explicit switch
-            ultraWideLens ?: currentLens
+            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally up to switch point FOV
+            ultraWideLens ?: targetLens
         } else if (isContinuous && activeLens.lensType == LensType.ULTRAWIDE && pZoom < switchZoom) {
-            // Keep on Ultra-Wide during continuous slider drag so it smoothly crops digitally all the way to switchZoom FOV
+            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally all the way to switchZoom FOV
             ultraWideLens ?: targetLens
         } else {
             targetLens

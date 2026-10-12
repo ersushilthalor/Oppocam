@@ -1001,7 +1001,7 @@ fun MasterZoomCapsule(
             .maxOfOrNull { it.maxZoomRatio } ?: (if (isFrontCamera) 10.0f else 20.0f)
     }
     val maxZoom = if (isFrontCamera) {
-        maxOf(capabilities.maxZoom, maxLensZoom, 10.0f)
+        1.0f
     } else {
         maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
     }
@@ -1031,7 +1031,7 @@ fun MasterZoomCapsule(
                 while (true) {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     // Only initiate capsule-to-slider opening drag when starting on the closed capsule
-                    if (isSliderOpenState.value) {
+                    if (isSliderOpenState.value || isFrontCamera) {
                         continue
                     }
 
@@ -1175,8 +1175,10 @@ fun MasterZoomCapsule(
                                 )
                                 .clickable {
                                     if (isActive) {
-                                        liveZoom = preset
-                                        isSliderOpen = true
+                                        if (!isFrontCamera) {
+                                            liveZoom = preset
+                                            isSliderOpen = true
+                                        }
                                     } else if (preset == 0.5f && !hasRealUltraWide && !isFrontCamera) {
                                         onShowToast("Ultra-Wide lens is not available on this device")
                                     } else if (preset > maxZoom) {
