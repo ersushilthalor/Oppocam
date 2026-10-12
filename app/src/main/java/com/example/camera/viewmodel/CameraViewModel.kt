@@ -709,6 +709,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (enabled) "Custom Image Pipeline: ON" else "Custom Image Pipeline: OFF")
     }
 
+    // --- Restormer AI Enhancement & Model Manager ---
+    val restormerModelManager: com.example.camera.restormer.data.RestormerModelManager = engine.restormerModelManager
+    private val _restormerConfig = MutableStateFlow(preferences.getRestormerConfig())
+    val restormerConfig: StateFlow<com.example.camera.restormer.model.RestormerConfig> = _restormerConfig.asStateFlow()
+
+    private val _isRestormerStudioOpen = MutableStateFlow(false)
+    val isRestormerStudioOpen: StateFlow<Boolean> = _isRestormerStudioOpen.asStateFlow()
+
+    fun setRestormerStudioOpen(open: Boolean) {
+        _isRestormerStudioOpen.value = open
+    }
+
+    fun toggleRestormerEnabled(enabled: Boolean) {
+        val updated = _restormerConfig.value.copy(isEnabled = enabled)
+        _restormerConfig.value = updated
+        preferences.saveRestormerConfig(updated)
+        showToast(if (enabled) "Restormer AI (12MP Tiled): ON" else "Restormer AI: OFF")
+    }
+
+    fun updateRestormerConfig(config: com.example.camera.restormer.model.RestormerConfig) {
+        _restormerConfig.value = config
+        preferences.saveRestormerConfig(config)
+    }
+
+    fun selectRestormerModel(modelId: String) {
+        if (restormerModelManager.selectActiveModel(modelId)) {
+            val updated = _restormerConfig.value.copy(activeModelId = modelId)
+            _restormerConfig.value = updated
+            preferences.saveRestormerConfig(updated)
+            showToast("Restormer Model: ${restormerModelManager.activeModel.value.name}")
+        }
+    }
+
     // --- Camera Switching State ---
     private val _instantSwitchState = MutableStateFlow(
         MotorolaInstantSwitchState(

@@ -648,6 +648,7 @@ fun LivePreviewCanvas(
                     TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                     TopControlItem.PIPELINE -> Icons.Outlined.Tune
+                    TopControlItem.RESTORMER -> Icons.Outlined.AutoAwesome
                     TopControlItem.SIX_DOT_MENU -> Icons.Outlined.GridView
                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
                 }

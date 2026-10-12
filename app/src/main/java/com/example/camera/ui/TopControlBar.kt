@@ -157,6 +157,8 @@ fun TopControlBar(
     activePhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL,
     onPipelineClick: () -> Unit = {},
     isPipelineActive: Boolean = false,
+    onRestormerClick: () -> Unit = {},
+    isRestormerActive: Boolean = false,
     onCinemaSettingsClick: () -> Unit = {},
     onCinemaEvChange: (Int) -> Unit = {},
     isEvOpen: Boolean = false,
@@ -626,6 +628,23 @@ fun TopControlBar(
             }
         }
 
+        val restormerButton = @Composable {
+            IconButton(
+                onClick = onRestormerClick,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(layoutConfig, activeColor = if (isRestormerActive) Color(0xFFFFD54F) else null)
+                    .testTag("restormer_ai_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.AutoAwesome,
+                    contentDescription = "Restormer AI Enhancement",
+                    tint = if (isRestormerActive) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
 
 
 
@@ -877,6 +896,7 @@ fun TopControlBar(
                     TopControlItem.VIDEO_ADJUSTMENTS -> videoAdjustmentsButton()
                     TopControlItem.MOTION_PHOTO -> motionPhotoButton()
                     TopControlItem.PIPELINE -> pipelineButton()
+                    TopControlItem.RESTORMER -> restormerButton()
                     TopControlItem.SIX_DOT_MENU -> sixDotMenuButton()
                     TopControlItem.SETTINGS -> settingsButton()
                 }

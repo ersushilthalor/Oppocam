@@ -85,6 +85,7 @@ class Camera2Engine(private val context: Context) {
     private var imageReaderRaw: ImageReader? = null
     private var imageReaderYuv: ImageReader? = null
     val customImagePipelineEngine by lazy { com.example.camera.pipeline.engine.CustomImagePipelineEngine(context) }
+    val restormerModelManager by lazy { com.example.camera.restormer.data.RestormerModelManager(context) }
     private var mediaRecorder: MediaRecorder? = null
     private var activeRecordingSurface: Surface? = null
     private var videoRecordingFileDescriptor: ParcelFileDescriptor? = null
@@ -9285,12 +9286,75 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun processStillJpegBytes(bytes: ByteArray, skipPipeline: Boolean = false): Pair<ByteArray, Boolean> {
-        val (effectiveBytes, wasCustomPipelineApplied) = if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isCustomPipelineEnabled) {
-            processPhotoWithCustomPipeline(bytes)
-        } else {
-            Pair(bytes, false)
+    fun processPhotoWithRestormer(jpegBytes: ByteArray): Pair<ByteArray, Boolean> {
+        try {
+            val restormerConfig = preferences.getRestormerConfig()
+            val activeModel = restormerModelManager.activeModel.value
+            val activeLens = _selectedLens.value
+            val isFront = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+            val captureOrientation = getCaptureJpegOrientation()
+
+            // Decode and physically orient upright
+            val sourceBmp = decodeUprightBitmapFromJpeg(
+                jpegBytes = jpegBytes,
+                captureOrientation = captureOrientation,
+                isFrontFacing = isFront,
+                mirrorHorizontally = isFront && saveSelfieAsPreviewed,
+                mutable = false
+            ) ?: return Pair(jpegBytes, false)
+
+            Log.i(TAG, "[RESTORMER_PROCESS] Starting genuine 12MP tiled inference with model ${activeModel.name} on ${sourceBmp.width}x${sourceBmp.height}")
+
+            val inferenceEngine = com.example.camera.restormer.engine.RestormerInferenceEngine(
+                context = context,
+                modelInfo = activeModel,
+                delegateOption = restormerConfig.hardwareDelegate
+            )
+            val tileProcessor = com.example.camera.restormer.engine.RestormerTileProcessor(inferenceEngine)
+
+            val result = kotlinx.coroutines.runBlocking(Dispatchers.Default) {
+                tileProcessor.processImage(sourceBmp, restormerConfig)
+            }
+            inferenceEngine.close()
+
+            // Compress 12 MP restored Bitmap to JPEG with high quality
+            val baos = java.io.ByteArrayOutputStream()
+            result.outputBitmap.compress(Bitmap.CompressFormat.JPEG, preferences.jpegQuality, baos)
+            val processedBytes = baos.toByteArray()
+            result.outputBitmap.recycle()
+            if (sourceBmp !== result.outputBitmap) {
+                sourceBmp.recycle()
+            }
+
+            val finalBytes = copyExifFromOriginal(
+                srcBytes = jpegBytes,
+                dstBytes = processedBytes,
+                forceOrientationNormal = true
+            )
+            Log.i(TAG, "[RESTORMER_PROCESS_DONE] Completed in ${result.durationMs}ms (${result.tilesProcessed} tiles)")
+            return Pair(finalBytes, true)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Error running Restormer AI restoration, falling back to original", e)
+            return Pair(jpegBytes, false)
         }
+    }
+
+    private fun processStillJpegBytes(bytes: ByteArray, skipPipeline: Boolean = false): Pair<ByteArray, Boolean> {
+        var effectiveBytes = bytes
+        var wasProcessingApplied = false
+
+        if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isCustomPipelineEnabled) {
+            val (pipelineBytes, applied) = processPhotoWithCustomPipeline(effectiveBytes)
+            effectiveBytes = pipelineBytes
+            if (applied) wasProcessingApplied = true
+        }
+
+        if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isRestormerEnabled) {
+            val (restormerBytes, applied) = processPhotoWithRestormer(effectiveBytes)
+            effectiveBytes = restormerBytes
+            if (applied) wasProcessingApplied = true
+        }
+
         val activeLens = _selectedLens.value
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         val captureOrientation = getCaptureJpegOrientation()
@@ -9316,8 +9380,8 @@ class Camera2Engine(private val context: Context) {
             android.media.ExifInterface.ORIENTATION_UNDEFINED
         ) ?: android.media.ExifInterface.ORIENTATION_UNDEFINED
 
-        val shouldMirrorHere = !skipPipeline && !wasCustomPipelineApplied && isFrontFacing && saveSelfieAsPreviewed
-        val orientMatrix = if (skipPipeline || wasCustomPipelineApplied) {
+        val shouldMirrorHere = !skipPipeline && !wasProcessingApplied && isFrontFacing && saveSelfieAsPreviewed
+        val orientMatrix = if (skipPipeline || wasProcessingApplied) {
             Matrix()
         } else {
             buildJpegOrientationMatrix(
@@ -9331,7 +9395,7 @@ class Camera2Engine(private val context: Context) {
         }
 
         val needsBitmapTransform = !orientMatrix.isIdentity || needsColorProcessing
-        var wasTransformed = wasCustomPipelineApplied
+        var wasTransformed = wasProcessingApplied
 
         val outputBytes = if (needsBitmapTransform) {
             try {

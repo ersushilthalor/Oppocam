@@ -37,6 +37,7 @@ fun MoreModesDrawer(
     onSelectProManual: () -> Unit,
     onSelectCinemaLog: () -> Unit,
     onSelectAiSubjectTracking: () -> Unit = {},
+    onSelectRestormerAi: () -> Unit = {},
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -129,11 +130,19 @@ fun MoreModesDrawer(
                 ) {
                     MoreModeCard(
                         icon = Icons.Outlined.GpsFixed,
-                        title = "AI Subject Tracking",
-                        subtitle = "Real AI 3× tracking & gyro gimbal",
+                        title = "AI Tracking",
+                        subtitle = "Subject 3x Gimbal",
                         tag = "mode_card_ai_subject_tracking",
                         modifier = Modifier.weight(1f),
                         onClick = onSelectAiSubjectTracking
+                    )
+                    MoreModeCard(
+                        icon = Icons.Outlined.AutoAwesome,
+                        title = "Restormer AI",
+                        subtitle = "12MP Tiled Models",
+                        tag = "mode_card_restormer_ai",
+                        modifier = Modifier.weight(1f),
+                        onClick = onSelectRestormerAi
                     )
                 }
 

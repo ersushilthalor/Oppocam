@@ -186,11 +186,19 @@ fun CameraScreen(
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     val isEvControlOpen by viewModel.isEvControlOpen.collectAsStateWithLifecycle()
     val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
+    val isRestormerStudioOpen by viewModel.isRestormerStudioOpen.collectAsStateWithLifecycle()
+    val restormerConfig by viewModel.restormerConfig.collectAsStateWithLifecycle()
 
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(cameraMode) {
         isQuickOptionsOpen = false
+    }
+
+    if (isRestormerStudioOpen) {
+        BackHandler {
+            viewModel.setRestormerStudioOpen(false)
+        }
     }
 
     if (isQuickOptionsOpen) {
@@ -642,6 +650,8 @@ fun CameraScreen(
             activePhotoFilter = selectedPhotoFilter,
             onPipelineClick = { viewModel.togglePipelinePresetFloatingWindow() },
             isPipelineActive = isCustomPipelineEnabled,
+            onRestormerClick = { viewModel.setRestormerStudioOpen(true) },
+            isRestormerActive = restormerConfig.isEnabled,
             onCinemaSettingsClick = { viewModel.toggleCinemaSettings() },
             onLogClick = { viewModel.toggleLogProfileWindow() },
             isLogWindowOpen = isLogProfileWindowOpen,
@@ -1108,6 +1118,13 @@ fun CameraScreen(
                     viewModel.setMoreModesOpen(false)
                     viewModel.setCameraMode(CameraMode.AI_SUBJECT_TRACKING)
                 },
+                onSelectRestormerAi = {
+                    viewModel.setMoreModesOpen(false)
+                    if (cameraMode == CameraMode.MORE) {
+                        viewModel.setCameraMode(CameraMode.PHOTO)
+                    }
+                    viewModel.setRestormerStudioOpen(true)
+                },
                 onOpenSettings = {
                     viewModel.setMoreModesOpen(false)
                     if (cameraMode == CameraMode.MORE) {
@@ -1286,6 +1303,18 @@ fun CameraScreen(
             com.example.camera.pipeline.ui.PipelineBeforeAfterDialog(
                 viewModel = viewModel,
                 onDismissRequest = { viewModel.setBeforeAfterOpen(false) }
+            )
+        }
+
+        // 11. Dedicated Restormer AI Studio & Model Manager Sheet
+        if (isRestormerStudioOpen) {
+            com.example.camera.restormer.ui.RestormerStudioSheet(
+                isOpen = isRestormerStudioOpen,
+                onDismissRequest = { viewModel.setRestormerStudioOpen(false) },
+                modelManager = viewModel.restormerModelManager,
+                config = restormerConfig,
+                onUpdateConfig = { viewModel.updateRestormerConfig(it) },
+                onShowToast = { viewModel.showToast(it) }
             )
         }
     }

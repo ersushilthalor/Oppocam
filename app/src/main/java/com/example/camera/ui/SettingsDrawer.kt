@@ -213,6 +213,8 @@ fun SettingsDrawer(
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
+    isRestormerEnabled: Boolean = false,
+    onRestormerToggle: (Boolean) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -369,7 +371,9 @@ fun SettingsDrawer(
                             jpegQuality = jpegQuality,
                             onJpegQualitySelected = onJpegQualitySelected,
                             selectedPhotoFilter = selectedPhotoFilter,
-                            onPhotoFilterSelected = onPhotoFilterSelected
+                            onPhotoFilterSelected = onPhotoFilterSelected,
+                            isRestormerEnabled = isRestormerEnabled,
+                            onRestormerToggle = onRestormerToggle
                         )
                         SettingsPage.VIDEO -> VideoSettingsPage(
                             selectedVideoResolution = selectedVideoResolution,
@@ -596,13 +600,25 @@ private fun PhotoSettingsPage(
     jpegQuality: Int,
     onJpegQualitySelected: (Int) -> Unit,
     selectedPhotoFilter: PhotoFilter,
-    onPhotoFilterSelected: (PhotoFilter) -> Unit
+    onPhotoFilterSelected: (PhotoFilter) -> Unit,
+    isRestormerEnabled: Boolean = false,
+    onRestormerToggle: (Boolean) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        item {
+            SettingsSwitchCard(
+                title = "Restormer AI Enhancement (12 MP Tiled)",
+                description = "Genuine Restormer neural restoration. Preserves 12 MP resolution with memory-safe overlapping tile inference.",
+                isChecked = isRestormerEnabled,
+                onCheckedChange = onRestormerToggle,
+                tag = "toggle_restormer_ai"
+            )
+        }
+
         item {
             SettingsSwitchCard(
                 title = "Auto HDR",
