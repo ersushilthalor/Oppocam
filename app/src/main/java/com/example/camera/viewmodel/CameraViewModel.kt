@@ -1397,7 +1397,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val isSignificantZoomChange = (targetZ - currentZ).absoluteValue >= 0.05f
 
-        if (isDifferentLens && isSignificantZoomChange && lens.facing == (currentLens?.facing ?: lens.facing)) {
+        if (isDifferentLens && (isSignificantZoomChange || isBetweenMainAndUw) && lens.facing == (currentLens?.facing ?: lens.facing)) {
             // Smooth continuous sub-step interpolation across complete range (300ms fixed duration)
             startContinuousZoomTransition(fromZoom = currentZ, targetZoom = targetZ, targetLens = lens)
             val lensDesc = when (lens.lensType) {
@@ -1840,8 +1840,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val currentZ = _currentZoom.value
         val currentLensType = engine.selectedLens.value?.lensType
+        val switchPoint = engine.lensSwitchPointMm.value
+        val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+        val isSwitchPointCrossing = (currentLensType == LensType.ULTRAWIDE && clamped >= switchZoom) ||
+                (currentLensType == LensType.WIDE && clamped < switchZoom)
 
-        if (kotlin.math.abs(clamped - currentZ) >= 0.05f) {
+        if (kotlin.math.abs(clamped - currentZ) >= 0.05f || isSwitchPointCrossing) {
             val targetLens = if (isFrontCamera) {
                 engine.selectedLens.value
             } else {

@@ -192,12 +192,21 @@ class ZoomTransitionController(
             val startZ = ((fromZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
             val endZ = ((targetZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
 
-            // If start and target are practically identical, finish immediately without delay
-            if (abs(endZ - startZ) < 0.005f) {
+            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
+
+            // Determine if this transition is switching from Ultra-Wide to Main lens across the switch point
+            val isStartingOnUltraWide = (currentLens?.lensType == LensType.ULTRAWIDE || startZ < switchZoom)
+            val isCrossingOrAtSwitchPoint = (endZ >= switchZoom - 0.05f || targetLens?.isPrimaryMain == true || targetLens?.lensType == LensType.WIDE)
+            val isUltraWideToMainSwitch = !isFrontCamera && isStartingOnUltraWide &&
+                isCrossingOrAtSwitchPoint &&
+                ultraWideLens != null && mainWideLens != null &&
+                (targetLens == null || targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE || targetLens.lensType == LensType.TELEPHOTO || targetLens.lensType == LensType.TELEPHOTO_3X)
+
+            // If start and target are practically identical, finish immediately without delay unless performing an Ultra-Wide to Main lens switch
+            if (abs(endZ - startZ) < 0.005f && !isUltraWideToMainSwitch) {
                 _currentInterpolatedZoom.value = endZ
                 onZoomUpdate(endZ)
                 onApplyZoomToEngine(endZ, false)
-                val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
                 setSteadyStatePreview(!isFrontCamera && endZ < switchZoom)
                 _isTransitionActive.value = false
                 onComplete(endZ, targetLens)
@@ -205,16 +214,6 @@ class ZoomTransitionController(
             }
 
             _isTransitionActive.value = true
-
-            val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
-
-            // Determine if this transition is switching from Ultra-Wide to Main lens across the switch point
-            val isStartingOnUltraWide = (currentLens?.lensType == LensType.ULTRAWIDE || startZ < switchZoom)
-            val isCrossingOrAtSwitchPoint = (endZ >= switchZoom - 0.05f)
-            val isUltraWideToMainSwitch = !isFrontCamera && isStartingOnUltraWide &&
-                isCrossingOrAtSwitchPoint &&
-                ultraWideLens != null && mainWideLens != null &&
-                (targetLens == null || targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE || targetLens.lensType == LensType.TELEPHOTO || targetLens.lensType == LensType.TELEPHOTO_3X)
 
             if (isUltraWideToMainSwitch) {
                 // 1. Keep view on Ultra-Wide lens; digitally crop Ultra-Wide to the selected focal length (switchZoom)
