@@ -372,20 +372,13 @@ class CameraOpticalCalibrationTest {
     }
 
     @Test
-    fun testFrontCameraZeroEightAndOneXCalibration() {
-        // 0.8x: True, full sensor field of view with no digital crop (1.0f)
-        val cropAt08 = CameraOpticalCalibration.calculateRequiredDigitalCrop(0.8f, 1.0f, LensType.FRONT)
-        assertEquals("0.8x must use true full sensor FOV with 1.0x digital crop", 1.0f, cropAt08, 0.001f)
-
-        // 1.0x: Slightly cropped view of the same front camera sensor (narrower FOV than 0.8x, exactly 1.25x crop)
+    fun testFrontCameraNativeUncroppedFieldOfView() {
+        // Front camera uses native uncropped sensor field of view by default (1.0f digital crop)
         val cropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.FRONT)
-        assertEquals("1x must use slightly cropped sensor view (1.25x)", 1.25f, cropAt10, 0.001f)
-        assertTrue("1x must have narrower FOV (higher crop factor) than 0.8x", cropAt10 > cropAt08)
+        assertEquals("Front camera must use native uncropped 1.0x sensor FOV", 1.0f, cropAt10, 0.001f)
 
         // Target lens type for FRONT stays FRONT regardless of zoom preset
-        val targetAt08 = CameraOpticalCalibration.resolveTargetLensType(LensType.FRONT, 0.8f, true, false, false, false)
         val targetAt10 = CameraOpticalCalibration.resolveTargetLensType(LensType.FRONT, 1.0f, true, false, false, false)
-        assertEquals(LensType.FRONT, targetAt08)
         assertEquals(LensType.FRONT, targetAt10)
     }
 }

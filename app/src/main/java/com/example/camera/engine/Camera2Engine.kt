@@ -1940,7 +1940,11 @@ class Camera2Engine(private val context: Context) {
                 ?: sortedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
                 ?: sortedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
 
+            val isFrontPreferred = preferences.lastFacing == CameraCharacteristics.LENS_FACING_FRONT
+            val frontLens = sortedLenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_FRONT }
+
             val validSelection = sortedLenses.firstOrNull { it.id == currentSelected?.id }
+                ?: (if (isFrontPreferred) frontLens else null)
                 ?: primaryMainLens
                 ?: sortedLenses.firstOrNull()
 
@@ -1948,9 +1952,10 @@ class Camera2Engine(private val context: Context) {
             if (validSelection != null) {
                 inspectCapabilities(validSelection.cameraId)
                 val preserveExistingZoom = (currentSelected != null && validSelection.id == currentSelected.id && currentZoom > 0f)
-                val initialZoom = if (preserveExistingZoom) {
+                val isFrontCamera = validSelection.facing == CameraCharacteristics.LENS_FACING_FRONT
+                val initialZoom = if (preserveExistingZoom && !isFrontCamera) {
                     currentZoom
-                } else if (validSelection.isPrimaryMain || validSelection.lensType == LensType.WIDE) {
+                } else if (isFrontCamera || validSelection.isPrimaryMain || validSelection.lensType == LensType.WIDE) {
                     1.0f
                 } else {
                     validSelection.baseZoomRatio
@@ -4883,10 +4888,9 @@ class Camera2Engine(private val context: Context) {
             }
 
             val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            val caps = capabilities.value
-            val isHardwareEisActive = caps.supportsEis && isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
+            val isStabActive = isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
 
-            if (isVideoMode && isVideoStabilizationEnabled && !isHardwareEisActive) {
+            if (isVideoMode && isStabActive) {
                 val lens = _selectedLens.value
                 if (lens != null) {
                     try {
@@ -5093,6 +5097,9 @@ class Camera2Engine(private val context: Context) {
         synchronized(previewRequestLock) {
             val builder = previewRequestBuilder ?: return
             try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1.0f)
+                }
                 builder.set(CaptureRequest.SCALER_CROP_REGION, crop)
                 session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
             } catch (e: Exception) {
@@ -5431,10 +5438,12 @@ class Camera2Engine(private val context: Context) {
         val lens = activeSessionLens ?: _selectedLens.value ?: return
 
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        val caps = capabilities.value
-        val isHardwareEisActive = caps.supportsEis && isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
+        val isStabActive = isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
 
-        if (!isHardwareEisActive && isVideoStabilizationEnabled && isVideoMode && lastStabilizedCrop != null) {
+        if (isStabActive && isVideoMode && lastStabilizedCrop != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1.0f)
+            }
             builder.set(CaptureRequest.SCALER_CROP_REGION, lastStabilizedCrop)
             return
         }

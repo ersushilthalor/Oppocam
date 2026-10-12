@@ -78,13 +78,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // Filtered lenses strictly adhering to current facing:
     // When on Back Camera -> ONLY back lenses (0.5x, 1x, 2x, etc.)
-    // When on Front Camera -> ONLY front selfie lens
+    // When on Front Camera -> Do not display any lens selector or lens-switching controls
     val displayedLenses: StateFlow<List<LensInfo>> = combine(
         engine.availableLenses,
         engine.selectedLens
     ) { lenses, selected ->
-        val currentFacing = selected?.facing ?: android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
-        lenses.filter { it.facing == currentFacing }
+        val currentFacing = selected?.facing ?: preferences.lastFacing
+        if (currentFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) {
+            emptyList()
+        } else {
+            lenses.filter { it.facing == currentFacing }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val selectedLens: StateFlow<LensInfo?> = engine.selectedLens
@@ -455,9 +459,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun refreshActiveZoomPresets() {
         val currentLens = engine.selectedLens.value ?: engine.availableLenses.value.firstOrNull()
-        val isFront = currentLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        val isFront = currentLens?.facing == CameraCharacteristics.LENS_FACING_FRONT ||
+            preferences.lastFacing == CameraCharacteristics.LENS_FACING_FRONT
         if (isFront) {
-            _activeZoomPresets.value = listOf(0.8f, 1.0f)
+            _activeZoomPresets.value = emptyList()
             return
         }
 
@@ -1332,8 +1337,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // 6. Restore mode-specific lens and zoom if available
         val modeZoom = preferences.getModeZoom(mode)
-        val modeLens = preferences.getModeLens(mode, engine.availableLenses.value)
-        val effectiveLens = modeLens ?: engine.selectedLens.value
+        val currentLens = engine.selectedLens.value
+        val isCurrentlyFront = currentLens?.facing == CameraCharacteristics.LENS_FACING_FRONT ||
+            preferences.lastFacing == CameraCharacteristics.LENS_FACING_FRONT
+        val modeLens = if (isCurrentlyFront) {
+            engine.availableLenses.value.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_FRONT }
+        } else {
+            preferences.getModeLens(mode, engine.availableLenses.value)
+        }
+        val effectiveLens = modeLens ?: currentLens
         val isFront = effectiveLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
 
         if (isFront) {
@@ -1843,7 +1855,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ?: lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE }
             ?: engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
 
-        val minZoom = if (isFrontCamera) 0.8f else if (ultraWideLens != null) 0.5f else 1.0f
+        val minZoom = if (isFrontCamera) 1.0f else if (ultraWideLens != null) 0.5f else 1.0f
         val maxLensZoom = lensesForFacing.maxOfOrNull { it.maxZoomRatio } ?: (if (isFrontCamera) 1.0f else 20.0f)
         val maxZoom = if (isFrontCamera) 1.0f else maxOf(engine.capabilities.value.maxZoom, maxLensZoom, 20.0f)
         val clamped = zoom.coerceIn(minZoom, maxZoom)
@@ -1945,7 +1957,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleVideoStabilization() {
-        setVideoStabilization(!_isVideoStabilizationEnabled.value)
+        val currentState = _isVideoStabilizationEnabled.value
+        if (currentState) {
+            if (hybridStabilizationConfig.value.isUltraStabilizationEnabled) {
+                val updated = hybridStabilizationConfig.value.copy(isUltraStabilizationEnabled = false)
+                setHybridStabilizationConfig(updated)
+            }
+            setVideoStabilization(false)
+        } else {
+            setVideoStabilization(true)
+        }
     }
 
     fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
@@ -2067,6 +2088,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun switchToRealUltraWideIfAvailable(): Boolean {
         val currentFacing = selectedLens.value?.facing ?: CameraCharacteristics.LENS_FACING_BACK
+        if (currentFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+            return false
+        }
         val realUltraWide = engine.availableLenses.value.firstOrNull {
             it.facing == currentFacing && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
                 (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)

@@ -170,4 +170,93 @@ class OisEisStabilizationEngineTest {
         assertTrue("EIS remains preferred", config.isEisPreferred)
         assertEquals("When OIS is OFF, hybrid mode gracefully operates as EIS_ONLY", MainCameraStabilizationMode.EIS_ONLY, config.stabilizationMode)
     }
+
+    @Test
+    fun testRealGyroEisPipelineInVideoAndProVideoModes() {
+        // In Video Mode: Toggle stabilization controls engine processing pipeline
+        viewModel.setCameraMode(CameraMode.VIDEO)
+        viewModel.setVideoStabilization(true)
+        assertTrue(viewModel.isVideoStabilizationEnabled.value)
+        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
+        assertEquals(com.example.camera.model.VideoStabilizationMode.EIS, viewModel.engine.videoStabilizationMode)
+
+        // Toggle OFF
+        viewModel.toggleVideoStabilization()
+        assertFalse(viewModel.isVideoStabilizationEnabled.value)
+        assertFalse(viewModel.engine.isVideoStabilizationEnabled)
+        assertEquals(com.example.camera.model.VideoStabilizationMode.OFF, viewModel.engine.videoStabilizationMode)
+
+        // Toggle back ON
+        viewModel.toggleVideoStabilization()
+        assertTrue(viewModel.isVideoStabilizationEnabled.value)
+        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
+
+        // Switch to Pro Video (Cinema) Mode: pipeline remains active
+        viewModel.setCameraMode(CameraMode.CINEMA)
+        assertTrue(viewModel.isVideoStabilizationEnabled.value)
+        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
+
+        // Force OIS OFF: EIS must operate independently without activating OIS
+        viewModel.setOisEnabled(false)
+        assertFalse(viewModel.isOisEnabled.value)
+        assertFalse(viewModel.engine.isOisEnabled)
+        assertTrue(viewModel.isVideoStabilizationEnabled.value)
+        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
+
+        // Toggling EIS while OIS is OFF keeps OIS strictly OFF
+        viewModel.setVideoStabilization(false)
+        assertFalse(viewModel.engine.isOisEnabled)
+        viewModel.setVideoStabilization(true)
+        assertFalse(viewModel.engine.isOisEnabled)
+    }
+
+    @Test
+    fun testFrontCameraNativeFieldOfViewAndNoLensSelector() {
+        viewModel.engine.detectHardwareLenses()
+        val frontLens = viewModel.engine.availableLenses.value.firstOrNull {
+            it.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+        }
+
+        if (frontLens != null) {
+            viewModel.selectLens(frontLens)
+
+            // Front camera presets must be empty (0.8x and 1x removed)
+            val presets = viewModel.activeZoomPresets.value
+            assertTrue("Front camera must not display 0.8x or 1x presets", presets.isEmpty())
+
+            // Front camera displayedLenses must be empty (no lens selector / controls)
+            val displayed = viewModel.displayedLenses.value
+            assertTrue("Front camera must not display lens selector", displayed.isEmpty())
+
+            // Front camera must use native uncropped 1.0x sensor FOV by default
+            val crop = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, com.example.camera.model.LensType.FRONT)
+            assertEquals("Front camera must use native uncropped 1.0x sensor FOV", 1.0f, crop, 0.001f)
+            assertEquals(1.0f, viewModel.currentZoom.value, 0.001f)
+        }
+    }
+
+    @Test
+    fun testFrontCameraPreservesFacingAcrossModeChanges() {
+        viewModel.engine.detectHardwareLenses()
+        val frontLens = viewModel.engine.availableLenses.value.firstOrNull {
+            it.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+        }
+
+        if (frontLens != null) {
+            viewModel.selectLens(frontLens)
+            assertEquals(android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT, viewModel.engine.selectedLens.value?.facing)
+
+            // Switching to VIDEO mode must preserve FRONT camera
+            viewModel.setCameraMode(CameraMode.VIDEO)
+            assertEquals(android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT, viewModel.engine.selectedLens.value?.facing)
+
+            // Switching to CINEMA (Pro Video) mode must preserve FRONT camera
+            viewModel.setCameraMode(CameraMode.CINEMA)
+            assertEquals(android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT, viewModel.engine.selectedLens.value?.facing)
+
+            // Switching back to PHOTO mode must preserve FRONT camera
+            viewModel.setCameraMode(CameraMode.PHOTO)
+            assertEquals(android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT, viewModel.engine.selectedLens.value?.facing)
+        }
+    }
 }

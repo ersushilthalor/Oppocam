@@ -539,6 +539,7 @@ object CameraUiTemplates {
             CameraMode.CINEMA -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
+                    TopControlItem.STABILIZATION,
                     TopControlItem.LOG,
                     TopControlItem.LUT,
                     TopControlItem.RESOLUTION,
@@ -546,6 +547,7 @@ object CameraUiTemplates {
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.STABILIZATION to TopIconPosition.LEFT,
                     TopControlItem.LOG to TopIconPosition.CENTER,
                     TopControlItem.LUT to TopIconPosition.CENTER,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,

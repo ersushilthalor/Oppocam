@@ -110,6 +110,7 @@ fun BottomControlBar(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // 1. Floating Master Zoom Capsule (0.5, 1x, 2, 3, 5, 10) with Photo Filter icon positioned to its right
+        val isFrontCamera = selectedLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         if (layoutConfig.showZoomCapsule) {
             Box(
                 modifier = Modifier
@@ -119,20 +120,22 @@ fun BottomControlBar(
                     .padding(bottom = 14.dp),
                 contentAlignment = Alignment.Center
             ) {
-                MasterZoomCapsule(
-                    currentZoom = currentZoom,
-                    displayedLenses = displayedLenses,
-                    selectedLens = selectedLens,
-                    capabilities = capabilities,
-                    customPresets = activeZoomPresets,
-                    onShowToast = onShowToast,
-                    onLensSelected = onLensSelected,
-                    onZoomChange = onZoomChange,
-                    onZoomPresetTap = onZoomPresetTap,
-                    modifier = Modifier
-                        .scale(layoutConfig.zoomCapsuleScale)
-                        .testTag("master_zoom_capsule")
-                )
+                if (!isFrontCamera) {
+                    MasterZoomCapsule(
+                        currentZoom = currentZoom,
+                        displayedLenses = displayedLenses,
+                        selectedLens = selectedLens,
+                        capabilities = capabilities,
+                        customPresets = activeZoomPresets,
+                        onShowToast = onShowToast,
+                        onLensSelected = onLensSelected,
+                        onZoomChange = onZoomChange,
+                        onZoomPresetTap = onZoomPresetTap,
+                        modifier = Modifier
+                            .scale(layoutConfig.zoomCapsuleScale)
+                            .testTag("master_zoom_capsule")
+                    )
+                }
 
                 // Separate Filter icon positioned to the right side of the zoom slider in Photo Mode
                 if (cameraMode == CameraMode.PHOTO) {
@@ -969,18 +972,17 @@ fun MasterZoomCapsule(
     modifier: Modifier = Modifier
 ) {
     val isFrontCamera = selectedLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+    if (isFrontCamera) {
+        return
+    }
     val hasRealUltraWide = remember(displayedLenses) {
         displayedLenses.any { it.lensType == LensType.ULTRAWIDE }
     }
     val presets = remember(isFrontCamera, hasRealUltraWide, customPresets) {
-        if (isFrontCamera) {
-            listOf(0.8f, 1.0f)
+        customPresets?.takeIf { it.isNotEmpty() } ?: if (hasRealUltraWide) {
+            listOf(0.5f, 1.0f, 2.0f, 3.0f)
         } else {
-            customPresets?.takeIf { it.isNotEmpty() } ?: if (hasRealUltraWide) {
-                listOf(0.5f, 1.0f, 2.0f, 3.0f)
-            } else {
-                listOf(1.0f, 2.0f, 3.0f)
-            }
+            listOf(1.0f, 2.0f, 3.0f)
         }
     }
 

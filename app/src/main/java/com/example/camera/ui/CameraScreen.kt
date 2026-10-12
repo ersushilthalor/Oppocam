@@ -681,7 +681,7 @@ fun CameraScreen(
             onAudioToggle = { viewModel.toggleAudio() },
             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-            onStabilizationClick = { viewModel.toggleUltraStabilization() },
+            onStabilizationClick = { viewModel.toggleVideoStabilization() },
             isQuickOptionsOpen = isQuickOptionsOpen,
             onQuickOptionsToggle = { isQuickOptionsOpen = !isQuickOptionsOpen },
             layoutConfig = activeLayoutConfig,

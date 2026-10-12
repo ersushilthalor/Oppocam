@@ -260,9 +260,8 @@ object CameraOpticalCalibration {
                 (uiZoom / base).coerceAtLeast(1.0f)
             }
             LensType.FRONT -> {
-                // 0.8x: true, full sensor field of view with no digital crop (1.0f).
-                // 1x: slightly cropped view of the same front camera sensor (1.25x), narrower FOV than 0.8x.
-                (uiZoom / 0.8f).coerceAtLeast(1.0f)
+                // Front camera: native uncropped sensor field of view by default (1.0f digital crop).
+                uiZoom.coerceAtLeast(1.0f)
             }
             else -> {
                 uiZoom.coerceAtLeast(1.0f)
