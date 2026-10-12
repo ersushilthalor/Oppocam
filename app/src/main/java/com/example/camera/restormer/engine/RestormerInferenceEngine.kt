@@ -1,7 +1,6 @@
 package com.example.camera.restormer.engine
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.util.Log
 import com.example.camera.restormer.model.HardwareDelegateOption
 import com.example.camera.restormer.model.ModelBackend
@@ -12,6 +11,7 @@ import org.tensorflow.lite.gpu.CompatibilityList
 import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileNotFoundException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -20,12 +20,13 @@ import java.nio.channels.FileChannel
 private const val TAG = "RestormerInference"
 
 /**
- * Unified Inference Engine for Restormer Models on Android.
+ * Genuine Inference Engine for Restormer Models on Android.
  *
- * Supports:
- * 1. ONNX Runtime Mobile (.onnx) for exported Restormer weights with full transformer operator support.
+ * Executes genuine pretrained neural network inference via:
+ * 1. Microsoft ONNX Runtime Mobile (.onnx) with multi-threading, NNAPI, or optimized CPU.
  * 2. TensorFlow Lite (.tflite) with GPU / NNAPI / CPU delegates.
- * 3. Native Restormer Transformer Engine with genuine MDTA / GDFN architecture and pretrained priors.
+ *
+ * Strictly prohibits fallback to fake untrained models or random weights.
  */
 class RestormerInferenceEngine(
     private val context: Context,
@@ -40,10 +41,11 @@ class RestormerInferenceEngine(
     private var tfliteInterpreter: Interpreter? = null
     private var gpuDelegate: GpuDelegate? = null
 
-    private var nativeArchitecture: RestormerArchitecture? = null
-
     @Volatile
     private var isInitialized = false
+
+    var initializationError: String? = null
+        private set
 
     init {
         initializeBackend()
@@ -58,50 +60,64 @@ class RestormerInferenceEngine(
                 ModelBackend.TENSORFLOW_LITE -> {
                     initTensorFlowLite()
                 }
-                ModelBackend.NATIVE_ENGINE -> {
-                    initNativeEngine()
-                }
             }
             isInitialized = true
-            Log.i(TAG, "Restormer model initialized: ${modelInfo.name} via ${modelInfo.backend}")
+            Log.i(TAG, "Genuine Restormer model initialized: ${modelInfo.name} via ${modelInfo.backend}")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize backend ${modelInfo.backend} for ${modelInfo.name}", e)
-            // Fallback to Native Engine to ensure 100% genuine inference availability
-            try {
-                initNativeEngine()
-                isInitialized = true
-                Log.w(TAG, "Fell back to Native Restormer Engine for ${modelInfo.name}")
-            } catch (t: Throwable) {
-                Log.e(TAG, "Native fallback also failed", t)
-            }
+            val msg = "Failed to initialize Restormer model '${modelInfo.name}': ${e.message}"
+            Log.e(TAG, msg, e)
+            initializationError = msg
+            isInitialized = false
+            throw IllegalStateException(msg, e)
         }
     }
 
     private fun initOnnxRuntime() {
-        val modelFile = modelInfo.filePath?.let { File(it) }
-        if (modelFile != null && modelFile.exists() && modelFile.length() > 0) {
-            val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
-            ortEnvironment = env
-            val sessionOptions = ai.onnxruntime.OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(numThreads)
-                setOptimizationLevel(ai.onnxruntime.OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                if (delegateOption == HardwareDelegateOption.NNAPI) {
+        val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+        ortEnvironment = env
+        val sessionOptions = ai.onnxruntime.OrtSession.SessionOptions().apply {
+            setIntraOpNumThreads(numThreads)
+            setOptimizationLevel(ai.onnxruntime.OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            if (delegateOption == HardwareDelegateOption.NNAPI) {
+                try {
                     addNnapi()
+                } catch (e: Exception) {
+                    Log.w(TAG, "NNAPI not available for ONNX, falling back to CPU", e)
                 }
             }
-            ortSession = env.createSession(modelFile.absolutePath, sessionOptions)
-        } else {
-            // No custom onnx file found on disk, fallback to native architecture
-            initNativeEngine()
         }
+
+        val filePath = modelInfo.filePath
+        if (filePath != null) {
+            val file = File(filePath)
+            if (!file.exists() || file.length() == 0L) {
+                throw FileNotFoundException("Model file does not exist or is empty: $filePath")
+            }
+            ortSession = env.createSession(file.absolutePath, sessionOptions)
+            return
+        }
+
+        val assetPath = modelInfo.assetPath
+        if (assetPath != null) {
+            val modelBytes = context.assets.open(assetPath).use { it.readBytes() }
+            if (modelBytes.isEmpty()) {
+                throw IllegalStateException("Asset model file is empty: $assetPath")
+            }
+            ortSession = env.createSession(modelBytes, sessionOptions)
+            return
+        }
+
+        throw FileNotFoundException("No file path or asset path configured for ONNX model: ${modelInfo.name}")
     }
 
     private fun initTensorFlowLite() {
         val buffer = loadModelByteBuffer()
-        if (buffer != null) {
-            val options = Interpreter.Options().apply {
-                setNumThreads(numThreads)
-                if (delegateOption == HardwareDelegateOption.GPU || delegateOption == HardwareDelegateOption.AUTO) {
+            ?: throw FileNotFoundException("Could not load model byte buffer for TFLite model: ${modelInfo.name}")
+
+        val options = Interpreter.Options().apply {
+            setNumThreads(numThreads)
+            if (delegateOption == HardwareDelegateOption.GPU || delegateOption == HardwareDelegateOption.AUTO) {
+                try {
                     val compat = CompatibilityList()
                     if (compat.isDelegateSupportedOnThisDevice) {
                         val gpuOptions = GpuDelegate.Options().apply {
@@ -111,25 +127,18 @@ class RestormerInferenceEngine(
                         gpuDelegate = GpuDelegate(gpuOptions)
                         addDelegate(gpuDelegate)
                     }
-                } else if (delegateOption == HardwareDelegateOption.NNAPI) {
+                } catch (e: Exception) {
+                    Log.w(TAG, "GPU delegate unavailable, continuing with CPU", e)
+                }
+            } else if (delegateOption == HardwareDelegateOption.NNAPI) {
+                try {
                     setUseNNAPI(true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "NNAPI delegate unavailable", e)
                 }
             }
-            tfliteInterpreter = Interpreter(buffer, options)
-        } else {
-            initNativeEngine()
         }
-    }
-
-    private fun initNativeEngine() {
-        nativeArchitecture = RestormerArchitecture(
-            inChannels = modelInfo.inputChannels,
-            outChannels = modelInfo.inputChannels,
-            baseDim = 24,
-            numHeads = 2,
-            ffnExpansionFactor = 2.0f,
-            task = modelInfo.task
-        )
+        tfliteInterpreter = Interpreter(buffer, options)
     }
 
     private fun loadModelByteBuffer(): ByteBuffer? {
@@ -148,14 +157,15 @@ class RestormerInferenceEngine(
         val assetPath = modelInfo.assetPath
         if (assetPath != null) {
             try {
-                val afd = context.assets.openFd(assetPath)
-                val fis = FileInputStream(afd.fileDescriptor)
-                val channel = fis.channel
-                val buffer = channel.map(FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.declaredLength)
-                fis.close()
+                val bytes = context.assets.open(assetPath).use { it.readBytes() }
+                val buffer = ByteBuffer.allocateDirect(bytes.size).apply {
+                    order(ByteOrder.nativeOrder())
+                    put(bytes)
+                    rewind()
+                }
                 return buffer
             } catch (e: Exception) {
-                Log.d(TAG, "Asset not found: $assetPath")
+                Log.e(TAG, "Error opening asset $assetPath", e)
             }
         }
 
@@ -163,27 +173,23 @@ class RestormerInferenceEngine(
     }
 
     /**
-     * Executes genuine inference on a single RGB patch [3, height, width] (in [0.0f, 1.0f]).
+     * Executes genuine Restormer inference on a single RGB patch [3, height, width] (in [0.0f, 1.0f]).
      * Returns the restored patch [3, height, width] with matching dimensions.
      */
     fun processTile(inputPatch: Array<FloatArray>, height: Int, width: Int): Array<FloatArray> {
-        check(isInitialized) { "Restormer inference engine is not initialized." }
+        check(isInitialized) { "Restormer inference engine is not initialized: $initializationError" }
 
-        // 1. If ONNX Runtime Session is active, execute through ONNX Runtime
         ortSession?.let { session ->
             ortEnvironment?.let { env ->
                 return executeOnnxInference(session, env, inputPatch, height, width)
             }
         }
 
-        // 2. If TensorFlow Lite Interpreter is active, execute through TFLite
         tfliteInterpreter?.let { interpreter ->
             return executeTfliteInference(interpreter, inputPatch, height, width)
         }
 
-        // 3. Native Restormer Engine
-        val native = nativeArchitecture ?: RestormerArchitecture(task = modelInfo.task)
-        return native.forward(inputPatch, height, width)
+        throw IllegalStateException("No active inference backend available for Restormer model: ${modelInfo.name}")
     }
 
     private fun executeOnnxInference(
@@ -208,11 +214,60 @@ class RestormerInferenceEngine(
 
         val results = session.run(mapOf(inputName to inputTensor))
         val outputTensor = results[0] as ai.onnxruntime.OnnxTensor
+        val outShape = outputTensor.info.shape
         val outFloatBuffer = outputTensor.floatBuffer
 
         val outputPatch = Array(3) { FloatArray(hw) }
+
+        // Determine output tensor layout from shape
+        if (outShape.size == 4 && outShape[1] == 3L) {
+            // NCHW layout: [1, 3, outH, outW]
+            val outH = outShape[2].toInt()
+            val outW = outShape[3].toInt()
+            if (outH == height && outW == width) {
+                for (c in 0 until 3) {
+                    outFloatBuffer.get(outputPatch[c])
+                }
+            } else {
+                // If model pads slightly to multiple of 8, extract active tile window
+                val fullPlane = FloatArray(outH * outW)
+                for (c in 0 until 3) {
+                    outFloatBuffer.get(fullPlane)
+                    val targetPlane = outputPatch[c]
+                    for (y in 0 until height) {
+                        System.arraycopy(fullPlane, y * outW, targetPlane, y * width, width)
+                    }
+                }
+            }
+        } else if (outShape.size == 4 && outShape[3] == 3L) {
+            // NHWC layout: [1, outH, outW, 3]
+            val outR = outputPatch[0]
+            val outG = outputPatch[1]
+            val outB = outputPatch[2]
+            for (i in 0 until hw) {
+                outR[i] = outFloatBuffer.get()
+                outG[i] = outFloatBuffer.get()
+                outB[i] = outFloatBuffer.get()
+            }
+        } else {
+            // Fallback sequential channel read
+            for (c in 0 until 3) {
+                outFloatBuffer.get(outputPatch[c])
+            }
+        }
+
+        // Numerical validation & clipping
         for (c in 0 until 3) {
-            outFloatBuffer.get(outputPatch[c])
+            val plane = outputPatch[c]
+            for (i in 0 until hw) {
+                val v = plane[i]
+                if (v.isNaN() || v.isInfinite()) {
+                    inputTensor.close()
+                    results.close()
+                    throw IllegalStateException("Restormer model output contains NaN or Infinite value at channel $c, pixel $i")
+                }
+                plane[i] = v.coerceIn(0.0f, 1.0f)
+            }
         }
 
         inputTensor.close()
@@ -227,6 +282,11 @@ class RestormerInferenceEngine(
         width: Int
     ): Array<FloatArray> {
         val hw = height * width
+        val inputTensor = interpreter.getInputTensor(0)
+        val shape = inputTensor.shape()
+
+        val isNCHW = shape.size == 4 && shape[1] == 3
+
         val inputBuffer = ByteBuffer.allocateDirect(1 * height * width * 3 * 4).apply {
             order(ByteOrder.nativeOrder())
         }
@@ -238,11 +298,20 @@ class RestormerInferenceEngine(
         val g = inputPatch[1]
         val b = inputPatch[2]
 
-        // NHWC layout for standard TFLite
-        for (i in 0 until hw) {
-            inputBuffer.putFloat(r[i])
-            inputBuffer.putFloat(g[i])
-            inputBuffer.putFloat(b[i])
+        if (isNCHW) {
+            for (c in 0 until 3) {
+                val plane = inputPatch[c]
+                for (i in 0 until hw) {
+                    inputBuffer.putFloat(plane[i])
+                }
+            }
+        } else {
+            // NHWC layout
+            for (i in 0 until hw) {
+                inputBuffer.putFloat(r[i])
+                inputBuffer.putFloat(g[i])
+                inputBuffer.putFloat(b[i])
+            }
         }
         inputBuffer.rewind()
 
@@ -253,20 +322,37 @@ class RestormerInferenceEngine(
         val outG = FloatArray(hw)
         val outB = FloatArray(hw)
 
-        for (i in 0 until hw) {
-            outR[i] = outputBuffer.getFloat()
-            outG[i] = outputBuffer.getFloat()
-            outB[i] = outputBuffer.getFloat()
+        if (isNCHW) {
+            for (i in 0 until hw) outR[i] = outputBuffer.getFloat().coerceIn(0.0f, 1.0f)
+            for (i in 0 until hw) outG[i] = outputBuffer.getFloat().coerceIn(0.0f, 1.0f)
+            for (i in 0 until hw) outB[i] = outputBuffer.getFloat().coerceIn(0.0f, 1.0f)
+        } else {
+            for (i in 0 until hw) {
+                outR[i] = outputBuffer.getFloat().coerceIn(0.0f, 1.0f)
+                outG[i] = outputBuffer.getFloat().coerceIn(0.0f, 1.0f)
+                outB[i] = outputBuffer.getFloat().coerceIn(0.0f, 1.0f)
+            }
         }
 
         return arrayOf(outR, outG, outB)
     }
 
     /**
-     * Executes diagnostic benchmark on a 64x64 or 128x128 synthetic test tile to verify
-     * real inference execution, finite non-zero output, and compute latency in milliseconds.
+     * Executes diagnostic benchmark on a test tile to verify real inference execution,
+     * finite non-zero output, and compute latency in milliseconds.
      */
-    fun runDiagnosticBenchmark(testSize: Int = 64): BenchmarkResult {
+    fun runDiagnosticBenchmark(testSize: Int = 128): BenchmarkResult {
+        if (!isInitialized) {
+            return BenchmarkResult(
+                isSuccess = false,
+                latencyMs = 0L,
+                tilePixels = testSize * testSize,
+                meanDiffPerPixel = 0f,
+                variance = 0f,
+                message = "Initialization error: $initializationError"
+            )
+        }
+
         val hw = testSize * testSize
         val testPatch = Array(3) { FloatArray(hw) }
 
@@ -284,42 +370,52 @@ class RestormerInferenceEngine(
             }
         }
 
-        val start = System.nanoTime()
-        val result = processTile(testPatch, testSize, testSize)
-        val durationMs = (System.nanoTime() - start) / 1_000_000L
+        return try {
+            val start = System.nanoTime()
+            val result = processTile(testPatch, testSize, testSize)
+            val durationMs = (System.nanoTime() - start) / 1_000_000L
 
-        // Verify output validity: must not be null, empty, all zeros, or NaN
-        var isAllZero = true
-        var hasNaN = false
-        var variance = 0.0f
-        var diffFromInput = 0.0f
+            var isAllZero = true
+            var hasNaN = false
+            var variance = 0.0f
+            var diffFromInput = 0.0f
 
-        for (c in 0 until 3) {
-            val out = result[c]
-            val inp = testPatch[c]
-            for (i in 0 until hw) {
-                val v = out[i]
-                if (v != 0.0f) isAllZero = false
-                if (v.isNaN() || v.isInfinite()) hasNaN = true
-                diffFromInput += kotlin.math.abs(v - inp[i])
-                variance += (v - 0.5f) * (v - 0.5f)
+            for (c in 0 until 3) {
+                val out = result[c]
+                val inp = testPatch[c]
+                for (i in 0 until hw) {
+                    val v = out[i]
+                    if (v != 0.0f) isAllZero = false
+                    if (v.isNaN() || v.isInfinite()) hasNaN = true
+                    diffFromInput += kotlin.math.abs(v - inp[i])
+                    variance += (v - 0.5f) * (v - 0.5f)
+                }
             }
+
+            val passed = !isAllZero && !hasNaN && diffFromInput > 0.0001f
+
+            BenchmarkResult(
+                isSuccess = passed,
+                latencyMs = durationMs,
+                tilePixels = hw,
+                meanDiffPerPixel = diffFromInput / (3 * hw),
+                variance = variance / (3 * hw),
+                message = if (passed) {
+                    "Verified genuine Restormer inference (${durationMs}ms, ${testSize}x${testSize} tile, Δ=${String.format("%.4f", diffFromInput / (3 * hw))})"
+                } else {
+                    "Inference check failed: NaN=$hasNaN, allZero=$isAllZero, diff=$diffFromInput"
+                }
+            )
+        } catch (e: Exception) {
+            BenchmarkResult(
+                isSuccess = false,
+                latencyMs = 0L,
+                tilePixels = hw,
+                meanDiffPerPixel = 0f,
+                variance = 0f,
+                message = "Inference execution failed: ${e.message}"
+            )
         }
-
-        val passed = !isAllZero && !hasNaN && diffFromInput > 0.001f
-
-        return BenchmarkResult(
-            isSuccess = passed,
-            latencyMs = durationMs,
-            tilePixels = hw,
-            meanDiffPerPixel = diffFromInput / (3 * hw),
-            variance = variance / (3 * hw),
-            message = if (passed) {
-                "Verified genuine inference (${durationMs}ms, ${testSize}x${testSize} tile, Δ=${String.format("%.4f", diffFromInput / (3 * hw))})"
-            } else {
-                "Diagnostic check failed: NaN=$hasNaN, allZero=$isAllZero"
-            }
-        )
     }
 
     override fun close() {

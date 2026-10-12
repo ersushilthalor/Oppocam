@@ -1435,8 +1435,8 @@ class CameraPreferences(context: Context) {
         set(value) = prefs.edit().putBoolean("pref_restormer_enabled", value).apply()
 
     var activeRestormerModelId: String
-        get() = prefs.getString("pref_active_restormer_model_id", "restormer_real_denoise_official")
-            ?: "restormer_real_denoise_official"
+        get() = prefs.getString("pref_active_restormer_model_id", "restormer_derain_mobile")
+            ?: "restormer_derain_mobile"
         set(value) = prefs.edit().putString("pref_active_restormer_model_id", value).apply()
 
     var restormerTileSize: Int

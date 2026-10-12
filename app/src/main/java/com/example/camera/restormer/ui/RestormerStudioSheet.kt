@@ -433,14 +433,25 @@ fun RestormerStudioSheet(
                                 isDiagnosticRunning = true
                                 coroutineScope.launch {
                                     val result = withContext(Dispatchers.Default) {
-                                        val engine = RestormerInferenceEngine(
-                                            context = context,
-                                            modelInfo = activeModel,
-                                            delegateOption = config.hardwareDelegate
-                                        )
-                                        val res = engine.runDiagnosticBenchmark(config.tileSize)
-                                        engine.close()
-                                        res
+                                        try {
+                                            val engine = RestormerInferenceEngine(
+                                                context = context,
+                                                modelInfo = activeModel,
+                                                delegateOption = config.hardwareDelegate
+                                            )
+                                            val res = engine.runDiagnosticBenchmark(config.tileSize)
+                                            engine.close()
+                                            res
+                                        } catch (e: Throwable) {
+                                            RestormerInferenceEngine.BenchmarkResult(
+                                                isSuccess = false,
+                                                latencyMs = 0L,
+                                                tilePixels = config.tileSize * config.tileSize,
+                                                meanDiffPerPixel = 0f,
+                                                variance = 0f,
+                                                message = "Diagnostic execution failed: ${e.message}"
+                                            )
+                                        }
                                     }
                                     diagnosticResult = result
                                     isDiagnosticRunning = false

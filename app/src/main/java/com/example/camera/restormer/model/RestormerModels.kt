@@ -3,7 +3,7 @@ package com.example.camera.restormer.model
 import com.squareup.moshi.JsonClass
 
 /**
- * Tasks supported by the official Restormer architecture (CVPR 2022).
+ * Tasks supported by genuine Restormer models (CVPR 2022).
  */
 enum class RestormerTask(val displayName: String, val description: String, val badge: String) {
     REAL_DENOISING(
@@ -23,7 +23,7 @@ enum class RestormerTask(val displayName: String, val description: String, val b
     ),
     DERAINING(
         displayName = "Deraining",
-        description = "Clears heavy rain streaks, haze, and rain droplets from outdoor photos",
+        description = "Clears rain streaks, haze, and rain droplets from outdoor photos",
         badge = "DERAIN"
     ),
     GAUSSIAN_DENOISING(
@@ -39,12 +39,11 @@ enum class RestormerTask(val displayName: String, val description: String, val b
 }
 
 /**
- * Execution backends for model inference.
+ * Genuine execution backends for model inference.
  */
 enum class ModelBackend(val displayName: String) {
     ONNX_RUNTIME("ONNX Runtime (Mobile)"),
-    TENSORFLOW_LITE("TensorFlow Lite"),
-    NATIVE_ENGINE("Restormer Transformer Engine")
+    TENSORFLOW_LITE("TensorFlow Lite")
 }
 
 /**
@@ -94,9 +93,9 @@ data class RestormerModelInfo(
 @JsonClass(generateAdapter = true)
 data class RestormerConfig(
     val isEnabled: Boolean = false,
-    val activeModelId: String = "restormer_real_denoise_official",
-    val tileSize: Int = 128,          // Tile size in pixels (e.g. 128 or 256)
-    val overlap: Int = 16,            // Overlap margin between neighboring tiles (e.g. 16 or 32)
+    val activeModelId: String = "restormer_derain_mobile",
+    val tileSize: Int = 128,          // Tile size in pixels (e.g. 64, 128, or 256)
+    val overlap: Int = 16,            // Overlap margin between neighboring tiles (e.g. 8, 16, or 32)
     val restorationStrength: Float = 1.0f, // 0.0f..1.0f blend with original
     val hardwareDelegate: HardwareDelegateOption = HardwareDelegateOption.AUTO,
     val cpuThreadCount: Int = 4,

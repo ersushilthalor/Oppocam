@@ -2394,8 +2394,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun executePhotoCapture() {
         val is50M = _photoMegapixelMode.value == PhotoMegapixelMode.M50
+        val isRestormer = preferences.isRestormerEnabled && _cameraMode.value == CameraMode.PHOTO
         if (is50M) {
             showToast("Processing 50MP Computational photo...")
+        } else if (isRestormer) {
+            showToast("Restormer AI: Processing photo...")
         }
         com.example.camera.sound.CameraSoundManager.performShutterFeedback(
             getApplication<Application>().applicationContext,
@@ -2405,11 +2408,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (uri != null) {
                 if (is50M) {
                     showToast("50MP Computational photo saved to DCIM/Camera")
+                } else if (isRestormer) {
+                    showToast("Restormer AI enhanced photo saved to DCIM/Camera")
                 } else {
                     showToast("Saved to DCIM/Camera")
                 }
             } else {
-                showToast("Failed to save photo")
+                val restormerErr = engine.lastRestormerError.value
+                if (restormerErr != null) {
+                    showToast("Restormer Error: $restormerErr")
+                } else {
+                    showToast("Failed to save photo")
+                }
             }
         }
     }

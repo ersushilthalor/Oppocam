@@ -246,6 +246,7 @@ fun CameraSettingsHost(
         onLensSwitchOverlapAnimationToggle = { viewModel.setLensSwitchOverlapAnimationEnabled(it) },
         isRestormerEnabled = restormerConfig.isEnabled,
         onRestormerToggle = { viewModel.toggleRestormerEnabled(it) },
+        onOpenRestormerStudio = { viewModel.setRestormerStudioOpen(true) },
         onDismiss = onDismiss
     )
 }
