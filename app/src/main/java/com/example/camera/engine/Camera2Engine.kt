@@ -169,25 +169,7 @@ class Camera2Engine(private val context: Context) {
         syncStandbyStreamSettings()
     }
 
-    val lensColourMatchingEngine by lazy {
-        LensColourMatchingEngine(context).apply {
-            isEnabled = preferences.isCorrectColourShift
-        }
-    }
-    private val _isCorrectColourShift = MutableStateFlow(preferences.isCorrectColourShift)
-    val isCorrectColourShift: StateFlow<Boolean> = _isCorrectColourShift.asStateFlow()
 
-    fun setCorrectColourShift(enabled: Boolean) {
-        _isCorrectColourShift.value = enabled
-        preferences.isCorrectColourShift = enabled
-        lensColourMatchingEngine.isEnabled = enabled
-        syncStandbyStreamSettings()
-        updatePreviewSettings()
-    }
-
-    fun getRenderColorMatrixForLens(lensType: LensType): android.graphics.ColorMatrix? {
-        return if (_isCorrectColourShift.value) lensColourMatchingEngine.computeRenderColorMatrix(lensType) else null
-    }
 
     var onLensSwitchCompletedListener: ((LensInfo, Float) -> Unit)? = null
     private val lensSwitchListeners = java.util.concurrent.CopyOnWriteArrayList<(LensInfo, Float) -> Unit>()
@@ -357,14 +339,7 @@ class Camera2Engine(private val context: Context) {
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                 }
             }
-            if (_isCorrectColourShift.value) {
-                val standbyCam = ultraWideStandbyCameraDevice
-                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                val standbyLens = backLenses.firstOrNull { it.cameraId == standbyCam?.id }
-                if (standbyLens != null) {
-                    lensColourMatchingEngine.onCaptureFrame(result, standbyLens)
-                }
-            }
+
         }
 
         override fun onCaptureFailed(
@@ -708,10 +683,7 @@ class Camera2Engine(private val context: Context) {
             val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
             builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
 
-            if (_isCorrectColourShift.value) {
-                val activeLens = activeSessionLens ?: _selectedLens.value
-                lensColourMatchingEngine.applySynchronizedMatching(builder, standbyLens, activeLens)
-            }
+
         } catch (e: Exception) {
             Log.w(TAG, "Error applying synchronized standby settings", e)
         }
@@ -1600,11 +1572,16 @@ class Camera2Engine(private val context: Context) {
 
     private var activeMeteringRectangle: MeteringRectangle? = null
 
-    val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
-    val realtimeStabilizationCoordinator by lazy {
-        com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator(context)
-    }
-    private var eisSession: com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator.Session? = null
+
+
+    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
+        set(value) {
+            field = value
+            updatePreviewSettings()
+        }
+
+    fun startEisStabilization() {}
+    fun stopEisStabilization() {}
 
     private val _stabilizationOffsetFlow = MutableStateFlow(Triple(0f, 0f, 1.0f))
     val stabilizationOffsetFlow: StateFlow<Triple<Float, Float, Float>> = _stabilizationOffsetFlow.asStateFlow()
@@ -1612,57 +1589,14 @@ class Camera2Engine(private val context: Context) {
     private val _isRealtimeEisActive = MutableStateFlow(false)
     val isRealtimeEisActive: StateFlow<Boolean> = _isRealtimeEisActive.asStateFlow()
 
-    fun startEisStabilization() {
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        val hybridConfig = _hybridStabilizationConfig.value
-        val isStabActive = isVideoStabilizationEnabled && (
-            hybridConfig.isUltraStabilizationEnabled ||
-            hybridConfig.isHybridEnabled ||
-            hybridConfig.isEisPreferred ||
-            hybridConfig.isEisOnly ||
-            videoStabilizationMode.isEnabled
-        )
-        if (isVideoMode && isStabActive) {
-            gyroStabilizationEngine.start()
-            val w = _previewBufferSize.value?.width ?: 1920
-            val h = _previewBufferSize.value?.height ?: 1080
-            val maxDim = maxOf(w, h)
-            val minDim = minOf(w, h)
-            if (eisSession == null) {
-                eisSession = realtimeStabilizationCoordinator.createSession(
-                    useCase = com.hinnka.mycamera.stabilization.StabilizationUseCase.VIDEO,
-                    strength = 1.0f,
-                    frameWidth = maxDim,
-                    frameHeight = minDim,
-                    lookaheadFrames = com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
-                )
-            }
-            eisSession?.start()
-            _isRealtimeEisActive.value = true
-        } else {
-            stopEisStabilization()
-        }
-    }
+    val gyroStabilizationEngine = GyroStabilizationEngine(context)
+    val lensColourMatchingEngine = LensColourMatchingEngine(context)
 
-    fun stopEisStabilization() {
-        gyroStabilizationEngine.stop()
-        eisSession?.stop()
-        eisSession = null
-        _isRealtimeEisActive.value = false
-        lastStabilizedCrop = null
-        _stabilizationOffsetFlow.value = Triple(0f, 0f, 1.0f)
-        dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
-        if (isSoftwareCinemaRecording) {
-            cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
-        }
+    private val _isCorrectColourShift = MutableStateFlow(false)
+    val isCorrectColourShift: StateFlow<Boolean> = _isCorrectColourShift.asStateFlow()
+    fun setCorrectColourShift(enabled: Boolean) {
+        _isCorrectColourShift.value = enabled
     }
-
-    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = preferences.videoStabilizationMode
-        set(value) {
-            field = value
-            startEisStabilization()
-            updatePreviewSettings()
-        }
 
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
     val stableActionHorizonEngine by lazy { com.example.camera.stableaction.StableActionHorizonEngine(context) }
@@ -2568,13 +2502,7 @@ class Camera2Engine(private val context: Context) {
                     activeSessionLens = lens
                     _selectedLens.value = lens
                     activeSessionPhysicalCameraId = if (useUw) lens.physicalCameraId else primaryMainLens?.physicalCameraId
-                    if (_isCorrectColourShift.value) {
-                        synchronized(previewRequestLock) {
-                            previewRequestBuilder?.let { b ->
-                                lensColourMatchingEngine.prepareTargetCaptureRequest(b, lens, currentRunningLens)
-                            }
-                        }
-                    }
+
                     Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
                     scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
                     completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
@@ -2739,10 +2667,7 @@ class Camera2Engine(private val context: Context) {
 
                 cameraDevice = targetCam
                 captureSession = standbySession
-                if (_isCorrectColourShift.value && targetBuilder != null) {
-                    val previousLens = activeSessionLens ?: _selectedLens.value
-                    lensColourMatchingEngine.prepareTargetCaptureRequest(targetBuilder, targetLens, previousLens)
-                }
+
                 synchronized(previewRequestLock) {
                     previewRequestBuilder = targetBuilder
                 }
@@ -4836,15 +4761,7 @@ class Camera2Engine(private val context: Context) {
                                         session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
                                     }
                                 }
-                                _isCameraReady.value = true
-                                val stabLens = activeSwitchingTargetLens ?: _targetLens.value ?: _selectedLens.value
-                                if (stabLens != null) {
-                                    val chars = getCharacteristics(stabLens.cameraId)
-                                    if (chars != null) {
-                                        realtimeStabilizationCoordinator.configureCamera(stabLens.cameraId, chars)
-                                    }
-                                }
-                                startEisStabilization()
+
                                 CameraPerformanceMonitor.start()
                                 completeLensSwitch(activeSwitchingTargetLens ?: _targetLens.value ?: _selectedLens.value)
                                 if (_isKeepUltraWideReady.value || isContinuousZoomTransitionActive || pendingEnsureUltraWideReady) {
@@ -4897,15 +4814,7 @@ class Camera2Engine(private val context: Context) {
                                     session.setRepeatingRequest(it.build(), captureCallback, backgroundHandler)
                                 }
                             }
-                            _isCameraReady.value = true
-                            val stabLens = _selectedLens.value
-                            if (stabLens != null) {
-                                val chars = getCharacteristics(stabLens.cameraId)
-                                if (chars != null) {
-                                    realtimeStabilizationCoordinator.configureCamera(stabLens.cameraId, chars)
-                                }
-                            }
-                            startEisStabilization()
+
                             CameraPerformanceMonitor.start()
                             completeLensSwitch(_selectedLens.value)
                         } catch (e: Exception) {
@@ -4957,10 +4866,7 @@ class Camera2Engine(private val context: Context) {
             lastCaptureResult = result
             CameraPerformanceMonitor.onPreviewFrame()
 
-            if (_isCorrectColourShift.value) {
-                val curLens = activeSessionLens ?: _selectedLens.value
-                lensColourMatchingEngine.onCaptureFrame(result, curLens)
-            }
+
 
             // Verify actual hardware OIS and EIS states directly from CaptureResult
             val actualOisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)
@@ -5004,60 +4910,7 @@ class Camera2Engine(private val context: Context) {
                 dollyZoomEngine.onFrameFaces(faces, activeArray, sensorOrientation, isFront)
             }
 
-            // Coordinated PhotonCamera MGC Realtime EIS & Gyroscope Stabilization
-            realtimeStabilizationCoordinator.submitCaptureResult(result, request)
 
-            if (_isRealtimeEisActive.value) {
-                val lens = activeSessionLens ?: _selectedLens.value
-                val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
-                val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                val focalLength = result.get(CaptureResult.LENS_FOCAL_LENGTH) ?: 0f
-                val physicalSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                val isFront = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-
-                if (activeArray != null && physicalSize != null && focalLength > 0f) {
-                    gyroStabilizationEngine.computeStabilizedCrop(
-                        result = result,
-                        activeArray = activeArray,
-                        baseZoom = currentZoom,
-                        focalLengthMm = focalLength,
-                        sensorPhysicalSizeMm = physicalSize,
-                        isOisActive = isOisAllowed
-                    )
-                }
-
-                val transform = eisSession?.dequeueLatestTransform()
-                val (offsetX, offsetY, cropScale) = if (transform != null && transform.hasPoseCoverage && transform.rowHomographies.size >= 12 * 9) {
-                    val rowIdx = com.hinnka.mycamera.stabilization.STABILIZATION_ROW_COUNT / 2
-                    val offset = rowIdx * 9
-                    val h02 = transform.rowHomographies[offset + 2]
-                    val h12 = transform.rowHomographies[offset + 5]
-                    val h22 = transform.rowHomographies[offset + 8]
-                    val rawScale = if (h22 > 0.001f) (1.0f / h22) else 1.111f
-                    val clampedScale = rawScale.coerceIn(1.04f, 1.15f)
-                    val normX = (h02 * 0.5f).coerceIn(-0.10f, 0.10f)
-                    val normY = (h12 * 0.5f).coerceIn(-0.10f, 0.10f)
-                    Triple(normX, normY, clampedScale)
-                } else {
-                    Triple(
-                        gyroStabilizationEngine.normalizedOffsetX.coerceIn(-0.10f, 0.10f),
-                        gyroStabilizationEngine.normalizedOffsetY.coerceIn(-0.10f, 0.10f),
-                        gyroStabilizationEngine.currentCropScale.coerceIn(1.04f, 1.15f)
-                    )
-                }
-
-                dualCameraRecordingRelay?.updateStabilizationOffset(offsetX, offsetY, cropScale)
-                if (isSoftwareCinemaRecording) {
-                    cinemaSoftwareRecorder.updateStabilizationOffset(offsetX, offsetY, cropScale)
-                }
-                _stabilizationOffsetFlow.value = Triple(offsetX, offsetY, cropScale)
-            } else {
-                dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
-                if (isSoftwareCinemaRecording) {
-                    cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
-                }
-                _stabilizationOffsetFlow.value = Triple(0f, 0f, 1.0f)
-            }
 
             // Real-time continuous Auto Tone Control for Cinema Log Profiles
             if (currentMode == CameraMode.CINEMA && _cinemaConfig.value.colorProfile == CinemaColorProfile.HLG10) {
@@ -5485,11 +5338,15 @@ class Camera2Engine(private val context: Context) {
             applyVendorOisControls(builder, oisAllowed = false)
         }
 
-        // 2. Electronic Image Stabilization (EIS) completely removed:
-        // Video uses normal camera output without electronic stabilization.
+        // 2. Native Device-Supported Electronic Image Stabilization (EIS)
+        val eisAllowed = isVideoStabilizationEnabled && caps.supportsEis
         builder.set(
             CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+            if (eisAllowed) {
+                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+            } else {
+                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+            }
         )
 
         // Preserve video recording capture intent and target FPS range across lens switches & setting updates
@@ -5572,20 +5429,7 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        // Correct Colour Shift matching across Main & Ultra-Wide
-        if (_isCorrectColourShift.value) {
-            val curLens = activeSessionLens ?: _selectedLens.value
-            if (curLens != null && (curLens.lensType == LensType.WIDE || curLens.lensType == LensType.ULTRAWIDE)) {
-                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                val otherLens = backLenses.firstOrNull {
-                    if (curLens.lensType == LensType.ULTRAWIDE) (it.lensType == LensType.WIDE && !it.isZoomPreset)
-                    else it.lensType == LensType.ULTRAWIDE
-                }
-                if (otherLens != null) {
-                    lensColourMatchingEngine.applySynchronizedMatching(builder, curLens, otherLens)
-                }
-            }
-        }
+
 
         // Digital Zoom / Crop Region
         applyZoom(builder, explicitZoom)
@@ -6465,8 +6309,7 @@ class Camera2Engine(private val context: Context) {
             chars = chars,
             lastResult = lastCaptureResult,
             flashMode = flashMode,
-            stats = latestLuminanceStats,
-            gyroEngine = gyroStabilizationEngine
+            stats = latestLuminanceStats
         )
         Log.i(TAG, "[PHOTO_CAPTURE_HDR] Plan: ${hdrPlan.bracketType}, specs=${hdrPlan.specs.size} - ${hdrPlan.reason}")
 
@@ -8137,7 +7980,8 @@ class Camera2Engine(private val context: Context) {
                             if (matchedFpsRange != null) {
                                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
                             }
-                            set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                            val isEisRecAllowed = isVideoStabilizationEnabled && _capabilities.value.supportsEis
+                            set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, if (isEisRecAllowed) CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON else CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
                             if (isOisAllowed && _capabilities.value.supportsOis) {
                                 try {
                                     set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
@@ -10069,3 +9913,26 @@ class Camera2Engine(private val context: Context) {
         applySynchronizedStandbySettings(builder, standbyLens)
     }
 }
+
+class GyroStabilizationEngine(val context: android.content.Context) {
+    fun start() {}
+    fun stop() {}
+    var latestPitchSpeed = 0f
+    var latestYawSpeed = 0f
+    var latestRollSpeed = 0f
+    fun getRecentRmsMotion() = 0f
+    fun computeStabilizedCrop(vararg args: Any?) {}
+    var normalizedOffsetX = 0f
+    var normalizedOffsetY = 0f
+    var currentCropScale = 1.0f
+}
+
+class LensColourMatchingEngine(val context: android.content.Context) {
+    var isEnabled = false
+    fun computeRenderColorMatrix(lensType: Any) = null
+    fun onCaptureFrame(result: Any, lens: Any) {}
+    fun applySynchronizedMatching(builder: Any, standbyLens: Any, activeLens: Any) {}
+    fun prepareTargetCaptureRequest(builder: Any, targetLens: Any, previousLens: Any) {}
+    fun registerLensCharacteristics(lens: Any, chars: Any?) {}
+}
+

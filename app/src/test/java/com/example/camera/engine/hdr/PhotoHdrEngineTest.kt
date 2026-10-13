@@ -54,8 +54,7 @@ class PhotoHdrEngineTest {
             chars = null,
             lastResult = null,
             flashMode = FlashMode.ON,
-            stats = FrameLuminanceStats(p1 = 0.01f, p5 = 0.05f, p18 = 0.20f, p50 = 0.50f, p95 = 0.90f, p99 = 0.98f, dynamicRange = 0.90f, isHighContrast = true),
-            gyroEngine = null
+            stats = FrameLuminanceStats(p1 = 0.01f, p5 = 0.05f, p18 = 0.20f, p50 = 0.50f, p95 = 0.90f, p99 = 0.98f, dynamicRange = 0.90f, isHighContrast = true)
         )
         assertEquals(HdrBracketType.SINGLE_FRAME, flashPlan.bracketType)
 
@@ -64,8 +63,7 @@ class PhotoHdrEngineTest {
             chars = null,
             lastResult = null,
             flashMode = FlashMode.OFF,
-            stats = FrameLuminanceStats(p1 = 0.15f, p5 = 0.20f, p18 = 0.35f, p50 = 0.50f, p95 = 0.70f, p99 = 0.80f, dynamicRange = 0.40f, isHighContrast = false),
-            gyroEngine = null
+            stats = FrameLuminanceStats(p1 = 0.15f, p5 = 0.20f, p18 = 0.35f, p50 = 0.50f, p95 = 0.70f, p99 = 0.80f, dynamicRange = 0.40f, isHighContrast = false)
         )
         assertEquals(HdrBracketType.SINGLE_FRAME, flatPlan.bracketType)
 
@@ -74,8 +72,7 @@ class PhotoHdrEngineTest {
             chars = null,
             lastResult = null,
             flashMode = FlashMode.OFF,
-            stats = FrameLuminanceStats(p1 = 0.10f, p5 = 0.18f, p18 = 0.35f, p50 = 0.55f, p95 = 0.88f, p99 = 0.96f, dynamicRange = 0.65f, isHighContrast = false),
-            gyroEngine = null
+            stats = FrameLuminanceStats(p1 = 0.10f, p5 = 0.18f, p18 = 0.35f, p50 = 0.55f, p95 = 0.88f, p99 = 0.96f, dynamicRange = 0.65f, isHighContrast = false)
         )
         assertEquals(HdrBracketType.TWO_FRAME_HIGHLIGHT, highlightPlan.bracketType)
         assertEquals(2, highlightPlan.specs.size)
@@ -87,8 +84,7 @@ class PhotoHdrEngineTest {
             chars = null,
             lastResult = null,
             flashMode = FlashMode.OFF,
-            stats = FrameLuminanceStats(p1 = 0.01f, p5 = 0.05f, p18 = 0.15f, p50 = 0.45f, p95 = 0.92f, p99 = 0.99f, dynamicRange = 0.85f, isHighContrast = true),
-            gyroEngine = null
+            stats = FrameLuminanceStats(p1 = 0.01f, p5 = 0.05f, p18 = 0.15f, p50 = 0.45f, p95 = 0.92f, p99 = 0.99f, dynamicRange = 0.85f, isHighContrast = true)
         )
         assertEquals(HdrBracketType.THREE_FRAME_FULL, extremeHdrPlan.bracketType)
         assertEquals(3, extremeHdrPlan.specs.size)

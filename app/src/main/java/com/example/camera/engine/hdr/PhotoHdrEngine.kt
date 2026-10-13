@@ -8,7 +8,6 @@ import android.hardware.camera2.TotalCaptureResult
 import android.media.ExifInterface
 import android.util.Log
 import com.example.camera.engine.FrameLuminanceStats
-import com.example.camera.engine.GyroStabilizationEngine
 import com.example.camera.model.FlashMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -62,16 +61,16 @@ class PhotoHdrEngine(private val context: Context) {
     val detailProcessor = HdrDetailProcessor()
 
     /**
-     * Determines optimal capture strategy based on live sensor, scene histogram, and gyro state.
+     * Determines optimal capture strategy based on live sensor and scene histogram.
      */
     fun planCapture(
         chars: CameraCharacteristics?,
         lastResult: TotalCaptureResult?,
         flashMode: FlashMode,
         stats: FrameLuminanceStats?,
-        gyroEngine: GyroStabilizationEngine?
+        deviceMotionRms: Float = 0f
     ): HdrCapturePlan {
-        return planner.planCapture(chars, lastResult, flashMode, stats, gyroEngine)
+        return planner.planCapture(chars, lastResult, flashMode, stats, deviceMotionRms)
     }
 
     /**

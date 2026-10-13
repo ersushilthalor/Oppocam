@@ -87,16 +87,6 @@ class DualCameraRecordingRelay(
     @Volatile
     var isFrontFacing: Boolean = isFront
         private set
-    @Volatile
-    var stabilizationOffsetX: Float = 0f
-        private set
-    @Volatile
-    var stabilizationOffsetY: Float = 0f
-        private set
-    @Volatile
-    var stabilizationCropScale: Float = 1.0f
-        private set
-
     fun updateCameraFacing(isFront: Boolean, sensorOrientation: Int) {
         isFrontFacing = isFront
         cameraSensorOrientation = sensorOrientation
@@ -104,12 +94,6 @@ class DualCameraRecordingRelay(
         switchCount.incrementAndGet()
         cinemaRecorder?.updateCameraFacing(isFront, sensorOrientation)
         Log.i(TAG, "[RECORDING_RELAY] Updated camera facing: isFront=$isFront, sensorOrientation=$sensorOrientation")
-    }
-
-    fun updateStabilizationOffset(offsetX: Float, offsetY: Float, cropScale: Float) {
-        stabilizationOffsetX = offsetX
-        stabilizationOffsetY = offsetY
-        stabilizationCropScale = cropScale.coerceIn(1.0f, 1.15f)
     }
 
     private val matrixValues = FloatArray(9)
@@ -865,18 +849,14 @@ class DualCameraRecordingRelay(
 
         cachedMatrix2d.reset()
         cachedMatrix2d.postTranslate(-0.5f, -0.5f)
-        val effectiveScaleX = scaleX * stabilizationCropScale
-        val effectiveScaleY = effScaleY * stabilizationCropScale
-        cachedMatrix2d.postScale(effectiveScaleX, effectiveScaleY)
+        cachedMatrix2d.postScale(scaleX, effScaleY)
         if (netRotationDeg != 0f) {
             cachedMatrix2d.postRotate(netRotationDeg)
         }
         if (isFront != isStMirrored) {
             cachedMatrix2d.postScale(-1.0f, 1.0f)
         }
-        val finalShiftX = stabilizationOffsetX
-        val finalShiftY = stabilizationOffsetY
-        cachedMatrix2d.postTranslate(0.5f + finalShiftX, 0.5f + finalShiftY)
+        cachedMatrix2d.postTranslate(0.5f, 0.5f)
 
         cachedMatrix2d.getValues(matrixValues)
         localTexMatrix[0] = matrixValues[0]; localTexMatrix[1] = matrixValues[3]; localTexMatrix[2] = 0f; localTexMatrix[3] = 0f

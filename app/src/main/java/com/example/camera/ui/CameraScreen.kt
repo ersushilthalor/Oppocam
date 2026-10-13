@@ -186,7 +186,6 @@ fun CameraScreen(
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     val isEvControlOpen by viewModel.isEvControlOpen.collectAsStateWithLifecycle()
     val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
-    val isCorrectColourShift by viewModel.isCorrectColourShift.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(cameraMode) {
@@ -250,8 +249,6 @@ fun CameraScreen(
 
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val videoStabilizationMode by viewModel.videoStabilizationMode.collectAsStateWithLifecycle()
-    val stabilizationOffsets by viewModel.stabilizationOffsetFlow.collectAsStateWithLifecycle()
-    val isRealtimeEisActive by viewModel.isRealtimeEisActive.collectAsStateWithLifecycle()
     val isOisEnabled by viewModel.isOisEnabled.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val activeLayoutConfig = remember(uiCustomizationState, cameraMode) {
@@ -423,16 +420,9 @@ fun CameraScreen(
                     viewModel.onTapToLockDollySubject(normX, normY)
                 },
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
-                stabilizationMode = videoStabilizationMode,
-                stabilizationOffsetX = stabilizationOffsets.first,
-                stabilizationOffsetY = stabilizationOffsets.second,
-                stabilizationCropScale = stabilizationOffsets.third,
-                isVideoStabilizationActive = isRealtimeEisActive,
                 doubleTapAction = doubleTapAction,
                 onDoubleTapFlip = { viewModel.toggleCameraFacing() },
                 onDoubleTapLock = { viewModel.toggleAeAfLock() },
-                isCorrectColourShift = isCorrectColourShift,
-                ultraWideColourCorrectionMatrix = viewModel.engine.getRenderColorMatrixForLens(com.example.camera.model.LensType.ULTRAWIDE),
                 modifier = Modifier.fillMaxSize()
             )
 

@@ -54,8 +54,7 @@ class DeviceCompatibilityTest {
             chars = null,
             lastResult = null,
             flashMode = FlashMode.OFF,
-            stats = null,
-            gyroEngine = null
+            stats = null
         )
 
         assertNotNull(plan)

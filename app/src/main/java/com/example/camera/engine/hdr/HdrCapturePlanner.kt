@@ -5,7 +5,6 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.util.Range
 import com.example.camera.engine.FrameLuminanceStats
-import com.example.camera.engine.GyroStabilizationEngine
 import com.example.camera.model.FlashMode
 import kotlin.math.roundToInt
 
@@ -14,7 +13,7 @@ import kotlin.math.roundToInt
  *
  * Responsibilities:
  * 1. Analyzes real-time scene histogram, percentile luminance (P1, P5, P95, P99), dynamic range,
- *    sensor ISO, exposure time, flash state, and gyro angular velocity.
+ *    sensor ISO, exposure time, flash state, and motion.
  * 2. Deterministically decides bracket strategy:
  *    - SINGLE_FRAME: Flat daylight, overcast scene, flash active, or fast handheld motion.
  *    - TWO_FRAME_HIGHLIGHT: Bright sky, bright windows, lamps with normal midtones/shadows.
@@ -35,7 +34,7 @@ class HdrCapturePlanner {
         lastResult: TotalCaptureResult?,
         flashMode: FlashMode,
         stats: FrameLuminanceStats?,
-        gyroEngine: GyroStabilizationEngine?
+        deviceMotionRms: Float = 0f
     ): HdrCapturePlan {
         val compRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) ?: Range(-6, 6)
         val compStepRational = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
@@ -64,13 +63,12 @@ class HdrCapturePlanner {
             )
         }
 
-        // 2. Gyroscope Handshake & High-Motion Safety Check
-        val rmsMotion = gyroEngine?.getRecentRmsMotion() ?: 0f
-        if (rmsMotion > MOTION_RMS_THRESHOLD) {
+        // 2. High-Motion Safety Check
+        if (deviceMotionRms > MOTION_RMS_THRESHOLD) {
             return HdrCapturePlan(
                 bracketType = HdrBracketType.SINGLE_FRAME,
                 specs = listOf(HdrExposureSpec(FrameRole.REFERENCE_BASE, 0f, 0, true)),
-                reason = "High device motion ($rmsMotion rad/s) - single frame to prevent motion blur",
+                reason = "High device motion ($deviceMotionRms rad/s) - single frame to prevent motion blur",
                 estimatedIso = iso,
                 estimatedExpTimeNs = expTimeNs
             )

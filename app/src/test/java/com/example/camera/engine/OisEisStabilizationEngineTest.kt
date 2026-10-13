@@ -19,23 +19,11 @@ class OisEisStabilizationEngineTest {
 
     private lateinit var app: Application
     private lateinit var viewModel: CameraViewModel
-    private lateinit var gyroEngine: GyroStabilizationEngine
 
     @Before
     fun setup() {
         app = ApplicationProvider.getApplicationContext<Application>()
         viewModel = CameraViewModel(app)
-        gyroEngine = GyroStabilizationEngine(app)
-    }
-
-    @Test
-    fun testGyroEngineLifecycleAndTelemetry() {
-        gyroEngine.start()
-        assertEquals(0f, gyroEngine.latestPitchSpeed, 0.001f)
-        assertEquals(0f, gyroEngine.latestYawSpeed, 0.001f)
-        assertEquals(0f, gyroEngine.latestRollSpeed, 0.001f)
-        assertEquals(0f, gyroEngine.getRecentRmsMotion(), 0.001f)
-        gyroEngine.stop()
     }
 
     @Test

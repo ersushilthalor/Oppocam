@@ -129,16 +129,9 @@ fun Viewfinder(
     isDollyZoomActive: Boolean = false,
     dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
     onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
-    stabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
-    stabilizationOffsetX: Float = 0f,
-    stabilizationOffsetY: Float = 0f,
-    stabilizationCropScale: Float = 1.0f,
-    isVideoStabilizationActive: Boolean = false,
     doubleTapAction: String = "FLIP",
     onDoubleTapFlip: () -> Unit = {},
     onDoubleTapLock: () -> Unit = {},
-    isCorrectColourShift: Boolean = true,
-    ultraWideColourCorrectionMatrix: android.graphics.ColorMatrix? = null,
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -189,9 +182,6 @@ fun Viewfinder(
         val viewH = if (h > 0) h else tv.height
         if (viewW <= 0 || viewH <= 0) return@rememberUpdatedState
         val calib = if (isUltraWide) currentUwCalib else com.example.camera.engine.CameraOpticalCalibration.OpticalFramingCalibration()
-        val effScale = if (isVideoStabilizationActive) calib.scaleCorrection * stabilizationCropScale else calib.scaleCorrection
-        val effOffX = if (isVideoStabilizationActive) calib.offsetXNorm + stabilizationOffsetX else calib.offsetXNorm
-        val effOffY = if (isVideoStabilizationActive) calib.offsetYNorm + stabilizationOffsetY else calib.offsetYNorm
         updateTextureViewTransform(
             textureView = tv,
             previewBufferSize = previewBufferSize,
@@ -207,9 +197,9 @@ fun Viewfinder(
             dollyFocusY = dollyCropState?.focusNormY ?: 0.5f,
             viewWidth = viewW,
             viewHeight = viewH,
-            opticalScale = effScale,
-            opticalOffsetX = effOffX,
-            opticalOffsetY = effOffY
+            opticalScale = calib.scaleCorrection,
+            opticalOffsetX = calib.offsetXNorm,
+            opticalOffsetY = calib.offsetYNorm
         )
     }
 
@@ -228,11 +218,7 @@ fun Viewfinder(
             previewBufferSize,
             isSettingsOpen,
             aspectRatio,
-            isCameraReady,
-            stabilizationOffsetX,
-            stabilizationOffsetY,
-            stabilizationCropScale,
-            isVideoStabilizationActive
+            isCameraReady
         ) {
         if (!isSettingsOpen) {
             listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
@@ -542,9 +528,7 @@ fun Viewfinder(
                             proContrast = proContrast,
                             proHighlights = proHighlights,
                             proShadows = proShadows,
-                            isUltraWide = false,
-                            isCorrectColourShift = isCorrectColourShift,
-                            ultraWideColourCorrectionMatrix = ultraWideColourCorrectionMatrix
+                            isUltraWide = false
                         )
                     },
                     modifier = Modifier
@@ -709,9 +693,7 @@ fun Viewfinder(
                                 proContrast = proContrast,
                                 proHighlights = proHighlights,
                                 proShadows = proShadows,
-                                isUltraWide = true,
-                                isCorrectColourShift = isCorrectColourShift,
-                                ultraWideColourCorrectionMatrix = ultraWideColourCorrectionMatrix
+                                isUltraWide = true
                             )
                         },
                         modifier = Modifier
@@ -1170,9 +1152,7 @@ private data class TextureViewEffectCacheKey(
     val proContrast: Float,
     val proHighlights: Float,
     val proShadows: Float,
-    val isUltraWide: Boolean = false,
-    val isCorrectColourShift: Boolean = true,
-    val hasColourMatrix: Boolean = false
+    val isUltraWide: Boolean = false
 )
 
 private val lastAppliedCornerRadius = java.util.WeakHashMap<TextureView, Int>()
@@ -1191,9 +1171,7 @@ private fun applyTextureViewOutlineAndEffects(
     proContrast: Float,
     proHighlights: Float,
     proShadows: Float,
-    isUltraWide: Boolean = false,
-    isCorrectColourShift: Boolean = true,
-    ultraWideColourCorrectionMatrix: android.graphics.ColorMatrix? = null
+    isUltraWide: Boolean = false
 ) {
     val prevRadius = synchronized(lastAppliedCornerRadius) {
         lastAppliedCornerRadius[textureView]
@@ -1216,8 +1194,6 @@ private fun applyTextureViewOutlineAndEffects(
         }
     }
 
-    val hasLensColorAdj = (isUltraWide && isCorrectColourShift && ultraWideColourCorrectionMatrix != null)
-
     val currentKey = TextureViewEffectCacheKey(
         cameraMode = cameraMode,
         activePhotoFilter = activePhotoFilter,
@@ -1229,9 +1205,7 @@ private fun applyTextureViewOutlineAndEffects(
         proContrast = proContrast,
         proHighlights = proHighlights,
         proShadows = proShadows,
-        isUltraWide = isUltraWide,
-        isCorrectColourShift = isCorrectColourShift,
-        hasColourMatrix = hasLensColorAdj
+        isUltraWide = isUltraWide
     )
     val prevKey = synchronized(lastAppliedEffectKey) {
         lastAppliedEffectKey[textureView]
@@ -1269,29 +1243,24 @@ private fun applyTextureViewOutlineAndEffects(
     } else {
         val hasProAdj = (proSaturation != 0f || proContrast != 1.0f || proHighlights != 0f || proShadows != 0f)
 
-        if (hasProAdj || hasLensColorAdj) {
+        if (hasProAdj) {
             val combinedMatrix = android.graphics.ColorMatrix()
-            if (hasProAdj) {
-                val sat = (1.0f + proSaturation).coerceIn(0f, 2.5f)
-                if (sat != 1.0f) {
-                    val satMat = android.graphics.ColorMatrix().apply { setSaturation(sat) }
-                    combinedMatrix.postConcat(satMat)
-                }
-                val c = proContrast.coerceIn(0.4f, 2.0f)
-                val lumDelta = (proShadows * 28f) + (proHighlights * 22f)
-                val dynContrast = (c + (proHighlights - proShadows) * 0.18f).coerceIn(0.4f, 2.2f)
-                val translate = (1f - dynContrast) * 128f + lumDelta
-                val toneMat = android.graphics.ColorMatrix(floatArrayOf(
-                    dynContrast, 0f, 0f, 0f, translate,
-                    0f, dynContrast, 0f, 0f, translate,
-                    0f, 0f, dynContrast, 0f, translate,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                combinedMatrix.postConcat(toneMat)
+            val sat = (1.0f + proSaturation).coerceIn(0f, 2.5f)
+            if (sat != 1.0f) {
+                val satMat = android.graphics.ColorMatrix().apply { setSaturation(sat) }
+                combinedMatrix.postConcat(satMat)
             }
-            if (hasLensColorAdj && ultraWideColourCorrectionMatrix != null) {
-                combinedMatrix.postConcat(ultraWideColourCorrectionMatrix)
-            }
+            val c = proContrast.coerceIn(0.4f, 2.0f)
+            val lumDelta = (proShadows * 28f) + (proHighlights * 22f)
+            val dynContrast = (c + (proHighlights - proShadows) * 0.18f).coerceIn(0.4f, 2.2f)
+            val translate = (1f - dynContrast) * 128f + lumDelta
+            val toneMat = android.graphics.ColorMatrix(floatArrayOf(
+                dynContrast, 0f, 0f, 0f, translate,
+                0f, dynContrast, 0f, 0f, translate,
+                0f, 0f, dynContrast, 0f, translate,
+                0f, 0f, 0f, 1f, 0f
+            ))
+            combinedMatrix.postConcat(toneMat)
             val filter = android.graphics.ColorMatrixColorFilter(combinedMatrix)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 textureView.setRenderEffect(android.graphics.RenderEffect.createColorFilterEffect(filter))

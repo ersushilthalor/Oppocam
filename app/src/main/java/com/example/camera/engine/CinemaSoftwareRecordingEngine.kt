@@ -1339,26 +1339,10 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var cameraBufferWidth: Int = 1920
     private var cameraBufferHeight: Int = 1080
 
-    @Volatile
-    var stabilizationOffsetX: Float = 0f
-        private set
-    @Volatile
-    var stabilizationOffsetY: Float = 0f
-        private set
-    @Volatile
-    var stabilizationCropScale: Float = 1.0f
-        private set
-
     fun updateCameraFacing(isFront: Boolean, sensorOrientation: Int) {
         isFrontFacing = isFront
         cameraSensorOrientation = sensorOrientation
         Log.i(TAG, "[CINEMA_ENGINE] Updated camera facing: isFront=$isFront, sensorOrientation=$sensorOrientation")
-    }
-
-    fun updateStabilizationOffset(offsetX: Float, offsetY: Float, cropScale: Float) {
-        stabilizationOffsetX = offsetX
-        stabilizationOffsetY = offsetY
-        stabilizationCropScale = cropScale.coerceIn(1.0f, 1.15f)
     }
 
     private val localTexMatrix = FloatArray(16)
@@ -1697,9 +1681,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         cachedMatrix2d.reset()
         cachedMatrix2d.postTranslate(-0.5f, -0.5f)
-        val effectiveScaleX = scaleX * stabilizationCropScale
-        val effectiveScaleY = effScaleY * stabilizationCropScale
-        cachedMatrix2d.postScale(effectiveScaleX, effectiveScaleY)
+        cachedMatrix2d.postScale(scaleX, effScaleY)
         // 2. Rotate to align with sensor buffer coordinates
         if (netRotationDeg != 0f) {
             cachedMatrix2d.postRotate(netRotationDeg)
@@ -1708,9 +1690,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         if (isFront != isStMirrored) {
             cachedMatrix2d.postScale(-1.0f, 1.0f)
         }
-        val finalShiftX = stabilizationOffsetX
-        val finalShiftY = stabilizationOffsetY
-        cachedMatrix2d.postTranslate(0.5f + finalShiftX, 0.5f + finalShiftY)
+        cachedMatrix2d.postTranslate(0.5f, 0.5f)
 
         cachedMatrix2d.getValues(matrixValues)
         // Convert 3x3 affine matrix to 4x4 OpenGL column-major matrix
