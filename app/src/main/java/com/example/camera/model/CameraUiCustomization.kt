@@ -149,7 +149,6 @@ enum class TopControlItem(val id: String, val label: String) {
     MOTION_PHOTO("motion_photo", "Motion Photo"),
     STABILIZATION("stabilization", "Video Stabilization (OFF/EIS/EIS+)"),
     PIPELINE("pipeline", "Custom Pipeline"),
-    RESTORMER("restormer", "Restormer AI Studio"),
     SIX_DOT_MENU("six_dot_menu", "Quick Options Menu (6-Dot)"),
     SETTINGS("settings", "Settings Gear")
 }
@@ -209,7 +208,7 @@ data class ModeLayoutConfig(
         return topIconPositions[item] ?: when (item) {
             TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
             TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
-            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM, TopControlItem.RESTORMER -> TopIconPosition.RIGHT
+            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
         }
     }
 

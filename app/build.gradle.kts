@@ -58,6 +58,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
 
+    ndkVersion = "26.1.10909125"
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     buildFeatures {
         compose = true
     }
@@ -101,9 +110,6 @@ dependencies {
     implementation(libs.tensorflow.lite)
     implementation(libs.tensorflow.lite.gpu)
     implementation(libs.tensorflow.lite.gpu.api)
-
-    // ONNX Runtime
-    implementation(libs.onnxruntime.android)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

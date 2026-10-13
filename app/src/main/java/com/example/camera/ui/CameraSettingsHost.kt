@@ -97,7 +97,6 @@ fun CameraSettingsHost(
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
     val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
     val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
-    val restormerConfig by viewModel.restormerConfig.collectAsStateWithLifecycle()
 
     androidx.compose.runtime.CompositionLocalProvider(
         com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
@@ -244,9 +243,6 @@ fun CameraSettingsHost(
         onLensSwitchHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
         isLensSwitchOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled,
         onLensSwitchOverlapAnimationToggle = { viewModel.setLensSwitchOverlapAnimationEnabled(it) },
-        isRestormerEnabled = restormerConfig.isEnabled,
-        onRestormerToggle = { viewModel.toggleRestormerEnabled(it) },
-        onOpenRestormerStudio = { viewModel.setRestormerStudioOpen(true) },
         onDismiss = onDismiss
     )
 }

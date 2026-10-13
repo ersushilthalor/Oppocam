@@ -1411,58 +1411,6 @@ class CameraPreferences(context: Context) {
         prefs.edit().clear().apply()
     }
 
-    // --- Restormer AI Enhancement & Model Manager Persistence ---
-
-    var isRestormerEnabled: Boolean
-        get() = prefs.getBoolean("pref_restormer_enabled", false)
-        set(value) = prefs.edit().putBoolean("pref_restormer_enabled", value).apply()
-
-    var activeRestormerModelId: String
-        get() = prefs.getString("pref_active_restormer_model_id", "restormer_derain_mobile")
-            ?: "restormer_derain_mobile"
-        set(value) = prefs.edit().putString("pref_active_restormer_model_id", value).apply()
-
-    var restormerTileSize: Int
-        get() = prefs.getInt("pref_restormer_tile_size", 128)
-        set(value) = prefs.edit().putInt("pref_restormer_tile_size", value).apply()
-
-    var restormerOverlap: Int
-        get() = prefs.getInt("pref_restormer_overlap", 16)
-        set(value) = prefs.edit().putInt("pref_restormer_overlap", value).apply()
-
-    var restormerStrength: Float
-        get() = prefs.getFloat("pref_restormer_strength", 1.0f)
-        set(value) = prefs.edit().putFloat("pref_restormer_strength", value).apply()
-
-    var restormerHardwareDelegate: String
-        get() = prefs.getString("pref_restormer_hardware_delegate", "AUTO") ?: "AUTO"
-        set(value) = prefs.edit().putString("pref_restormer_hardware_delegate", value).apply()
-
-    fun getRestormerConfig(): com.example.camera.restormer.model.RestormerConfig {
-        val delegate = try {
-            com.example.camera.restormer.model.HardwareDelegateOption.valueOf(restormerHardwareDelegate)
-        } catch (e: Exception) {
-            com.example.camera.restormer.model.HardwareDelegateOption.AUTO
-        }
-        return com.example.camera.restormer.model.RestormerConfig(
-            isEnabled = isRestormerEnabled,
-            activeModelId = activeRestormerModelId,
-            tileSize = restormerTileSize,
-            overlap = restormerOverlap,
-            restorationStrength = restormerStrength,
-            hardwareDelegate = delegate
-        )
-    }
-
-    fun saveRestormerConfig(config: com.example.camera.restormer.model.RestormerConfig) {
-        isRestormerEnabled = config.isEnabled
-        activeRestormerModelId = config.activeModelId
-        restormerTileSize = config.tileSize
-        restormerOverlap = config.overlap
-        restormerStrength = config.restorationStrength
-        restormerHardwareDelegate = config.hardwareDelegate.name
-    }
-
     // --- Custom Image Processing Pipeline Persistence ---
 
     var isCustomPipelineEnabled: Boolean

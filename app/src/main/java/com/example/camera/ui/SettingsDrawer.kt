@@ -212,9 +212,6 @@ fun SettingsDrawer(
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
-    isRestormerEnabled: Boolean = false,
-    onRestormerToggle: (Boolean) -> Unit = {},
-    onOpenRestormerStudio: () -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -339,7 +336,6 @@ fun SettingsDrawer(
                     // 1. Categories Overview
                     SettingsOverviewPage(
                         onSelectPage = { currentPage = it },
-                        onOpenRestormerStudio = onOpenRestormerStudio,
                         onResetAll = onResetAllSettings
                     )
                 } else {
@@ -372,10 +368,7 @@ fun SettingsDrawer(
                             jpegQuality = jpegQuality,
                             onJpegQualitySelected = onJpegQualitySelected,
                             selectedPhotoFilter = selectedPhotoFilter,
-                            onPhotoFilterSelected = onPhotoFilterSelected,
-                            isRestormerEnabled = isRestormerEnabled,
-                            onRestormerToggle = onRestormerToggle,
-                            onOpenRestormerStudio = onOpenRestormerStudio
+                            onPhotoFilterSelected = onPhotoFilterSelected
                         )
                         SettingsPage.VIDEO -> VideoSettingsPage(
                             selectedVideoResolution = selectedVideoResolution,
@@ -509,7 +502,6 @@ fun SettingsDrawer(
 @Composable
 private fun SettingsOverviewPage(
     onSelectPage: (SettingsPage) -> Unit,
-    onOpenRestormerStudio: () -> Unit = {},
     onResetAll: () -> Unit
 ) {
     LazyColumn(
@@ -517,82 +509,6 @@ private fun SettingsOverviewPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 8.dp)
     ) {
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenRestormerStudio() }
-                    .testTag("overview_open_restormer_studio"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2028)),
-                border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.5f))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFFFD54F).copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.AutoAwesome,
-                                contentDescription = null,
-                                tint = Color(0xFFFFD54F),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "AI Model Manager",
-                                    color = Color.White,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(Color(0xFFFFD54F).copy(alpha = 0.25f))
-                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "RESTORMER",
-                                        color = Color(0xFFFFD54F),
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Select models, import custom .onnx / .tflite weights, run diagnostic benchmarks & tile setup",
-                                color = Color.White.copy(alpha = 0.65f),
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp
-                            )
-                        }
-                    }
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open AI Model Manager",
-                        tint = Color(0xFFFFD54F)
-                    )
-                }
-            }
-        }
 
         items(SettingsPage.entries.toTypedArray()) { page ->
             CategoryCard(
@@ -666,86 +582,13 @@ private fun PhotoSettingsPage(
     jpegQuality: Int,
     onJpegQualitySelected: (Int) -> Unit,
     selectedPhotoFilter: PhotoFilter,
-    onPhotoFilterSelected: (PhotoFilter) -> Unit,
-    isRestormerEnabled: Boolean = false,
-    onRestormerToggle: (Boolean) -> Unit = {},
-    onOpenRestormerStudio: () -> Unit = {}
+    onPhotoFilterSelected: (PhotoFilter) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-        item {
-            SettingsSwitchCard(
-                title = "Restormer AI Enhancement (12 MP Tiled)",
-                description = "Genuine Restormer neural restoration. Preserves 12 MP resolution with memory-safe overlapping tile inference.",
-                isChecked = isRestormerEnabled,
-                onCheckedChange = onRestormerToggle,
-                tag = "toggle_restormer_ai"
-            )
-        }
-
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenRestormerStudio() }
-                    .testTag("settings_open_restormer_studio"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2028)),
-                border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.AutoAwesome,
-                                contentDescription = null,
-                                tint = Color(0xFFFFD54F),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "AI Model Manager / Import Model",
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Select active models, import custom .onnx / .tflite files, run diagnostics and configure tiling",
-                                color = Color.White.copy(alpha = 0.65f),
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp
-                            )
-                        }
-                    }
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open",
-                        tint = Color(0xFFFFD54F)
-                    )
-                }
-            }
-        }
 
         item {
             SettingsSwitchCard(

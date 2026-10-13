@@ -85,8 +85,6 @@ class Camera2Engine(private val context: Context) {
     private var imageReaderRaw: ImageReader? = null
     private var imageReaderYuv: ImageReader? = null
     val customImagePipelineEngine by lazy { com.example.camera.pipeline.engine.CustomImagePipelineEngine(context) }
-    val restormerModelManager by lazy { com.example.camera.restormer.data.RestormerModelManager(context) }
-    val lastRestormerError = MutableStateFlow<String?>(null)
     private var mediaRecorder: MediaRecorder? = null
     private var activeRecordingSurface: Surface? = null
     private var videoRecordingFileDescriptor: ParcelFileDescriptor? = null
@@ -6353,7 +6351,7 @@ class Camera2Engine(private val context: Context) {
                                 image.close()
                                 _isCapturing.value = false
                                 updateStorageStats()
-                                val err = lastRestormerError.value ?: e.message ?: "Photo processing failure"
+                                val err = e.message ?: "Photo processing failure"
                                 Log.e(TAG, "Still photo processing failed: $err", e)
                                 withContext(Dispatchers.Main) {
                                     onComplete(null)
@@ -9317,76 +9315,6 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    fun processPhotoWithRestormer(jpegBytes: ByteArray): Pair<ByteArray, Boolean> {
-        val restormerConfig = preferences.getRestormerConfig()
-        val candidate = restormerModelManager.models.value.firstOrNull { it.id == restormerConfig.activeModelId }
-            ?: restormerModelManager.activeModel.value
-        val activeModel = if (candidate.isBuiltIn && (candidate.filePath == null || !java.io.File(candidate.filePath).exists())) {
-            restormerModelManager.extractBuiltInModel(candidate)
-        } else {
-            candidate
-        }
-        val activeLens = _selectedLens.value
-        val isFront = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-        val captureOrientation = getCaptureJpegOrientation()
-
-        // Decode and physically orient upright
-        val sourceBmp = decodeUprightBitmapFromJpeg(
-            jpegBytes = jpegBytes,
-            captureOrientation = captureOrientation,
-            isFrontFacing = isFront,
-            mirrorHorizontally = isFront && saveSelfieAsPreviewed,
-            mutable = false
-        ) ?: run {
-            val err = "Failed to decode photo bitmap for Restormer processing"
-            Log.e(TAG, err)
-            lastRestormerError.value = err
-            throw IllegalStateException(err)
-        }
-
-        Log.i(TAG, "[RESTORMER_PROCESS] Starting genuine tiled inference with model ${activeModel.name} on ${sourceBmp.width}x${sourceBmp.height}")
-
-        val inferenceEngine = com.example.camera.restormer.engine.RestormerInferenceEngine(
-            context = context,
-            modelInfo = activeModel,
-            delegateOption = restormerConfig.hardwareDelegate
-        )
-        val tileProcessor = com.example.camera.restormer.engine.RestormerTileProcessor(inferenceEngine)
-
-        val result = try {
-            kotlinx.coroutines.runBlocking(Dispatchers.Default) {
-                tileProcessor.processImage(sourceBmp, restormerConfig)
-            }
-        } catch (e: Throwable) {
-            val err = "Restormer inference error: ${e.message ?: "Processing failure"}"
-            Log.e(TAG, err, e)
-            lastRestormerError.value = err
-            inferenceEngine.close()
-            sourceBmp.recycle()
-            throw e
-        }
-        inferenceEngine.close()
-
-        // Compress 12 MP restored Bitmap to JPEG with high quality
-        val baos = java.io.ByteArrayOutputStream()
-        val quality = preferences.jpegQuality.coerceIn(90, 100)
-        result.outputBitmap.compress(Bitmap.CompressFormat.JPEG, quality, baos)
-        val processedBytes = baos.toByteArray()
-        result.outputBitmap.recycle()
-        if (sourceBmp !== result.outputBitmap) {
-            sourceBmp.recycle()
-        }
-
-        val finalBytes = copyExifFromOriginal(
-            srcBytes = jpegBytes,
-            dstBytes = processedBytes,
-            forceOrientationNormal = true
-        )
-        lastRestormerError.value = null
-        Log.i(TAG, "[RESTORMER_PROCESS_DONE] Completed in ${result.durationMs}ms (${result.tilesProcessed} tiles)")
-        return Pair(finalBytes, true)
-    }
-
     private fun processStillJpegBytes(bytes: ByteArray, skipPipeline: Boolean = false): Pair<ByteArray, Boolean> {
         var effectiveBytes = bytes
         var wasProcessingApplied = false
@@ -9395,19 +9323,6 @@ class Camera2Engine(private val context: Context) {
             val (pipelineBytes, applied) = processPhotoWithCustomPipeline(effectiveBytes)
             effectiveBytes = pipelineBytes
             if (applied) wasProcessingApplied = true
-        }
-
-        if (!skipPipeline && currentMode == CameraMode.PHOTO && preferences.isRestormerEnabled) {
-            try {
-                val (restormerBytes, applied) = processPhotoWithRestormer(effectiveBytes)
-                effectiveBytes = restormerBytes
-                if (applied) wasProcessingApplied = true
-            } catch (e: Throwable) {
-                val err = "Restormer AI error: ${e.message ?: "Inference failure"}"
-                Log.e(TAG, err, e)
-                lastRestormerError.value = err
-                throw e
-            }
         }
 
         val activeLens = _selectedLens.value

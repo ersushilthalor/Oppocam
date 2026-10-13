@@ -709,39 +709,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (enabled) "Custom Image Pipeline: ON" else "Custom Image Pipeline: OFF")
     }
 
-    // --- Restormer AI Enhancement & Model Manager ---
-    val restormerModelManager: com.example.camera.restormer.data.RestormerModelManager = engine.restormerModelManager
-    private val _restormerConfig = MutableStateFlow(preferences.getRestormerConfig())
-    val restormerConfig: StateFlow<com.example.camera.restormer.model.RestormerConfig> = _restormerConfig.asStateFlow()
-
-    private val _isRestormerStudioOpen = MutableStateFlow(false)
-    val isRestormerStudioOpen: StateFlow<Boolean> = _isRestormerStudioOpen.asStateFlow()
-
-    fun setRestormerStudioOpen(open: Boolean) {
-        _isRestormerStudioOpen.value = open
-    }
-
-    fun toggleRestormerEnabled(enabled: Boolean) {
-        val updated = _restormerConfig.value.copy(isEnabled = enabled)
-        _restormerConfig.value = updated
-        preferences.saveRestormerConfig(updated)
-        showToast(if (enabled) "Restormer AI (12MP Tiled): ON" else "Restormer AI: OFF")
-    }
-
-    fun updateRestormerConfig(config: com.example.camera.restormer.model.RestormerConfig) {
-        _restormerConfig.value = config
-        preferences.saveRestormerConfig(config)
-    }
-
-    fun selectRestormerModel(modelId: String) {
-        if (restormerModelManager.selectActiveModel(modelId)) {
-            val updated = _restormerConfig.value.copy(activeModelId = modelId)
-            _restormerConfig.value = updated
-            preferences.saveRestormerConfig(updated)
-            showToast("Restormer Model: ${restormerModelManager.activeModel.value.name}")
-        }
-    }
-
     // --- Camera Switching State ---
     private val _instantSwitchState = MutableStateFlow(
         MotorolaInstantSwitchState(
@@ -2317,11 +2284,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun executePhotoCapture() {
         val is50M = _photoMegapixelMode.value == PhotoMegapixelMode.M50
-        val isRestormer = preferences.isRestormerEnabled && _cameraMode.value == CameraMode.PHOTO
         if (is50M) {
             showToast("Processing 50MP Computational photo...")
-        } else if (isRestormer) {
-            showToast("Restormer AI: Processing photo...")
         }
         com.example.camera.sound.CameraSoundManager.performShutterFeedback(
             getApplication<Application>().applicationContext,
@@ -2331,18 +2295,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (uri != null) {
                 if (is50M) {
                     showToast("50MP Computational photo saved to DCIM/Camera")
-                } else if (isRestormer) {
-                    showToast("Restormer AI enhanced photo saved to DCIM/Camera")
                 } else {
                     showToast("Saved to DCIM/Camera")
                 }
             } else {
-                val restormerErr = engine.lastRestormerError.value
-                if (restormerErr != null) {
-                    showToast("Restormer Error: $restormerErr")
-                } else {
-                    showToast("Failed to save photo")
-                }
+                showToast("Failed to save photo")
             }
         }
     }

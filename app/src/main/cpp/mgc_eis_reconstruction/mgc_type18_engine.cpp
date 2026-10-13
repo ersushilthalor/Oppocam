@@ -1,0 +1,1465 @@
+#include "mgc_eis_reconstruction.hpp"
+
+#include "mgc_type18_gyro.hpp"
+#include "mgc_type18_lookahead.hpp"
+#include "mgc_type18_projection.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <deque>
+#include <iterator>
+#include <stdexcept>
+#include <utility>
+
+namespace mgc_eis_reconstruction {
+namespace {
+
+constexpr std::size_t kMaximumOutputCacheSize = 120;
+constexpr double kMaximumAllowedProtrusion = 0.0;
+// createHandle(..., cropFactor=0.5) scales the fallback parameter source to
+// 0.05 for the look-ahead input/output crop and 0.025 for its inner allowed
+// rectangle. The full native output configuration applies the corresponding
+// projection crop scale after construction.
+constexpr double kLookaheadCropMargin = 0.05;
+constexpr double kAllowedInnerMargin = 0.025;
+constexpr double kOutputCropZoom =
+    1.0 / (1.0 - 2.0 * kLookaheadCropMargin);
+constexpr double kProjectionDenominatorEpsilon = 0.000001;
+constexpr std::int64_t kMaximumLensSampleInterpolationGapNs = 50'000'000;
+constexpr std::int64_t kMinimumSupportedFramePeriodNs = 1'000'000;
+constexpr std::int64_t kMaximumSupportedFramePeriodNs = 1'000'000'000;
+constexpr double kActiveCadenceTolerance = 0.08;
+constexpr double kCandidateCadenceTolerance = 0.05;
+constexpr int kCadenceChangeConfirmationFrames = 3;
+
+bool periodsAreEquivalent(std::int64_t lhs, std::int64_t rhs,
+                          double relative_tolerance) {
+  if (lhs <= 0 || rhs <= 0) {
+    return false;
+  }
+  const auto difference = static_cast<double>(
+      lhs > rhs ? lhs - rhs : rhs - lhs);
+  const auto scale = static_cast<double>(std::max(lhs, rhs));
+  return difference <= scale * relative_tolerance;
+}
+
+bool isPlausibleFramePeriod(std::int64_t period_ns) {
+  return period_ns >= kMinimumSupportedFramePeriodNs &&
+         period_ns <= kMaximumSupportedFramePeriodNs;
+}
+
+type18::Parameters parametersFor(const EngineConfig &config) {
+  type18::Parameters parameters;
+  // The motion-filtering factory selects this exact half-window from the MGC
+  // product profile.  V25's type-7 fallback has seven frames; type 18 has
+  // ten.  Keep it alongside the queue delay rather than letting either path
+  // retain a stale type-18 literal.
+  parameters.half_window_frames = config.lookahead_frames;
+  // 0x22FD640 and 0x22FE244 pass params+416 to the rolling-shutter projection
+  // builder. The ensuing conditional is the proprietary profile's calibrated
+  // lens-model branch, which profile 7 leaves false. Photon retains that
+  // recovered field verbatim; Camera2's public, already pixel-calibrated OIS
+  // shifts/dynamic intrinsics are fused separately in realIntrinsicsForRows.
+  parameters.apply_lens_offsets_to_intrinsics = config.lookahead_frames != 7;
+  return parameters;
+}
+
+double clamp01(double value) {
+  return std::max(0.0, std::min(value, 1.0));
+}
+
+type18::ProtrusionRect insetRect(double width, double height,
+                                 double margin) {
+  return {width * margin, width * (1.0 - margin), height * margin,
+          height * (1.0 - margin)};
+}
+
+} // namespace
+
+class Engine::Impl {
+public:
+  explicit Impl(EngineConfig config)
+      : config_(std::move(config)), parameters_(parametersFor(config_)),
+        delayed_gyro_(static_cast<std::int64_t>(parameters_.half_window_frames) *
+                      frame_period_ns_),
+        realtime_gyro_(0), motion_filter_(parameters_),
+        pressure_filter_(parameters_) {
+    if (config_.active_array_width <= 0) {
+      config_.active_array_width = config_.output_width;
+    }
+    if (config_.active_array_height <= 0) {
+      config_.active_array_height = config_.output_height;
+    }
+    if (config_.crop_width <= 0) {
+      config_.crop_width = config_.active_array_width;
+    }
+    if (config_.crop_height <= 0) {
+      config_.crop_height = config_.active_array_height;
+    }
+    if (!validConfig()) {
+      throw std::invalid_argument("Invalid MGC EIS engine configuration");
+    }
+  }
+
+  void setActiveArraySize(int width, int height) {
+    if (width <= 0 || height <= 0) {
+      throw std::invalid_argument("Active array dimensions must be positive");
+    }
+    config_.active_array_width = width;
+    config_.active_array_height = height;
+  }
+
+  void setCropWindowSize(int width, int height) {
+    if (width <= 0 || height <= 0) {
+      throw std::invalid_argument("Crop dimensions must be positive");
+    }
+    config_.crop_width = width;
+    config_.crop_height = height;
+  }
+
+  void setStrength(double strength) {
+    if (!(strength >= 0.0 && strength <= 1.0)) {
+      throw std::invalid_argument(
+          "Stabilization strength must be between zero and one");
+    }
+    config_.stabilization_strength = strength;
+  }
+
+  bool pushGyro(const GyroSample &sample) {
+    // V25 0x22C0980 runs the shared 100-sample stationary detector before
+    // 0x22C3F70 fans the same (possibly zeroed) sample into both queues.
+    const GyroSample gated_sample = gyro_stationary_detector_.gate(sample);
+    tripod_mode_ = gyro_stationary_detector_.isStationary();
+    const bool delayed = delayed_gyro_.push(gated_sample);
+    const bool realtime = realtime_gyro_.push(gated_sample);
+    if (delayed && realtime) {
+      gyro_samples_.push_back(gated_sample);
+      while (gyro_samples_.size() > type18::kGyroRingCapacity) {
+        gyro_samples_.pop_front();
+      }
+    }
+    return delayed && realtime;
+  }
+
+  bool pushLensOffset(const LensOffsetSample &sample) {
+    if (sample.timestamp_ns <= 0 || !std::isfinite(sample.offset.x) ||
+        !std::isfinite(sample.offset.y)) {
+      return false;
+    }
+    if (!lens_offsets_.empty() &&
+        sample.timestamp_ns <= lens_offsets_.back().timestamp_ns) {
+      return false;
+    }
+    lens_offsets_.push_back(sample);
+    while (lens_offsets_.size() > 2048) {
+      lens_offsets_.pop_front();
+    }
+    return true;
+  }
+
+  bool pushLensIntrinsics(const LensIntrinsicsSample &sample) {
+    if (sample.timestamp_ns <= 0) {
+      return false;
+    }
+    if (!lens_intrinsics_.empty() &&
+        sample.timestamp_ns <= lens_intrinsics_.back().timestamp_ns) {
+      return false;
+    }
+    const bool finite = std::all_of(
+        sample.intrinsics.begin(), sample.intrinsics.end(),
+        [](double value) { return std::isfinite(value); });
+    if (!finite || sample.intrinsics[0] <= 0.0 ||
+        sample.intrinsics[1] <= 0.0) {
+      return false;
+    }
+    lens_intrinsics_.push_back(sample);
+    while (lens_intrinsics_.size() > 2048) {
+      lens_intrinsics_.pop_front();
+    }
+    return true;
+  }
+
+  std::optional<StabilizedFrame> processFrame(const FrameMetadata &frame) {
+    if (last_submitted_frame_timestamp_ns_ > 0 &&
+        frame.frame_timestamp_ns <= last_submitted_frame_timestamp_ns_) {
+      throw std::invalid_argument("Frame timestamps must be monotonic");
+    }
+    observeFrameCadence(frame);
+    last_submitted_frame_timestamp_ns_ = frame.frame_timestamp_ns;
+    last_submitted_source_timestamp_ns_ = frame.source_timestamp_ns;
+    if (!(frame.inverse_focal_length > 0.0)) {
+      StabilizedFrame output = dropped(frame.frame_timestamp_ns);
+      output.source_timestamp_ns = frame.source_timestamp_ns;
+      return emitDeferredFirst(std::move(output));
+    }
+
+    FrameMetadata queued_frame = frame;
+    queued_frame.sequence_id = next_frame_sequence_++;
+    pending_frames_.push_back(queued_frame);
+    if (pending_frames_.size() <=
+        static_cast<std::size_t>(parameters_.half_window_frames)) {
+      return emitDeferredFirst(std::nullopt);
+    }
+
+    StabilizedFrame output = stabilizeFront();
+    // `timestamp_ns` is the EIS first-row-centre time. Keep the independent
+    // Camera2 source-buffer timestamp with the delayed output rather than
+    // asking a downstream consumer to reconstruct the mapping.
+    output.source_timestamp_ns = pending_frames_.front().source_timestamp_ns;
+    previous_frame_timestamp_ns_ =
+        pending_frames_.front().frame_timestamp_ns;
+    pending_frames_.pop_front();
+    cacheOutput(output);
+    return emitDeferredFirst(std::move(output));
+  }
+
+  std::vector<StabilizedFrame> flush() {
+    // Method 4 cannot synthesize the missing +1..+10 frame metadata. MGC's
+    // stop path drains those images as unstabilized/dropped rather than
+    // reflecting or freezing the last pose.
+    std::vector<StabilizedFrame> result;
+    result.reserve(deferred_outputs_.size() + pending_frames_.size());
+    while (!deferred_outputs_.empty()) {
+      result.push_back(std::move(deferred_outputs_.front()));
+      deferred_outputs_.pop_front();
+    }
+    while (!pending_frames_.empty()) {
+      StabilizedFrame output =
+          dropped(pending_frames_.front().frame_timestamp_ns);
+      output.source_timestamp_ns = pending_frames_.front().source_timestamp_ns;
+      result.push_back(std::move(output));
+      pending_frames_.pop_front();
+    }
+    return result;
+  }
+
+  bool getTransformBetweenFrames(std::int64_t from_timestamp_ns,
+                                 std::int64_t to_timestamp_ns,
+                                 std::vector<Mat3> *strip_transforms) const {
+    if (strip_transforms == nullptr) {
+      throw std::invalid_argument("strip_transforms must not be null");
+    }
+    const OutputCacheEntry *from = nullptr;
+    const OutputCacheEntry *to = nullptr;
+    for (const OutputCacheEntry &entry : output_cache_) {
+      if (entry.timestamp_ns == from_timestamp_ns) {
+        from = &entry;
+      }
+      if (entry.timestamp_ns == to_timestamp_ns) {
+        to = &entry;
+      }
+    }
+    if (from == nullptr || to == nullptr ||
+        from->transforms.size() != to->transforms.size()) {
+      return false;
+    }
+    strip_transforms->clear();
+    strip_transforms->reserve(from->transforms.size());
+    for (std::size_t index = 0; index < from->transforms.size(); ++index) {
+      strip_transforms->push_back(to->transforms[index].inverse() *
+                                  from->transforms[index]);
+    }
+    return true;
+  }
+
+  int numStrips() const { return config_.num_strips; }
+  int numFramesToLookAhead() const { return parameters_.half_window_frames; }
+  std::int64_t framePeriodNs() const { return frame_period_ns_; }
+  bool isTripodMode() const { return tripod_mode_; }
+
+private:
+  struct FutureGeometry {
+    std::vector<Mat3> real;
+    std::vector<Mat3> inverse_real;
+  };
+
+  struct OutputCacheEntry {
+    std::int64_t timestamp_ns = 0;
+    std::vector<Mat3> transforms;
+  };
+
+  bool validConfig() const {
+    return config_.output_width > 0 && config_.output_height > 0 &&
+           config_.active_array_width > 0 &&
+           config_.active_array_height > 0 && config_.crop_width > 0 &&
+           config_.crop_height > 0 && config_.num_strips == 12 &&
+           config_.lookahead_frames >= 3 && config_.lookahead_frames <= 10 &&
+           config_.lookahead_frames == parameters_.half_window_frames &&
+           config_.stabilization_strength >= 0.0 &&
+           config_.stabilization_strength <= 1.0;
+  }
+
+  static StabilizedFrame dropped(std::int64_t timestamp_ns) {
+    StabilizedFrame result;
+    result.timestamp_ns = timestamp_ns;
+    return result;
+  }
+
+  std::optional<StabilizedFrame>
+  emitDeferredFirst(std::optional<StabilizedFrame> current) {
+    if (deferred_outputs_.empty()) {
+      return current;
+    }
+    if (current) {
+      deferred_outputs_.push_back(std::move(*current));
+    }
+    StabilizedFrame output = std::move(deferred_outputs_.front());
+    deferred_outputs_.pop_front();
+    return output;
+  }
+
+  void resetTemporalStateForCadence() {
+    while (!pending_frames_.empty()) {
+      StabilizedFrame output =
+          dropped(pending_frames_.front().frame_timestamp_ns);
+      output.source_timestamp_ns = pending_frames_.front().source_timestamp_ns;
+      deferred_outputs_.push_back(std::move(output));
+      pending_frames_.pop_front();
+    }
+    output_cache_.clear();
+    projected_motion_magnitudes_.clear();
+    projected_motion_peak_frames_.clear();
+    motion_filter_.reset();
+    pressure_filter_.reset();
+    previous_output_pose_ = Quaternion::identity();
+    next_frame_sequence_ = 0;
+    previous_frame_timestamp_ns_ = 0;
+    projected_motion_history_gain_ = 0.0;
+    previous_projected_candidate_blend_ = 0.0;
+    output_pose_initialized_ = false;
+  }
+
+  void applyFramePeriod(std::int64_t period_ns) {
+    if (!isPlausibleFramePeriod(period_ns)) {
+      return;
+    }
+    const bool was_initialized = frame_period_initialized_;
+    const bool changed = period_ns != frame_period_ns_;
+    frame_period_ns_ = period_ns;
+    frame_period_initialized_ = true;
+    pending_frame_period_ns_ = 0;
+    pending_frame_period_count_ = 0;
+    if (!changed) {
+      return;
+    }
+
+    // Before the first cadence is known, buffered frames have not produced
+    // any filter output and can remain in the new time domain. A confirmed
+    // mid-stream cadence change must not mix temporal/filter state.
+    if (was_initialized) {
+      resetTemporalStateForCadence();
+    }
+    type18::GyroPoseQueue rebuilt_delayed_gyro(
+        static_cast<std::int64_t>(parameters_.half_window_frames) *
+        frame_period_ns_);
+    for (const GyroSample &sample : gyro_samples_) {
+      rebuilt_delayed_gyro.push(sample);
+    }
+    delayed_gyro_ = std::move(rebuilt_delayed_gyro);
+  }
+
+  void observeFrameCadence(const FrameMetadata &frame) {
+    // Consecutive source-buffer timestamps are the authoritative output
+    // cadence: the sensor can report a 60 fps frame duration while a HAL only
+    // delivers every second YUV frame. The per-result duration is solely the
+    // first-frame/fallback seed when no output interval exists yet.
+    std::int64_t observed_period_ns = 0;
+    if (last_submitted_source_timestamp_ns_ > 0) {
+      observed_period_ns =
+          frame.source_timestamp_ns - last_submitted_source_timestamp_ns_;
+    }
+    if (!isPlausibleFramePeriod(observed_period_ns)) {
+      observed_period_ns = frame.frame_duration_ns;
+    }
+    if (!isPlausibleFramePeriod(observed_period_ns)) {
+      return;
+    }
+
+    // The first completed frame supplies an actual sensor period immediately,
+    // so startup never spends its seven-frame look-ahead on the 30 fps
+    // fallback. Later changes require three coherent results to reject a
+    // one-frame HAL anomaly or a missing-result timestamp gap.
+    if (!frame_period_initialized_) {
+      applyFramePeriod(observed_period_ns);
+      return;
+    }
+    if (periodsAreEquivalent(observed_period_ns, frame_period_ns_,
+                             kActiveCadenceTolerance)) {
+      pending_frame_period_ns_ = 0;
+      pending_frame_period_count_ = 0;
+      return;
+    }
+    if (periodsAreEquivalent(observed_period_ns, pending_frame_period_ns_,
+                             kCandidateCadenceTolerance)) {
+      pending_frame_period_ns_ =
+          (pending_frame_period_ns_ * pending_frame_period_count_ +
+           observed_period_ns) /
+          (pending_frame_period_count_ + 1);
+      ++pending_frame_period_count_;
+    } else {
+      pending_frame_period_ns_ = observed_period_ns;
+      pending_frame_period_count_ = 1;
+    }
+    if (pending_frame_period_count_ >= kCadenceChangeConfirmationFrames) {
+      applyFramePeriod(pending_frame_period_ns_);
+    }
+  }
+
+  Mat3 intrinsicsFor(const FrameMetadata &frame) const {
+    const double focal = static_cast<double>(config_.output_width) /
+                         frame.inverse_focal_length;
+    return Mat3::cameraIntrinsics(
+        focal, focal, static_cast<double>(config_.output_width) * 0.5,
+        static_cast<double>(config_.output_height) * 0.5);
+  }
+
+  std::optional<Vec2> lensOffsetAt(std::int64_t timestamp_ns) const {
+    if (lens_offsets_.empty()) {
+      return std::nullopt;
+    }
+    const auto after = std::lower_bound(
+        lens_offsets_.begin(), lens_offsets_.end(), timestamp_ns,
+        [](const LensOffsetSample &sample, std::int64_t timestamp) {
+          return sample.timestamp_ns < timestamp;
+        });
+    if (after == lens_offsets_.begin()) {
+      if (after->timestamp_ns - timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return after->offset;
+      }
+      return std::nullopt;
+    }
+    if (after == lens_offsets_.end()) {
+      const LensOffsetSample &before = lens_offsets_.back();
+      if (timestamp_ns - before.timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return before.offset;
+      }
+      return std::nullopt;
+    }
+    const LensOffsetSample &before = *std::prev(after);
+    if (timestamp_ns - before.timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs ||
+        after->timestamp_ns - timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs) {
+      return std::nullopt;
+    }
+    const std::int64_t span = after->timestamp_ns - before.timestamp_ns;
+    if (span <= 0) {
+      return after->offset;
+    }
+    const double alpha = static_cast<double>(timestamp_ns - before.timestamp_ns) /
+                         static_cast<double>(span);
+    return Vec2{
+        before.offset.x + (after->offset.x - before.offset.x) * alpha,
+        before.offset.y + (after->offset.y - before.offset.y) * alpha,
+    };
+  }
+
+  std::optional<std::array<double, 5>>
+  lensIntrinsicsAt(std::int64_t timestamp_ns) const {
+    if (lens_intrinsics_.empty()) {
+      return std::nullopt;
+    }
+    const auto after = std::lower_bound(
+        lens_intrinsics_.begin(), lens_intrinsics_.end(), timestamp_ns,
+        [](const LensIntrinsicsSample &sample, std::int64_t timestamp) {
+          return sample.timestamp_ns < timestamp;
+        });
+    if (after == lens_intrinsics_.begin()) {
+      if (after->timestamp_ns - timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return after->intrinsics;
+      }
+      return std::nullopt;
+    }
+    if (after == lens_intrinsics_.end()) {
+      const LensIntrinsicsSample &before = lens_intrinsics_.back();
+      if (timestamp_ns - before.timestamp_ns <=
+          kMaximumLensSampleInterpolationGapNs) {
+        return before.intrinsics;
+      }
+      return std::nullopt;
+    }
+    const LensIntrinsicsSample &before = *std::prev(after);
+    if (timestamp_ns - before.timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs ||
+        after->timestamp_ns - timestamp_ns >
+            kMaximumLensSampleInterpolationGapNs) {
+      return std::nullopt;
+    }
+    const std::int64_t span = after->timestamp_ns - before.timestamp_ns;
+    if (span <= 0) {
+      return after->intrinsics;
+    }
+    const double alpha = static_cast<double>(timestamp_ns - before.timestamp_ns) /
+                         static_cast<double>(span);
+    std::array<double, 5> result{};
+    for (std::size_t index = 0; index < result.size(); ++index) {
+      result[index] = before.intrinsics[index] +
+                      (after->intrinsics[index] - before.intrinsics[index]) *
+                          alpha;
+    }
+    return result;
+  }
+
+  std::vector<Mat3> realIntrinsicsForRows(
+      const FrameMetadata &frame,
+      const std::vector<std::int64_t> &row_timestamps_ns) const {
+    const Mat3 nominal = intrinsicsFor(frame);
+    if (row_timestamps_ns.empty()) {
+      return {};
+    }
+    const int pre_width = frame.pre_correction_active_array_width > 0
+                              ? frame.pre_correction_active_array_width
+                              : frame.active_array_width;
+    const int pre_height = frame.pre_correction_active_array_height > 0
+                               ? frame.pre_correction_active_array_height
+                               : frame.active_array_height;
+    const double active_to_pre_x =
+        static_cast<double>(std::max(frame.active_array_width, 1)) /
+        static_cast<double>(std::max(pre_width, 1));
+    const double active_to_pre_y =
+        static_cast<double>(std::max(frame.active_array_height, 1)) /
+        static_cast<double>(std::max(pre_height, 1));
+    const double x_scale =
+        static_cast<double>(config_.output_width) /
+        static_cast<double>(std::max(frame.crop_width, 1)) * active_to_pre_x;
+    const double y_scale =
+        static_cast<double>(config_.output_height) /
+        static_cast<double>(std::max(frame.crop_height, 1)) * active_to_pre_y;
+
+    if (frame.has_nominal_lens_intrinsics &&
+        frame.nominal_lens_intrinsics[0] > 0.0 &&
+        frame.nominal_lens_intrinsics[1] > 0.0) {
+      std::vector<std::array<double, 5>> samples;
+      samples.reserve(row_timestamps_ns.size());
+      for (const std::int64_t timestamp_ns : row_timestamps_ns) {
+        const auto sample = lensIntrinsicsAt(timestamp_ns);
+        if (!sample) {
+          samples.clear();
+          break;
+        }
+        samples.push_back(*sample);
+      }
+      if (samples.size() == row_timestamps_ns.size()) {
+        std::vector<Mat3> result;
+        result.reserve(samples.size());
+        for (const auto &sample : samples) {
+          const double fx_ratio =
+              sample[0] / frame.nominal_lens_intrinsics[0];
+          const double fy_ratio =
+              sample[1] / frame.nominal_lens_intrinsics[1];
+          const double cx_delta =
+              (sample[2] - frame.nominal_lens_intrinsics[2]) * x_scale;
+          const double cy_delta =
+              (sample[3] - frame.nominal_lens_intrinsics[3]) * y_scale;
+          if (!std::isfinite(fx_ratio) || !std::isfinite(fy_ratio) ||
+              fx_ratio < 0.5 || fx_ratio > 2.0 || fy_ratio < 0.5 ||
+              fy_ratio > 2.0 ||
+              std::abs(cx_delta) > config_.output_width * 0.25 ||
+              std::abs(cy_delta) > config_.output_height * 0.25) {
+            result.clear();
+            break;
+          }
+          Mat3 adjusted = Mat3::cameraIntrinsics(
+              nominal.at(0, 0) * fx_ratio,
+              nominal.at(1, 1) * fy_ratio,
+              nominal.at(0, 2) + cx_delta,
+              nominal.at(1, 2) + cy_delta);
+          adjusted.at(0, 1) =
+              (sample[4] - frame.nominal_lens_intrinsics[4]) * x_scale;
+          result.push_back(adjusted);
+        }
+        if (result.size() == row_timestamps_ns.size()) {
+          return result;
+        }
+      }
+    }
+
+    std::vector<Vec2> offsets;
+    offsets.reserve(row_timestamps_ns.size());
+    for (const std::int64_t timestamp_ns : row_timestamps_ns) {
+      const auto offset = lensOffsetAt(timestamp_ns);
+      if (!offset) {
+        return {nominal};
+      }
+      offsets.push_back(*offset);
+    }
+    std::vector<Mat3> result;
+    result.reserve(offsets.size());
+    for (const Vec2 &offset : offsets) {
+      const double cx_delta = offset.x * x_scale;
+      const double cy_delta = offset.y * y_scale;
+      if (!std::isfinite(cx_delta) || !std::isfinite(cy_delta) ||
+          std::abs(cx_delta) > config_.output_width * 0.25 ||
+          std::abs(cy_delta) > config_.output_height * 0.25) {
+        return {nominal};
+      }
+      result.push_back(Mat3::cameraIntrinsics(
+          nominal.at(0, 0), nominal.at(1, 1), nominal.at(0, 2) + cx_delta,
+          nominal.at(1, 2) + cy_delta));
+    }
+    return result;
+  }
+
+  bool queryPair(const type18::GyroPoseQueue &queue,
+                 std::int64_t timestamp_ns, type18::PosePair *pair) const {
+    return queue.query(timestamp_ns, &pair->primary, &pair->secondary);
+  }
+
+  type18::BaselinePoseWindow makeBaselineWindow(
+      const type18::GyroPoseQueue &queue, std::int64_t center_timestamp_ns,
+      std::int64_t measured_frame_period_ns) const {
+    type18::BaselinePoseWindow window;
+    if (!queryPair(queue, center_timestamp_ns, &window.current)) {
+      throw std::runtime_error("Current delayed gyro pose is unavailable");
+    }
+    if (!queryPair(queue,
+                   center_timestamp_ns - frame_period_ns_,
+                   &window.previous)) {
+      window.previous = window.current;
+    }
+
+    // 0x22D6944 increments the historical counter only after querying
+    // center - 2*period, and continues while counter < params+272.  With
+    // the profile-specific half-window this includes the corresponding extra deltas through
+    // center - 11*period, in addition to the initial center-to-previous
+    // delta assembled by 0x22D66A4..0x22D66DC.
+    for (int distance = 2;
+         distance <= parameters_.half_window_frames + 1; ++distance) {
+      type18::PosePair older;
+      if (!queryPair(queue,
+                     center_timestamp_ns -
+                         frame_period_ns_ * distance,
+                     &older)) {
+        break;
+      }
+      window.older.push_back(older);
+    }
+    for (int distance = 1; distance <= parameters_.half_window_frames;
+         ++distance) {
+      Quaternion future;
+      if (!queue.query(center_timestamp_ns +
+                           frame_period_ns_ * distance,
+                       &future)) {
+        break;
+      }
+      window.future_primary.push_back(future);
+    }
+    const std::int64_t positive_period =
+        std::max<std::int64_t>(measured_frame_period_ns, 1);
+    window.nominal_to_measured_period_ratio =
+        static_cast<double>(frame_period_ns_) /
+        static_cast<double>(positive_period);
+    return window;
+  }
+
+  type18::PoseCandidates makeCandidates(
+      const type18::GyroPoseQueue &queue, std::int64_t center_timestamp_ns,
+      const Quaternion &reference) const {
+    std::vector<Quaternion> poses;
+    poses.reserve(static_cast<std::size_t>(
+        parameters_.half_window_frames * 2 + 1));
+    for (int distance = -parameters_.half_window_frames;
+         distance <= parameters_.half_window_frames; ++distance) {
+      Quaternion primary;
+      const std::int64_t timestamp =
+          center_timestamp_ns + frame_period_ns_ * distance;
+      bool queried = false;
+      if (parameters_.candidate_uses_secondary_pose_stream) {
+        Quaternion secondary;
+        queried = queue.query(timestamp, &primary, &secondary);
+        if (queried) {
+          poses.push_back(secondary);
+        }
+      } else {
+        // 0x22FD848 passes a null secondary output pointer when selector
+        // lookahead+352 (params+272) is false. Requiring a secondary sample
+        // here silently discarded the newest primary future poses, because
+        // that stream is intentionally delayed; it was the source of the
+        // incorrect low-amplitude wide candidate.
+        queried = queue.query(timestamp, &primary);
+        if (queried) {
+          poses.push_back(primary);
+        }
+      }
+      if (!queried) {
+        // 0x22FD848 skips a failed query. Supplying the reference produces
+        // exactly the same identity relative contribution in the fixed-size
+        // clean-room accumulator.
+        poses.push_back(reference);
+      }
+    }
+    return type18::accumulatePoseCandidates(poses, reference, parameters_);
+  }
+
+  std::vector<Quaternion> queryRowOrientations(
+      const type18::GyroPoseQueue &queue, std::int64_t first_row_timestamp_ns,
+      std::int64_t rolling_shutter_ns) const {
+    const std::vector<std::int64_t> offsets =
+        type18::makeRollingShutterRowOffsets(rolling_shutter_ns,
+                                             config_.num_strips);
+    std::vector<Quaternion> result;
+    result.reserve(offsets.size());
+    for (const std::int64_t offset : offsets) {
+      Quaternion orientation;
+      if (!queue.query(first_row_timestamp_ns + offset, &orientation)) {
+        return {};
+      }
+      result.push_back(orientation);
+    }
+    return result;
+  }
+
+  FutureGeometry buildFutureGeometry(
+      const type18::GyroPoseQueue &queue, const FrameMetadata &metadata,
+      std::int64_t center_timestamp_ns, bool dense) const {
+    std::vector<Quaternion> orientations;
+    std::vector<std::int64_t> row_timestamps_ns;
+    if (dense) {
+      const std::int64_t first_row_timestamp_ns =
+          center_timestamp_ns - metadata.rolling_shutter_skew_ns / 2;
+      const std::vector<std::int64_t> offsets =
+          type18::makeRollingShutterRowOffsets(
+              metadata.rolling_shutter_skew_ns, config_.num_strips);
+      orientations.reserve(offsets.size());
+      row_timestamps_ns.reserve(offsets.size());
+      for (const std::int64_t offset : offsets) {
+        Quaternion orientation;
+        const std::int64_t timestamp_ns = first_row_timestamp_ns + offset;
+        if (!queue.query(timestamp_ns, &orientation)) {
+          return {};
+        }
+        orientations.push_back(orientation);
+        row_timestamps_ns.push_back(timestamp_ns);
+      }
+    } else {
+      const std::array<double, 2> source_rows{
+          kLookaheadCropMargin * static_cast<double>(config_.output_height),
+          (1.0 - kLookaheadCropMargin) *
+              static_cast<double>(config_.output_height),
+      };
+      const auto offsets = type18::makeBoundingRowOffsets(
+          metadata.rolling_shutter_skew_ns, source_rows,
+          static_cast<double>(config_.output_height));
+      orientations.reserve(2);
+      row_timestamps_ns.reserve(2);
+      for (const std::int64_t offset : offsets) {
+        Quaternion orientation;
+        const std::int64_t first_row =
+            center_timestamp_ns - metadata.rolling_shutter_skew_ns / 2;
+        const std::int64_t timestamp_ns = first_row + offset;
+        if (!queue.query(timestamp_ns, &orientation)) {
+          return {};
+        }
+        orientations.push_back(orientation);
+        row_timestamps_ns.push_back(timestamp_ns);
+      }
+    }
+
+    FutureGeometry geometry;
+    if (orientations.empty()) {
+      return geometry;
+    }
+    geometry.real = type18::buildRealCameraProjectionRows(
+        orientations, realIntrinsicsForRows(metadata, row_timestamps_ns));
+    geometry.inverse_real.reserve(geometry.real.size());
+    for (const Mat3 &projection : geometry.real) {
+      geometry.inverse_real.push_back(projection.inverse());
+    }
+    return geometry;
+  }
+
+  std::vector<Mat3> virtualProjection(const Quaternion &pose,
+                                      const Mat3 &intrinsics) const {
+    // Parameter-set byte +415 is zero: V25 uses one shared virtual
+    // projection even though each real rolling-shutter row has its own pose.
+    return type18::buildVirtualCameraProjectionRows(pose, {}, {intrinsics});
+  }
+
+  double fullGridCorrection(const Quaternion &requested,
+                            const Quaternion &fallback,
+                            const FutureGeometry &geometry,
+                            const Mat3 &virtual_intrinsics) const {
+    if (geometry.inverse_real.size() < 2) {
+      return 1.1;
+    }
+    const double width = static_cast<double>(config_.output_width);
+    const double height = static_cast<double>(config_.output_height);
+    // The dense feasibility pass has a different domain from the earlier
+    // two-row probe.  It projects the complete source frame and asks whether
+    // the fixed 5% output safety frame can be reverse-projected inside that
+    // source.  Feeding the two-row 5%-inset input rectangle here pairs each
+    // rolling-shutter boundary with the wrong source scanline and makes the
+    // outer correction oscillate as it alternates between incompatible
+    // geometry models.
+    const type18::ProtrusionRect input{0.0, width, 0.0, height};
+    const type18::ProtrusionRect output =
+        insetRect(width, height, kLookaheadCropMargin);
+    const type18::ProtrusionRect allowed{0.0, width, 0.0, height};
+    return type18::computeFullGridCropCorrectionFraction(
+        requested, fallback, geometry.inverse_real,
+        [this, &virtual_intrinsics](const Quaternion &pose) {
+          return virtualProjection(pose, virtual_intrinsics);
+        },
+        input, output, allowed, width, height,
+        kMaximumAllowedProtrusion);
+  }
+
+  double twoRowScore(const Quaternion &virtual_pose,
+                     const FutureGeometry &geometry,
+                     const Mat3 &virtual_intrinsics) const {
+    if (geometry.inverse_real.size() < 2) {
+      return 1.0;
+    }
+    const double width = static_cast<double>(config_.output_width);
+    const double height = static_cast<double>(config_.output_height);
+    const type18::ProtrusionRect input =
+        insetRect(width, height, kLookaheadCropMargin);
+    const type18::ProtrusionRect output =
+        insetRect(width, height, kLookaheadCropMargin);
+    const type18::ProtrusionRect allowed =
+        insetRect(width, height, kAllowedInnerMargin);
+    const std::vector<bool> mask(geometry.inverse_real.size() - 1, true);
+    return type18::evaluateProjectionProtrusion(
+               geometry.inverse_real,
+               virtualProjection(virtual_pose, virtual_intrinsics), input,
+               output, allowed, mask, width, height)
+        .maximum;
+  }
+
+  Vec2 projectedPoseDisplacement(const Quaternion &from,
+                                 const Quaternion &to,
+                                 const Mat3 &intrinsics) const {
+    // 0x22DEAA4: H = P(to) * inverse(P(from)); project the image centre,
+    // divide both axes by image width, and retain the binary's +1e-6
+    // homogeneous denominator bias.
+    const Mat3 from_projection =
+        type18::makeCameraProjection(intrinsics, from);
+    const Mat3 to_projection = type18::makeCameraProjection(intrinsics, to);
+    const Mat3 relative = to_projection * from_projection.inverse();
+    const double x = static_cast<double>(config_.output_width) * 0.5;
+    const double y = static_cast<double>(config_.output_height) * 0.5;
+    const double homogeneous_x =
+        relative.at(0, 0) * x + relative.at(0, 1) * y +
+        relative.at(0, 2);
+    const double homogeneous_y =
+        relative.at(1, 0) * x + relative.at(1, 1) * y +
+        relative.at(1, 2);
+    const double homogeneous_w =
+        relative.at(2, 0) * x + relative.at(2, 1) * y +
+        relative.at(2, 2) + kProjectionDenominatorEpsilon;
+    const double width = static_cast<double>(config_.output_width);
+    return {(homogeneous_x / homogeneous_w - x) / width,
+            (homogeneous_y / homogeneous_w - y) / width};
+  }
+
+  Vec2 projectedExposureMotion(
+      const type18::GyroPoseQueue &queue, std::int64_t center_timestamp_ns,
+      std::int64_t exposure_time_ns, const Mat3 &intrinsics) const {
+    // 0x22D91D8 reads frame metadata +56, the exposure duration, and builds
+    // the two projections at center +/- exposure/2. Rolling-shutter skew is
+    // used by the independent per-row real-camera projection path.
+    Quaternion exposure_start;
+    Quaternion exposure_end;
+    if (!queue.query(center_timestamp_ns - exposure_time_ns / 2,
+                     &exposure_start) ||
+        !queue.query(center_timestamp_ns + exposure_time_ns / 2,
+                     &exposure_end)) {
+      return {};
+    }
+    return projectedPoseDisplacement(exposure_start, exposure_end,
+                                     intrinsics);
+  }
+
+  double projectedMotionCandidateBlend(double magnitude) const {
+    // Exact two-branch scalar at 0x22D95E8..0x22D9654. Both branches are
+    // multiplied by the hard-coded 0.2 candidate ceiling.
+    if (magnitude <= parameters_.projected_motion_threshold) {
+      return std::max(
+                 magnitude * parameters_.projected_motion_small_slope +
+                     parameters_.projected_motion_small_offset,
+                 0.0) *
+             parameters_.projected_candidate_max_blend;
+    }
+    const double exponent =
+        -parameters_.projected_motion_large_slope *
+        (magnitude - parameters_.projected_motion_center);
+    return parameters_.projected_candidate_max_blend /
+           (std::exp(exponent) + 1.0);
+  }
+
+  double capProjectedCandidateBlend(double requested,
+                                    const Quaternion &previous_output,
+                                    const Quaternion &measured_pose,
+                                    const Vec2 &raw_projected_motion,
+                                    const Mat3 &intrinsics) const {
+    const double maximum = parameters_.projected_pose_motion_limit *
+                           std::hypot(raw_projected_motion.x,
+                                      raw_projected_motion.y);
+    const auto displacement_for = [&](double amount) {
+      const Quaternion candidate = type18::interpolatePose(
+          previous_output, measured_pose, amount, previous_output);
+      const Vec2 displacement = projectedPoseDisplacement(
+          previous_output, candidate, intrinsics);
+      return std::hypot(displacement.x, displacement.y);
+    };
+    if (displacement_for(requested) <= maximum) {
+      return requested;
+    }
+    double low = 0.0;
+    double high = requested;
+    while (low + 0.000001 < high) {
+      const double middle = (low + high) * 0.5;
+      if (displacement_for(middle) <= maximum) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    return low;
+  }
+
+  void prepareProjectedMotionHistory(const Vec2 &current_motion,
+                                     std::int64_t frame_sequence) {
+    const double magnitude =
+        std::hypot(current_motion.x, current_motion.y);
+    projected_motion_magnitudes_.push_back(magnitude);
+    while (projected_motion_magnitudes_.size() > 60) {
+      projected_motion_magnitudes_.pop_front();
+    }
+    if (projected_motion_magnitudes_.size() < 3) {
+      return;
+    }
+    const std::size_t size = projected_motion_magnitudes_.size();
+    const double prior = projected_motion_magnitudes_[size - 2];
+    if (prior > projected_motion_magnitudes_[size - 3] &&
+        prior >= projected_motion_magnitudes_.back() &&
+        prior >= parameters_.projected_peak_threshold) {
+      projected_motion_peak_frames_.push_back(frame_sequence);
+      while (projected_motion_peak_frames_.size() > 60) {
+        projected_motion_peak_frames_.pop_front();
+      }
+    }
+  }
+
+  double updateProjectedMotionHistoryGain(
+      std::int64_t frame_sequence,
+      std::int64_t measured_frame_period_ns) {
+    // V25 0x22D8BD4. The state at engine +2656 is constructed as zero.
+    // With fewer than two detected peaks its target is one; otherwise the
+    // reciprocal mean peak spacing over the last 30 normalized frames drives
+    // the very steep rate logistic at params +392/+396.
+    double target = 1.0;
+    const double normalized_periods =
+        std::round(33'333'000.0 / static_cast<double>(
+                                       std::max<std::int64_t>(
+                                           measured_frame_period_ns, 1)));
+    if (projected_motion_peak_frames_.size() >= 2) {
+      const std::int64_t oldest_allowed = std::max<std::int64_t>(
+          static_cast<std::int64_t>(
+              static_cast<double>(frame_sequence) -
+              normalized_periods *
+                  parameters_.projected_history_window_frames),
+          0);
+      double interval_sum = 0.0;
+      int interval_count = 0;
+      for (std::size_t upper = projected_motion_peak_frames_.size() - 1;
+           upper > 0; --upper) {
+        const std::int64_t lower_frame =
+            projected_motion_peak_frames_[upper - 1];
+        if (lower_frame < oldest_allowed) {
+          break;
+        }
+        interval_sum += static_cast<double>(
+            projected_motion_peak_frames_[upper] - lower_frame);
+        ++interval_count;
+      }
+      if (interval_count >=
+              parameters_.projected_history_min_intervals &&
+          interval_sum > 0.0 && normalized_periods > 0.0) {
+        const double reciprocal_mean_spacing =
+            1.0 /
+            (interval_sum /
+             (normalized_periods * static_cast<double>(interval_count)));
+        const double exponent =
+            -parameters_.projected_history_rate_slope *
+            (reciprocal_mean_spacing -
+             parameters_.projected_history_rate_center);
+        target = 1.0 - 1.0 / (std::exp(exponent) + 1.0);
+      }
+    }
+    const double previous_weight =
+        target >= projected_motion_history_gain_
+            ? parameters_.projected_gain_rise_previous_weight
+            : parameters_.projected_gain_fall_previous_weight;
+    projected_motion_history_gain_ =
+        projected_motion_history_gain_ * previous_weight +
+        target * (1.0 - previous_weight);
+    return projected_motion_history_gain_;
+  }
+
+  struct CandidateBlendControl {
+    double requested = 0.0;
+    double capped = 0.0;
+    double history_gain = 0.0;
+    double result = 0.0;
+  };
+
+  CandidateBlendControl lookaheadCandidateBlend(
+      const type18::GyroPoseQueue &queue,
+      std::int64_t center_timestamp_ns, std::int64_t exposure_time_ns,
+      const Quaternion &measured_pose, const Mat3 &intrinsics,
+      double current_motion_blend, const Vec2 &current,
+      double motion_history_gain) {
+    const double motion_scale = 1.0 - current_motion_blend;
+    const double requested = projectedMotionCandidateBlend(
+        std::hypot(current.x * motion_scale, current.y * motion_scale));
+    const double capped = capProjectedCandidateBlend(
+        requested, previous_output_pose_, measured_pose, current, intrinsics);
+
+    double maximum = capped;
+    int maximum_distance = 0;
+    for (int distance = 1; distance <= parameters_.half_window_frames;
+         ++distance) {
+      const Vec2 future = projectedExposureMotion(
+          queue,
+          center_timestamp_ns +
+              frame_period_ns_ * distance,
+          exposure_time_ns, intrinsics);
+      const double value = projectedMotionCandidateBlend(
+          std::hypot(future.x * motion_scale, future.y * motion_scale));
+      if (value > maximum) {
+        maximum = value;
+        maximum_distance = distance;
+      }
+    }
+    const double raw_result = capped +
+                              (maximum - capped) /
+                                  static_cast<double>(maximum_distance + 1);
+    // 0x22D9814..0x22D984C multiplies by the persistent history gain before
+    // comparing with the previous final control value and damping a fall.
+    double result = raw_result * motion_history_gain;
+    if (result < previous_projected_candidate_blend_) {
+      result = previous_projected_candidate_blend_ *
+                   parameters_.projected_blend_fall_previous_weight +
+               result *
+                   (1.0 -
+                    parameters_.projected_blend_fall_previous_weight);
+    }
+    previous_projected_candidate_blend_ = result;
+    return {requested, capped, motion_history_gain, result};
+  }
+
+  type18::GyroActivityMetrics activityMetrics(
+      const type18::GyroPoseQueue &queue,
+      std::int64_t first_row_timestamp_ns,
+      std::int64_t statistics_window_ns,
+      std::int64_t sample_period_ns) const {
+    // The recovered 30 fps profile expresses this endpoint in frame units.
+    // Use the observed sensor cadence so seven-frame look-ahead remains seven
+    // actual frames at 24/30/50/60 fps. 0x230F094 backs the endpoint toward
+    // the current frame until the primary pose ring covers it.
+    std::int64_t end_timestamp_ns =
+        first_row_timestamp_ns +
+        parameters_.half_window_frames * frame_period_ns_;
+    if (parameters_.half_window_frames >= 1) {
+      do {
+        if (queue.isTimestampCovered(end_timestamp_ns, false)) {
+          break;
+        }
+        end_timestamp_ns -= frame_period_ns_;
+      } while (end_timestamp_ns > first_row_timestamp_ns);
+    }
+    const std::int64_t start_timestamp_ns =
+        statistics_window_ns > 0
+            ? end_timestamp_ns - statistics_window_ns
+            : first_row_timestamp_ns;
+    if (!queue.isTimestampCovered(start_timestamp_ns, false)) {
+      return {};
+    }
+    return type18::computeGyroActivityMetrics(
+        type18::collectHorizonRotationVectors(
+            queue.primaryRecords(), start_timestamp_ns, end_timestamp_ns,
+            sample_period_ns),
+        parameters_);
+  }
+
+  StabilizedFrame stabilizeFront() {
+    const FrameMetadata &frame = pending_frames_.front();
+    const type18::GyroPoseQueue &queue =
+        frame.half_resolution_sensor_mode ? realtime_gyro_ : delayed_gyro_;
+    const std::int64_t center_timestamp =
+        frame.frame_timestamp_ns + frame.rolling_shutter_skew_ns / 2;
+    // 0x22D660C..0x22D666C uses the current output frame minus the previous
+    // output frame. It never uses the next buffered frame's period.
+    const std::int64_t measured_period =
+        previous_frame_timestamp_ns_ > 0
+            ? frame.frame_timestamp_ns - previous_frame_timestamp_ns_
+            : 33'333'000;
+
+    type18::PosePair current;
+    if (!queryPair(queue, center_timestamp, &current)) {
+      return dropped(frame.frame_timestamp_ns);
+    }
+
+    // gyro_nonlinear_filter.cc's first-valid-frame branch (engine +2080)
+    // seeds +1168 and +1200 from the measured primary pose before method 4
+    // composes its baseline increment. Starting this persistent pose at the
+    // global quaternion identity instead makes the filter fight all rotation
+    // accumulated between gyro registration and the first camera frame.
+    const bool initialize_output_pose = !output_pose_initialized_;
+    if (initialize_output_pose) {
+      previous_output_pose_ = current.primary;
+      output_pose_initialized_ = true;
+    }
+
+    // gyro_nonlinear_filter.cc 0x22DA58C..0x22DA994 does not run method 4 on
+    // the first valid frame. It seeds +1168/+1200 from the measured primary
+    // pose, keeps +1184 at identity, builds the virtual projection directly
+    // from +1168 and jumps to the dense-warp output path. Running look-ahead
+    // here mixes an uninitialized motion history into the first output and
+    // creates a startup drag in the opposite direction.
+    if (initialize_output_pose) {
+      const Mat3 virtual_intrinsics = intrinsicsFor(frame);
+      const FutureGeometry dense_current =
+          buildFutureGeometry(queue, frame, center_timestamp, true);
+      if (dense_current.real.size() !=
+          static_cast<std::size_t>(config_.num_strips)) {
+        return dropped(frame.frame_timestamp_ns);
+      }
+      const std::vector<Mat3> virtual_rows =
+          virtualProjection(current.primary, virtual_intrinsics);
+      const std::vector<Mat3> pixel_warps = type18::composeDenseWarpRows(
+          dense_current.real, virtual_rows, false, Mat3::identity());
+
+      StabilizedFrame output;
+      output.timestamp_ns = frame.frame_timestamp_ns;
+      output.tripod_mode = tripod_mode_;
+      output.applied_strength = config_.stabilization_strength;
+      output.diagnostic_measured_pose = current.primary;
+      output.diagnostic_secondary_measured_pose = current.secondary;
+      output.diagnostic_virtual_pose = current.primary;
+      output.strip_input_to_output.reserve(pixel_warps.size());
+      for (const Mat3 &pixel_warp : pixel_warps) {
+        output.strip_input_to_output.push_back(
+            type18::applyCropZoomToClipHomography(
+                type18::convertPixelHomographyToClip(
+                    pixel_warp, static_cast<double>(config_.output_width),
+                    static_cast<double>(config_.output_height)),
+                kOutputCropZoom));
+      }
+      return output;
+    }
+
+    const type18::BaselinePoseWindow baseline_window =
+        makeBaselineWindow(queue, center_timestamp, measured_period);
+    const Quaternion baseline_increment =
+        type18::computeBaselineVirtualPose(baseline_window, parameters_);
+    const Quaternion motion_pose =
+        (baseline_increment * previous_output_pose_).normalized();
+    const type18::PoseCandidates candidates =
+        makeCandidates(queue, center_timestamp,
+                       parameters_.candidate_uses_secondary_pose_stream
+                           ? current.secondary
+                           : current.primary);
+    const Mat3 virtual_intrinsics = intrinsicsFor(frame);
+    const Vec2 projected_current_motion = projectedExposureMotion(
+        queue, center_timestamp, frame.exposure_time_ns,
+        virtual_intrinsics);
+    prepareProjectedMotionHistory(projected_current_motion,
+                                  frame.sequence_id);
+    const double projected_motion_history_gain =
+        updateProjectedMotionHistoryGain(frame.sequence_id,
+                                         measured_period);
+
+    std::vector<FutureGeometry> future_geometry;
+    std::vector<double> raw_two_row_scores;
+    future_geometry.reserve(static_cast<std::size_t>(
+        parameters_.half_window_frames + 1));
+    raw_two_row_scores.reserve(future_geometry.capacity());
+    for (int index = 0; index <= parameters_.half_window_frames; ++index) {
+      const std::int64_t future_center =
+          center_timestamp + frame_period_ns_ * index;
+      // 0x22FD640 receives the one frame-state/metadata object being
+      // stabilized and advances only its gyro/OIS timestamps by one actual
+      // frame. Later buffered frames are not substituted as future intrinsics.
+      future_geometry.push_back(buildFutureGeometry(
+          queue, frame, future_center, false));
+      raw_two_row_scores.push_back(twoRowScore(
+          previous_output_pose_, future_geometry.back(), virtual_intrinsics));
+    }
+
+    const std::int64_t horizon_statistics_window_ns =
+        static_cast<std::int64_t>(
+            parameters_.horizon_statistics_window_seconds * 1.0e9);
+    const type18::GyroActivityMetrics activity = activityMetrics(
+        queue, frame.frame_timestamp_ns, horizon_statistics_window_ns,
+        type18::Parameters::kActivitySamplePeriodNs);
+    double current_motion_blend = activity.motion_blend;
+    // 0x230F094 leaves sqrt(mean.x² + mean.y² + mean.z²) in S0 on return.
+    // 0x22D9C20 compares that mean-motion magnitude with params+312 before
+    // multiplying the logistic blend by the directional signal written to
+    // the out parameter.  It does not compare the directional signal itself.
+    // Thus a low net-motion window retains its logistic blend even when its
+    // individual samples have a high directional alignment.
+    if (norm(activity.mean) >= parameters_.motion_direction_gate) {
+      current_motion_blend *= activity.directional_alignment;
+    }
+    current_motion_blend = clamp01(current_motion_blend);
+    const CandidateBlendControl candidate_control = lookaheadCandidateBlend(
+        queue, center_timestamp, frame.exposure_time_ns,
+        current.primary, virtual_intrinsics, current_motion_blend,
+        projected_current_motion,
+        projected_motion_history_gain);
+    const double tight_candidate_blend = candidate_control.result;
+    // 0x22FE420..0x22FE48C invokes the same primitive a second time with no
+    // past statistics window. Its independent directional scalar is measured
+    // only across [frame_timestamp, frame_timestamp + 10 frames) and controls
+    // the 10-to-3 future-score horizon.
+    const type18::GyroActivityMetrics future_activity = activityMetrics(
+        queue, frame.frame_timestamp_ns, 0,
+        frame_period_ns_);
+    const int future_index = type18::effectiveFutureIndex(
+        future_activity.directional_alignment,
+        static_cast<int>(raw_two_row_scores.size()), parameters_);
+    // 0x22FDA40 evaluates and averages the complete 0..N two-row horizon
+    // before 0x22FDEE4 composes the virtual pose.  The independent horizon
+    // signal below only limits the later expensive full-grid probing; using
+    // it to truncate this average changed V25's input-11 oracle pressure
+    // from 0.266624421 to 0.005074956 and made the controller appear almost
+    // inactive.
+    const double two_row_pressure =
+        type18::meanNormalizedProtrusionScore(raw_two_row_scores,
+                                              parameters_);
+
+    std::vector<double> selected_scores;
+    if (future_index >= 0) {
+      selected_scores.assign(raw_two_row_scores.begin(),
+                             raw_two_row_scores.begin() + future_index + 1);
+    }
+    double full_grid_future_pressure =
+        type18::meanNormalizedProtrusionScore(selected_scores, parameters_);
+
+    // 0x22BDA3C seeds its first candidate blend from the newest virtual-pose
+    // history entry (the first output is seeded from the measured pose), then
+    // moves toward the sigma-6 candidate by the two-row pressure.
+    const Quaternion two_row_pose = type18::interpolatePose(
+        previous_output_pose_, candidates.wide, two_row_pressure,
+        previous_output_pose_);
+    const double filtered_motion_blend =
+        // 0x22BDEE0 is invoked before full-grid scoring and consumes the
+        // same complete two-row aggregate used for the first pose SLERP.
+        motion_filter_.update(current_motion_blend, two_row_pressure);
+    // Type 18 sets params+352, so 0x22FDEE4 always performs this first SLERP
+    // using frame-state +136 before blending toward the baseline motion pose.
+    const Quaternion preblended_pose = type18::interpolatePose(
+        two_row_pose, candidates.tight, tight_candidate_blend, two_row_pose);
+    const Quaternion intermediate_pose = type18::interpolatePose(
+        preblended_pose, motion_pose, filtered_motion_blend, preblended_pose);
+
+    const FutureGeometry dense_current =
+        buildFutureGeometry(queue, frame, center_timestamp, true);
+    if (dense_current.real.size() !=
+        static_cast<std::size_t>(config_.num_strips)) {
+      return dropped(frame.frame_timestamp_ns);
+    }
+    const double current_full_grid_pressure = fullGridCorrection(
+        intermediate_pose, candidates.tight, dense_current,
+        virtual_intrinsics);
+
+    for (int index = 0; index < future_index; ++index) {
+      const int next = index + 1;
+      if (!type18::shouldProbeFutureFullGrid(
+              raw_two_row_scores[static_cast<std::size_t>(index)],
+              raw_two_row_scores[static_cast<std::size_t>(next)])) {
+        continue;
+      }
+      const std::int64_t future_center =
+          center_timestamp + frame_period_ns_ * next;
+      const FutureGeometry full_future = buildFutureGeometry(
+          queue, frame, future_center, true);
+      Quaternion future_actual;
+      if (queue.query(future_center, &future_actual)) {
+        const double future_full_grid = fullGridCorrection(
+            intermediate_pose, future_actual, full_future,
+            virtual_intrinsics);
+        full_grid_future_pressure +=
+            (future_full_grid - full_grid_future_pressure) /
+            static_cast<double>(next + 1);
+      }
+      break;
+    }
+
+    const double spatial_pressure = type18::combineSpatialPressure(
+        filtered_motion_blend, current_full_grid_pressure,
+        full_grid_future_pressure);
+    const double temporal_pressure = pressure_filter_.update(spatial_pressure);
+    // pack_lookahead_frame_state writes min(filter+0x98c, filter+0x988) to
+    // frame-state +0x84. Both constructor fields start at 1.0, and valid
+    // strength is <= 1, so type-18 supplies the current strength here.
+    const double final_blend = type18::finalPoseBlend(
+        temporal_pressure, config_.stabilization_strength);
+    Quaternion output_pose = type18::interpolatePose(
+        intermediate_pose, candidates.tight, final_blend,
+        intermediate_pose);
+
+    // 0x22DB9F4 performs the method-4 outer full-grid feasibility pass and
+    // applies its returned correction directly. The strength-adjusted form at
+    // 0x22DDF44 belongs to the method-3/6 branch, not this path.
+    const double outer_correction = fullGridCorrection(
+        output_pose, current.primary, dense_current, virtual_intrinsics);
+    output_pose = type18::interpolatePose(
+        output_pose, current.primary, outer_correction, output_pose);
+    previous_output_pose_ = output_pose;
+
+    const std::vector<Mat3> virtual_rows =
+        virtualProjection(output_pose, virtual_intrinsics);
+    const std::vector<Mat3> pixel_warps = type18::composeDenseWarpRows(
+        dense_current.real, virtual_rows, false, Mat3::identity());
+
+    StabilizedFrame output;
+    output.timestamp_ns = frame.frame_timestamp_ns;
+    output.tripod_mode = tripod_mode_;
+    output.applied_strength = config_.stabilization_strength;
+    output.diagnostic_measured_pose = current.primary;
+    output.diagnostic_secondary_measured_pose = current.secondary;
+    output.diagnostic_virtual_pose = output_pose;
+    output.diagnostic_baseline_increment = baseline_increment;
+    output.diagnostic_motion_pose = motion_pose;
+    output.diagnostic_wide_pose = candidates.wide;
+    output.diagnostic_tight_pose = candidates.tight;
+    output.diagnostic_intermediate_pose = intermediate_pose;
+    output.diagnostic_horizon_mean_rotation = activity.mean;
+    output.diagnostic_horizon_rotation_stddev = activity.standard_deviation;
+    output.diagnostic_horizon_directional_alignment =
+        activity.directional_alignment;
+    output.diagnostic_horizon_logistic_motion_blend = activity.motion_blend;
+    output.diagnostic_future_horizon_index = future_index;
+    output.diagnostic_future_horizon_alignment =
+        future_activity.directional_alignment;
+    output.diagnostic_future_horizon_pressure = full_grid_future_pressure;
+    output.diagnostic_current_motion_blend = current_motion_blend;
+    output.diagnostic_filtered_motion_blend = filtered_motion_blend;
+    output.diagnostic_projected_motion = projected_current_motion;
+    output.diagnostic_projected_candidate_requested =
+        candidate_control.requested;
+    output.diagnostic_projected_candidate_capped = candidate_control.capped;
+    output.diagnostic_projected_candidate_history_gain =
+        candidate_control.history_gain;
+    output.diagnostic_tight_candidate_blend = tight_candidate_blend;
+    output.diagnostic_raw_two_row_scores = raw_two_row_scores;
+    output.diagnostic_mean_future_pressure = two_row_pressure;
+    output.diagnostic_current_full_grid_pressure = current_full_grid_pressure;
+    output.diagnostic_temporal_pressure = temporal_pressure;
+    output.diagnostic_final_blend = final_blend;
+    output.diagnostic_outer_correction = outer_correction;
+    output.strip_input_to_output.reserve(pixel_warps.size());
+    for (const Mat3 &pixel_warp : pixel_warps) {
+      output.strip_input_to_output.push_back(
+          type18::applyCropZoomToClipHomography(
+              type18::convertPixelHomographyToClip(
+                  pixel_warp, static_cast<double>(config_.output_width),
+                  static_cast<double>(config_.output_height)),
+              kOutputCropZoom));
+    }
+    return output;
+  }
+
+  void cacheOutput(const StabilizedFrame &frame) {
+    if (frame.strip_input_to_output.empty()) {
+      return;
+    }
+    output_cache_.push_back({frame.timestamp_ns, frame.strip_input_to_output});
+    while (output_cache_.size() > kMaximumOutputCacheSize) {
+      output_cache_.pop_front();
+    }
+  }
+
+  EngineConfig config_;
+  type18::Parameters parameters_;
+  // The reconstruction was recovered from a 30 fps profile, but Camera2 may
+  // actually produce any supported cadence. This value converts frame-domain
+  // look-ahead into the observed sensor timestamp domain.
+  std::int64_t frame_period_ns_ = type18::Parameters::kFramePeriodNs;
+  type18::GyroStationaryDetector gyro_stationary_detector_;
+  type18::GyroPoseQueue delayed_gyro_;
+  type18::GyroPoseQueue realtime_gyro_;
+  type18::LowProtrusionMotionFilter motion_filter_;
+  type18::TemporalPressureFilter pressure_filter_;
+  std::deque<GyroSample> gyro_samples_;
+  std::deque<LensOffsetSample> lens_offsets_;
+  std::deque<LensIntrinsicsSample> lens_intrinsics_;
+  std::deque<FrameMetadata> pending_frames_;
+  std::deque<StabilizedFrame> deferred_outputs_;
+  std::deque<OutputCacheEntry> output_cache_;
+  std::deque<double> projected_motion_magnitudes_;
+  std::deque<std::int64_t> projected_motion_peak_frames_;
+  Quaternion previous_output_pose_ = Quaternion::identity();
+  std::int64_t next_frame_sequence_ = 0;
+  std::int64_t previous_frame_timestamp_ns_ = 0;
+  std::int64_t last_submitted_frame_timestamp_ns_ = 0;
+  std::int64_t last_submitted_source_timestamp_ns_ = 0;
+  std::int64_t pending_frame_period_ns_ = 0;
+  int pending_frame_period_count_ = 0;
+  double projected_motion_history_gain_ = 0.0;
+  double previous_projected_candidate_blend_ = 0.0;
+  bool frame_period_initialized_ = false;
+  bool output_pose_initialized_ = false;
+  bool tripod_mode_ = false;
+};
+
+Engine::Engine(EngineConfig config)
+    : impl_(std::make_unique<Impl>(std::move(config))) {}
+
+Engine::~Engine() = default;
+Engine::Engine(Engine &&) noexcept = default;
+Engine &Engine::operator=(Engine &&) noexcept = default;
+
+void Engine::setActiveArraySize(int width, int height) {
+  impl_->setActiveArraySize(width, height);
+}
+
+void Engine::setCropWindowSize(int width, int height) {
+  impl_->setCropWindowSize(width, height);
+}
+
+void Engine::setStabilizationStrength(double strength) {
+  impl_->setStrength(strength);
+}
+
+int Engine::numStrips() const { return impl_->numStrips(); }
+int Engine::numFramesToLookAhead() const {
+  return impl_->numFramesToLookAhead();
+}
+std::int64_t Engine::framePeriodNs() const { return impl_->framePeriodNs(); }
+bool Engine::isTripodMode() const { return impl_->isTripodMode(); }
+
+bool Engine::pushGyro(const GyroSample &sample) {
+  return impl_->pushGyro(sample);
+}
+
+bool Engine::pushLensOffset(const LensOffsetSample &sample) {
+  return impl_->pushLensOffset(sample);
+}
+
+bool Engine::pushLensIntrinsics(const LensIntrinsicsSample &sample) {
+  return impl_->pushLensIntrinsics(sample);
+}
+
+std::optional<StabilizedFrame>
+Engine::processFrame(const FrameMetadata &frame) {
+  return impl_->processFrame(frame);
+}
+
+std::vector<StabilizedFrame> Engine::flush() { return impl_->flush(); }
+
+bool Engine::getTransformBetweenFrames(
+    std::int64_t from_timestamp_ns, std::int64_t to_timestamp_ns,
+    std::vector<Mat3> *strip_transforms) const {
+  return impl_->getTransformBetweenFrames(from_timestamp_ns, to_timestamp_ns,
+                                          strip_transforms);
+}
+
+} // namespace mgc_eis_reconstruction
