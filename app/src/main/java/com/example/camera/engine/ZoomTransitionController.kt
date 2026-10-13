@@ -262,13 +262,12 @@ class ZoomTransitionController(
                     if (elapsed >= uwPhaseDurationMs) break
 
                     val linearProgress = (elapsed.toDouble() / uwPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                    val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                    val currentNorm = (startNorm + (switchNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
+                    val currentNorm = (startNorm + (switchNorm - startNorm) * linearProgress).toFloat().coerceIn(0f, 1f)
 
                     val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                     val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, effectiveSwitchZoom)
 
-                    if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                    if (currentZ < effectiveSwitchZoom && (abs(currentZ - lastDispatchedZoom) >= 0.005f || (now - lastDispatchedTime) >= 16L)) {
                         lastDispatchedZoom = currentZ
                         lastDispatchedTime = now
                         _currentInterpolatedZoom.value = currentZ
@@ -283,22 +282,18 @@ class ZoomTransitionController(
                     }
                 }
 
-                val totalElapsedUw = SystemClock.uptimeMillis() - startTime
-                if (totalElapsedUw < uwPhaseDurationMs) {
-                    delay(uwPhaseDurationMs - totalElapsedUw)
-                }
-
-                // Ensure Ultra-Wide reaches the exact selected focal length / 1x field of view
+                // Ensure Ultra-Wide reaches the exact 1x field of view
                 _currentInterpolatedZoom.value = effectiveSwitchZoom
                 onZoomUpdate(effectiveSwitchZoom)
                 onApplyZoomToEngine(effectiveSwitchZoom, true)
 
-                // Hold at 1x for the configured hold time on the Ultra-Wide lens feed
+                // Hold timer starts precisely when 1x cropped ultra-wide feed becomes active
                 val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 val holdStartTime = SystemClock.uptimeMillis()
                 while (isActive) {
                     val now = SystemClock.uptimeMillis()
-                    if (now - holdStartTime >= holdDuration) break
+                    val elapsedHold = now - holdStartTime
+                    if (elapsedHold >= holdDuration) break
 
                     val nextTick = minOf(holdStartTime + holdDuration, now + 16L)
                     val waitMs = nextTick - SystemClock.uptimeMillis()
@@ -307,7 +302,7 @@ class ZoomTransitionController(
                     }
                 }
 
-                // Then instantly switch to the main 1x lens with zero visible freeze, black screen, or interruption
+                // Immediately switch lenses when timer expires
                 onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
                 setSteadyStatePreview(false)
                 _currentInterpolatedZoom.value = effectiveSwitchZoom
@@ -336,13 +331,12 @@ class ZoomTransitionController(
                         if (elapsed >= mainPhaseDurationMs) break
 
                         val linearProgress = (elapsed.toDouble() / mainPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                        val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                        val currentNorm = (switchNorm + (endNorm - switchNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
+                        val currentNorm = (switchNorm + (endNorm - switchNorm) * linearProgress).toFloat().coerceIn(0f, 1f)
 
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                         val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(effectiveSwitchZoom, maxZoom)
 
-                        if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                        if (abs(currentZ - lastDispatchedZoom) >= 0.005f || (now - lastDispatchedTime) >= 16L) {
                             lastDispatchedZoom = currentZ
                             lastDispatchedTime = now
                             _currentInterpolatedZoom.value = currentZ
@@ -394,13 +388,12 @@ class ZoomTransitionController(
                         if (elapsed >= mainPhaseDurationMs) break
 
                         val linearProgress = (elapsed.toDouble() / mainPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                        val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                        val currentNorm = (startNorm + (switchNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
+                        val currentNorm = (startNorm + (switchNorm - startNorm) * linearProgress).toFloat().coerceIn(0f, 1f)
 
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                         val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(effectiveSwitchZoom, startZ)
 
-                        if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                        if (currentZ > effectiveSwitchZoom && (abs(currentZ - lastDispatchedZoom) >= 0.005f || (now - lastDispatchedTime) >= 16L)) {
                             lastDispatchedZoom = currentZ
                             lastDispatchedTime = now
                             _currentInterpolatedZoom.value = currentZ
@@ -423,12 +416,13 @@ class ZoomTransitionController(
                 setSteadyStatePreview(true)
                 onApplyZoomToEngine(effectiveSwitchZoom, true)
 
-                // Step 2: Hold this cropped ultra-wide view for the configured hold time
+                // Step 2: Hold this cropped ultra-wide view for exactly the user-selected hold duration
                 val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 val holdStartTime = SystemClock.uptimeMillis()
                 while (isActive) {
                     val now = SystemClock.uptimeMillis()
-                    if (now - holdStartTime >= holdDuration) break
+                    val elapsedHold = now - holdStartTime
+                    if (elapsedHold >= holdDuration) break
 
                     val nextTick = minOf(holdStartTime + holdDuration, now + 16L)
                     val waitMs = nextTick - SystemClock.uptimeMillis()
@@ -437,7 +431,7 @@ class ZoomTransitionController(
                     }
                 }
 
-                // Step 3: Then smoothly transition digitally from 1x down to 0.5x
+                // Step 3: Immediately when the hold timer expires, smoothly transition digitally from 1x down to 0.5x
                 val uwPhaseDurationMs = transitionDurationMs
                 val uwStartNorm = switchNorm
                 val uwEndNorm = endNorm
@@ -452,13 +446,12 @@ class ZoomTransitionController(
                     if (elapsed >= uwPhaseDurationMs) break
 
                     val linearProgress = (elapsed.toDouble() / uwPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                    val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                    val currentNorm = (uwStartNorm + (uwEndNorm - uwStartNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
+                    val currentNorm = (uwStartNorm + (uwEndNorm - uwStartNorm) * linearProgress).toFloat().coerceIn(0f, 1f)
 
                     val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                     val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(endZ, effectiveSwitchZoom)
 
-                    if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                    if (abs(currentZ - lastDispatchedZoom) >= 0.005f || (now - lastDispatchedTime) >= 16L) {
                         lastDispatchedZoom = currentZ
                         lastDispatchedTime = now
                         _currentInterpolatedZoom.value = currentZ
@@ -471,11 +464,6 @@ class ZoomTransitionController(
                     if (waitMs > 0) {
                         delay(waitMs)
                     }
-                }
-
-                val totalElapsedUw = SystemClock.uptimeMillis() - smoothStartTime
-                if (totalElapsedUw < uwPhaseDurationMs) {
-                    delay(uwPhaseDurationMs - totalElapsedUw)
                 }
 
                 _currentInterpolatedZoom.value = endZ
