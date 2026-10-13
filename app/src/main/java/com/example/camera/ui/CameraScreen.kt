@@ -249,6 +249,8 @@ fun CameraScreen(
 
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val videoStabilizationMode by viewModel.videoStabilizationMode.collectAsStateWithLifecycle()
+    val stabilizationOffsets by viewModel.stabilizationOffsetFlow.collectAsStateWithLifecycle()
+    val isRealtimeEisActive by viewModel.isRealtimeEisActive.collectAsStateWithLifecycle()
     val isOisEnabled by viewModel.isOisEnabled.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val activeLayoutConfig = remember(uiCustomizationState, cameraMode) {
@@ -421,6 +423,10 @@ fun CameraScreen(
                 },
                 viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
                 stabilizationMode = videoStabilizationMode,
+                stabilizationOffsetX = stabilizationOffsets.first,
+                stabilizationOffsetY = stabilizationOffsets.second,
+                stabilizationCropScale = stabilizationOffsets.third,
+                isVideoStabilizationActive = isRealtimeEisActive,
                 doubleTapAction = doubleTapAction,
                 onDoubleTapFlip = { viewModel.toggleCameraFacing() },
                 onDoubleTapLock = { viewModel.toggleAeAfLock() },

@@ -1697,9 +1697,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
         cachedMatrix2d.reset()
         cachedMatrix2d.postTranslate(-0.5f, -0.5f)
-        // 1. Normal uncropped viewport scaling without EIS
-        val effectiveScaleX = scaleX
-        val effectiveScaleY = effScaleY
+        val effectiveScaleX = scaleX * stabilizationCropScale
+        val effectiveScaleY = effScaleY * stabilizationCropScale
         cachedMatrix2d.postScale(effectiveScaleX, effectiveScaleY)
         // 2. Rotate to align with sensor buffer coordinates
         if (netRotationDeg != 0f) {
@@ -1709,8 +1708,8 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         if (isFront != isStMirrored) {
             cachedMatrix2d.postScale(-1.0f, 1.0f)
         }
-        val finalShiftX = 0f
-        val finalShiftY = 0f
+        val finalShiftX = stabilizationOffsetX
+        val finalShiftY = stabilizationOffsetY
         cachedMatrix2d.postTranslate(0.5f + finalShiftX, 0.5f + finalShiftY)
 
         cachedMatrix2d.getValues(matrixValues)

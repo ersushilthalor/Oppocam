@@ -130,6 +130,10 @@ fun Viewfinder(
     dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
     onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
     stabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
+    stabilizationOffsetX: Float = 0f,
+    stabilizationOffsetY: Float = 0f,
+    stabilizationCropScale: Float = 1.0f,
+    isVideoStabilizationActive: Boolean = false,
     doubleTapAction: String = "FLIP",
     onDoubleTapFlip: () -> Unit = {},
     onDoubleTapLock: () -> Unit = {},
@@ -183,6 +187,9 @@ fun Viewfinder(
         val viewH = if (h > 0) h else tv.height
         if (viewW <= 0 || viewH <= 0) return@rememberUpdatedState
         val calib = if (isUltraWide) currentUwCalib else com.example.camera.engine.CameraOpticalCalibration.OpticalFramingCalibration()
+        val effScale = if (isVideoStabilizationActive) calib.scaleCorrection * stabilizationCropScale else calib.scaleCorrection
+        val effOffX = if (isVideoStabilizationActive) calib.offsetXNorm + stabilizationOffsetX else calib.offsetXNorm
+        val effOffY = if (isVideoStabilizationActive) calib.offsetYNorm + stabilizationOffsetY else calib.offsetYNorm
         updateTextureViewTransform(
             textureView = tv,
             previewBufferSize = previewBufferSize,
@@ -198,29 +205,33 @@ fun Viewfinder(
             dollyFocusY = dollyCropState?.focusNormY ?: 0.5f,
             viewWidth = viewW,
             viewHeight = viewH,
-            opticalScale = calib.scaleCorrection,
-            opticalOffsetX = calib.offsetXNorm,
-            opticalOffsetY = calib.offsetYNorm
+            opticalScale = effScale,
+            opticalOffsetX = effOffX,
+            opticalOffsetY = effOffY
         )
     }
 
-    LaunchedEffect(
-        textureViewInstance,
-        ultraWideTextureViewInstance,
-        isUsingUltraWideSurface,
-        currentZoom,
-        isHorizonLockEnabled,
-        horizonRollDegrees,
-        horizonNormX,
-        horizonNormY,
-        isDollyZoomActive,
-        dollyCropState,
-        cameraMode,
-        previewBufferSize,
-        isSettingsOpen,
-        aspectRatio,
-        isCameraReady
-    ) {
+        LaunchedEffect(
+            textureViewInstance,
+            ultraWideTextureViewInstance,
+            isUsingUltraWideSurface,
+            currentZoom,
+            isHorizonLockEnabled,
+            horizonRollDegrees,
+            horizonNormX,
+            horizonNormY,
+            isDollyZoomActive,
+            dollyCropState,
+            cameraMode,
+            previewBufferSize,
+            isSettingsOpen,
+            aspectRatio,
+            isCameraReady,
+            stabilizationOffsetX,
+            stabilizationOffsetY,
+            stabilizationCropScale,
+            isVideoStabilizationActive
+        ) {
         if (!isSettingsOpen) {
             listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
                 val isUw = (tv === ultraWideTextureViewInstance)

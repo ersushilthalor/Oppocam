@@ -1496,18 +1496,10 @@ class Camera2Engine(private val context: Context) {
         }
     var isAfLocked: Boolean = false
     var isRawCaptureEnabled: Boolean = false
-    var isVideoStabilizationEnabled: Boolean = true
+    var isVideoStabilizationEnabled: Boolean = preferences.isVideoStabilizationEnabled
         set(value) {
             field = value
-            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            val hybridConfig = _hybridStabilizationConfig.value
-            val isStabActive = value && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || hybridConfig.isEisPreferred || hybridConfig.isEisOnly)
-            if (isVideoMode && isStabActive) {
-                gyroStabilizationEngine.start()
-            } else {
-                gyroStabilizationEngine.stop()
-                lastStabilizedCrop = null
-            }
+            startEisStabilization()
         }
     var videoBitrateOption: VideoBitrateOption = VideoBitrateOption.AUTO
     var videoFps: Int = 30
@@ -1576,25 +1568,66 @@ class Camera2Engine(private val context: Context) {
     private var activeMeteringRectangle: MeteringRectangle? = null
 
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
+    val realtimeStabilizationCoordinator by lazy {
+        com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator(context)
+    }
+    private var eisSession: com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator.Session? = null
+
+    private val _stabilizationOffsetFlow = MutableStateFlow(Triple(0f, 0f, 1.0f))
+    val stabilizationOffsetFlow: StateFlow<Triple<Float, Float, Float>> = _stabilizationOffsetFlow.asStateFlow()
+
+    private val _isRealtimeEisActive = MutableStateFlow(false)
+    val isRealtimeEisActive: StateFlow<Boolean> = _isRealtimeEisActive.asStateFlow()
+
+    fun startEisStabilization() {
+        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
+        val hybridConfig = _hybridStabilizationConfig.value
+        val isStabActive = isVideoStabilizationEnabled && (
+            hybridConfig.isUltraStabilizationEnabled ||
+            hybridConfig.isHybridEnabled ||
+            hybridConfig.isEisPreferred ||
+            hybridConfig.isEisOnly ||
+            videoStabilizationMode.isEnabled
+        )
+        if (isVideoMode && isStabActive) {
+            gyroStabilizationEngine.start()
+            val w = _previewBufferSize.value?.width ?: 1920
+            val h = _previewBufferSize.value?.height ?: 1080
+            val maxDim = maxOf(w, h)
+            val minDim = minOf(w, h)
+            if (eisSession == null) {
+                eisSession = realtimeStabilizationCoordinator.createSession(
+                    useCase = com.hinnka.mycamera.stabilization.StabilizationUseCase.VIDEO,
+                    strength = 1.0f,
+                    frameWidth = maxDim,
+                    frameHeight = minDim,
+                    lookaheadFrames = com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
+                )
+            }
+            eisSession?.start()
+            _isRealtimeEisActive.value = true
+        } else {
+            stopEisStabilization()
+        }
+    }
+
+    fun stopEisStabilization() {
+        gyroStabilizationEngine.stop()
+        eisSession?.stop()
+        eisSession = null
+        _isRealtimeEisActive.value = false
+        lastStabilizedCrop = null
+        _stabilizationOffsetFlow.value = Triple(0f, 0f, 1.0f)
+        dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
+        if (isSoftwareCinemaRecording) {
+            cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
+        }
+    }
 
     var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = preferences.videoStabilizationMode
         set(value) {
             field = value
-            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            if (isVideoMode) {
-                when (value) {
-                    com.example.camera.model.VideoStabilizationMode.EIS -> {
-                        gyroStabilizationEngine.start()
-                    }
-                    com.example.camera.model.VideoStabilizationMode.OFF -> {
-                        gyroStabilizationEngine.stop()
-                        lastStabilizedCrop = null
-                    }
-                }
-            } else {
-                gyroStabilizationEngine.stop()
-                lastStabilizedCrop = null
-            }
+            startEisStabilization()
             updatePreviewSettings()
         }
 
@@ -1691,17 +1724,10 @@ class Camera2Engine(private val context: Context) {
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
         if (config.isEisOnly || config.isHybridEnabled || config.isEisPreferred || config.isUltraStabilizationEnabled) {
             videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
         }
-        val isStabActive = isVideoStabilizationEnabled && (config.isUltraStabilizationEnabled || config.isHybridEnabled || config.isEisPreferred || config.isEisOnly || videoStabilizationMode.isEnabled)
-        if (isVideoMode && isStabActive) {
-            gyroStabilizationEngine.start()
-        } else {
-            gyroStabilizationEngine.stop()
-            lastStabilizedCrop = null
-        }
+        startEisStabilization()
         updatePreviewSettings()
     }
 
@@ -3677,15 +3703,7 @@ class Camera2Engine(private val context: Context) {
         val cameraH = min(optimalSize.width, optimalSize.height)
         syncPreviewBufferSizes(cameraW, cameraH)
 
-        val isVideoMode = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA)
-        val hybridConfig = _hybridStabilizationConfig.value
-        val isStabActive = isVideoStabilizationEnabled && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || hybridConfig.isEisPreferred || hybridConfig.isEisOnly)
-        if (!isVideoMode || !isStabActive) {
-            gyroStabilizationEngine.stop()
-            lastStabilizedCrop = null
-        } else if (isVideoMode && isStabActive) {
-            gyroStabilizationEngine.start()
-        }
+        startEisStabilization()
 
         val horizonLockActiveInVideo = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA) && (_isHorizonLockEnabled.value ||
                 (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive))
@@ -4771,6 +4789,14 @@ class Camera2Engine(private val context: Context) {
                                     }
                                 }
                                 _isCameraReady.value = true
+                                val stabLens = activeSwitchingTargetLens ?: _targetLens.value ?: _selectedLens.value
+                                if (stabLens != null) {
+                                    val chars = getCharacteristics(stabLens.cameraId)
+                                    if (chars != null) {
+                                        realtimeStabilizationCoordinator.configureCamera(stabLens.cameraId, chars)
+                                    }
+                                }
+                                startEisStabilization()
                                 CameraPerformanceMonitor.start()
                                 completeLensSwitch(activeSwitchingTargetLens ?: _targetLens.value ?: _selectedLens.value)
                                 if (_isKeepUltraWideReady.value || isContinuousZoomTransitionActive || pendingEnsureUltraWideReady) {
@@ -4824,6 +4850,14 @@ class Camera2Engine(private val context: Context) {
                                 }
                             }
                             _isCameraReady.value = true
+                            val stabLens = _selectedLens.value
+                            if (stabLens != null) {
+                                val chars = getCharacteristics(stabLens.cameraId)
+                                if (chars != null) {
+                                    realtimeStabilizationCoordinator.configureCamera(stabLens.cameraId, chars)
+                                }
+                            }
+                            startEisStabilization()
                             CameraPerformanceMonitor.start()
                             completeLensSwitch(_selectedLens.value)
                         } catch (e: Exception) {
@@ -4917,10 +4951,59 @@ class Camera2Engine(private val context: Context) {
                 dollyZoomEngine.onFrameFaces(faces, activeArray, sensorOrientation, isFront)
             }
 
-            // EIS completely removed: video uses normal uncropped camera output without electronic stabilization
-            dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
-            if (isSoftwareCinemaRecording) {
-                cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
+            // Coordinated PhotonCamera MGC Realtime EIS & Gyroscope Stabilization
+            realtimeStabilizationCoordinator.submitCaptureResult(result, request)
+
+            if (_isRealtimeEisActive.value) {
+                val lens = activeSessionLens ?: _selectedLens.value
+                val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
+                val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                val focalLength = result.get(CaptureResult.LENS_FOCAL_LENGTH) ?: 0f
+                val physicalSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                val isFront = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+
+                if (activeArray != null && physicalSize != null && focalLength > 0f) {
+                    gyroStabilizationEngine.computeStabilizedCrop(
+                        result = result,
+                        activeArray = activeArray,
+                        baseZoom = currentZoom,
+                        focalLengthMm = focalLength,
+                        sensorPhysicalSizeMm = physicalSize,
+                        isOisActive = isOisAllowed
+                    )
+                }
+
+                val transform = eisSession?.dequeueLatestTransform()
+                val (offsetX, offsetY, cropScale) = if (transform != null && transform.hasPoseCoverage && transform.rowHomographies.size >= 12 * 9) {
+                    val rowIdx = com.hinnka.mycamera.stabilization.STABILIZATION_ROW_COUNT / 2
+                    val offset = rowIdx * 9
+                    val h02 = transform.rowHomographies[offset + 2]
+                    val h12 = transform.rowHomographies[offset + 5]
+                    val h22 = transform.rowHomographies[offset + 8]
+                    val rawScale = if (h22 > 0.001f) (1.0f / h22) else 1.111f
+                    val clampedScale = rawScale.coerceIn(1.04f, 1.15f)
+                    val normX = (h02 * 0.5f).coerceIn(-0.10f, 0.10f)
+                    val normY = (h12 * 0.5f).coerceIn(-0.10f, 0.10f)
+                    Triple(normX, normY, clampedScale)
+                } else {
+                    Triple(
+                        gyroStabilizationEngine.normalizedOffsetX.coerceIn(-0.10f, 0.10f),
+                        gyroStabilizationEngine.normalizedOffsetY.coerceIn(-0.10f, 0.10f),
+                        gyroStabilizationEngine.currentCropScale.coerceIn(1.04f, 1.15f)
+                    )
+                }
+
+                dualCameraRecordingRelay?.updateStabilizationOffset(offsetX, offsetY, cropScale)
+                if (isSoftwareCinemaRecording) {
+                    cinemaSoftwareRecorder.updateStabilizationOffset(offsetX, offsetY, cropScale)
+                }
+                _stabilizationOffsetFlow.value = Triple(offsetX, offsetY, cropScale)
+            } else {
+                dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
+                if (isSoftwareCinemaRecording) {
+                    cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
+                }
+                _stabilizationOffsetFlow.value = Triple(0f, 0f, 1.0f)
             }
 
             // Real-time continuous Auto Tone Control for Cinema Log Profiles
@@ -9754,8 +9837,7 @@ class Camera2Engine(private val context: Context) {
         _isCameraReady.value = false
         sessionConfigGeneration.incrementAndGet()
         isConfiguringSession = false
-        pendingReconfigureSession = false
-        gyroStabilizationEngine.stop()
+        stopEisStabilization()
         stableActionHorizonEngine.stop()
         dollyZoomEngine.stop()
         ultraFastShutterEngine.reset()

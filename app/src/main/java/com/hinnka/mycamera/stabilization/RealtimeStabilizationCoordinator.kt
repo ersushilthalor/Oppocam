@@ -292,26 +292,16 @@ class RealtimeStabilizationCoordinator(context: Context) {
         get() {
             val current = calibration
             return !halStabilizationConflictDetected &&
-                isGyroscopeAvailable && current != null &&
-                current.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
-                current.timestampSource ==
-                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+                isGyroscopeAvailable && current != null
         }
 
     fun isCameraSupported(
         characteristics: CameraCharacteristics,
         timingCharacteristics: CameraCharacteristics = characteristics,
     ): Boolean {
-        val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
-            ?: timingCharacteristics.get(CameraCharacteristics.LENS_FACING)
-        val timestampSource = timingCharacteristics.get(
-            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE,
-        ) ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val physicalSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-        return isGyroscopeAvailable && activeArray != null && physicalSize != null &&
-            lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
-            timestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+        return isGyroscopeAvailable && activeArray != null && physicalSize != null
     }
 
     private val sensorListener = object : SensorEventListener {
@@ -583,7 +573,13 @@ class RealtimeStabilizationCoordinator(context: Context) {
             frameMetadata[timestampNs] = metadata
             latestMetadataTimestampNs = maxOf(latestMetadataTimestampNs, timestampNs)
             trimOldest(frameMetadata, MAX_METADATA_COUNT)
-            drainFramesLocked(lastFrameBoundaryNs)
+            onFrameBoundaryLocked(timestampNs)
+        }
+    }
+
+    fun submitFrameBoundary(timestampNs: Long) {
+        synchronized(lock) {
+            onFrameBoundaryLocked(timestampNs)
         }
     }
 
@@ -795,20 +791,15 @@ class RealtimeStabilizationCoordinator(context: Context) {
         } else {
             requestedOpticalMode == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
         }
-        val opticalConflict = opticalStabilizationActive &&
-            !opticalCorrectionAccepted
+        // Hardware OIS operates concurrently with software EIS. If the HAL does not provide
+        // fine-grained OIS shift samples, MGC EIS stabilizes using the gyroscope alone without disabling itself.
+        val opticalConflict = false
         if (!videoConflict && !opticalConflict) {
             consecutiveHalStabilizationConflictCount = 0
             return false
         }
         consecutiveHalStabilizationConflictCount += 1
-        val confirmationFrameCount = if (videoConflict) {
-            HAL_STABILIZATION_CONFLICT_CONFIRMATION_FRAME_COUNT
-        } else {
-            // Give a hidden/forced OIS implementation enough completed requests to start
-            // returning telemetry. Five frames remain below profile 7's first delayed output.
-            HAL_OPTICAL_CORRECTION_PROBE_FRAME_COUNT
-        }
+        val confirmationFrameCount = HAL_STABILIZATION_CONFLICT_CONFIRMATION_FRAME_COUNT
         return consecutiveHalStabilizationConflictCount >= confirmationFrameCount
     }
 
@@ -1125,6 +1116,33 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 } else {
                     latest?.image?.close()
                     latest = next
+                }
+            }
+        }
+
+        /** Retrieves the latest calculated algorithmic stabilization transform without requiring an Image lease. */
+        @Synchronized
+        fun dequeueLatestTransform(): AlgorithmicStabilizationTransform? {
+            if (!active) return null
+            val throughSequence = coordinator.currentResultSequence()
+            var latest: AlgorithmicStabilizationTransform? = null
+            while (true) {
+                val next = coordinator.nextNativeResult(lastConsumedSequence, throughSequence) ?: return latest
+                lastConsumedSequence = next.sequence
+                when (val result = next.result) {
+                    is MgcEisNativeEngine.FrameResult.Stabilized -> {
+                        latest = AlgorithmicStabilizationTransform(
+                            timestampNs = result.sensorTimestampNs,
+                            rowHomographies = result.rowHomographies,
+                            cropRect = floatArrayOf(0f, 0f, 1f, 1f),
+                            hasPoseCoverage = true,
+                            appliedStrength = result.appliedStrength,
+                            tripodMode = result.tripodMode,
+                        )
+                    }
+                    is MgcEisNativeEngine.FrameResult.Dropped -> {
+                        // ignore dropped frames
+                    }
                 }
             }
         }

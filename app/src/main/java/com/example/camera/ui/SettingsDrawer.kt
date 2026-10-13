@@ -827,6 +827,44 @@ private fun VideoSettingsPage(
 
         item {
             SettingsSwitchCard(
+                title = "Electronic Image Stabilization (EIS)",
+                description = if (isVideoStabilizationEnabled) {
+                    "ON: PhotonCamera MGC gyroscope-assisted EIS active for smooth viewfinder and video recording."
+                } else {
+                    "OFF: Electronic stabilization disabled (raw sensor field of view)."
+                },
+                isChecked = isVideoStabilizationEnabled,
+                onCheckedChange = onStabilizationToggle,
+                tag = "toggle_video_eis"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Hardware OIS (Optical Image Stabilization)",
+                description = if (isOisPreferred) {
+                    "ON: Main camera uses physical hardware voice-coil Optical Image Stabilization (OIS) whenever supported."
+                } else {
+                    "OFF: Hardware Optical Image Stabilization is disabled."
+                },
+                isChecked = isOisPreferred,
+                onCheckedChange = onOisToggle,
+                tag = "toggle_video_ois"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Horizontal Horizon Lock",
+                description = "Keep horizon level using gyroscope sensor tracking.",
+                isChecked = isHorizontalLockSettingEnabled,
+                onCheckedChange = onHorizontalLockSettingToggle,
+                tag = "toggle_horizontal_lock"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
                 title = "Record Audio",
                 description = "Capture high-fidelity stereo audio with recorded videos.",
                 isChecked = isAudioEnabled,
@@ -2360,6 +2398,20 @@ private fun StabilizationSettingsPage(
                 isChecked = isOisPreferred,
                 onCheckedChange = onOisToggle,
                 tag = "toggle_ois_switch"
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Electronic Image Stabilization (EIS)",
+                description = if (isVideoStabilizationEnabled) {
+                    "ON: PhotonCamera MGC gyroscope-assisted EIS active for smooth preview and video."
+                } else {
+                    "OFF: Electronic stabilization disabled (raw sensor field of view)."
+                },
+                isChecked = isVideoStabilizationEnabled,
+                onCheckedChange = onStabilizationToggle,
+                tag = "toggle_eis_switch"
             )
         }
 
@@ -4001,12 +4053,10 @@ fun CameraSettingsScreen(
     val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
         val oisEffective = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred
         when {
-            !isVideoStabilizationEnabled -> MainCameraStabilizationMode.OFF
             hybridStabilizationConfig.isUltraStabilizationEnabled -> MainCameraStabilizationMode.ULTRA
-            hybridStabilizationConfig.isEisOnly || (!oisEffective && hybridStabilizationConfig.isEisPreferred) -> MainCameraStabilizationMode.EIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled && oisEffective -> MainCameraStabilizationMode.HYBRID_OIS_EIS
-            oisEffective && !hybridStabilizationConfig.isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled -> MainCameraStabilizationMode.EIS_ONLY
+            oisEffective && isVideoStabilizationEnabled -> MainCameraStabilizationMode.HYBRID_OIS_EIS
+            oisEffective && !isVideoStabilizationEnabled -> MainCameraStabilizationMode.OIS_ONLY
+            !oisEffective && isVideoStabilizationEnabled -> MainCameraStabilizationMode.EIS_ONLY
             else -> MainCameraStabilizationMode.OFF
         }
     }
