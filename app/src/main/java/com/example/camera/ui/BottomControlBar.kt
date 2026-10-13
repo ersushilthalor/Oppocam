@@ -166,31 +166,7 @@ fun BottomControlBar(
                     }
                 }
 
-                // Separate Filter icon positioned to the right side of the zoom slider in Photo Mode
-                if (cameraMode == CameraMode.PHOTO) {
-                    val isFilterActive = selectedPhotoFilter != PhotoFilter.ORIGINAL
-                    IconButton(
-                        onClick = onPhotoFilterClick,
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(if (isFilterActive) Color(0xFF64FFDA).copy(alpha = 0.25f) else Color(0xD9141418))
-                            .border(
-                                width = 1.2.dp,
-                                color = if (isFilterActive) Color(0xFF64FFDA) else Color.White.copy(alpha = 0.22f),
-                                shape = CircleShape
-                            )
-                            .testTag("photo_filter_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AutoAwesome,
-                            contentDescription = "Photo Filters",
-                            tint = if (isFilterActive) Color(0xFF64FFDA) else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
+
 
                 // EV button positioned to the right side of the zoom capsule in Video and Cinema Mode
                 if (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) {

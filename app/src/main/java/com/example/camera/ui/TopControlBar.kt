@@ -302,29 +302,31 @@ fun TopControlBar(
             when (cameraMode) {
                 CameraMode.PHOTO -> {
                     val is50M = photoMegapixelMode == PhotoMegapixelMode.M50
-                    Box(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(if (is50M) accentColor.copy(alpha = 0.2f) else Color(0xB21A1A1E))
-                            .border(
-                                1.dp,
-                                if (is50M) accentColor else Color.White.copy(alpha = 0.22f),
-                                RoundedCornerShape(17.dp)
+                    if (is50M) {
+                        Box(
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(17.dp))
+                                .background(accentColor.copy(alpha = 0.2f))
+                                .border(
+                                    1.dp,
+                                    accentColor,
+                                    RoundedCornerShape(17.dp)
+                                )
+                                .clickable { onToggleMegapixelMode() }
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = photoMegapixelMode.label,
+                                color = accentColor,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp,
+                                maxLines = 1,
+                                softWrap = false
                             )
-                            .clickable { onToggleMegapixelMode() }
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = photoMegapixelMode.label,
-                            color = if (is50M) accentColor else Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                        }
                     }
                 }
                 CameraMode.VIDEO -> {
@@ -883,13 +885,17 @@ fun TopControlBar(
                     TopControlItem.FLASH -> flashButton()
                     TopControlItem.TIMER -> timerAudioButton()
                     TopControlItem.GRID -> gridAssistButton()
-                    TopControlItem.RESOLUTION -> primaryBadge()
+                    TopControlItem.RESOLUTION -> {
+                        if (cameraMode != CameraMode.PHOTO || photoMegapixelMode == PhotoMegapixelMode.M50) {
+                            primaryBadge()
+                        }
+                    }
                     TopControlItem.RAW -> secondaryBadge()
                     TopControlItem.PRO_EXP -> proExpButton()
                     TopControlItem.LOG -> logButton()
                     TopControlItem.LUT -> lutButton()
                     TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
-                    TopControlItem.STABILIZATION -> stabilizationButton()
+                    TopControlItem.STABILIZATION -> { /* Removed: stabilization controls completely removed */ }
                     TopControlItem.EV -> evButton()
                     TopControlItem.HORIZON_LOCK -> horizonLockButton()
                     TopControlItem.DOLLY_ZOOM -> dollyZoomButton()
@@ -906,7 +912,7 @@ fun TopControlBar(
         // Render Top Controls according to layoutConfig and position
         val visibleItems = run {
             var items = layoutConfig.topControlsOrder
-                .filterNot { layoutConfig.hiddenTopControls.contains(it) }
+                .filterNot { layoutConfig.hiddenTopControls.contains(it) || it == TopControlItem.STABILIZATION }
             if (!items.contains(TopControlItem.SIX_DOT_MENU) && !layoutConfig.hiddenTopControls.contains(TopControlItem.SIX_DOT_MENU)) {
                 items = if (items.contains(TopControlItem.SETTINGS)) {
                     items.map { if (it == TopControlItem.SETTINGS) TopControlItem.SIX_DOT_MENU else it }

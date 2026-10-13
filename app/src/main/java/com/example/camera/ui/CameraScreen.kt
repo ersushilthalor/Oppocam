@@ -1043,21 +1043,7 @@ fun CameraScreen(
             )
         }
 
-        // 3d2. Photo Mode Filter Selector Bar
-        AnimatedVisibility(
-            visible = cameraMode == CameraMode.PHOTO && isPhotoFilterBarOpen,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 215.dp)
-        ) {
-            PhotoFilterSelectorBar(
-                selectedFilter = selectedPhotoFilter,
-                onFilterSelected = { viewModel.setSelectedPhotoFilter(it) },
-                onClose = { viewModel.setPhotoFilterBarOpen(false) }
-            )
-        }
+
 
         // 3d4. Dedicated Compact Pipeline Preset Floating Window (Photo Mode)
         AnimatedVisibility(

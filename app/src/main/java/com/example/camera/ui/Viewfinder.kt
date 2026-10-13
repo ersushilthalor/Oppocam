@@ -735,25 +735,8 @@ fun Viewfinder(
                             )
                         }
                     }
-                } else if (cameraMode == CameraMode.PHOTO && activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(8.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xCC111318))
-                            .border(1.dp, activePhotoFilter.swatchColor.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "FILTER: ${activePhotoFilter.displayName}",
-                            color = activePhotoFilter.swatchColor,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
-                        )
-                    }
                 }
+
 
                 // Grid Overlay
                 if (gridType != GridType.NONE) {
@@ -1255,15 +1238,9 @@ private fun applyTextureViewOutlineAndEffects(
         }
     } else {
         val hasProAdj = (proSaturation != 0f || proContrast != 1.0f || proHighlights != 0f || proShadows != 0f)
-        val hasPhotoFilter = (cameraMode == CameraMode.PHOTO && activePhotoFilter != null && activePhotoFilter != PhotoFilter.ORIGINAL)
 
-        if (hasPhotoFilter || hasProAdj) {
+        if (hasProAdj) {
             val combinedMatrix = android.graphics.ColorMatrix()
-            if (hasPhotoFilter && activePhotoFilter != null) {
-                activePhotoFilter.toAndroidColorMatrix()?.let { filterMat ->
-                    combinedMatrix.postConcat(filterMat)
-                }
-            }
             if (hasProAdj) {
                 val sat = (1.0f + proSaturation).coerceIn(0f, 2.5f)
                 if (sat != 1.0f) {

@@ -9464,10 +9464,8 @@ class Camera2Engine(private val context: Context) {
         val isFrontFacing = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         val captureOrientation = getCaptureJpegOrientation()
 
-        val photoFilter = selectedPhotoFilter
-        val isFilterActive = (photoFilter != PhotoFilter.ORIGINAL && currentMode == CameraMode.PHOTO)
         val isProAdjusted = (proSaturation.value != 0f || proContrast.value != 1.0f || proHighlights.value != 0f || proShadows.value != 0f)
-        val needsColorProcessing = !skipPipeline && (isFilterActive || isProAdjusted)
+        val needsColorProcessing = !skipPipeline && isProAdjusted
 
         // Check whether effectiveBytes still needs physical rotation or front-camera mirroring
         val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -9522,12 +9520,6 @@ class Camera2Engine(private val context: Context) {
                     val colorMatrix = android.graphics.ColorMatrix()
                     var hasColorTransform = false
                     if (needsColorProcessing) {
-                        if (isFilterActive) {
-                            photoFilter.toAndroidColorMatrix()?.let {
-                                colorMatrix.postConcat(it)
-                                hasColorTransform = true
-                            }
-                        }
                         if (proSaturation.value != 0f) {
                             val satMat = android.graphics.ColorMatrix().apply {
                                 setSaturation((1f + proSaturation.value / 100f).coerceIn(0f, 3f))

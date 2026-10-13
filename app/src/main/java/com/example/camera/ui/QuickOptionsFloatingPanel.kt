@@ -165,22 +165,7 @@ fun QuickOptionsFloatingPanel(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                val isSteadyActive = isUltraStabilizationEnabled || isVideoStabilizationEnabled
-                                val steadyLabel = when {
-                                    isUltraStabilizationEnabled -> "ULTRA"
-                                    isVideoStabilizationEnabled -> "EIS"
-                                    else -> "OFF"
-                                }
-                                QuickOptionCircleButton(
-                                    icon = if (isUltraStabilizationEnabled) Icons.Filled.DirectionsRun else Icons.Outlined.Shield,
-                                    label = "Steady",
-                                    statusText = steadyLabel,
-                                    isActive = isSteadyActive,
-                                    activeColor = accentColor,
-                                    onClick = onStabilizationClick,
-                                    testTag = "panel_stabilization_button",
-                                    modifier = Modifier.weight(1f)
-                                )
+
 
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.VideoSettings,
@@ -456,17 +441,7 @@ fun QuickOptionsFloatingPanel(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                val isFilterActive = activePhotoFilter != PhotoFilter.ORIGINAL || isPipelineActive
-                                QuickOptionCircleButton(
-                                    icon = Icons.Outlined.AutoAwesome,
-                                    label = "Filters",
-                                    statusText = if (isPipelineActive) "Pipeline" else activePhotoFilter.displayName,
-                                    isActive = isFilterActive,
-                                    activeColor = accentColor,
-                                    onClick = onPhotoFilterClick,
-                                    testTag = "panel_filters_button",
-                                    modifier = Modifier.weight(1f)
-                                )
+
 
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.Settings,

@@ -53,7 +53,6 @@ enum class SettingsPage(val title: String, val subtitle: String, val icon: Image
     CINEMA("Pro Video Settings", "Resolution, FPS, Bitrate, Codec, Noise Reduction, Sharpness, Log & LUTs", Icons.Outlined.Movie),
     PRO_MANUAL("Pro / Manual Settings", "ISO, Shutter, Focus, WB & Image Pipeline", Icons.Outlined.Tune),
     CAMERA_LENS("Camera & Lens Settings", "Hardware lenses & Viewfinder", Icons.Outlined.Lens),
-    STABILIZATION("Stabilization & Audio", "Hybrid OIS/EIS, Gyro & Wind reduction", Icons.Outlined.VideoStable),
     UI_LAYOUT("UI & Layout Settings", "Templates, Floating windows & Custom studio", Icons.Outlined.DashboardCustomize),
     GENERAL("General Settings", "Volume key, Double tap, Feedback & Thermal", Icons.Outlined.Settings),
     ABOUT("About & Hardware Info", "Device camera specs, Sensor & Storage stats", Icons.Outlined.Info)
@@ -458,20 +457,6 @@ fun SettingsDrawer(
                             onGridTypeSelected = onGridTypeSelected,
                             horizonLeveler = horizonLeveler,
                             onHorizonLevelerToggle = onHorizonLevelerToggle
-                        )
-                        SettingsPage.STABILIZATION -> StabilizationSettingsPage(
-                            mainCameraStabilizationMode = mainCameraStabilizationMode,
-                            onMainCameraStabilizationModeSelected = onMainCameraStabilizationModeSelected,
-                            isVideoStabilizationEnabled = isVideoStabilizationEnabled,
-                            onStabilizationToggle = onStabilizationToggle,
-                            isOisPreferred = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
-                            onOisToggle = onOisToggle,
-                            isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
-                            onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
-                            isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-                            onUltraStabilizationToggle = onUltraStabilizationToggle,
-                            windNoiseReduction = windNoiseReduction,
-                            onWindNoiseReductionToggle = onWindNoiseReductionToggle
                         )
                         SettingsPage.UI_LAYOUT -> UiLayoutSettingsPage(
                             uiCustomizationState = uiCustomizationState,
@@ -979,45 +964,11 @@ private fun VideoSettingsPage(
 
         item {
             SettingsSwitchCard(
-                title = "Video Stabilization (EIS)",
-                description = "Uses software motion compensation to reduce camera shake.",
-                isChecked = isVideoStabilizationEnabled,
-                onCheckedChange = onStabilizationToggle,
-                tag = "toggle_video_stabilization"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Hardware OIS (Optical Image Stabilization)",
-                description = if (isOisPreferred) {
-                    "ON: Allow the main camera lens to use hardware voice-coil OIS normally."
-                } else {
-                    "OFF: Hardware OIS forcefully disabled. EIS & EIS+ operate purely electronically without triggering OIS."
-                },
-                isChecked = isOisPreferred,
-                onCheckedChange = onOisToggle,
-                tag = "toggle_video_ois_switch"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
                 title = "Horizontal Lock",
                 description = "Show Horizontal Lock control in Video Mode to keep the horizon level during action shots.",
                 isChecked = isHorizontalLockSettingEnabled,
                 onCheckedChange = onHorizontalLockSettingToggle,
                 tag = "toggle_horizontal_lock_video_setting"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Ultra Gyroscope Stabilization",
-                description = "Hardware sensor-assisted horizon stabilization for extreme motion.",
-                isChecked = isUltraStabilizationEnabled,
-                onCheckedChange = { onUltraStabilizationToggle() },
-                tag = "toggle_ultra_stabilization"
             )
         }
 
