@@ -137,6 +137,8 @@ fun Viewfinder(
     doubleTapAction: String = "FLIP",
     onDoubleTapFlip: () -> Unit = {},
     onDoubleTapLock: () -> Unit = {},
+    isCorrectColourShift: Boolean = true,
+    ultraWideColourCorrectionMatrix: android.graphics.ColorMatrix? = null,
     modifier: Modifier = Modifier
 ) {
     var currentScale by remember { mutableFloatStateOf(currentZoom) }
@@ -539,7 +541,10 @@ fun Viewfinder(
                             proSaturation = proSaturation,
                             proContrast = proContrast,
                             proHighlights = proHighlights,
-                            proShadows = proShadows
+                            proShadows = proShadows,
+                            isUltraWide = false,
+                            isCorrectColourShift = isCorrectColourShift,
+                            ultraWideColourCorrectionMatrix = ultraWideColourCorrectionMatrix
                         )
                     },
                     modifier = Modifier
@@ -703,7 +708,10 @@ fun Viewfinder(
                                 proSaturation = proSaturation,
                                 proContrast = proContrast,
                                 proHighlights = proHighlights,
-                                proShadows = proShadows
+                                proShadows = proShadows,
+                                isUltraWide = true,
+                                isCorrectColourShift = isCorrectColourShift,
+                                ultraWideColourCorrectionMatrix = ultraWideColourCorrectionMatrix
                             )
                         },
                         modifier = Modifier
@@ -1161,7 +1169,10 @@ private data class TextureViewEffectCacheKey(
     val proSaturation: Float,
     val proContrast: Float,
     val proHighlights: Float,
-    val proShadows: Float
+    val proShadows: Float,
+    val isUltraWide: Boolean = false,
+    val isCorrectColourShift: Boolean = true,
+    val hasColourMatrix: Boolean = false
 )
 
 private val lastAppliedCornerRadius = java.util.WeakHashMap<TextureView, Int>()
@@ -1179,7 +1190,10 @@ private fun applyTextureViewOutlineAndEffects(
     proSaturation: Float,
     proContrast: Float,
     proHighlights: Float,
-    proShadows: Float
+    proShadows: Float,
+    isUltraWide: Boolean = false,
+    isCorrectColourShift: Boolean = true,
+    ultraWideColourCorrectionMatrix: android.graphics.ColorMatrix? = null
 ) {
     val prevRadius = synchronized(lastAppliedCornerRadius) {
         lastAppliedCornerRadius[textureView]
@@ -1202,6 +1216,8 @@ private fun applyTextureViewOutlineAndEffects(
         }
     }
 
+    val hasLensColorAdj = (isUltraWide && isCorrectColourShift && ultraWideColourCorrectionMatrix != null)
+
     val currentKey = TextureViewEffectCacheKey(
         cameraMode = cameraMode,
         activePhotoFilter = activePhotoFilter,
@@ -1212,7 +1228,10 @@ private fun applyTextureViewOutlineAndEffects(
         proSaturation = proSaturation,
         proContrast = proContrast,
         proHighlights = proHighlights,
-        proShadows = proShadows
+        proShadows = proShadows,
+        isUltraWide = isUltraWide,
+        isCorrectColourShift = isCorrectColourShift,
+        hasColourMatrix = hasLensColorAdj
     )
     val prevKey = synchronized(lastAppliedEffectKey) {
         lastAppliedEffectKey[textureView]
@@ -1250,7 +1269,7 @@ private fun applyTextureViewOutlineAndEffects(
     } else {
         val hasProAdj = (proSaturation != 0f || proContrast != 1.0f || proHighlights != 0f || proShadows != 0f)
 
-        if (hasProAdj) {
+        if (hasProAdj || hasLensColorAdj) {
             val combinedMatrix = android.graphics.ColorMatrix()
             if (hasProAdj) {
                 val sat = (1.0f + proSaturation).coerceIn(0f, 2.5f)
@@ -1269,6 +1288,9 @@ private fun applyTextureViewOutlineAndEffects(
                     0f, 0f, 0f, 1f, 0f
                 ))
                 combinedMatrix.postConcat(toneMat)
+            }
+            if (hasLensColorAdj && ultraWideColourCorrectionMatrix != null) {
+                combinedMatrix.postConcat(ultraWideColourCorrectionMatrix)
             }
             val filter = android.graphics.ColorMatrixColorFilter(combinedMatrix)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

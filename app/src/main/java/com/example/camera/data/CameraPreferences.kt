@@ -65,7 +65,12 @@ class CameraPreferences(context: Context) {
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
+        private const val KEY_CORRECT_COLOUR_SHIFT = "pref_correct_colour_shift"
     }
+
+    var isCorrectColourShift: Boolean
+        get() = prefs.getBoolean(KEY_CORRECT_COLOUR_SHIFT, true)
+        set(value) = prefs.edit().putBoolean(KEY_CORRECT_COLOUR_SHIFT, value).apply()
 
     var lensSwitchHoldDurationSec: Float
         get() {

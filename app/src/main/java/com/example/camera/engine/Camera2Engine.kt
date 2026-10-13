@@ -169,6 +169,26 @@ class Camera2Engine(private val context: Context) {
         syncStandbyStreamSettings()
     }
 
+    val lensColourMatchingEngine by lazy {
+        LensColourMatchingEngine(context).apply {
+            isEnabled = preferences.isCorrectColourShift
+        }
+    }
+    private val _isCorrectColourShift = MutableStateFlow(preferences.isCorrectColourShift)
+    val isCorrectColourShift: StateFlow<Boolean> = _isCorrectColourShift.asStateFlow()
+
+    fun setCorrectColourShift(enabled: Boolean) {
+        _isCorrectColourShift.value = enabled
+        preferences.isCorrectColourShift = enabled
+        lensColourMatchingEngine.isEnabled = enabled
+        syncStandbyStreamSettings()
+        updatePreviewSettings()
+    }
+
+    fun getRenderColorMatrixForLens(lensType: LensType): android.graphics.ColorMatrix? {
+        return if (_isCorrectColourShift.value) lensColourMatchingEngine.computeRenderColorMatrix(lensType) else null
+    }
+
     var onLensSwitchCompletedListener: ((LensInfo, Float) -> Unit)? = null
     private val lensSwitchListeners = java.util.concurrent.CopyOnWriteArrayList<(LensInfo, Float) -> Unit>()
 
@@ -335,6 +355,14 @@ class Camera2Engine(private val context: Context) {
                 }
                 if (_ultraWideStreamStatus.value != BackgroundCameraStatus.READY_QUIET) {
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
+                }
+            }
+            if (_isCorrectColourShift.value) {
+                val standbyCam = ultraWideStandbyCameraDevice
+                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+                val standbyLens = backLenses.firstOrNull { it.cameraId == standbyCam?.id }
+                if (standbyLens != null) {
+                    lensColourMatchingEngine.onCaptureFrame(result, standbyLens)
                 }
             }
         }
@@ -679,6 +707,11 @@ class Camera2Engine(private val context: Context) {
             val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
             val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
             builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
+
+            if (_isCorrectColourShift.value) {
+                val activeLens = activeSessionLens ?: _selectedLens.value
+                lensColourMatchingEngine.applySynchronizedMatching(builder, standbyLens, activeLens)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Error applying synchronized standby settings", e)
         }
@@ -1964,6 +1997,10 @@ class Camera2Engine(private val context: Context) {
             val sortedLenses = inventory.lenses
 
             _availableLenses.value = sortedLenses
+            sortedLenses.forEach { lens ->
+                val chars = getCharacteristics(lens.cameraId)
+                lensColourMatchingEngine.registerLensCharacteristics(lens, chars)
+            }
 
             // Selection priority:
             // 1. Always prioritize the Primary 1x Main camera on launch or reset so 1x NEVER starts on ultra-wide!
@@ -2531,6 +2568,13 @@ class Camera2Engine(private val context: Context) {
                     activeSessionLens = lens
                     _selectedLens.value = lens
                     activeSessionPhysicalCameraId = if (useUw) lens.physicalCameraId else primaryMainLens?.physicalCameraId
+                    if (_isCorrectColourShift.value) {
+                        synchronized(previewRequestLock) {
+                            previewRequestBuilder?.let { b ->
+                                lensColourMatchingEngine.prepareTargetCaptureRequest(b, lens, currentRunningLens)
+                            }
+                        }
+                    }
                     Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
                     scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
                     completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
@@ -2695,6 +2739,10 @@ class Camera2Engine(private val context: Context) {
 
                 cameraDevice = targetCam
                 captureSession = standbySession
+                if (_isCorrectColourShift.value && targetBuilder != null) {
+                    val previousLens = activeSessionLens ?: _selectedLens.value
+                    lensColourMatchingEngine.prepareTargetCaptureRequest(targetBuilder, targetLens, previousLens)
+                }
                 synchronized(previewRequestLock) {
                     previewRequestBuilder = targetBuilder
                 }
@@ -4909,6 +4957,11 @@ class Camera2Engine(private val context: Context) {
             lastCaptureResult = result
             CameraPerformanceMonitor.onPreviewFrame()
 
+            if (_isCorrectColourShift.value) {
+                val curLens = activeSessionLens ?: _selectedLens.value
+                lensColourMatchingEngine.onCaptureFrame(result, curLens)
+            }
+
             // Verify actual hardware OIS and EIS states directly from CaptureResult
             val actualOisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)
             val isActualOisHwActive = (actualOisMode == CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_ON)
@@ -5516,6 +5569,21 @@ class Camera2Engine(private val context: Context) {
                 builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
             } else if (faceModes.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)) {
                 builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)
+            }
+        }
+
+        // Correct Colour Shift matching across Main & Ultra-Wide
+        if (_isCorrectColourShift.value) {
+            val curLens = activeSessionLens ?: _selectedLens.value
+            if (curLens != null && (curLens.lensType == LensType.WIDE || curLens.lensType == LensType.ULTRAWIDE)) {
+                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+                val otherLens = backLenses.firstOrNull {
+                    if (curLens.lensType == LensType.ULTRAWIDE) (it.lensType == LensType.WIDE && !it.isZoomPreset)
+                    else it.lensType == LensType.ULTRAWIDE
+                }
+                if (otherLens != null) {
+                    lensColourMatchingEngine.applySynchronizedMatching(builder, curLens, otherLens)
+                }
             }
         }
 

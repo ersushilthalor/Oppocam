@@ -186,6 +186,7 @@ fun CameraScreen(
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     val isEvControlOpen by viewModel.isEvControlOpen.collectAsStateWithLifecycle()
     val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
+    val isCorrectColourShift by viewModel.isCorrectColourShift.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(cameraMode) {
@@ -430,6 +431,8 @@ fun CameraScreen(
                 doubleTapAction = doubleTapAction,
                 onDoubleTapFlip = { viewModel.toggleCameraFacing() },
                 onDoubleTapLock = { viewModel.toggleAeAfLock() },
+                isCorrectColourShift = isCorrectColourShift,
+                ultraWideColourCorrectionMatrix = viewModel.engine.getRenderColorMatrixForLens(com.example.camera.model.LensType.ULTRAWIDE),
                 modifier = Modifier.fillMaxSize()
             )
 

@@ -721,10 +721,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             switchPointMm = preferences.lensSwitchPointMm,
             lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
             lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec,
-            isLensSwitchOverlapAnimationEnabled = preferences.isLensSwitchOverlapAnimationEnabled
+            isLensSwitchOverlapAnimationEnabled = preferences.isLensSwitchOverlapAnimationEnabled,
+            isCorrectColourShift = preferences.isCorrectColourShift
         )
     )
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
+
+    val isCorrectColourShift: StateFlow<Boolean> = engine.isCorrectColourShift
+
+    fun setCorrectColourShift(enabled: Boolean) {
+        preferences.isCorrectColourShift = enabled
+        engine.setCorrectColourShift(enabled)
+        _instantSwitchState.update { it.copy(isCorrectColourShift = enabled) }
+        showToast("Correct Colour Shift: ${if (enabled) "ON" else "OFF"}")
+    }
 
     private val _isLensSwitchOverlapAnimationEnabled = MutableStateFlow(preferences.isLensSwitchOverlapAnimationEnabled)
     val isLensSwitchOverlapAnimationEnabled: StateFlow<Boolean> = _isLensSwitchOverlapAnimationEnabled.asStateFlow()

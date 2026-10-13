@@ -212,6 +212,8 @@ fun SettingsDrawer(
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
+    isCorrectColourShiftEnabled: Boolean = true,
+    onCorrectColourShiftToggle: (Boolean) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -449,7 +451,9 @@ fun SettingsDrawer(
                             gridType = gridType,
                             onGridTypeSelected = onGridTypeSelected,
                             horizonLeveler = horizonLeveler,
-                            onHorizonLevelerToggle = onHorizonLevelerToggle
+                            onHorizonLevelerToggle = onHorizonLevelerToggle,
+                            isCorrectColourShiftEnabled = isCorrectColourShiftEnabled,
+                            onCorrectColourShiftToggle = onCorrectColourShiftToggle
                         )
                         SettingsPage.UI_LAYOUT -> UiLayoutSettingsPage(
                             uiCustomizationState = uiCustomizationState,
@@ -1910,7 +1914,9 @@ private fun CameraLensSettingsPage(
     gridType: GridType,
     onGridTypeSelected: (GridType) -> Unit,
     horizonLeveler: Boolean,
-    onHorizonLevelerToggle: (Boolean) -> Unit
+    onHorizonLevelerToggle: (Boolean) -> Unit,
+    isCorrectColourShiftEnabled: Boolean = true,
+    onCorrectColourShiftToggle: (Boolean) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1930,6 +1936,16 @@ private fun CameraLensSettingsPage(
             SwitchPointSettingCard(
                 switchPointMm = lensSwitchPointMm,
                 onSwitchPointChange = onLensSwitchPointChange
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Correct Colour Shift",
+                description = "Match colour temperature, white balance, tint, exposure, brightness and noise levels between Ultra-Wide (0.5x) and Main (1x) cameras.",
+                isChecked = isCorrectColourShiftEnabled,
+                onCheckedChange = onCorrectColourShiftToggle,
+                tag = "toggle_correct_colour_shift"
             )
         }
 
@@ -4199,6 +4215,8 @@ fun CameraSettingsScreen(
         onResetFloatingWindowAppearance = { viewModel.resetFloatingWindowAppearance() },
         preferredGalleryPackage = preferredGalleryPackage,
         onOpenGalleryChooser = { viewModel.setGallerySelectionDialogOpen(true) },
+        isCorrectColourShiftEnabled = viewModel.isCorrectColourShift.collectAsStateWithLifecycle().value,
+        onCorrectColourShiftToggle = { viewModel.setCorrectColourShift(it) },
         onDismiss = onDismiss
     )
 }
