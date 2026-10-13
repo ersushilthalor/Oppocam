@@ -1548,7 +1548,7 @@ class Camera2Engine(private val context: Context) {
     @Volatile
     private var pendingDirectTargetZoom: Float? = null
     var saveSelfieAsPreviewed: Boolean = true
-    var viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL
+    var viewfinderResolution: ViewfinderResolution = ViewfinderResolution.RES_2K
     var selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL
     private val cinemaSoftwareRecorder by lazy { CinemaSoftwareRecordingEngine(context) }
     private val normalVideoRecorder by lazy { NormalVideoRecordingEngine(context) }
@@ -1572,8 +1572,6 @@ class Camera2Engine(private val context: Context) {
 
     private var activeMeteringRectangle: MeteringRectangle? = null
 
-
-
     var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
         set(value) {
             field = value
@@ -1586,17 +1584,8 @@ class Camera2Engine(private val context: Context) {
     private val _stabilizationOffsetFlow = MutableStateFlow(Triple(0f, 0f, 1.0f))
     val stabilizationOffsetFlow: StateFlow<Triple<Float, Float, Float>> = _stabilizationOffsetFlow.asStateFlow()
 
-    private val _isRealtimeEisActive = MutableStateFlow(false)
-    val isRealtimeEisActive: StateFlow<Boolean> = _isRealtimeEisActive.asStateFlow()
-
-    val gyroStabilizationEngine = GyroStabilizationEngine(context)
-    val lensColourMatchingEngine = LensColourMatchingEngine(context)
-
-    private val _isCorrectColourShift = MutableStateFlow(false)
-    val isCorrectColourShift: StateFlow<Boolean> = _isCorrectColourShift.asStateFlow()
-    fun setCorrectColourShift(enabled: Boolean) {
-        _isCorrectColourShift.value = enabled
-    }
+    val isRealtimeEisActive: StateFlow<Boolean>
+        get() = _actualEisHardwareActive.asStateFlow()
 
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
     val stableActionHorizonEngine by lazy { com.example.camera.stableaction.StableActionHorizonEngine(context) }
@@ -1931,10 +1920,6 @@ class Camera2Engine(private val context: Context) {
             val sortedLenses = inventory.lenses
 
             _availableLenses.value = sortedLenses
-            sortedLenses.forEach { lens ->
-                val chars = getCharacteristics(lens.cameraId)
-                lensColourMatchingEngine.registerLensCharacteristics(lens, chars)
-            }
 
             // Selection priority:
             // 1. Always prioritize the Primary 1x Main camera on launch or reset so 1x NEVER starts on ultra-wide!
@@ -2264,6 +2249,31 @@ class Camera2Engine(private val context: Context) {
             // 4. Closest overall size in previewSizes
             val closestOverall = previewSizes.minByOrNull {
                 kotlin.math.abs(maxOf(it.width, it.height) - targetMax)
+            }
+            if (closestOverall != null) {
+                return closestOverall
+            }
+        }
+
+        // Photo mode: Always maintain a 2K viewfinder resolution, even when switching between 1x and 0.5x lenses.
+        // Select closest supported 2K stream size (target ~2560) when exact 2K is unavailable without falling back to 1080p.
+        val isPhotoMode = (currentMode != CameraMode.VIDEO && currentMode != CameraMode.CINEMA)
+        if (isPhotoMode) {
+            val target2KDim = 2560
+            val matchingRatioSizes = previewSizes.filter {
+                val r = max(it.width, it.height).toFloat() / min(it.width, it.height).toFloat()
+                kotlin.math.abs(r - streamRatio) < 0.08f
+            }
+            if (matchingRatioSizes.isNotEmpty()) {
+                val closest2K = matchingRatioSizes.minByOrNull {
+                    kotlin.math.abs(max(it.width, it.height) - target2KDim)
+                }
+                if (closest2K != null) {
+                    return closest2K
+                }
+            }
+            val closestOverall = previewSizes.minByOrNull {
+                kotlin.math.abs(max(it.width, it.height) - target2KDim)
             }
             if (closestOverall != null) {
                 return closestOverall
@@ -6437,9 +6447,9 @@ class Camera2Engine(private val context: Context) {
                         exposureTimeNs = actualExpTime,
                         iso = actualIso,
                         timestampNs = ts,
-                        gyroYawSpeed = gyroStabilizationEngine.latestYawSpeed,
-                        gyroPitchSpeed = gyroStabilizationEngine.latestPitchSpeed,
-                        gyroRollSpeed = gyroStabilizationEngine.latestRollSpeed,
+                        gyroYawSpeed = 0f,
+                        gyroPitchSpeed = 0f,
+                        gyroRollSpeed = 0f,
                         actualAeCompensation = actualAeComp
                     )
                 }
@@ -9912,27 +9922,5 @@ class Camera2Engine(private val context: Context) {
     internal fun applySynchronizedStandbySettingsForTest(builder: CaptureRequest.Builder, standbyLens: LensInfo) {
         applySynchronizedStandbySettings(builder, standbyLens)
     }
-}
-
-class GyroStabilizationEngine(val context: android.content.Context) {
-    fun start() {}
-    fun stop() {}
-    var latestPitchSpeed = 0f
-    var latestYawSpeed = 0f
-    var latestRollSpeed = 0f
-    fun getRecentRmsMotion() = 0f
-    fun computeStabilizedCrop(vararg args: Any?) {}
-    var normalizedOffsetX = 0f
-    var normalizedOffsetY = 0f
-    var currentCropScale = 1.0f
-}
-
-class LensColourMatchingEngine(val context: android.content.Context) {
-    var isEnabled = false
-    fun computeRenderColorMatrix(lensType: Any) = null
-    fun onCaptureFrame(result: Any, lens: Any) {}
-    fun applySynchronizedMatching(builder: Any, standbyLens: Any, activeLens: Any) {}
-    fun prepareTargetCaptureRequest(builder: Any, targetLens: Any, previousLens: Any) {}
-    fun registerLensCharacteristics(lens: Any, chars: Any?) {}
 }
 

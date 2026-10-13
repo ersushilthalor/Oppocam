@@ -721,20 +721,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             switchPointMm = preferences.lensSwitchPointMm,
             lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
             lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec,
-            isLensSwitchOverlapAnimationEnabled = preferences.isLensSwitchOverlapAnimationEnabled,
-            isCorrectColourShift = preferences.isCorrectColourShift
+            isLensSwitchOverlapAnimationEnabled = preferences.isLensSwitchOverlapAnimationEnabled
         )
     )
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
-
-    val isCorrectColourShift: StateFlow<Boolean> = engine.isCorrectColourShift
-
-    fun setCorrectColourShift(enabled: Boolean) {
-        preferences.isCorrectColourShift = enabled
-        engine.setCorrectColourShift(enabled)
-        _instantSwitchState.update { it.copy(isCorrectColourShift = enabled) }
-        showToast("Correct Colour Shift: ${if (enabled) "ON" else "OFF"}")
-    }
 
     private val _isLensSwitchOverlapAnimationEnabled = MutableStateFlow(preferences.isLensSwitchOverlapAnimationEnabled)
     val isLensSwitchOverlapAnimationEnabled: StateFlow<Boolean> = _isLensSwitchOverlapAnimationEnabled.asStateFlow()
@@ -1955,8 +1945,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             isUltraStabilizationEnabled = if (!enabled) false else currentHybrid.isUltraStabilizationEnabled
         )
         setHybridStabilizationConfig(updatedHybrid)
-        engine.updatePreviewSettings()
-        showToast(if (enabled) "Electronic Stabilization (EIS): ON" else "Electronic Stabilization (EIS): OFF")
+        val supportsEis = engine.capabilities.value.supportsEis
+        if (enabled && !supportsEis) {
+            showToast("EIS is unsupported on this camera device (HAL mode unavailable)")
+        } else {
+            showToast(if (enabled) "Electronic Stabilization (EIS): ON" else "Electronic Stabilization (EIS): OFF")
+        }
     }
 
     fun toggleVideoStabilization() {

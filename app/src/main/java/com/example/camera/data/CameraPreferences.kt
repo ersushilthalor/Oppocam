@@ -65,12 +65,7 @@ class CameraPreferences(context: Context) {
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
-        private const val KEY_CORRECT_COLOUR_SHIFT = "pref_correct_colour_shift"
     }
-
-    var isCorrectColourShift: Boolean
-        get() = prefs.getBoolean(KEY_CORRECT_COLOUR_SHIFT, true)
-        set(value) = prefs.edit().putBoolean(KEY_CORRECT_COLOUR_SHIFT, value).apply()
 
     var lensSwitchHoldDurationSec: Float
         get() {
@@ -433,9 +428,9 @@ class CameraPreferences(context: Context) {
 
     var viewfinderResolution: com.example.camera.model.ViewfinderResolution
         get() {
-            val name = prefs.getString(KEY_VIEWFINDER_RESOLUTION, com.example.camera.model.ViewfinderResolution.NORMAL.name)
-                ?: com.example.camera.model.ViewfinderResolution.NORMAL.name
-            return try { com.example.camera.model.ViewfinderResolution.fromName(name) } catch (e: Exception) { com.example.camera.model.ViewfinderResolution.NORMAL }
+            val name = prefs.getString(KEY_VIEWFINDER_RESOLUTION, com.example.camera.model.ViewfinderResolution.RES_2K.name)
+                ?: com.example.camera.model.ViewfinderResolution.RES_2K.name
+            return try { com.example.camera.model.ViewfinderResolution.fromName(name) } catch (e: Exception) { com.example.camera.model.ViewfinderResolution.RES_2K }
         }
         set(value) = prefs.edit().putString(KEY_VIEWFINDER_RESOLUTION, value.name).apply()
 

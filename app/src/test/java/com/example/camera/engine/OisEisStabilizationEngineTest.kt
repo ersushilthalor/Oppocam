@@ -144,4 +144,45 @@ class OisEisStabilizationEngineTest {
             assertEquals(android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT, viewModel.engine.selectedLens.value?.facing)
         }
     }
+
+    @Test
+    fun testPhotoModeAlwaysMaintains2KViewfinderResolution() {
+        viewModel.engine.detectHardwareLenses()
+        val engine = viewModel.engine
+        engine.setMode(CameraMode.PHOTO)
+
+        val targetRatio = 16f / 9f
+        val optimalSizePhoto = engine.getOptimalPreviewSize(targetRatio = targetRatio)
+        val maxDimPhoto = maxOf(optimalSizePhoto.width, optimalSizePhoto.height)
+
+        val chars = engine.getCharacteristics(engine.selectedLens.value?.cameraId ?: "0")
+        val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val supportedSizes = map?.getOutputSizes(android.graphics.SurfaceTexture::class.java) ?: emptyArray()
+        val matchingRatioSizes = supportedSizes.filter {
+            val r = maxOf(it.width, it.height).toFloat() / minOf(it.width, it.height).toFloat()
+            kotlin.math.abs(r - targetRatio) < 0.08f
+        }
+        val has2K = matchingRatioSizes.any { maxOf(it.width, it.height) >= 2560 }
+        if (has2K) {
+            assertTrue("Photo mode viewfinder must maintain 2K resolution (got $maxDimPhoto)", maxDimPhoto >= 2560)
+        } else if (matchingRatioSizes.isNotEmpty()) {
+            val closest = matchingRatioSizes.minByOrNull { kotlin.math.abs(maxOf(it.width, it.height) - 2560) }!!
+            assertEquals(maxOf(closest.width, closest.height), maxDimPhoto)
+        }
+    }
+
+    @Test
+    fun testGenuineDeviceEisAndNoPhotonCameraGyroSimulation() {
+        viewModel.engine.detectHardwareLenses()
+        val engine = viewModel.engine
+
+        // Stabilization offset flow must remain 1.0f identity (no fake gyro software crop simulation)
+        val offset = engine.stabilizationOffsetFlow.value
+        assertEquals(0f, offset.first, 0.001f)
+        assertEquals(0f, offset.second, 0.001f)
+        assertEquals(1.0f, offset.third, 0.001f)
+
+        // Realtime EIS state must accurately track actual hardware EIS activity
+        assertEquals(engine.actualEisHardwareActive.value, engine.isRealtimeEisActive.value)
+    }
 }

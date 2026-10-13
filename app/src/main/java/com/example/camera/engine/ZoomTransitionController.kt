@@ -278,11 +278,9 @@ class ZoomTransitionController(
                 onZoomUpdate(effectiveSwitchZoom)
                 onApplyZoomToEngine(effectiveSwitchZoom, true)
 
-                // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
-                val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
-
+                // 2. Continuous seamless handoff to Main lens at the switch point without freezing or pausing
                 if (isOverlapAnimationEnabled) {
-                    // Activate physical Main lens stream concurrently under Ultra-Wide layer at effectiveSwitchZoom
+                    val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
                     val blendStartTime = SystemClock.uptimeMillis()
@@ -311,13 +309,10 @@ class ZoomTransitionController(
                             delay(waitMs)
                         }
                     }
-                } else {
-                    // Exact hold duration applied at selected switch point FOV
-                    delay(holdDuration)
                 }
 
-                // 3. Switch to the main lens with matching digital crop, maintaining identical FOV throughout
-                onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, false)
+                // 3. Hand over to the main lens maintaining continuous FOV and smooth motion
+                onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
                 setSteadyStatePreview(false)
 
                 if (isTargetNearSwitch) {

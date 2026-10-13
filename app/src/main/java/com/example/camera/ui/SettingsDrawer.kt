@@ -212,8 +212,6 @@ fun SettingsDrawer(
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
-    isCorrectColourShiftEnabled: Boolean = true,
-    onCorrectColourShiftToggle: (Boolean) -> Unit = {},
     onDismiss: () -> Unit = {}
 ) {
     if (!isOpen) return
@@ -451,9 +449,7 @@ fun SettingsDrawer(
                             gridType = gridType,
                             onGridTypeSelected = onGridTypeSelected,
                             horizonLeveler = horizonLeveler,
-                            onHorizonLevelerToggle = onHorizonLevelerToggle,
-                            isCorrectColourShiftEnabled = isCorrectColourShiftEnabled,
-                            onCorrectColourShiftToggle = onCorrectColourShiftToggle
+                            onHorizonLevelerToggle = onHorizonLevelerToggle
                         )
                         SettingsPage.UI_LAYOUT -> UiLayoutSettingsPage(
                             uiCustomizationState = uiCustomizationState,
@@ -830,15 +826,18 @@ private fun VideoSettingsPage(
         }
 
         item {
+            val isEisSupported = capabilities.supportsEis
             SettingsSwitchCard(
                 title = "Electronic Image Stabilization (EIS)",
-                description = if (isVideoStabilizationEnabled) {
-                    "ON: PhotonCamera MGC gyroscope-assisted EIS active for smooth viewfinder and video recording."
+                description = if (!isEisSupported) {
+                    "UNSUPPORTED: This device/lens does not expose hardware or vendor HAL video stabilization."
+                } else if (isVideoStabilizationEnabled) {
+                    "ON: Genuine device-supported hardware/HAL EIS active for video recording."
                 } else {
                     "OFF: Electronic stabilization disabled (raw sensor field of view)."
                 },
-                isChecked = isVideoStabilizationEnabled,
-                onCheckedChange = onStabilizationToggle,
+                isChecked = isVideoStabilizationEnabled && isEisSupported,
+                onCheckedChange = { if (isEisSupported) onStabilizationToggle(it) },
                 tag = "toggle_video_eis"
             )
         }
@@ -1914,9 +1913,7 @@ private fun CameraLensSettingsPage(
     gridType: GridType,
     onGridTypeSelected: (GridType) -> Unit,
     horizonLeveler: Boolean,
-    onHorizonLevelerToggle: (Boolean) -> Unit,
-    isCorrectColourShiftEnabled: Boolean = true,
-    onCorrectColourShiftToggle: (Boolean) -> Unit = {}
+    onHorizonLevelerToggle: (Boolean) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1936,16 +1933,6 @@ private fun CameraLensSettingsPage(
             SwitchPointSettingCard(
                 switchPointMm = lensSwitchPointMm,
                 onSwitchPointChange = onLensSwitchPointChange
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Correct Colour Shift",
-                description = "Match colour temperature, white balance, tint, exposure, brightness and noise levels between Ultra-Wide (0.5x) and Main (1x) cameras.",
-                isChecked = isCorrectColourShiftEnabled,
-                onCheckedChange = onCorrectColourShiftToggle,
-                tag = "toggle_correct_colour_shift"
             )
         }
 
@@ -2396,7 +2383,8 @@ private fun StabilizationSettingsPage(
     isUltraStabilizationEnabled: Boolean,
     onUltraStabilizationToggle: () -> Unit,
     windNoiseReduction: Boolean,
-    onWindNoiseReductionToggle: (Boolean) -> Unit
+    onWindNoiseReductionToggle: (Boolean) -> Unit,
+    isEisSupported: Boolean = true
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -2420,13 +2408,15 @@ private fun StabilizationSettingsPage(
         item {
             SettingsSwitchCard(
                 title = "Electronic Image Stabilization (EIS)",
-                description = if (isVideoStabilizationEnabled) {
-                    "ON: PhotonCamera MGC gyroscope-assisted EIS active for smooth preview and video."
+                description = if (!isEisSupported) {
+                    "UNSUPPORTED: This device/lens does not expose hardware or vendor HAL video stabilization."
+                } else if (isVideoStabilizationEnabled) {
+                    "ON: Genuine device-supported hardware/HAL EIS active for video recording."
                 } else {
                     "OFF: Electronic stabilization disabled (raw sensor field of view)."
                 },
-                isChecked = isVideoStabilizationEnabled,
-                onCheckedChange = onStabilizationToggle,
+                isChecked = isVideoStabilizationEnabled && isEisSupported,
+                onCheckedChange = { if (isEisSupported) onStabilizationToggle(it) },
                 tag = "toggle_eis_switch"
             )
         }
@@ -4215,8 +4205,6 @@ fun CameraSettingsScreen(
         onResetFloatingWindowAppearance = { viewModel.resetFloatingWindowAppearance() },
         preferredGalleryPackage = preferredGalleryPackage,
         onOpenGalleryChooser = { viewModel.setGallerySelectionDialogOpen(true) },
-        isCorrectColourShiftEnabled = viewModel.isCorrectColourShift.collectAsStateWithLifecycle().value,
-        onCorrectColourShiftToggle = { viewModel.setCorrectColourShift(it) },
         onDismiss = onDismiss
     )
 }
