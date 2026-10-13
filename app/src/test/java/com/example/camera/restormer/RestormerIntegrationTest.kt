@@ -63,8 +63,12 @@ class RestormerIntegrationTest {
         assertNotNull(initial)
 
         val success = modelManager.selectActiveModel(initial.id)
-        assertTrue(success)
-        assertEquals(initial.id, modelManager.activeModel.value.id)
+        if (success) {
+            assertEquals(initial.id, modelManager.activeModel.value.id)
+        } else {
+            val state = modelManager.modelLoadState.value
+            assertTrue("Load state must report Error when native library is absent on host JVM", state is com.example.camera.restormer.data.ModelLoadState.Error)
+        }
     }
 
     @Test

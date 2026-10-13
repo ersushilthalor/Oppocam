@@ -1954,56 +1954,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setVideoStabilization(enabled: Boolean) {
-        if (enabled) {
-            val caps = engine.capabilities.value
-            if (caps.supportedVideoResolutions.isNotEmpty() && !caps.supportsEis && !caps.supportsOis && !engine.gyroStabilizationEngine.isGyroAvailable) {
-                showToast("Stabilization not supported by hardware")
-                return
-            }
-        }
-        _isVideoStabilizationEnabled.value = enabled
-        preferences.isVideoStabilizationEnabled = enabled
-        preferences.setModeVideoStabilization(_cameraMode.value, enabled)
-        engine.isVideoStabilizationEnabled = enabled
+        // EIS completely removed: video always uses normal camera output without electronic stabilization
+        _isVideoStabilizationEnabled.value = false
+        preferences.isVideoStabilizationEnabled = false
+        preferences.setModeVideoStabilization(_cameraMode.value, false)
+        engine.isVideoStabilizationEnabled = false
 
-        val mode = if (enabled) VideoStabilizationMode.EIS else VideoStabilizationMode.OFF
-        _videoStabilizationMode.value = mode
-        preferences.videoStabilizationMode = mode
-        preferences.setModeVideoStabilizationMode(_cameraMode.value, mode)
-        engine.videoStabilizationMode = mode
+        _videoStabilizationMode.value = VideoStabilizationMode.OFF
+        preferences.videoStabilizationMode = VideoStabilizationMode.OFF
+        preferences.setModeVideoStabilizationMode(_cameraMode.value, VideoStabilizationMode.OFF)
+        engine.videoStabilizationMode = VideoStabilizationMode.OFF
 
-        // CRITICAL: EIS must NEVER automatically enable or activate hardware OIS.
-        // When OIS is OFF in settings, enabling EIS keeps OIS strictly OFF.
         val isOisAllowed = preferences.isOisEnabled
         val currentHybrid = hybridStabilizationConfig.value
         val updatedHybrid = currentHybrid.copy(
             isOisPreferred = isOisAllowed,
             isOisEnabled = isOisAllowed,
-            isEisPreferred = enabled,
-            isEisOnly = enabled && !isOisAllowed,
-            isHybridEnabled = enabled && isOisAllowed
+            isEisPreferred = false,
+            isEisOnly = false,
+            isHybridEnabled = false,
+            isUltraStabilizationEnabled = false
         )
         setHybridStabilizationConfig(updatedHybrid)
-
         engine.updatePreviewSettings()
-        showToast(if (enabled) "Video Stabilization (EIS): ON" else "Video Stabilization: OFF")
     }
 
     fun toggleVideoStabilization() {
-        val currentState = _isVideoStabilizationEnabled.value
-        if (currentState) {
-            if (hybridStabilizationConfig.value.isUltraStabilizationEnabled) {
-                val updated = hybridStabilizationConfig.value.copy(isUltraStabilizationEnabled = false)
-                setHybridStabilizationConfig(updated)
-            }
-            setVideoStabilization(false)
-        } else {
-            setVideoStabilization(true)
-        }
+        // EIS completely removed
+        setVideoStabilization(false)
     }
 
     fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
-        setVideoStabilization(mode == VideoStabilizationMode.EIS)
+        // EIS completely removed
+        setVideoStabilization(false)
     }
 
     fun setVideoBitrate(bitrate: VideoBitrateOption) {
@@ -2250,92 +2233,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setMainCameraStabilizationMode(mode: MainCameraStabilizationMode) {
         val current = hybridStabilizationConfig.value
-        val isOisAllowed = preferences.isOisEnabled
-        val updated = when (mode) {
-            MainCameraStabilizationMode.OFF -> current.copy(
-                isHybridEnabled = false,
-                isOisPreferred = false,
-                isOisEnabled = false,
-                isEisPreferred = false,
-                isUltraStabilizationEnabled = false,
-                isEisOnly = false
-            )
-            MainCameraStabilizationMode.OIS_ONLY -> current.copy(
-                isHybridEnabled = false,
-                isOisPreferred = isOisAllowed,
-                isOisEnabled = isOisAllowed,
-                isEisPreferred = false,
-                isUltraStabilizationEnabled = false,
-                isEisOnly = false
-            )
-            MainCameraStabilizationMode.EIS_ONLY -> current.copy(
-                isHybridEnabled = false,
-                isOisPreferred = false,
-                isOisEnabled = isOisAllowed,
-                isEisPreferred = true,
-                isUltraStabilizationEnabled = false,
-                isEisOnly = true
-            )
-            MainCameraStabilizationMode.HYBRID_OIS_EIS -> current.copy(
-                isHybridEnabled = true,
-                isOisPreferred = isOisAllowed,
-                isOisEnabled = isOisAllowed,
-                isEisPreferred = true,
-                isUltraStabilizationEnabled = false,
-                isEisOnly = !isOisAllowed
-            )
-            MainCameraStabilizationMode.ULTRA -> current.copy(
-                isHybridEnabled = true,
-                isOisPreferred = isOisAllowed,
-                isOisEnabled = isOisAllowed,
-                isEisPreferred = true,
-                isUltraStabilizationEnabled = true,
-                isEisOnly = !isOisAllowed
-            )
-        }
-        val isStabOn = (mode != MainCameraStabilizationMode.OFF)
-        _isVideoStabilizationEnabled.value = isStabOn
-        preferences.isVideoStabilizationEnabled = isStabOn
-        preferences.setModeVideoStabilization(_cameraMode.value, isStabOn)
-        engine.isVideoStabilizationEnabled = isStabOn
+        val willEnableOis = (mode == MainCameraStabilizationMode.OIS_ONLY || mode == MainCameraStabilizationMode.HYBRID_OIS_EIS)
+        setOisEnabled(willEnableOis)
+        val updated = current.copy(
+            isHybridEnabled = false,
+            isOisPreferred = willEnableOis,
+            isOisEnabled = willEnableOis,
+            isEisPreferred = false,
+            isUltraStabilizationEnabled = false,
+            isEisOnly = false
+        )
+        _isVideoStabilizationEnabled.value = false
+        preferences.isVideoStabilizationEnabled = false
+        preferences.setModeVideoStabilization(_cameraMode.value, false)
+        engine.isVideoStabilizationEnabled = false
         setHybridStabilizationConfig(updated)
-        showToast("Stabilization: ${mode.title}")
+        showToast(if (willEnableOis) "Optical Stabilization (OIS): ON" else "Stabilization: OFF")
     }
 
     fun cycleStabilizationMode() {
-        val current = hybridStabilizationConfig.value
-        when {
-            current.isUltraStabilizationEnabled -> {
-                setMainCameraStabilizationMode(MainCameraStabilizationMode.OFF)
-            }
-            _isVideoStabilizationEnabled.value -> {
-                setMainCameraStabilizationMode(MainCameraStabilizationMode.ULTRA)
-            }
-            else -> {
-                setMainCameraStabilizationMode(MainCameraStabilizationMode.HYBRID_OIS_EIS)
-            }
-        }
+        val currentOis = _isOisEnabled.value
+        setOisEnabled(!currentOis)
     }
 
     fun toggleUltraStabilization() {
-        val current = hybridStabilizationConfig.value
-        val nextState = !current.isUltraStabilizationEnabled
-        val isOisAllowed = preferences.isOisEnabled
-        val updated = current.copy(
-            isUltraStabilizationEnabled = nextState,
-            isHybridEnabled = if (nextState) true else current.isHybridEnabled,
-            isEisPreferred = if (nextState) true else current.isEisPreferred,
-            isOisPreferred = if (nextState) (current.isOisPreferred && isOisAllowed) else current.isOisPreferred,
-            isOisEnabled = isOisAllowed
-        )
-        if (nextState) {
-            _isVideoStabilizationEnabled.value = true
-            preferences.isVideoStabilizationEnabled = true
-            preferences.setModeVideoStabilization(_cameraMode.value, true)
-            engine.isVideoStabilizationEnabled = true
-        }
-        setHybridStabilizationConfig(updated)
-        showToast(if (nextState) "Ultra Action Steady: Active" else "Ultra Stabilization: Off")
+        // Ultra/EIS removed - keep OIS intact
+        setMainCameraStabilizationMode(MainCameraStabilizationMode.OIS_ONLY)
     }
 
     fun setOisEnabled(enabled: Boolean) {

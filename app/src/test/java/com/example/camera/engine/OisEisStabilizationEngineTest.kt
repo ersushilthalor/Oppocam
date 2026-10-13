@@ -1,11 +1,10 @@
 package com.example.camera.engine
 
 import android.app.Application
-import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.camera.model.CameraMode
-import com.example.camera.model.HybridStabilizationConfig
 import com.example.camera.model.MainCameraStabilizationMode
+import com.example.camera.model.VideoStabilizationMode
 import com.example.camera.viewmodel.CameraViewModel
 import org.junit.Assert.*
 import org.junit.Before
@@ -40,76 +39,33 @@ class OisEisStabilizationEngineTest {
     }
 
     @Test
-    fun testHybridStabilizationConfigModeMapping() {
-        val hybridConfig = HybridStabilizationConfig(
-            isHybridEnabled = true,
-            isOisPreferred = true,
-            isEisPreferred = true,
-            isUltraStabilizationEnabled = false
-        )
-        assertEquals(MainCameraStabilizationMode.HYBRID_OIS_EIS, hybridConfig.stabilizationMode)
-
-        val oisOnlyConfig = hybridConfig.copy(
-            isHybridEnabled = false,
-            isOisPreferred = true,
-            isEisPreferred = false
-        )
-        assertEquals(MainCameraStabilizationMode.OIS_ONLY, oisOnlyConfig.stabilizationMode)
-
-        val eisOnlyConfig = hybridConfig.copy(
-            isHybridEnabled = false,
-            isOisPreferred = false,
-            isEisPreferred = true,
-            isEisOnly = true
-        )
-        assertEquals(MainCameraStabilizationMode.EIS_ONLY, eisOnlyConfig.stabilizationMode)
-
-        val ultraConfig = hybridConfig.copy(
-            isUltraStabilizationEnabled = true
-        )
-        assertEquals(MainCameraStabilizationMode.ULTRA, ultraConfig.stabilizationMode)
-    }
-
-    @Test
-    fun testStabilizationStateInVideoAndCinemaModes() {
-        // Video mode initialization
+    fun testEisCompletelyRemovedInVideoAndCinemaModes() {
+        // Video mode initialization: EIS must NOT be active
         viewModel.setCameraMode(CameraMode.VIDEO)
-        assertTrue("Video mode should default to video stabilization enabled", viewModel.isVideoStabilizationEnabled.value)
+        assertFalse("Video mode must have EIS completely disabled", viewModel.isVideoStabilizationEnabled.value)
+        assertEquals(VideoStabilizationMode.OFF, viewModel.videoStabilizationMode.value)
 
-        // Switch to Cinema Mode: stabilization remains properly active
+        // Switching to Cinema Mode: EIS remains strictly disabled
         viewModel.setCameraMode(CameraMode.CINEMA)
-        assertTrue("Cinema mode should keep stabilization active", viewModel.isVideoStabilizationEnabled.value)
+        assertFalse("Cinema mode must have EIS completely disabled", viewModel.isVideoStabilizationEnabled.value)
+        assertEquals(VideoStabilizationMode.OFF, viewModel.videoStabilizationMode.value)
 
-        // Set Main Camera Stabilization to OIS Only
-        viewModel.setMainCameraStabilizationMode(MainCameraStabilizationMode.OIS_ONLY)
-        assertTrue(viewModel.isVideoStabilizationEnabled.value)
-        assertTrue(viewModel.hybridStabilizationConfig.value.isOisPreferred)
-        assertFalse(viewModel.hybridStabilizationConfig.value.isEisPreferred)
+        // Attempting to toggle or set EIS must remain strictly disabled
+        viewModel.setVideoStabilization(true)
+        assertFalse("EIS must not be enabled", viewModel.isVideoStabilizationEnabled.value)
+        assertFalse("Engine EIS must remain false", viewModel.engine.isVideoStabilizationEnabled)
+        assertEquals(VideoStabilizationMode.OFF, viewModel.engine.videoStabilizationMode)
 
-        // Set Main Camera Stabilization to Hybrid
-        viewModel.setMainCameraStabilizationMode(MainCameraStabilizationMode.HYBRID_OIS_EIS)
-        assertTrue(viewModel.isVideoStabilizationEnabled.value)
-        assertTrue(viewModel.hybridStabilizationConfig.value.isOisPreferred)
-        assertTrue(viewModel.hybridStabilizationConfig.value.isEisPreferred)
-
-        // Toggle Ultra Action Steady
-        viewModel.toggleUltraStabilization()
-        assertTrue(viewModel.hybridStabilizationConfig.value.isUltraStabilizationEnabled)
-
-        // Disable Ultra Action Steady
-        viewModel.toggleUltraStabilization()
-        assertFalse(viewModel.hybridStabilizationConfig.value.isUltraStabilizationEnabled)
-
-        // Set to OFF
-        viewModel.setMainCameraStabilizationMode(MainCameraStabilizationMode.OFF)
-        assertFalse(viewModel.isVideoStabilizationEnabled.value)
+        viewModel.setVideoStabilizationMode(VideoStabilizationMode.EIS)
+        assertFalse("Setting EIS mode must remain disabled", viewModel.isVideoStabilizationEnabled.value)
+        assertEquals(VideoStabilizationMode.OFF, viewModel.videoStabilizationMode.value)
     }
 
     @Test
     fun testOisToggleDirectlyOnAndOff() {
-        // Default: OIS ON
+        // Default: Hardware OIS ON
         assertTrue("Default OIS should be ON", viewModel.isOisEnabled.value)
-        assertTrue(viewModel.engine.isOisEnabled)
+        assertTrue("Engine OIS should be ON", viewModel.engine.isOisEnabled)
 
         // Turn OIS OFF
         viewModel.setOisEnabled(false)
@@ -127,87 +83,18 @@ class OisEisStabilizationEngineTest {
     }
 
     @Test
-    fun testWhenOisOffEisDoesNotReenableOis() {
-        // Forcefully disable OIS
-        viewModel.setOisEnabled(false)
-        assertFalse(viewModel.isOisEnabled.value)
+    fun testMainCameraStabilizationPreservesOisWhileEisIsOff() {
+        // Selecting OIS_ONLY enables OIS and leaves EIS strictly OFF
+        viewModel.setMainCameraStabilizationMode(MainCameraStabilizationMode.OIS_ONLY)
+        assertTrue("OIS must be enabled", viewModel.isOisEnabled.value)
+        assertTrue("Engine OIS must be enabled", viewModel.engine.isOisEnabled)
+        assertFalse("EIS must be strictly OFF", viewModel.isVideoStabilizationEnabled.value)
 
-        // Select normal EIS mode
-        viewModel.setVideoStabilizationMode(com.example.camera.model.VideoStabilizationMode.EIS)
-        assertEquals(com.example.camera.model.VideoStabilizationMode.EIS, viewModel.videoStabilizationMode.value)
-        assertTrue("Video stabilization should be active for EIS", viewModel.isVideoStabilizationEnabled.value)
-        assertFalse("OIS must NOT be re-enabled by selecting EIS", viewModel.isOisEnabled.value)
-        assertFalse("Engine OIS must stay false in EIS", viewModel.engine.isOisEnabled)
-        assertFalse("Engine isOisAllowed must stay false in EIS", viewModel.engine.isOisAllowed)
-        assertFalse("Hybrid config OIS must stay false in EIS", viewModel.hybridStabilizationConfig.value.isOisEnabled)
-        assertFalse("Hybrid config isOisPreferred must stay false in EIS", viewModel.hybridStabilizationConfig.value.isOisPreferred)
-
-        // Toggle Video Stabilization directly (OFF then ON)
-        viewModel.setVideoStabilization(false)
-        assertFalse("Video stabilization should be OFF", viewModel.isVideoStabilizationEnabled.value)
-        assertFalse("OIS must stay false", viewModel.isOisEnabled.value)
-
-        viewModel.setVideoStabilization(true)
-        assertTrue("Video stabilization should be ON (normal EIS)", viewModel.isVideoStabilizationEnabled.value)
-        assertFalse("OIS must still be forcefully disabled when normal EIS is enabled", viewModel.isOisEnabled.value)
-        assertFalse("Engine OIS must remain disabled", viewModel.engine.isOisEnabled)
-
-        // Toggle Ultra Action Steady
-        viewModel.toggleUltraStabilization()
-        assertFalse("Ultra Action must NOT re-enable OIS when OIS is OFF", viewModel.isOisEnabled.value)
-        assertFalse(viewModel.hybridStabilizationConfig.value.isOisPreferred)
-    }
-
-    @Test
-    fun testMainCameraStabilizationModeFallbackWhenOisOff() {
-        // With OIS OFF, selecting Hybrid results in EIS_ONLY operation
-        viewModel.setOisEnabled(false)
-        viewModel.setMainCameraStabilizationMode(MainCameraStabilizationMode.HYBRID_OIS_EIS)
-
-        val config = viewModel.hybridStabilizationConfig.value
-        assertFalse("OIS must remain false", config.isOisEnabled)
-        assertFalse("OIS preferred must remain false", config.isOisPreferred)
-        assertTrue("EIS remains preferred", config.isEisPreferred)
-        assertEquals("When OIS is OFF, hybrid mode gracefully operates as EIS_ONLY", MainCameraStabilizationMode.EIS_ONLY, config.stabilizationMode)
-    }
-
-    @Test
-    fun testRealGyroEisPipelineInVideoAndProVideoModes() {
-        // In Video Mode: Toggle stabilization controls engine processing pipeline
-        viewModel.setCameraMode(CameraMode.VIDEO)
-        viewModel.setVideoStabilization(true)
-        assertTrue(viewModel.isVideoStabilizationEnabled.value)
-        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
-        assertEquals(com.example.camera.model.VideoStabilizationMode.EIS, viewModel.engine.videoStabilizationMode)
-
-        // Toggle OFF
-        viewModel.toggleVideoStabilization()
-        assertFalse(viewModel.isVideoStabilizationEnabled.value)
-        assertFalse(viewModel.engine.isVideoStabilizationEnabled)
-        assertEquals(com.example.camera.model.VideoStabilizationMode.OFF, viewModel.engine.videoStabilizationMode)
-
-        // Toggle back ON
-        viewModel.toggleVideoStabilization()
-        assertTrue(viewModel.isVideoStabilizationEnabled.value)
-        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
-
-        // Switch to Pro Video (Cinema) Mode: pipeline remains active
-        viewModel.setCameraMode(CameraMode.CINEMA)
-        assertTrue(viewModel.isVideoStabilizationEnabled.value)
-        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
-
-        // Force OIS OFF: EIS must operate independently without activating OIS
-        viewModel.setOisEnabled(false)
-        assertFalse(viewModel.isOisEnabled.value)
-        assertFalse(viewModel.engine.isOisEnabled)
-        assertTrue(viewModel.isVideoStabilizationEnabled.value)
-        assertTrue(viewModel.engine.isVideoStabilizationEnabled)
-
-        // Toggling EIS while OIS is OFF keeps OIS strictly OFF
-        viewModel.setVideoStabilization(false)
-        assertFalse(viewModel.engine.isOisEnabled)
-        viewModel.setVideoStabilization(true)
-        assertFalse(viewModel.engine.isOisEnabled)
+        // Selecting OFF disables OIS
+        viewModel.setMainCameraStabilizationMode(MainCameraStabilizationMode.OFF)
+        assertFalse("OIS must be disabled", viewModel.isOisEnabled.value)
+        assertFalse("Engine OIS must be disabled", viewModel.engine.isOisEnabled)
+        assertFalse("EIS must remain OFF", viewModel.isVideoStabilizationEnabled.value)
     }
 
     @Test

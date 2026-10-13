@@ -2507,37 +2507,12 @@ private fun StabilizationSettingsPage(
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
         item {
-            SettingsSegmentedCard(
-                title = "Main Camera Stabilization Mode",
-                description = "Hardware OIS, software EIS, or coordinated hybrid stabilization.",
-                options = listOf(
-                    MainCameraStabilizationMode.HYBRID_OIS_EIS to "Hybrid",
-                    MainCameraStabilizationMode.EIS_ONLY to "EIS Only",
-                    MainCameraStabilizationMode.OIS_ONLY to "OIS Only",
-                    MainCameraStabilizationMode.OFF to "Off"
-                ),
-                selectedOption = mainCameraStabilizationMode,
-                onOptionSelected = onMainCameraStabilizationModeSelected
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Video Stabilization",
-                description = "Real-time electronic motion stabilization during video capture.",
-                isChecked = isVideoStabilizationEnabled,
-                onCheckedChange = onStabilizationToggle,
-                tag = "toggle_video_stab_card"
-            )
-        }
-
-        item {
             SettingsSwitchCard(
                 title = "Hardware OIS (Optical Image Stabilization)",
                 description = if (isOisPreferred) {
-                    "ON: Allow the main camera lens to use hardware voice-coil OIS normally."
+                    "ON: Main camera uses physical hardware voice-coil Optical Image Stabilization (OIS) whenever supported."
                 } else {
-                    "OFF: Hardware OIS is forcefully disabled for the main lens. EIS and EIS+ operate independently via electronic/gyro stabilization."
+                    "OFF: Hardware Optical Image Stabilization is disabled."
                 },
                 isChecked = isOisPreferred,
                 onCheckedChange = onOisToggle,

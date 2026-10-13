@@ -656,21 +656,11 @@ class Camera2Engine(private val context: Context) {
                     } catch (_: Throwable) {}
                 }
 
-                val eisModes = chars.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
-                val standbySupportsEis = eisModes.contains(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON)
-                val stabEnabled = if (isRecordingActive && recConfig != null) recConfig.isVideoStabilizationEnabled else isVideoStabilizationEnabled
-                val stabMode = if (isRecordingActive && recConfig != null) recConfig.videoStabilizationMode else videoStabilizationMode
-                if (isVideo && stabEnabled && stabMode.isEnabled && standbySupportsEis) {
-                    builder.set(
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-                    )
-                } else {
-                    builder.set(
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-                    )
-                }
+                // EIS completely removed: video uses normal camera output without electronic stabilization
+                builder.set(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                )
             }
 
             // Keep standby lens FOV-matched to the configured lens switch point
@@ -4929,51 +4919,10 @@ class Camera2Engine(private val context: Context) {
                 dollyZoomEngine.onFrameFaces(faces, activeArray, sensorOrientation, isFront)
             }
 
-            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value
-            val isStabActive = isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
-
-            if (isVideoMode && isStabActive) {
-                val lens = activeSessionLens ?: _selectedLens.value
-                if (lens != null) {
-                    try {
-                        val chars = getCharacteristics(lens.cameraId)
-                        val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                        val focalLengths = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                        val focalLength = focalLengths?.firstOrNull() ?: 4.38f
-                        val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: SizeF(6.4f, 4.8f)
-
-                        if (activeArray != null) {
-                            val isOisActive = isOisAllowed && _actualOisHardwareActive.value
-                            val crop = gyroStabilizationEngine.computeStabilizedCrop(
-                                result = result,
-                                activeArray = activeArray,
-                                baseZoom = currentZoom,
-                                focalLengthMm = focalLength,
-                                sensorPhysicalSizeMm = sensorSize,
-                                isOisActive = isOisActive
-                            )
-                            val offX = gyroStabilizationEngine.normalizedOffsetX
-                            val offY = gyroStabilizationEngine.normalizedOffsetY
-                            val cropScale = gyroStabilizationEngine.currentCropScale
-
-                            // Pass real-time smooth offsets directly to GPU rendering relay for zero request churn
-                            dualCameraRecordingRelay?.updateStabilizationOffset(offX, offY, cropScale)
-                            if (isSoftwareCinemaRecording) {
-                                cinemaSoftwareRecorder.updateStabilizationOffset(offX, offY, cropScale)
-                            }
-
-                            // Only apply HAL crop when not actively recording with GPU relay to avoid 4K request churn
-                            if (!_isRecordingVideo.value && crop != null) {
-                                applyStabilizedCrop(crop)
-                            }
-                        }
-                    } catch (ignored: Exception) {}
-                }
-            } else {
-                dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
-                if (isSoftwareCinemaRecording) {
-                    cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
-                }
+            // EIS completely removed: video uses normal uncropped camera output without electronic stabilization
+            dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
+            if (isSoftwareCinemaRecording) {
+                cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
             }
 
             // Real-time continuous Auto Tone Control for Cinema Log Profiles
@@ -5402,21 +5351,12 @@ class Camera2Engine(private val context: Context) {
             applyVendorOisControls(builder, oisAllowed = false)
         }
 
-        // 2. Electronic Image Stabilization (EIS):
-        // Only active in Video / Cinema modes when video stabilization is enabled.
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value
-        val eisAllowed = isVideoMode && isVideoStabilizationEnabled && videoStabilizationMode.isEnabled && caps.supportsEis
-        if (eisAllowed) {
-            builder.set(
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-            )
-        } else {
-            builder.set(
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-            )
-        }
+        // 2. Electronic Image Stabilization (EIS) completely removed:
+        // Video uses normal camera output without electronic stabilization.
+        builder.set(
+            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+        )
 
         // Preserve video recording capture intent and target FPS range across lens switches & setting updates
         if (_isRecordingVideo.value) {
@@ -5440,7 +5380,7 @@ class Camera2Engine(private val context: Context) {
                 builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_FAST)
             } catch (_: Throwable) {}
         }
-        if (isVideoMode) {
+        if (isVideoOrCinema) {
             val activeLens = activeSessionLens ?: _selectedLens.value
             val activeChars = activeLens?.let { getCharacteristics(it.cameraId) }
             val recConfig = activeRecordingStreamConfig
@@ -8048,13 +7988,12 @@ class Camera2Engine(private val context: Context) {
                             if (matchedFpsRange != null) {
                                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
                             }
-                            if (isVideoStabilizationEnabled && videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS) {
-                                val eisModes = chars?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
-                                if (eisModes.contains(CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
-                                    set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)
-                                }
-                            }
-                            if (!isOisAllowed) {
+                            set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                            if (isOisAllowed && _capabilities.value.supportsOis) {
+                                try {
+                                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
+                                } catch (_: Throwable) {}
+                            } else {
                                 try {
                                     set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
                                 } catch (_: Throwable) {}
@@ -8073,7 +8012,12 @@ class Camera2Engine(private val context: Context) {
                                 try {
                                     synchronized(previewRequestLock) {
                                         applyCommonSettings(recordBuilder)
-                                        if (!isOisAllowed) {
+                                        recordBuilder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                                        if (isOisAllowed && _capabilities.value.supportsOis) {
+                                            try {
+                                                recordBuilder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
+                                            } catch (_: Throwable) {}
+                                        } else {
                                             try {
                                                 recordBuilder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
                                             } catch (_: Throwable) {}
@@ -9375,7 +9319,13 @@ class Camera2Engine(private val context: Context) {
 
     fun processPhotoWithRestormer(jpegBytes: ByteArray): Pair<ByteArray, Boolean> {
         val restormerConfig = preferences.getRestormerConfig()
-        val activeModel = restormerModelManager.activeModel.value
+        val candidate = restormerModelManager.models.value.firstOrNull { it.id == restormerConfig.activeModelId }
+            ?: restormerModelManager.activeModel.value
+        val activeModel = if (candidate.isBuiltIn && (candidate.filePath == null || !java.io.File(candidate.filePath).exists())) {
+            restormerModelManager.extractBuiltInModel(candidate)
+        } else {
+            candidate
+        }
         val activeLens = _selectedLens.value
         val isFront = activeLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
         val captureOrientation = getCaptureJpegOrientation()

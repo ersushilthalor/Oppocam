@@ -530,10 +530,8 @@ class CameraXManager(
                 builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
             }
 
-            val eisModes = chars.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES) ?: intArrayOf()
-            if (eisModes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
-                builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)
-            }
+            // EIS completely removed: video uses normal camera output without electronic stabilization
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
 
             // 5. Optical Zoom Ratio (if Ultra-Wide is accessed via integrated logical zoom <1.0x on Android 11+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

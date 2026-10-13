@@ -54,6 +54,7 @@ fun RestormerStudioSheet(
     val coroutineScope = rememberCoroutineScope()
     val models by modelManager.models.collectAsState()
     val activeModel by modelManager.activeModel.collectAsState()
+    val modelLoadState by modelManager.modelLoadState.collectAsState()
 
     var isDiagnosticRunning by remember { mutableStateOf(false) }
     var diagnosticResult by remember { mutableStateOf<RestormerInferenceEngine.BenchmarkResult?>(null) }
@@ -298,6 +299,106 @@ fun RestormerStudioSheet(
                             .heightIn(max = 420.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        // Model Load Status & Meaningful Error Display
+                        item {
+                            when (val state = modelLoadState) {
+                                is com.example.camera.restormer.data.ModelLoadState.Loaded -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(Color(0xFF1E3A2B))
+                                            .border(1.dp, Color(0xFF81C784), RoundedCornerShape(10.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.CheckCircle,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF81C784),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Model Initialized: ${state.modelInfo.name}",
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Engine: ${state.accelerator} | Shape: ${state.inputShapeStr} → ${state.outputShapeStr}",
+                                                color = Color.White.copy(alpha = 0.85f),
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+                                is com.example.camera.restormer.data.ModelLoadState.Loading -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(Color(0xFF2A281E))
+                                            .border(1.dp, Color(0xFFFFD54F), RoundedCornerShape(10.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                color = Color(0xFFFFD54F),
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Initializing neural graph for ${state.modelName}...",
+                                                color = Color(0xFFFFD54F),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+                                is com.example.camera.restormer.data.ModelLoadState.Error -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(Color(0xFF3E1E1E))
+                                            .border(1.dp, Color(0xFFE57373), RoundedCornerShape(10.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.Error,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFE57373),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Model Loading Failed: ${state.modelName}",
+                                                    color = Color(0xFFE57373),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = state.errorMessage,
+                                                color = Color.White.copy(alpha = 0.9f),
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+                                com.example.camera.restormer.data.ModelLoadState.Idle -> {}
+                            }
+                        }
+
                         // Action buttons row: Import model & PyTorch Guide
                         item {
                             Row(

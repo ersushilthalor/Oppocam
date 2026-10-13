@@ -865,8 +865,8 @@ class DualCameraRecordingRelay(
 
         cachedMatrix2d.reset()
         cachedMatrix2d.postTranslate(-0.5f, -0.5f)
-        val effectiveScaleX = scaleX * stabilizationCropScale
-        val effectiveScaleY = effScaleY * stabilizationCropScale
+        val effectiveScaleX = scaleX
+        val effectiveScaleY = effScaleY
         cachedMatrix2d.postScale(effectiveScaleX, effectiveScaleY)
         if (netRotationDeg != 0f) {
             cachedMatrix2d.postRotate(netRotationDeg)
@@ -874,17 +874,8 @@ class DualCameraRecordingRelay(
         if (isFront != isStMirrored) {
             cachedMatrix2d.postScale(-1.0f, 1.0f)
         }
-        val maxAllowedShift = (stabilizationCropScale - 1.0f) * 0.45f
-        val safeShiftX = stabilizationOffsetX.coerceIn(-maxAllowedShift, maxAllowedShift)
-        val safeShiftY = stabilizationOffsetY.coerceIn(-maxAllowedShift, maxAllowedShift)
-        val (orientedShiftX, orientedShiftY) = when (normRot) {
-            90 -> -safeShiftY to safeShiftX
-            180 -> -safeShiftX to -safeShiftY
-            270 -> safeShiftY to -safeShiftX
-            else -> safeShiftX to safeShiftY
-        }
-        val finalShiftX = if (isFront) -orientedShiftX else orientedShiftX
-        val finalShiftY = orientedShiftY
+        val finalShiftX = 0f
+        val finalShiftY = 0f
         cachedMatrix2d.postTranslate(0.5f + finalShiftX, 0.5f + finalShiftY)
 
         cachedMatrix2d.getValues(matrixValues)

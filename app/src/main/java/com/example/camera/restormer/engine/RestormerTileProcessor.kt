@@ -39,8 +39,11 @@ class RestormerTileProcessor(
 
         Log.i(TAG, "[TILED_INFERENCE_START] Processing ${width}x${height} (~${String.format("%.1f", totalPixels / 1_000_000f)} MP) with ${inferenceEngine.modelInfo.name}")
 
-        val tileSize = config.tileSize.coerceIn(64, 256)
-        val overlap = config.overlap.coerceIn(8, tileSize / 2)
+        val reqH = inferenceEngine.inspectedInputHeight
+        val isDynamic = inferenceEngine.isDynamicShape
+        val baseTileSize = if (!isDynamic && reqH > 0) reqH else config.tileSize.coerceIn(64, 512)
+        val tileSize = minOf(baseTileSize, maxOf(width, height).coerceAtLeast(32))
+        val overlap = config.overlap.coerceIn(4, maxOf(8, tileSize / 2))
         val step = max(1, tileSize - overlap)
 
         // Generate grid coordinates
