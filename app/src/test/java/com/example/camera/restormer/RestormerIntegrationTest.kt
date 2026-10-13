@@ -2,7 +2,9 @@ package com.example.camera.restormer
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import com.example.camera.restormer.data.ModelImportResult
 import com.example.camera.restormer.data.RestormerModelManager
 import com.example.camera.restormer.engine.RestormerInferenceEngine
 import com.example.camera.restormer.engine.RestormerTileProcessor
@@ -16,6 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -43,6 +46,18 @@ class RestormerIntegrationTest {
     }
 
     @Test
+    fun testExtractBuiltInModelCreatesValidFilesOnInternalStorage() {
+        val builtIn = modelManager.models.value.first { it.isBuiltIn }
+        val extracted = modelManager.extractBuiltInModel(builtIn)
+
+        assertNotNull("Extracted model must have non-null filePath", extracted.filePath)
+        val file = File(extracted.filePath!!)
+        assertTrue("Extracted model file must exist on internal storage: ${file.absolutePath}", file.exists())
+        assertTrue("Extracted model file must not be empty", file.length() > 0)
+        assertTrue("Extracted model file must be readable", file.canRead())
+    }
+
+    @Test
     fun testSelectActiveModelUpdatesPreference() {
         val initial = modelManager.activeModel.value
         assertNotNull(initial)
@@ -50,6 +65,27 @@ class RestormerIntegrationTest {
         val success = modelManager.selectActiveModel(initial.id)
         assertTrue(success)
         assertEquals(initial.id, modelManager.activeModel.value.id)
+    }
+
+    @Test
+    fun testPthImportDetectionReturnsConversionGuide() {
+        // Create a dummy .pth file to simulate user selecting a PyTorch checkpoint
+        val testPthFile = File(context.cacheDir, "real_denoising.pth").apply {
+            writeBytes("dummy_pytorch_weights".toByteArray())
+        }
+        val uri = Uri.fromFile(testPthFile)
+
+        val result = kotlinx.coroutines.runBlocking {
+            modelManager.importModelFromUri(uri, "real_denoising.pth")
+        }
+
+        assertTrue(
+            "Importing .pth checkpoint must return PthCheckpointDetected result, got $result",
+            result is ModelImportResult.PthCheckpointDetected
+        )
+        val pthResult = result as ModelImportResult.PthCheckpointDetected
+        assertEquals("real_denoising.pth", pthResult.fileName)
+        assertTrue("Instructions must mention export script", pthResult.instructions.contains("export_restormer_to_onnx.py"))
     }
 
     @Test
@@ -68,19 +104,16 @@ class RestormerIntegrationTest {
             fail("Expected IllegalStateException or LinkageError")
             engine.close()
         } catch (t: Throwable) {
-            // Catches either genuine initialization failure or host JVM UnsatisfiedLinkError
-            assertTrue(t.message != null || t is LinkageError)
+            assertTrue("Exception message must not be empty", t.message != null || t is LinkageError)
         }
     }
 
     @Test
     fun testTileProcessorPreservesExactImageResolution() {
-        // Create synthetic high-res image
         val width = 512
         val height = 384
         val source = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 
-        // Fill with gradient
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val r = (x % 256)

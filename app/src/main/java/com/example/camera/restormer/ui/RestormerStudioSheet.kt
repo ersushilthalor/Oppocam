@@ -9,7 +9,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,10 +19,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -32,8 +33,6 @@ import com.example.camera.restormer.data.ModelImportResult
 import com.example.camera.restormer.data.RestormerModelManager
 import com.example.camera.restormer.engine.RestormerInferenceEngine
 import com.example.camera.restormer.model.*
-import com.example.camera.ui.components.FloatingSelectorDefaults
-import com.example.camera.ui.components.FloatingWindowCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,13 +50,19 @@ fun RestormerStudioSheet(
     if (!isOpen) return
 
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
     val models by modelManager.models.collectAsState()
     val activeModel by modelManager.activeModel.collectAsState()
 
     var isDiagnosticRunning by remember { mutableStateOf(false) }
     var diagnosticResult by remember { mutableStateOf<RestormerInferenceEngine.BenchmarkResult?>(null) }
+    var diagnosticErrorMessage by remember { mutableStateOf<String?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Models, 1: Tiling & Performance, 2: Diagnostics
+
+    // State for PyTorch .pth conversion dialog
+    var showPthConversionDialog by remember { mutableStateOf(false) }
+    var pthDialogFileName by remember { mutableStateOf("model.pth") }
 
     // File picker launcher for importing models (.onnx and .tflite)
     val modelPickerLauncher = rememberLauncherForActivityResult(
@@ -72,12 +77,107 @@ fun RestormerStudioSheet(
                         onShowToast("Model imported successfully: ${result.modelInfo.name} (${result.benchmarkMs}ms)")
                         onUpdateConfig(config.copy(activeModelId = result.modelInfo.id))
                     }
+                    is ModelImportResult.PthCheckpointDetected -> {
+                        pthDialogFileName = result.fileName
+                        showPthConversionDialog = true
+                    }
                     is ModelImportResult.Error -> {
                         onShowToast("Import failed: ${result.reason}")
                     }
                 }
             }
         }
+    }
+
+    if (showPthConversionDialog) {
+        AlertDialog(
+            onDismissRequest = { showPthConversionDialog = false },
+            containerColor = Color(0xFF1E1E28),
+            titleContentColor = Color.White,
+            textContentColor = Color.White.copy(alpha = 0.85f),
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Outlined.Info,
+                        contentDescription = null,
+                        tint = Color(0xFFFFD54F),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "PyTorch (.pth) Checkpoint Guide",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "File: '$pthDialogFileName'",
+                        color = Color(0xFFFFD54F),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "The official Restormer repository provides raw PyTorch (.pth) weights. Android mobile devices execute compiled ONNX or TFLite neural networks, not raw Python/PyTorch pickles.",
+                        fontSize = 12.sp,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                    Text(
+                        text = "Run this one-line command to export the official checkpoint into an ONNX model:",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+
+                    val exportCmd = "python3 scripts/export_restormer_to_onnx.py --checkpoint $pthDialogFileName --task deraining --output restormer_derain.onnx"
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = exportCmd,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = Color(0xFFFFD54F)
+                        )
+                    }
+
+                    Text(
+                        text = "After running the script, transfer the resulting .onnx file to your phone and tap 'Import Model (.onnx / .tflite)' to load it.",
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val cmd = "python3 scripts/export_restormer_to_onnx.py --checkpoint $pthDialogFileName --task deraining --output restormer_derain.onnx"
+                        clipboardManager.setText(AnnotatedString(cmd))
+                        onShowToast("Conversion command copied to clipboard!")
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFFD54F),
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("Copy Command", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showPthConversionDialog = false }
+                ) {
+                    Text("Close", color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+        )
     }
 
     ModalBottomSheet(
@@ -198,38 +298,73 @@ fun RestormerStudioSheet(
                             .heightIn(max = 420.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Import model button
+                        // Action buttons row: Import model & PyTorch Guide
                         item {
-                            Button(
-                                onClick = {
-                                    modelPickerLauncher.launch(arrayOf("*/*"))
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF2A2A34)
-                                ),
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("import_model_button"),
-                                border = androidx.compose.foundation.BorderStroke(
-                                    1.dp,
-                                    Color(0xFFFFD54F).copy(alpha = 0.5f)
-                                )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.FileOpen,
-                                    contentDescription = null,
-                                    tint = Color(0xFFFFD54F),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Import Model (.onnx / .tflite)",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 13.sp
-                                )
+                                Button(
+                                    onClick = {
+                                        modelPickerLauncher.launch(arrayOf("*/*"))
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF2A2A34)
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(46.dp)
+                                        .testTag("import_model_button"),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        Color(0xFFFFD54F).copy(alpha = 0.5f)
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.FileOpen,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFFD54F),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Import Model",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        pthDialogFileName = "deraining.pth"
+                                        showPthConversionDialog = true
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(46.dp)
+                                        .testTag("pytorch_guide_button"),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        Color.White.copy(alpha = 0.25f)
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Transform,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.8f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = ".pth Guide",
+                                        color = Color.White.copy(alpha = 0.9f),
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 12.sp
+                                    )
+                                }
                             }
                         }
 
@@ -423,14 +558,75 @@ fun RestormerStudioSheet(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Runs a genuine neural inference pass through the active model '${activeModel.name}' to verify tensor execution, latency, and numerical validity.",
+                            text = "Executes real neural inference through the active model '${activeModel.name}' to verify tensor operations, execution latency, and numerical validity.",
                             color = Color.White.copy(alpha = 0.65f),
                             fontSize = 12.sp
                         )
 
+                        // Model Details card
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = 0.04f))
+                                .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                                .padding(12.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Active Model:",
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 11.sp
+                                    )
+                                    Text(
+                                        text = activeModel.name,
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Task / Backend:",
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 11.sp
+                                    )
+                                    Text(
+                                        text = "${activeModel.task.displayName} (${activeModel.backend.displayName})",
+                                        color = Color(0xFFFFD54F),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Storage Location:",
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 11.sp
+                                    )
+                                    Text(
+                                        text = if (activeModel.filePath != null) "Internal Storage" else "APK Assets",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+
                         Button(
                             onClick = {
                                 isDiagnosticRunning = true
+                                diagnosticErrorMessage = null
                                 coroutineScope.launch {
                                     val result = withContext(Dispatchers.Default) {
                                         try {
@@ -443,13 +639,18 @@ fun RestormerStudioSheet(
                                             engine.close()
                                             res
                                         } catch (e: Throwable) {
+                                            val msg = StringBuilder("[${e.javaClass.simpleName}] ${e.message}")
+                                            if (e.cause != null) {
+                                                msg.append("\nCause: [${e.cause?.javaClass?.simpleName}] ${e.cause?.message}")
+                                            }
+                                            diagnosticErrorMessage = msg.toString()
                                             RestormerInferenceEngine.BenchmarkResult(
                                                 isSuccess = false,
                                                 latencyMs = 0L,
                                                 tilePixels = config.tileSize * config.tileSize,
                                                 meanDiffPerPixel = 0f,
                                                 variance = 0f,
-                                                message = "Diagnostic execution failed: ${e.message}"
+                                                message = "Initialization/Inference Exception: ${e.message}"
                                             )
                                         }
                                     }
@@ -523,11 +724,21 @@ fun RestormerStudioSheet(
                                         color = Color.White.copy(alpha = 0.85f),
                                         fontSize = 11.sp
                                     )
-                                    Text(
-                                        text = "Latency: ${res.latencyMs} ms · Variance: ${String.format("%.5f", res.variance)}",
-                                        color = Color.White.copy(alpha = 0.6f),
-                                        fontSize = 11.sp
-                                    )
+                                    if (res.isSuccess) {
+                                        Text(
+                                            text = "Latency: ${res.latencyMs} ms · Variance: ${String.format("%.5f", res.variance)} · Tile: ${config.tileSize}x${config.tileSize}",
+                                            color = Color.White.copy(alpha = 0.6f),
+                                            fontSize = 11.sp
+                                        )
+                                    } else if (diagnosticErrorMessage != null) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Error Details:\n$diagnosticErrorMessage",
+                                            color = Color(0xFFFF8A80),
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
                                 }
                             }
                         }

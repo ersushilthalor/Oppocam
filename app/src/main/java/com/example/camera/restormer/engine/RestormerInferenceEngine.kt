@@ -12,6 +12,7 @@ import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileNotFoundException
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -22,11 +23,11 @@ private const val TAG = "RestormerInference"
 /**
  * Genuine Inference Engine for Restormer Models on Android.
  *
- * Executes genuine pretrained neural network inference via:
- * 1. Microsoft ONNX Runtime Mobile (.onnx) with multi-threading, NNAPI, or optimized CPU.
+ * Executes genuine neural network inference via:
+ * 1. Microsoft ONNX Runtime Mobile (.onnx) loaded from verified local storage.
  * 2. TensorFlow Lite (.tflite) with GPU / NNAPI / CPU delegates.
  *
- * Strictly prohibits fallback to fake untrained models or random weights.
+ * Strictly prohibits simulated inference, fake models, or unverified outputs.
  */
 class RestormerInferenceEngine(
     private val context: Context,
@@ -62,9 +63,14 @@ class RestormerInferenceEngine(
                 }
             }
             isInitialized = true
-            Log.i(TAG, "Genuine Restormer model initialized: ${modelInfo.name} via ${modelInfo.backend}")
+            Log.i(TAG, "Genuine Restormer model initialized successfully: ${modelInfo.name} via ${modelInfo.backend}")
         } catch (e: Exception) {
-            val msg = "Failed to initialize Restormer model '${modelInfo.name}': ${e.message}"
+            val details = StringBuilder("Failed to initialize Restormer model '${modelInfo.name}': ")
+            details.append("[${e.javaClass.simpleName}] ${e.message}")
+            if (e.cause != null) {
+                details.append(" | Caused by: [${e.cause?.javaClass?.simpleName}] ${e.cause?.message}")
+            }
+            val msg = details.toString()
             Log.e(TAG, msg, e)
             initializationError = msg
             isInitialized = false
@@ -72,9 +78,102 @@ class RestormerInferenceEngine(
         }
     }
 
+    /**
+     * Resolves the concrete model file on internal storage, extracting from assets if necessary.
+     * This ensures ONNX Runtime C++ filesystem APIs can properly resolve the model file and any companion
+     * external weight files (e.g. restormer_real.onnx.data).
+     */
+    private fun openAssetInputStream(assetPath: String): java.io.InputStream {
+        return try {
+            context.assets.open(assetPath)
+        } catch (e: Exception) {
+            val relative = assetPath.removePrefix("models/")
+            try {
+                context.assets.open(relative)
+            } catch (e2: Exception) {
+                val devCandidates = listOf(
+                    File("app/src/main/assets", assetPath),
+                    File("src/main/assets", assetPath),
+                    File("app/src/main/assets", relative),
+                    File("src/main/assets", relative),
+                    File(assetPath)
+                )
+                val found = devCandidates.firstOrNull { it.exists() && it.length() > 0L }
+                if (found != null) {
+                    FileInputStream(found)
+                } else {
+                    throw e
+                }
+            }
+        }
+    }
+
+    private fun resolveModelFile(): File {
+        val path = modelInfo.filePath
+        if (path != null) {
+            val f = File(path)
+            if (f.exists() && f.length() > 0L) {
+                return f
+            }
+        }
+
+        val assetPath = modelInfo.assetPath
+        if (assetPath != null) {
+            val modelsDir = File(context.filesDir, "restormer_models").apply {
+                if (!exists()) mkdirs()
+            }
+            val fileName = assetPath.substringAfterLast('/')
+            val targetFile = File(modelsDir, fileName)
+
+            if (!targetFile.exists() || targetFile.length() == 0L) {
+                Log.i(TAG, "Extracting asset '$assetPath' to internal storage: ${targetFile.absolutePath}")
+                openAssetInputStream(assetPath).use { input ->
+                    FileOutputStream(targetFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                targetFile.setReadable(true, false)
+            }
+
+            // Also ensure companion external weight file is extracted if present in assets
+            val assetDir = assetPath.substringBeforeLast('/', "")
+            val companionName = "restormer_real.onnx.data"
+            val companionAsset = if (assetDir.isNotEmpty()) "$assetDir/$companionName" else companionName
+            val companionFile = File(modelsDir, companionName)
+
+            try {
+                if (!companionFile.exists() || companionFile.length() == 0L) {
+                    try {
+                        openAssetInputStream(companionAsset).use { input ->
+                            Log.i(TAG, "Extracting companion external data asset '$companionAsset' to: ${companionFile.absolutePath}")
+                            FileOutputStream(companionFile).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        companionFile.setReadable(true, false)
+                    } catch (e: Exception) {
+                        Log.d(TAG, "No companion external data asset found for '$companionAsset'")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Companion external data asset check skipped: ${e.message}")
+            }
+
+            return targetFile
+        }
+
+        throw FileNotFoundException("No valid file path or asset path found for Restormer model '${modelInfo.name}'")
+    }
+
     private fun initOnnxRuntime() {
+        val modelFile = resolveModelFile()
+        if (!modelFile.exists() || modelFile.length() == 0L) {
+            throw FileNotFoundException("Model file does not exist or is empty: ${modelFile.absolutePath}")
+        }
+
         val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
         ortEnvironment = env
+
         val sessionOptions = ai.onnxruntime.OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(numThreads)
             setOptimizationLevel(ai.onnxruntime.OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -82,32 +181,13 @@ class RestormerInferenceEngine(
                 try {
                     addNnapi()
                 } catch (e: Exception) {
-                    Log.w(TAG, "NNAPI not available for ONNX, falling back to CPU", e)
+                    Log.w(TAG, "NNAPI acceleration not available on this device, falling back to multi-threaded CPU", e)
                 }
             }
         }
 
-        val filePath = modelInfo.filePath
-        if (filePath != null) {
-            val file = File(filePath)
-            if (!file.exists() || file.length() == 0L) {
-                throw FileNotFoundException("Model file does not exist or is empty: $filePath")
-            }
-            ortSession = env.createSession(file.absolutePath, sessionOptions)
-            return
-        }
-
-        val assetPath = modelInfo.assetPath
-        if (assetPath != null) {
-            val modelBytes = context.assets.open(assetPath).use { it.readBytes() }
-            if (modelBytes.isEmpty()) {
-                throw IllegalStateException("Asset model file is empty: $assetPath")
-            }
-            ortSession = env.createSession(modelBytes, sessionOptions)
-            return
-        }
-
-        throw FileNotFoundException("No file path or asset path configured for ONNX model: ${modelInfo.name}")
+        Log.i(TAG, "Creating ONNX Runtime session for '${modelInfo.name}' from path: ${modelFile.absolutePath} (${modelFile.length()} bytes)")
+        ortSession = env.createSession(modelFile.absolutePath, sessionOptions)
     }
 
     private fun initTensorFlowLite() {
@@ -128,13 +208,13 @@ class RestormerInferenceEngine(
                         addDelegate(gpuDelegate)
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "GPU delegate unavailable, continuing with CPU", e)
+                    Log.w(TAG, "GPU delegate unavailable, continuing with multi-threaded CPU", e)
                 }
             } else if (delegateOption == HardwareDelegateOption.NNAPI) {
                 try {
                     setUseNNAPI(true)
                 } catch (e: Exception) {
-                    Log.w(TAG, "NNAPI delegate unavailable", e)
+                    Log.w(TAG, "NNAPI delegate unavailable, continuing with multi-threaded CPU", e)
                 }
             }
         }
@@ -142,33 +222,14 @@ class RestormerInferenceEngine(
     }
 
     private fun loadModelByteBuffer(): ByteBuffer? {
-        val filePath = modelInfo.filePath
-        if (filePath != null) {
-            val file = File(filePath)
-            if (file.exists() && file.length() > 0) {
-                val fis = FileInputStream(file)
-                val channel = fis.channel
-                val buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size())
-                fis.close()
-                return buffer
-            }
+        val file = resolveModelFile()
+        if (file.exists() && file.length() > 0L) {
+            val fis = FileInputStream(file)
+            val channel = fis.channel
+            val buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size())
+            fis.close()
+            return buffer
         }
-
-        val assetPath = modelInfo.assetPath
-        if (assetPath != null) {
-            try {
-                val bytes = context.assets.open(assetPath).use { it.readBytes() }
-                val buffer = ByteBuffer.allocateDirect(bytes.size).apply {
-                    order(ByteOrder.nativeOrder())
-                    put(bytes)
-                    rewind()
-                }
-                return buffer
-            } catch (e: Exception) {
-                Log.e(TAG, "Error opening asset $assetPath", e)
-            }
-        }
-
         return null
     }
 
@@ -212,67 +273,73 @@ class RestormerInferenceEngine(
         val inputTensor = ai.onnxruntime.OnnxTensor.createTensor(env, floatBuffer, shape)
         val inputName = session.inputNames.iterator().next()
 
-        val results = session.run(mapOf(inputName to inputTensor))
-        val outputTensor = results[0] as ai.onnxruntime.OnnxTensor
-        val outShape = outputTensor.info.shape
-        val outFloatBuffer = outputTensor.floatBuffer
+        var results: ai.onnxruntime.OrtSession.Result? = null
+        try {
+            results = session.run(mapOf(inputName to inputTensor))
+            val outputTensor = results[0] as ai.onnxruntime.OnnxTensor
+            val outShape = outputTensor.info.shape
+            val outFloatBuffer = outputTensor.floatBuffer
 
-        val outputPatch = Array(3) { FloatArray(hw) }
+            val outputPatch = Array(3) { FloatArray(hw) }
 
-        // Determine output tensor layout from shape
-        if (outShape.size == 4 && outShape[1] == 3L) {
-            // NCHW layout: [1, 3, outH, outW]
-            val outH = outShape[2].toInt()
-            val outW = outShape[3].toInt()
-            if (outH == height && outW == width) {
+            // Determine output tensor layout from shape
+            if (outShape.size == 4 && outShape[1] == 3L) {
+                // NCHW layout: [1, 3, outH, outW]
+                val outH = outShape[2].toInt()
+                val outW = outShape[3].toInt()
+                if (outH == height && outW == width) {
+                    for (c in 0 until 3) {
+                        outFloatBuffer.get(outputPatch[c])
+                    }
+                } else {
+                    // Tile window extraction if model requires padding to multiple of 8
+                    val fullPlane = FloatArray(outH * outW)
+                    for (c in 0 until 3) {
+                        outFloatBuffer.get(fullPlane)
+                        val targetPlane = outputPatch[c]
+                        for (y in 0 until height) {
+                            System.arraycopy(fullPlane, y * outW, targetPlane, y * width, width)
+                        }
+                    }
+                }
+            } else if (outShape.size == 4 && outShape[3] == 3L) {
+                // NHWC layout: [1, outH, outW, 3]
+                val outR = outputPatch[0]
+                val outG = outputPatch[1]
+                val outB = outputPatch[2]
+                for (i in 0 until hw) {
+                    outR[i] = outFloatBuffer.get()
+                    outG[i] = outFloatBuffer.get()
+                    outB[i] = outFloatBuffer.get()
+                }
+            } else {
+                // Fallback sequential channel read
                 for (c in 0 until 3) {
                     outFloatBuffer.get(outputPatch[c])
                 }
-            } else {
-                // If model pads slightly to multiple of 8, extract active tile window
-                val fullPlane = FloatArray(outH * outW)
-                for (c in 0 until 3) {
-                    outFloatBuffer.get(fullPlane)
-                    val targetPlane = outputPatch[c]
-                    for (y in 0 until height) {
-                        System.arraycopy(fullPlane, y * outW, targetPlane, y * width, width)
-                    }
-                }
             }
-        } else if (outShape.size == 4 && outShape[3] == 3L) {
-            // NHWC layout: [1, outH, outW, 3]
-            val outR = outputPatch[0]
-            val outG = outputPatch[1]
-            val outB = outputPatch[2]
-            for (i in 0 until hw) {
-                outR[i] = outFloatBuffer.get()
-                outG[i] = outFloatBuffer.get()
-                outB[i] = outFloatBuffer.get()
-            }
-        } else {
-            // Fallback sequential channel read
+
+            // Numerical validation & clipping
             for (c in 0 until 3) {
-                outFloatBuffer.get(outputPatch[c])
-            }
-        }
-
-        // Numerical validation & clipping
-        for (c in 0 until 3) {
-            val plane = outputPatch[c]
-            for (i in 0 until hw) {
-                val v = plane[i]
-                if (v.isNaN() || v.isInfinite()) {
-                    inputTensor.close()
-                    results.close()
-                    throw IllegalStateException("Restormer model output contains NaN or Infinite value at channel $c, pixel $i")
+                val plane = outputPatch[c]
+                for (i in 0 until hw) {
+                    val v = plane[i]
+                    if (v.isNaN() || v.isInfinite()) {
+                        throw IllegalStateException("Restormer model output contains NaN or Infinite value at channel $c, pixel $i")
+                    }
+                    plane[i] = v.coerceIn(0.0f, 1.0f)
                 }
-                plane[i] = v.coerceIn(0.0f, 1.0f)
+            }
+
+            return outputPatch
+        } finally {
+            try {
+                inputTensor.close()
+                results?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing tensor resources", e)
             }
         }
-
-        inputTensor.close()
-        results.close()
-        return outputPatch
     }
 
     private fun executeTfliteInference(
@@ -407,13 +474,17 @@ class RestormerInferenceEngine(
                 }
             )
         } catch (e: Exception) {
+            val errMsg = StringBuilder("Inference execution failed: [${e.javaClass.simpleName}] ${e.message}")
+            if (e.cause != null) {
+                errMsg.append(" | Cause: [${e.cause?.javaClass?.simpleName}] ${e.cause?.message}")
+            }
             BenchmarkResult(
                 isSuccess = false,
                 latencyMs = 0L,
                 tilePixels = hw,
                 meanDiffPerPixel = 0f,
                 variance = 0f,
-                message = "Inference execution failed: ${e.message}"
+                message = errMsg.toString()
             )
         }
     }
@@ -421,9 +492,14 @@ class RestormerInferenceEngine(
     override fun close() {
         try {
             ortSession?.close()
+            ortSession = null
             ortEnvironment?.close()
+            ortEnvironment = null
             tfliteInterpreter?.close()
+            tfliteInterpreter = null
             gpuDelegate?.close()
+            gpuDelegate = null
+            isInitialized = false
         } catch (e: Exception) {
             Log.e(TAG, "Error closing Restormer engine", e)
         }
