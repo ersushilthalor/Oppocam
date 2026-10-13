@@ -763,4 +763,102 @@ class ZoomTransitionVerificationTest {
             }
         }
     }
+
+    @Test
+    fun testOneXToHalfXWorkflowInstantSwitchCroppedHoldAndSmoothZoom() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val testValues = listOf(0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+            val expectedMs = listOf(50L, 100L, 150L, 200L, 250L, 300L)
+
+            for (i in testValues.indices) {
+                val value = testValues[i]
+                val expectedHoldMs = expectedMs[i]
+
+                val switchedUltraWideTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val switchedUltraWideLensRef = java.util.concurrent.atomic.AtomicReference<LensInfo?>(null)
+                val firstZoomBelowOneXTime = java.util.concurrent.atomic.AtomicLong(-1L)
+                val finalReachedHalfXTime = java.util.concurrent.atomic.AtomicLong(-1L)
+
+                val controller = ZoomTransitionController(
+                    onApplyZoomToEngine = { zoom, _ ->
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (zoom < 1.0f && firstZoomBelowOneXTime.get() < 0L) {
+                            firstZoomBelowOneXTime.set(now)
+                        }
+                        if (zoom <= 0.5f) {
+                            finalReachedHalfXTime.set(now)
+                        }
+                    },
+                    onSelectLensOnEngine = { lens, targetZoom, _ ->
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (lens.lensType == LensType.ULTRAWIDE && switchedUltraWideTime.get() < 0L) {
+                            switchedUltraWideTime.set(now)
+                            switchedUltraWideLensRef.set(lens)
+                        }
+                    }
+                )
+
+                controller.holdAtOneXDurationMs = expectedHoldMs
+
+                val job = controller.startTransition(
+                    fromZoom = 1.0f,
+                    targetZoom = 0.5f,
+                    targetLens = uwLens,
+                    availableLenses = listOf(uwLens, mainLens),
+                    currentLens = mainLens,
+                    switchPointMm = 23.0f,
+                    scope = this,
+                    durationMs = 50L,
+                    onZoomUpdate = {},
+                    onComplete = { _, _ -> }
+                )
+
+                job.join()
+
+                assertTrue("Ultra-Wide lens feed must be switched to instantly at start", switchedUltraWideTime.get() > 0L)
+                assertEquals("Selected lens must be Ultra-Wide", uwLens.id, switchedUltraWideLensRef.get()?.id)
+                assertTrue("Zoom must smoothly transition below 1.0x", firstZoomBelowOneXTime.get() > 0L)
+
+                // The hold at 1x cropped must occur BEFORE digital zoom begins descending below 1.0x
+                val actualHoldDuration = firstZoomBelowOneXTime.get() - switchedUltraWideTime.get()
+                assertTrue(
+                    "Cropped 1x hold on Ultra-Wide for $value sec must be at least ${expectedHoldMs - 20L}ms, was ${actualHoldDuration}ms",
+                    actualHoldDuration >= (expectedHoldMs - 20L)
+                )
+                assertTrue("Final 0.5x zoom must be reached", finalReachedHalfXTime.get() > 0L)
+            }
+        }
+    }
+
+    @Test
+    fun testIdenticalPhotoAndVideoTransitionWorkflow() {
+        viewModel.setCameraMode(com.example.camera.model.CameraMode.PHOTO)
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            // Photo 0.5x -> 1.0x
+            viewModel.selectLens(uwLens, instant = true)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
+
+            // Video 0.5x -> 1.0x
+            viewModel.setCameraMode(com.example.camera.model.CameraMode.VIDEO)
+            viewModel.selectLens(uwLens, instant = true)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
+
+            // Video 1.0x -> 0.5x
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
+        }
+    }
 }
