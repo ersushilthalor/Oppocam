@@ -252,14 +252,14 @@ fun Viewfinder(
                 tv.alpha = mainAlpha
                 tv.translationZ = if (!isUw) 2f else 0f
                 (tv.parent as? android.view.View)?.translationZ = if (!isUw) 2f else 0f
-                tv.visibility = android.view.View.VISIBLE
+                tv.visibility = if (!isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
             }
             ultraWideTextureViewInstance?.let { tv ->
                 val uwAlpha = if (isUw) 1f else 0f
                 tv.alpha = uwAlpha
                 tv.translationZ = if (isUw) 2f else 0f
                 (tv.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
-                tv.visibility = android.view.View.VISIBLE
+                tv.visibility = if (isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
             }
         }
     }
@@ -671,7 +671,7 @@ fun Viewfinder(
                             val isUw = currentIsUsingUltraWideSurface
                             val isOverlapping = currentPreviewOverlapState.isOverlapping
                             textureView.alpha = if (isOverlapping) currentPreviewOverlapState.ultraWideAlpha else (if (isUw) 1f else 0f)
-                            textureView.visibility = android.view.View.VISIBLE
+                            textureView.visibility = if (isOverlapping || isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
                             textureView.translationZ = if (isOverlapping) 2f else (if (isUw) 2f else 0f)
                             (textureView.parent as? android.view.View)?.translationZ = if (isOverlapping) 2f else (if (isUw) 2f else 0f)
                             if (isUw && com.example.camera.ui.components.BackdropBlurManager.isWindowActive && textureView.isAvailable) {

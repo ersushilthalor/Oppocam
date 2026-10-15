@@ -68,6 +68,68 @@ object CameraPerformanceMonitor {
         } catch (ignored: Throwable) {}
     }
 
+    val primaryDroppedFrames = AtomicInteger(0)
+    val standbyDroppedFrames = AtomicInteger(0)
+    val standbySessionInitCount = AtomicInteger(0)
+    val standbySessionReuseCount = AtomicInteger(0)
+    val lastLensSwitchLatencyMs = java.util.concurrent.atomic.AtomicLong(0L)
+
+    data class PerformanceSnapshot(
+        val previewFps: Float,
+        val uiFrameTimeMs: Float,
+        val primaryDroppedFrames: Int,
+        val standbyDroppedFrames: Int,
+        val standbySessionInitCount: Int,
+        val standbySessionReuseCount: Int,
+        val lastLensSwitchLatencyMs: Long,
+        val usedHeapMb: Long
+    )
+
+    fun recordPrimaryDroppedFrame() {
+        primaryDroppedFrames.incrementAndGet()
+    }
+
+    fun recordStandbyDroppedFrame() {
+        standbyDroppedFrames.incrementAndGet()
+    }
+
+    fun recordStandbySessionInit() {
+        standbySessionInitCount.incrementAndGet()
+    }
+
+    fun recordStandbySessionReuse() {
+        standbySessionReuseCount.incrementAndGet()
+    }
+
+    fun recordLensSwitchLatency(latencyMs: Long) {
+        lastLensSwitchLatencyMs.set(latencyMs)
+    }
+
+    fun getPerformanceSnapshot(): PerformanceSnapshot {
+        val runtime = Runtime.getRuntime()
+        val usedMemMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
+        return PerformanceSnapshot(
+            previewFps = currentPreviewFps,
+            uiFrameTimeMs = currentUiFrameTimeMs,
+            primaryDroppedFrames = primaryDroppedFrames.get(),
+            standbyDroppedFrames = standbyDroppedFrames.get(),
+            standbySessionInitCount = standbySessionInitCount.get(),
+            standbySessionReuseCount = standbySessionReuseCount.get(),
+            lastLensSwitchLatencyMs = lastLensSwitchLatencyMs.get(),
+            usedHeapMb = usedMemMb
+        )
+    }
+
+    fun resetDiagnostics() {
+        primaryDroppedFrames.set(0)
+        standbyDroppedFrames.set(0)
+        standbySessionInitCount.set(0)
+        standbySessionReuseCount.set(0)
+        lastLensSwitchLatencyMs.set(0L)
+        previewFrameCounter.set(0)
+        lastReportTimeMs = SystemClock.elapsedRealtime()
+    }
+
     fun onPreviewFrame() {
         previewFrameCounter.incrementAndGet()
         val now = SystemClock.elapsedRealtime()
@@ -91,12 +153,15 @@ object CameraPerformanceMonitor {
                     Log.i(
                         TAG,
                         String.format(
-                            "Preview: %.1f FPS%s | UI: %.1f ms | YUV: %.1f FPS | Outputs: %s | UsedHeap: %dMB",
+                            "Preview: %.1f FPS%s | UI: %.1f ms | Drops: [pri=%d, sby=%d] | SbyInits: %d | SbyReuses: %d | SwitchLat: %dms | UsedHeap: %dMB",
                             currentPreviewFps,
                             recFpsStr,
                             currentUiFrameTimeMs,
-                            currentYuvFps,
-                            activeOutputsDescription,
+                            primaryDroppedFrames.get(),
+                            standbyDroppedFrames.get(),
+                            standbySessionInitCount.get(),
+                            standbySessionReuseCount.get(),
+                            lastLensSwitchLatencyMs.get(),
                             usedMemMb
                         )
                     )
