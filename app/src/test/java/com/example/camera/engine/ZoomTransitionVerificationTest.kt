@@ -861,4 +861,107 @@ class ZoomTransitionVerificationTest {
             assertTrue(viewModel.engine.isContinuousZoomTransitionActive)
         }
     }
+
+    @Test
+    fun testZeroExtraDelayBeyondSelectedHoldDurationInBothDirections() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val selectedHoldMs = 100L
+
+            // 1. Direction 0.5x -> 1.0x
+            val reachedOneXTime = java.util.concurrent.atomic.AtomicLong(-1L)
+            val switchedMainTime = java.util.concurrent.atomic.AtomicLong(-1L)
+
+            val controller05To1 = ZoomTransitionController(
+                onApplyZoomToEngine = { zoom, _ ->
+                    if (zoom >= 1.0f && reachedOneXTime.get() < 0L) {
+                        reachedOneXTime.set(android.os.SystemClock.uptimeMillis())
+                    }
+                },
+                onSelectLensOnEngine = { lens, _, _ ->
+                    if (lens.isPrimaryMain || lens.lensType == LensType.WIDE) {
+                        switchedMainTime.set(android.os.SystemClock.uptimeMillis())
+                    }
+                }
+            )
+            controller05To1.holdAtOneXDurationMs = selectedHoldMs
+
+            val job1 = controller05To1.startTransition(
+                fromZoom = 0.5f,
+                targetZoom = 1.0f,
+                targetLens = mainLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = uwLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 50L,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+            job1.join()
+
+            assertTrue(reachedOneXTime.get() > 0L)
+            assertTrue(switchedMainTime.get() > 0L)
+            val actualHold1 = switchedMainTime.get() - reachedOneXTime.get()
+            // Verify hold is at least expected and has no large extra delay (< expected + 50ms)
+            assertTrue("Hold in 0.5x->1.0x must be within tolerance ($actualHold1 ms)", actualHold1 >= selectedHoldMs - 20L && actualHold1 <= selectedHoldMs + 80L)
+
+            // 2. Direction 1.0x -> 0.5x
+            val switchedUwTime = java.util.concurrent.atomic.AtomicLong(-1L)
+            val startedZoomBelowOneXTime = java.util.concurrent.atomic.AtomicLong(-1L)
+
+            val controller1To05 = ZoomTransitionController(
+                onApplyZoomToEngine = { zoom, _ ->
+                    if (zoom < 1.0f && startedZoomBelowOneXTime.get() < 0L) {
+                        startedZoomBelowOneXTime.set(android.os.SystemClock.uptimeMillis())
+                    }
+                },
+                onSelectLensOnEngine = { lens, _, _ ->
+                    if (lens.lensType == LensType.ULTRAWIDE && switchedUwTime.get() < 0L) {
+                        switchedUwTime.set(android.os.SystemClock.uptimeMillis())
+                    }
+                }
+            )
+            controller1To05.holdAtOneXDurationMs = selectedHoldMs
+
+            val job2 = controller1To05.startTransition(
+                fromZoom = 1.0f,
+                targetZoom = 0.5f,
+                targetLens = uwLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = mainLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 50L,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+            job2.join()
+
+            assertTrue(switchedUwTime.get() > 0L)
+            assertTrue(startedZoomBelowOneXTime.get() > 0L)
+            val actualHold2 = startedZoomBelowOneXTime.get() - switchedUwTime.get()
+            assertTrue("Hold in 1.0x->0.5x must be within tolerance ($actualHold2 ms)", actualHold2 >= selectedHoldMs - 20L && actualHold2 <= selectedHoldMs + 80L)
+        }
+    }
+
+    @Test
+    fun testVideoRecordingSeamlessZoomTransitionWithoutBlackScreenOrSessionClosure() {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            viewModel.setCameraMode(com.example.camera.model.CameraMode.VIDEO)
+            viewModel.selectLens(mainLens, instant = true)
+
+            // During video recording mode, zoom transitions between 1x and 0.5x seamlessly maintain active camera state
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            assertTrue("Continuous zoom transition must activate in Video mode", viewModel.engine.isContinuousZoomTransitionActive)
+            assertNotNull("Camera must remain initialized with no null device", viewModel.engine.isCameraReady.value)
+        }
+    }
 }

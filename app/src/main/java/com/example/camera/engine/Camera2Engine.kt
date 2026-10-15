@@ -2432,6 +2432,26 @@ class Camera2Engine(private val context: Context) {
             return
         }
         val nowMs = android.os.SystemClock.uptimeMillis()
+        val previousLens = _selectedLens.value
+        val currentRunningLens = activeSessionLens ?: previousLens
+
+        // If already on the requested lens on the current device, apply zoom directly without locking isSwitchingLens
+        val isAlreadyOnRequestedLens = currentRunningLens != null &&
+                currentRunningLens.id == lens.id &&
+                currentRunningLens.cameraId == lens.cameraId &&
+                (cameraDevice == null || cameraDevice?.id == lens.cameraId)
+
+        if (isAlreadyOnRequestedLens) {
+            currentZoom = effectiveTargetZoom
+            _currentZoom.value = effectiveTargetZoom
+            preferences.currentZoom = effectiveTargetZoom
+            activeSessionLens = lens
+            _selectedLens.value = lens
+            scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
+            completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
+            return
+        }
+
         if (!isSwitchingLens.compareAndSet(false, true)) {
             if (nowMs - lastLensSwitchStartTimeMs > 1800L) {
                 Log.w(TAG, "Previous lens switch timed out (>1800ms), forcing new switch to ${lens.lensType}")
@@ -2460,8 +2480,6 @@ class Camera2Engine(private val context: Context) {
                 pendingZoomRunnable = null
             }
 
-            val previousLens = _selectedLens.value
-            val currentRunningLens = activeSessionLens ?: previousLens
             val strategy = CameraDiscovery.resolveSwitchStrategy(currentRunningLens, lens)
             preferences.saveLastLens(lens)
 
@@ -2546,8 +2564,8 @@ class Camera2Engine(private val context: Context) {
 
                 // Case D: Standby camera device is not opened yet or switch between separate camera devices requested:
                 // Switch camera devices seamlessly without tearing down the active preview stream (ZERO black screen)
-                if (cameraDevice != null && !_isRecordingVideo.value) {
-                    Log.i(TAG, "[LENS_SWITCH] Switching camera device to ${lens.cameraId} (${lens.lensType}) seamlessly")
+                if (cameraDevice != null) {
+                    Log.i(TAG, "[LENS_SWITCH] Switching camera device to ${lens.cameraId} (${lens.lensType}) seamlessly (recording=${_isRecordingVideo.value})")
                     switchCameraDevice(lens, switchGen, isContinuousTransition = isContinuousTransition)
                     return
                 }
@@ -2811,6 +2829,10 @@ class Camera2Engine(private val context: Context) {
                         }
 
                         val sessionConfigGen = sessionConfigGeneration.incrementAndGet()
+                        val recSurf = if (_isRecordingVideo.value) {
+                            dualCameraRecordingRelay?.getRecorderSurfaceForLens(targetLens) ?: activeRecordingSurface
+                        } else null
+
                         val stateCallback = object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
                                 synchronized(cameraLifecycleLock) {
@@ -2820,7 +2842,7 @@ class Camera2Engine(private val context: Context) {
                                         return@synchronized
                                     }
 
-                                    val template = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) {
+                                    val template = if (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA || _isRecordingVideo.value) {
                                         CameraDevice.TEMPLATE_RECORD
                                     } else {
                                         CameraDevice.TEMPLATE_PREVIEW
@@ -2828,6 +2850,10 @@ class Camera2Engine(private val context: Context) {
                                     val builder = try {
                                         newCamera.createCaptureRequest(template).apply {
                                             addTarget(surf)
+                                            if (_isRecordingVideo.value && recSurf != null && recSurf.isValid) {
+                                                addTarget(recSurf)
+                                                set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+                                            }
                                             applyCommonSettings(this)
                                         }
                                     } catch (e: Exception) {
@@ -2855,8 +2881,15 @@ class Camera2Engine(private val context: Context) {
                                     }
 
                                     val useUw = (targetLens.lensType == LensType.ULTRAWIDE)
+                                    val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                                    if (_isRecordingVideo.value) {
+                                        dualCameraRecordingRelay?.setActiveSource(targetSource)
+                                        if (recSurf != null && recSurf.isValid) {
+                                            activeRecordingSurface = recSurf
+                                        }
+                                    }
                                     _isUsingUltraWideSurface.value = useUw
-                                    _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                                    _displayedPreviewSource.value = targetSource
                                     activeSessionLens = targetLens
                                     _selectedLens.value = targetLens
                                     activeSessionPhysicalCameraId = targetLens.physicalCameraId
@@ -2898,18 +2931,22 @@ class Camera2Engine(private val context: Context) {
                         }
 
                         try {
+                            val outputSurfaces = mutableListOf(surf)
+                            if (_isRecordingVideo.value && recSurf != null && recSurf.isValid && !outputSurfaces.contains(recSurf)) {
+                                outputSurfaces.add(recSurf)
+                            }
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                val outputConfig = android.hardware.camera2.params.OutputConfiguration(surf)
+                                val outputConfigs = outputSurfaces.map { android.hardware.camera2.params.OutputConfiguration(it) }
                                 val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
                                     android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
-                                    listOf(outputConfig),
+                                    outputConfigs,
                                     Executor { cmd -> backgroundHandler?.post(cmd) ?: cmd.run() },
                                     stateCallback
                                 )
                                 newCamera.createCaptureSession(sessionConfig)
                             } else {
                                 @Suppress("DEPRECATION")
-                                newCamera.createCaptureSession(listOf(surf), stateCallback, backgroundHandler)
+                                newCamera.createCaptureSession(outputSurfaces, stateCallback, backgroundHandler)
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed creating capture session on new camera ${newCamera.id}", e)
