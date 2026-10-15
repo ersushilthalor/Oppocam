@@ -194,7 +194,8 @@ fun SettingsDrawer(
     onOpenPipelineStudio: () -> Unit = {},
     onOpenBeforeAfter: () -> Unit = {},
     instantSwitchState: MotorolaInstantSwitchState = MotorolaInstantSwitchState(),
-    onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
+    onFastLensSwitchToggle: (Boolean) -> Unit = {},
+    onKeepUltraWideReadyToggle: (Boolean) -> Unit = onFastLensSwitchToggle,
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit = {},
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit = {},
@@ -2116,7 +2117,8 @@ private fun CameraLensSettingsPage(
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
-    onKeepUltraWideReadyToggle: (Boolean) -> Unit = {},
+    onFastLensSwitchToggle: (Boolean) -> Unit = {},
+    onKeepUltraWideReadyToggle: (Boolean) -> Unit = onFastLensSwitchToggle,
     onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
     onShowUltraWidePreviewToggle: (Boolean) -> Unit,
     onShowFrontCameraPreviewToggle: (Boolean) -> Unit,
@@ -2180,11 +2182,11 @@ private fun CameraLensSettingsPage(
 
         item {
             SettingsSwitchCard(
-                title = "Keep Ultra Wide Ready",
-                description = "Keep Main and Ultra-Wide cameras active and ready in background simultaneously for instant, zero-lag lens switching during photo and video recording.",
-                isChecked = instantSwitchState.isKeepUltraWideReady,
-                onCheckedChange = onKeepUltraWideReadyToggle,
-                tag = "toggle_keep_ultrawide_ready"
+                title = "Fast Lens Switch",
+                description = "Seamless, zero-lag lens switching and smooth continuous zoom transitions between 0.5x and 1x with optimized hardware resource utilization.",
+                isChecked = instantSwitchState.isFastLensSwitch,
+                onCheckedChange = onFastLensSwitchToggle,
+                tag = "toggle_fast_lens_switch"
             )
         }
 
@@ -4405,7 +4407,8 @@ fun CameraSettingsScreen(
         onLensSwitchHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
         isLensSwitchOverlapAnimationEnabled = viewModel.isLensSwitchOverlapAnimationEnabled.collectAsStateWithLifecycle().value,
         onLensSwitchOverlapAnimationToggle = { viewModel.setLensSwitchOverlapAnimationEnabled(it) },
-        onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
+        onFastLensSwitchToggle = { viewModel.setFastLensSwitch(it) },
+        onKeepUltraWideReadyToggle = { viewModel.setFastLensSwitch(it) },
         onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
         onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
         onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },

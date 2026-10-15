@@ -37,6 +37,7 @@ class CameraPreferences(context: Context) {
         private const val KEY_ULTRA_FAST_SHUTTER_FPS = "pref_ultra_fast_shutter_fps"
         private const val KEY_ULTRA_FAST_SHUTTER_BURST_COUNT = "pref_ultra_fast_shutter_burst_count"
         private const val KEY_TRACKING_LENS = "pref_tracking_lens"
+        private const val KEY_FAST_LENS_SWITCH = "pref_fast_lens_switch"
         private const val KEY_KEEP_ULTRAWIDE_READY = "pref_keep_ultrawide_ready"
         private const val KEY_AUTO_SWITCH_TO_ULTRAWIDE = "pref_auto_switch_to_ultrawide"
         private const val KEY_SHOW_ULTRAWIDE_PREVIEW = "pref_show_ultrawide_preview"
@@ -269,9 +270,20 @@ class CameraPreferences(context: Context) {
             .apply()
     }
 
+    var isFastLensSwitch: Boolean
+        get() = prefs.getBoolean(KEY_FAST_LENS_SWITCH, prefs.getBoolean(KEY_KEEP_ULTRAWIDE_READY, true))
+        set(value) {
+            prefs.edit()
+                .putBoolean(KEY_FAST_LENS_SWITCH, value)
+                .putBoolean(KEY_KEEP_ULTRAWIDE_READY, value)
+                .apply()
+        }
+
     var isKeepUltraWideReady: Boolean
-        get() = prefs.getBoolean(KEY_KEEP_ULTRAWIDE_READY, true)
-        set(value) = prefs.edit().putBoolean(KEY_KEEP_ULTRAWIDE_READY, value).apply()
+        get() = isFastLensSwitch
+        set(value) {
+            isFastLensSwitch = value
+        }
 
     var isAutoSwitchToUltraWide: Boolean
         get() = prefs.getBoolean(KEY_AUTO_SWITCH_TO_ULTRAWIDE, false)

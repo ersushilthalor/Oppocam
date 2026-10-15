@@ -329,7 +329,8 @@ enum class PreviewStreamSource {
 }
 
 data class MotorolaInstantSwitchState(
-    val isKeepUltraWideReady: Boolean = true,
+    val isFastLensSwitch: Boolean = true,
+    val isKeepUltraWideReady: Boolean = isFastLensSwitch,
     val isAutoSwitchToUltraWide: Boolean = false,
     val isAutoMacroActive: Boolean = false,
     val isShowUltraWidePreview: Boolean = false,

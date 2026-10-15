@@ -798,12 +798,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     // --- Camera Switching State ---
     private val _instantSwitchState = MutableStateFlow(
         MotorolaInstantSwitchState(
-            isKeepUltraWideReady = preferences.isKeepUltraWideReady,
+            isFastLensSwitch = preferences.isFastLensSwitch,
+            isKeepUltraWideReady = preferences.isFastLensSwitch,
             isAutoSwitchToUltraWide = preferences.isAutoSwitchToUltraWide,
             isShowUltraWidePreview = preferences.isShowUltraWidePreview,
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
-            ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF,
+            ultraWideStatus = if (preferences.isFastLensSwitch) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF,
             switchPointMm = preferences.lensSwitchPointMm,
             lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
             lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec,
@@ -873,14 +874,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Switch Point: ${clamped.toInt()}mm (UW ${String.format(java.util.Locale.US, "%.2f", uwCrop)}×, Main ${String.format(java.util.Locale.US, "%.2f", mainCrop)}×)")
     }
 
-    fun setKeepUltraWideReady(enabled: Boolean) {
-        preferences.isKeepUltraWideReady = enabled
+    fun setFastLensSwitch(enabled: Boolean) {
+        preferences.isFastLensSwitch = enabled
         _instantSwitchState.value = _instantSwitchState.value.copy(
+            isFastLensSwitch = enabled,
             isKeepUltraWideReady = enabled,
             ultraWideStatus = if (enabled) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF
         )
-        engine.setKeepUltraWideReady(enabled)
-        showToast(if (enabled) "Keep Ultra Wide Ready: ON" else "Keep Ultra Wide Ready: OFF")
+        engine.setFastLensSwitch(enabled)
+        showToast(if (enabled) "Fast Lens Switch: ON" else "Fast Lens Switch: OFF")
+    }
+
+    fun setKeepUltraWideReady(enabled: Boolean) {
+        setFastLensSwitch(enabled)
     }
 
     fun setAutoSwitchToUltraWide(enabled: Boolean) {
@@ -1148,7 +1154,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setCinemaConfig(preferences.getCinemaConfig())
         engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
-        engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
+        engine.setFastLensSwitch(preferences.isFastLensSwitch)
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
         engine.zoomTransitionController.holdAtOneXDurationMs = preferences.lensSwitchHoldDurationMs

@@ -173,6 +173,25 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
+    fun testFastLensSwitchDefaultOn() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        assertTrue("Fast Lens Switch must be ON by default in preferences", prefs.isFastLensSwitch)
+        assertTrue("Fast Lens Switch must be ON by default in engine", engine.isFastLensSwitch.value)
+    }
+
+    @Test
+    fun testFastLensSwitchTogglePersistsAndUpdatesState() {
+        val prefs = com.example.camera.data.CameraPreferences(context)
+        engine.setFastLensSwitch(true)
+        assertTrue("Setting Fast Lens Switch to true must update engine state", engine.isFastLensSwitch.value)
+        assertTrue("Setting Fast Lens Switch to true must persist in preferences", prefs.isFastLensSwitch)
+
+        engine.setFastLensSwitch(false)
+        assertFalse("Setting Fast Lens Switch to false must update engine state", engine.isFastLensSwitch.value)
+        assertFalse("Setting Fast Lens Switch to false must persist in preferences", prefs.isFastLensSwitch)
+    }
+
+    @Test
     fun testKeepUltraWideReadyDefaultOn() {
         val prefs = com.example.camera.data.CameraPreferences(context)
         assertTrue("Keep Ultra Wide Ready must be ON by default in preferences", prefs.isKeepUltraWideReady)
@@ -479,6 +498,34 @@ class PhotonCameraLensSwitchingTest {
             // During initial transition, must stay on Ultra-Wide lens and zoom towards .999x
             assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
             assertTrue("Zoom must transition up from .5x towards .999x", viewModel.currentZoom.value >= 0.5f && viewModel.currentZoom.value <= 1.0f)
+        }
+    }
+
+    @Test
+    fun testFastLensSwitchEnablesSmoothTransitionBetweenHalfXAndOneX() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (ultraWideLens != null && mainLens != null) {
+            viewModel.setFastLensSwitch(true)
+            assertTrue("isFastLensSwitch must be enabled", viewModel.engine.isFastLensSwitch.value)
+
+            viewModel.setZoom(1.0f, isPresetTap = false)
+            assertEquals(1.0f, viewModel.currentZoom.value, 0.001f)
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            assertTrue("Zoom must smoothly transition down towards 0.5x", viewModel.currentZoom.value <= 1.0f && viewModel.currentZoom.value >= 0.5f)
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+
+            viewModel.engine.selectLens(ultraWideLens)
+            viewModel.setZoom(0.5f, isPresetTap = false)
+            assertEquals(0.5f, viewModel.currentZoom.value, 0.001f)
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            assertTrue("Zoom must smoothly transition up towards 1.0x", viewModel.currentZoom.value >= 0.5f && viewModel.currentZoom.value <= 1.0f)
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
         }
     }
 

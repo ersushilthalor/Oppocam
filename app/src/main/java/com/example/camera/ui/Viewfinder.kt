@@ -218,13 +218,21 @@ fun Viewfinder(
             previewBufferSize,
             isSettingsOpen,
             aspectRatio,
-            isCameraReady
+            isCameraReady,
+            previewOverlapState.isOverlapping
         ) {
         if (!isSettingsOpen) {
-            listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
-                val isUw = (tv === ultraWideTextureViewInstance)
-                if (tv.width > 0 && tv.height > 0) {
-                    applyTransformToView.value(tv, isUw, tv.width, tv.height)
+            if (previewOverlapState.isOverlapping) {
+                listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
+                    val isUw = (tv === ultraWideTextureViewInstance)
+                    if (tv.width > 0 && tv.height > 0) {
+                        applyTransformToView.value(tv, isUw, tv.width, tv.height)
+                    }
+                }
+            } else {
+                val activeTv = if (isUsingUltraWideSurface) ultraWideTextureViewInstance else textureViewInstance
+                if (activeTv != null && activeTv.width > 0 && activeTv.height > 0) {
+                    applyTransformToView.value(activeTv, isUsingUltraWideSurface, activeTv.width, activeTv.height)
                 }
             }
         }
