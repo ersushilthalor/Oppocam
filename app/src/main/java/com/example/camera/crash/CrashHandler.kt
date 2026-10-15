@@ -49,9 +49,9 @@ object CrashHandler {
                 .putLong(KEY_CRASH_TIME, System.currentTimeMillis())
                 .commit()
 
-            // Launch CrashDisplayActivity to display stack trace directly to user
-            val intent = Intent(context, CrashDisplayActivity::class.java).apply {
-                putExtra(CrashDisplayActivity.EXTRA_CRASH_REPORT, fullReport)
+            // Launch MainActivity to display stack trace directly to user
+            val intent = Intent(context, com.example.MainActivity::class.java).apply {
+                putExtra(com.example.MainActivity.EXTRA_CRASH_REPORT, fullReport)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             }
             context.startActivity(intent)

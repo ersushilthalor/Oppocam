@@ -63,7 +63,39 @@ class CameraPreferences(context: Context) {
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
+        private const val KEY_MOTION_PHOTO_ENABLED = "pref_motion_photo_enabled"
+        private const val KEY_MOTION_PHOTO_DURATION = "pref_motion_photo_duration"
+        private const val KEY_HORIZONTAL_LOCK_SETTING_ENABLED = "pref_horizontal_lock_setting_enabled"
+        private const val KEY_HORIZON_LOCK_ACTIVE = "pref_horizon_lock_active"
+        private const val KEY_DOLLY_ZOOM_SETTING_ENABLED = "pref_dolly_zoom_setting_enabled"
     }
+
+    var isMotionPhotoEnabled: Boolean
+        get() = prefs.getBoolean(KEY_MOTION_PHOTO_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_MOTION_PHOTO_ENABLED, value).apply()
+
+    var motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration
+        get() {
+            val name = prefs.getString(KEY_MOTION_PHOTO_DURATION, com.example.camera.motionphoto.MotionPhotoDuration.SEC_1.name)
+            return try {
+                com.example.camera.motionphoto.MotionPhotoDuration.valueOf(name ?: com.example.camera.motionphoto.MotionPhotoDuration.SEC_1.name)
+            } catch (e: Exception) {
+                com.example.camera.motionphoto.MotionPhotoDuration.SEC_1
+            }
+        }
+        set(value) = prefs.edit().putString(KEY_MOTION_PHOTO_DURATION, value.name).apply()
+
+    var isHorizontalLockSettingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_HORIZONTAL_LOCK_SETTING_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_HORIZONTAL_LOCK_SETTING_ENABLED, value).apply()
+
+    var isHorizonLockActive: Boolean
+        get() = prefs.getBoolean(KEY_HORIZON_LOCK_ACTIVE, false)
+        set(value) = prefs.edit().putBoolean(KEY_HORIZON_LOCK_ACTIVE, value).apply()
+
+    var isDollyZoomSettingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_DOLLY_ZOOM_SETTING_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_DOLLY_ZOOM_SETTING_ENABLED, value).apply()
 
     var lensSwitchHoldDurationSec: Float
         get() {

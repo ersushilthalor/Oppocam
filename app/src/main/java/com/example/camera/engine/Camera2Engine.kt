@@ -221,6 +221,29 @@ class Camera2Engine(private val context: Context) {
         preferences.isLensSwitchOverlapAnimationEnabled = enabled
     }
 
+    // Motion Photo Engine
+    val motionPhotoEngine = com.example.camera.motionphoto.MotionPhotoEngine()
+    var isMotionPhotoEnabled: Boolean = false
+    var motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration = com.example.camera.motionphoto.MotionPhotoDuration.SEC_1
+
+    // Stable Action Horizon Engine
+    val stableActionHorizonEngine = com.example.camera.stableaction.StableActionHorizonEngine()
+    private val _isHorizonLockEnabled = MutableStateFlow(false)
+    val isHorizonLockEnabled: StateFlow<Boolean> = _isHorizonLockEnabled.asStateFlow()
+    fun setHorizonLockEnabled(enabled: Boolean) {
+        _isHorizonLockEnabled.value = enabled
+        if (enabled) stableActionHorizonEngine.start() else stableActionHorizonEngine.stop()
+    }
+
+    // Dolly Zoom Engine
+    val dollyZoomEngine = com.example.camera.dollyzoom.DollyZoomEngine()
+    private val _isDollyZoomActive = MutableStateFlow(false)
+    val isDollyZoomActive: StateFlow<Boolean> = _isDollyZoomActive.asStateFlow()
+    fun setDollyZoomActive(active: Boolean) {
+        _isDollyZoomActive.value = active
+        if (active) dollyZoomEngine.start() else dollyZoomEngine.stop()
+    }
+
     @Volatile
     private var ultraWideViewfinderSurfaceTexture: SurfaceTexture? = null
     @Volatile
