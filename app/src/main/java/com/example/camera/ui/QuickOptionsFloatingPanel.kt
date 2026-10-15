@@ -51,35 +51,24 @@ fun QuickOptionsFloatingPanel(
     gridType: GridType,
     photoMegapixelMode: PhotoMegapixelMode,
     isRawEnabled: Boolean,
-    isMotionPhotoEnabled: Boolean,
-    activePhotoFilter: PhotoFilter,
-    isPipelineActive: Boolean,
     // Video properties
     videoResolution: CameraResolution?,
     videoFps: Int,
     isAudioEnabled: Boolean,
     isVideoStabilizationEnabled: Boolean,
     isUltraStabilizationEnabled: Boolean,
-    isHorizonLockEnabled: Boolean,
-    isDollyZoomActive: Boolean,
     hasActiveVideoAdjustments: Boolean,
     isVideoHdrEnabled: Boolean = false,
     onToggleVideoHdr: () -> Unit = {},
     // Cinema properties
     cinemaConfig: CinemaConfig = CinemaConfig(),
-    isEvOpen: Boolean = false,
-    exposureCompensation: Int = 0,
-    evStepSize: Float = 0.333f,
     // Actions
     onFlashClick: () -> Unit,
     onTimerClick: () -> Unit,
     onGridClick: () -> Unit,
     onToggleMegapixelMode: () -> Unit,
     onRawClick: () -> Unit,
-    onMotionPhotoClick: () -> Unit,
     onPhotoFilterClick: () -> Unit,
-    onToggleDollyZoom: () -> Unit,
-    onToggleHorizonLock: () -> Unit,
     onStabilizationClick: () -> Unit,
     onVideoSettingsClick: () -> Unit,
     onAudioToggle: () -> Unit,
@@ -89,7 +78,6 @@ fun QuickOptionsFloatingPanel(
     onCinemaSettingsClick: () -> Unit = {},
     onLogClick: () -> Unit = {},
     onLutClick: () -> Unit = {},
-    onEvClick: () -> Unit = {},
     onSettingsClick: () -> Unit,
     onDismiss: () -> Unit,
     accentColor: Color = Color(0xFFFF7A00),
@@ -140,61 +128,7 @@ fun QuickOptionsFloatingPanel(
                 ) {
                     when (cameraMode) {
                         CameraMode.VIDEO -> {
-                            // Row 1: Dolly Zoom, Horizontal Lock, Stabilization, Resolution
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                QuickOptionCircleButton(
-                                    icon = Icons.Filled.CenterFocusStrong,
-                                    label = "Dolly Zoom",
-                                    statusText = if (isDollyZoomActive) "ON" else "OFF",
-                                    isActive = isDollyZoomActive,
-                                    activeColor = accentColor,
-                                    onClick = onToggleDollyZoom,
-                                    testTag = "panel_dolly_zoom_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                QuickOptionCircleButton(
-                                    icon = Icons.Filled.ScreenLockRotation,
-                                    label = "Horizon Lock",
-                                    statusText = if (isHorizonLockEnabled) "ON" else "OFF",
-                                    isActive = isHorizonLockEnabled,
-                                    activeColor = accentColor,
-                                    onClick = onToggleHorizonLock,
-                                    testTag = "panel_horizon_lock_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-
-
-
-                                QuickOptionCircleButton(
-                                    icon = if (isVideoHdrEnabled) Icons.Filled.HdrOn else Icons.Outlined.HdrOff,
-                                    label = "HDR Look",
-                                    statusText = if (isVideoHdrEnabled) "ON" else "OFF",
-                                    isActive = isVideoHdrEnabled,
-                                    activeColor = accentColor,
-                                    onClick = onToggleVideoHdr,
-                                    testTag = "panel_video_hdr_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                QuickOptionCircleButton(
-                                    icon = Icons.Outlined.VideoSettings,
-                                    label = "Quality",
-                                    statusText = "$resLabel · $videoFps",
-                                    isActive = true,
-                                    activeColor = accentColor,
-                                    onClick = onVideoSettingsClick,
-                                    testTag = "panel_resolution_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Row 2: Torch, Audio, Video Adjustments, Settings
+                            // Row 1: Torch, Audio, HDR Look, Quality
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -222,6 +156,36 @@ fun QuickOptionsFloatingPanel(
                                     modifier = Modifier.weight(1f)
                                 )
 
+                                QuickOptionCircleButton(
+                                    icon = if (isVideoHdrEnabled) Icons.Filled.HdrOn else Icons.Outlined.HdrOff,
+                                    label = "HDR Look",
+                                    statusText = if (isVideoHdrEnabled) "ON" else "OFF",
+                                    isActive = isVideoHdrEnabled,
+                                    activeColor = accentColor,
+                                    onClick = onToggleVideoHdr,
+                                    testTag = "panel_video_hdr_button",
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                QuickOptionCircleButton(
+                                    icon = Icons.Outlined.VideoSettings,
+                                    label = "Quality",
+                                    statusText = "$resLabel · $videoFps",
+                                    isActive = true,
+                                    activeColor = accentColor,
+                                    onClick = onVideoSettingsClick,
+                                    testTag = "panel_resolution_button",
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Row 2: Video Adjustments Tuning, Settings
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.Tune,
                                     label = "Tuning",
@@ -309,28 +273,11 @@ fun QuickOptionsFloatingPanel(
 
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Row 2: Exposure EV, Fine Tuning, Audio, Settings
+                            // Row 2: Fine Tuning, Audio, Settings
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                val evText = when {
-                                    exposureCompensation == 0 -> "0.0"
-                                    exposureCompensation > 0 -> String.format(java.util.Locale.US, "+%.1f", exposureCompensation * evStepSize)
-                                    else -> String.format(java.util.Locale.US, "%.1f", exposureCompensation * evStepSize)
-                                }
-                                val isEvActive = exposureCompensation != 0 || isEvOpen
-                                QuickOptionCircleButton(
-                                    icon = Icons.Filled.Exposure,
-                                    label = "Exposure EV",
-                                    statusText = evText,
-                                    isActive = isEvActive,
-                                    activeColor = accentColor,
-                                    onClick = onEvClick,
-                                    testTag = "panel_cinema_ev_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.Tune,
                                     label = "Fine Tuning",
@@ -368,10 +315,10 @@ fun QuickOptionsFloatingPanel(
 
                         else -> {
                             // Photo Mode (and other capture modes)
-                            // Row 1: Timer, Hi-Res (50MP), RAW, Motion Photo
+                            // Row 1: Timer, Hi-Res (50MP), RAW
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.Timer,
@@ -404,17 +351,6 @@ fun QuickOptionsFloatingPanel(
                                     activeColor = accentColor,
                                     onClick = onRawClick,
                                     testTag = "panel_raw_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                QuickOptionCircleButton(
-                                    icon = if (isMotionPhotoEnabled) Icons.Filled.MotionPhotosOn else Icons.Outlined.MotionPhotosOff,
-                                    label = "Live Photo",
-                                    statusText = if (isMotionPhotoEnabled) "ON" else "OFF",
-                                    isActive = isMotionPhotoEnabled,
-                                    activeColor = accentColor,
-                                    onClick = onMotionPhotoClick,
-                                    testTag = "panel_motion_photo_button",
                                     modifier = Modifier.weight(1f)
                                 )
                             }

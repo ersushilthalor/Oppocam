@@ -79,10 +79,8 @@ fun SettingsDrawer(
     photoMegapixelMode: PhotoMegapixelMode = PhotoMegapixelMode.M12,
     isRefocusPhotoEnabled: Boolean = false,
     refocusFrameCount: Int = 5,
-    isMotionPhotoEnabled: Boolean = false,
-    motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration = com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS,
-    onMotionPhotoToggle: (Boolean) -> Unit = {},
-    onMotionPhotoDurationSelect: (com.example.camera.motionphoto.MotionPhotoDuration) -> Unit = {},
+    onRefocusPhotoToggle: (Boolean) -> Unit = {},
+    onRefocusFrameCountChange: (Int) -> Unit = {},
     isUltraFastShutterEnabled: Boolean = false,
     ultraFastShutterFps: Int = 15,
     onUltraFastShutterToggle: (Boolean) -> Unit = {},
@@ -94,10 +92,6 @@ fun SettingsDrawer(
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     isVideoStabilizationEnabled: Boolean = true,
-    isHorizontalLockSettingEnabled: Boolean = true,
-    onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
-    isDollyZoomSettingEnabled: Boolean = false,
-    onDollyZoomSettingToggle: (Boolean) -> Unit = {},
     isAudioEnabled: Boolean = true,
     isRawEnabled: Boolean = false,
     saveSelfieAsPreviewed: Boolean = true,
@@ -362,10 +356,6 @@ fun SettingsDrawer(
                             onRefocusPhotoToggle = onRefocusPhotoToggle,
                             refocusFrameCount = refocusFrameCount,
                             onRefocusFrameCountChange = onRefocusFrameCountChange,
-                            isMotionPhotoEnabled = isMotionPhotoEnabled,
-                            motionPhotoDuration = motionPhotoDuration,
-                            onMotionPhotoToggle = onMotionPhotoToggle,
-                            onMotionPhotoDurationSelect = onMotionPhotoDurationSelect,
                             isUltraFastShutterEnabled = isUltraFastShutterEnabled,
                             onUltraFastShutterToggle = onUltraFastShutterToggle,
                             ultraFastShutterFps = ultraFastShutterFps,
@@ -395,12 +385,8 @@ fun SettingsDrawer(
                             onStabilizationToggle = onStabilizationToggle,
                             isOisPreferred = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
                             onOisToggle = onOisToggle,
-                            isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
-                            onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
                             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
                             onUltraStabilizationToggle = onUltraStabilizationToggle,
-                            isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
-                            onDollyZoomSettingToggle = onDollyZoomSettingToggle,
                             videoHdrConfig = videoHdrConfig,
                             onVideoHdrConfigChange = onVideoHdrConfigChange,
                             onResetVideoHdrPreset = onResetVideoHdrPreset,
@@ -581,10 +567,6 @@ private fun PhotoSettingsPage(
     onRefocusPhotoToggle: (Boolean) -> Unit,
     refocusFrameCount: Int,
     onRefocusFrameCountChange: (Int) -> Unit,
-    isMotionPhotoEnabled: Boolean = false,
-    motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration = com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS,
-    onMotionPhotoToggle: (Boolean) -> Unit = {},
-    onMotionPhotoDurationSelect: (com.example.camera.motionphoto.MotionPhotoDuration) -> Unit = {},
     isUltraFastShutterEnabled: Boolean,
     onUltraFastShutterToggle: (Boolean) -> Unit,
     ultraFastShutterFps: Int,
@@ -641,31 +623,6 @@ private fun PhotoSettingsPage(
                 onCheckedChange = onSaveSelfieAsPreviewedToggle,
                 tag = "toggle_save_selfie"
             )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Motion Photo",
-                description = "Captures a continuous motion video synchronized around the shutter press, saved as a single Google Photos compatible Motion Photo.",
-                isChecked = isMotionPhotoEnabled,
-                onCheckedChange = onMotionPhotoToggle,
-                tag = "toggle_motion_photo"
-            )
-        }
-
-        if (isMotionPhotoEnabled) {
-            item {
-                SettingsSegmentedCard(
-                    title = "Motion Photo Duration",
-                    description = "Duration of motion captured before and after the shutter moment.",
-                    options = listOf(
-                        com.example.camera.motionphoto.MotionPhotoDuration.ONE_SECOND to "1 Second (0.5s + 0.5s)",
-                        com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS to "2 Seconds (1s + 1s)"
-                    ),
-                    selectedOption = motionPhotoDuration,
-                    onOptionSelected = onMotionPhotoDurationSelect
-                )
-            }
         }
 
         item {
@@ -745,12 +702,8 @@ private fun VideoSettingsPage(
     onStabilizationToggle: (Boolean) -> Unit,
     isOisPreferred: Boolean = true,
     onOisToggle: (Boolean) -> Unit = {},
-    isHorizontalLockSettingEnabled: Boolean = true,
-    onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isUltraStabilizationEnabled: Boolean,
     onUltraStabilizationToggle: () -> Unit,
-    isDollyZoomSettingEnabled: Boolean = false,
-    onDollyZoomSettingToggle: (Boolean) -> Unit = {},
     videoHdrConfig: com.example.camera.model.VideoHdrPresetConfig = com.example.camera.model.VideoHdrPresetConfig(),
     onVideoHdrConfigChange: (com.example.camera.model.VideoHdrPresetConfig) -> Unit = {},
     onResetVideoHdrPreset: () -> Unit = {},
@@ -831,26 +784,6 @@ private fun VideoSettingsPage(
         }
 
         item {
-            SettingsSwitchCard(
-                title = "Horizontal Lock",
-                description = "Show Horizontal Lock control in Video Mode to keep the horizon level during action shots.",
-                isChecked = isHorizontalLockSettingEnabled,
-                onCheckedChange = onHorizontalLockSettingToggle,
-                tag = "toggle_horizontal_lock_video_setting"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Dolly Zoom (Vertigo Effect)",
-                description = "Show Dolly Zoom control in Video Mode to keep subject size invariant while moving.",
-                isChecked = isDollyZoomSettingEnabled,
-                onCheckedChange = onDollyZoomSettingToggle,
-                tag = "toggle_dolly_zoom_setting"
-            )
-        }
-
-        item {
             val isEisSupported = capabilities.supportsEis
             SettingsSwitchCard(
                 title = "Electronic Image Stabilization (EIS)",
@@ -878,16 +811,6 @@ private fun VideoSettingsPage(
                 isChecked = isOisPreferred,
                 onCheckedChange = onOisToggle,
                 tag = "toggle_video_ois"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Horizontal Horizon Lock",
-                description = "Keep horizon level using gyroscope sensor tracking.",
-                isChecked = isHorizontalLockSettingEnabled,
-                onCheckedChange = onHorizontalLockSettingToggle,
-                tag = "toggle_horizontal_lock"
             )
         }
 
@@ -2663,8 +2586,6 @@ private fun StabilizationSettingsPage(
     onStabilizationToggle: (Boolean) -> Unit,
     isOisPreferred: Boolean,
     onOisToggle: (Boolean) -> Unit,
-    isHorizontalLockSettingEnabled: Boolean = true,
-    onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isUltraStabilizationEnabled: Boolean,
     onUltraStabilizationToggle: () -> Unit,
     windNoiseReduction: Boolean,
@@ -2703,16 +2624,6 @@ private fun StabilizationSettingsPage(
                 isChecked = isVideoStabilizationEnabled && isEisSupported,
                 onCheckedChange = { if (isEisSupported) onStabilizationToggle(it) },
                 tag = "toggle_eis_switch"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Horizontal Lock",
-                description = "Keep horizon level using Stable Action sensor tracking and counter-rotation crop stabilization.",
-                isChecked = isHorizontalLockSettingEnabled,
-                onCheckedChange = onHorizontalLockSettingToggle,
-                tag = "toggle_horizontal_lock_stab_card"
             )
         }
 

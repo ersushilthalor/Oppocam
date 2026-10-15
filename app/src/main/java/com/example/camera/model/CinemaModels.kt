@@ -143,7 +143,7 @@ data class CinemaConfig(
     val brilliance: Float = 0.0f, // -1.0f to +1.0f intelligent tone-mapping balancing shadows, midtones, and highlights
     val saturation: Float = 1.0f, // 0.0f (monochrome/desaturated) to 2.0f (vibrant) via 3x3 color gamut matrix
     val vibrance: Float = 0.0f, // -1.0f to +1.0f selective vibrance with skin-tone protection
-    val sharpness: CinemaSharpness = CinemaSharpness.CRISP, // Smartphone-style crisp detail enhancement by default
+    val sharpness: CinemaSharpness = CinemaSharpness.OFF, // Off by default for organic filmic cinema recording
     val noiseReduction: CinemaNoiseReduction = CinemaNoiseReduction.OFF, // Default OFF on initial install; persists across restarts
     val exposureCompensation: Int = 0, // Real Camera2 EV steps (e.g. -6..+6)
     val whiteBalance: WhiteBalanceMode = WhiteBalanceMode.AUTO,
