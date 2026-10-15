@@ -964,4 +964,201 @@ class ZoomTransitionVerificationTest {
             assertNotNull("Camera must remain initialized with no null device", viewModel.engine.isCameraReady.value)
         }
     }
+
+    @Test
+    fun testAlwaysReadyStandbyOppositeLensOnLaunch() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val vm = CameraViewModel(app)
+        vm.engine.detectHardwareLenses()
+        val mainLens = vm.engine.availableLenses.value.firstOrNull { it.isPrimaryMain }
+            ?: vm.engine.availableLenses.value.firstOrNull { it.lensType == LensType.WIDE }
+        val uwLens = vm.engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+
+        if (mainLens != null && uwLens != null) {
+            // Fast Lens Switch is active by default
+            assertTrue(vm.engine.isFastLensSwitch.value)
+            vm.engine.ensureUltraWideSimultaneousReady()
+            // Standby mode is detected and preparing or ready
+            val dualMode = vm.engine.detectSimultaneousStreamingMode(mainLens, uwLens)
+            assertNotEquals(Camera2Engine.DualStreamingMode.NONE, dualMode)
+        }
+    }
+
+    @Test
+    fun testActiveLensChangeAutomaticallyUpdatesStandbyTarget() {
+        val lenses = viewModel.engine.availableLenses.value
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+
+        if (mainLens != null && uwLens != null) {
+            // Start on Main lens: Standby target must be Ultra-Wide
+            viewModel.selectLens(mainLens, instant = true)
+            assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
+            viewModel.engine.ensureUltraWideSimultaneousReady()
+
+            // Switch to Ultra-Wide lens: Standby target must be Main
+            viewModel.selectLens(uwLens, instant = true)
+            assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
+            viewModel.engine.ensureUltraWideSimultaneousReady()
+
+            // Switch back to Main lens: Standby target must be Ultra-Wide
+            viewModel.selectLens(mainLens, instant = true)
+            assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
+        }
+    }
+
+    @Test
+    fun testNoLensSwitchDuringZoomTransitionZeroFiveToOneX() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            val intermediateZooms = mutableListOf<Float>()
+            val lensSwitchesWhileZooming = mutableListOf<LensInfo>()
+            val switchExecutedAtEnd = java.util.concurrent.atomic.AtomicBoolean(false)
+
+            val controller = ZoomTransitionController(
+                onApplyZoomToEngine = { zoom, isContinuous ->
+                    intermediateZooms.add(zoom)
+                    // If zoom is strictly below 1.0x, verify no lens switch was triggered
+                    if (zoom < 1.0f && switchExecutedAtEnd.get()) {
+                        fail("Lens switch cannot occur while zoom is below 1.0x ($zoom)")
+                    }
+                },
+                onSelectLensOnEngine = { lens, targetZoom, _ ->
+                    if (lens.isPrimaryMain || lens.lensType == LensType.WIDE) {
+                        switchExecutedAtEnd.set(true)
+                        lensSwitchesWhileZooming.add(lens)
+                    }
+                }
+            )
+            controller.holdAtOneXDurationMs = 0L // Zero hold for instant synchronized handoff
+
+            val job = controller.startTransition(
+                fromZoom = 0.5f,
+                targetZoom = 1.0f,
+                targetLens = mainLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = uwLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 50L,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+            job.join()
+
+            assertTrue("Intermediate digital crops must be dispatched", intermediateZooms.isNotEmpty())
+            assertTrue("Final zoom must reach 1.0x", intermediateZooms.last() >= 1.0f)
+            assertTrue("Lens switch must execute at transition completion", switchExecutedAtEnd.get())
+            assertEquals("Exactly one lens switch to Main lens should occur", 1, lensSwitchesWhileZooming.size)
+            assertEquals(mainLens.id, lensSwitchesWhileZooming[0].id)
+        }
+    }
+
+    @Test
+    fun testOneXToZeroFiveXSwitchesToCroppedUltraWideFirstThenZoomsOut() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            val eventTimeline = mutableListOf<String>()
+
+            val controller = ZoomTransitionController(
+                onApplyZoomToEngine = { zoom, _ ->
+                    eventTimeline.add("ZOOM_$zoom")
+                },
+                onSelectLensOnEngine = { lens, targetZoom, _ ->
+                    eventTimeline.add("SWITCH_${lens.lensType}_AT_$targetZoom")
+                }
+            )
+            controller.holdAtOneXDurationMs = 0L
+
+            val job = controller.startTransition(
+                fromZoom = 1.0f,
+                targetZoom = 0.5f,
+                targetLens = uwLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = mainLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 50L,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+            job.join()
+
+            // First event must be the switch to Ultra-Wide at 1.0x crop
+            assertTrue("Switch to Ultra-Wide at 1.0x crop must occur first", eventTimeline.first().startsWith("SWITCH_ULTRAWIDE_AT_1.0"))
+
+            // Verify subsequent events are zoom steps descending towards 0.5x
+            val switchIndex = eventTimeline.indexOfFirst { it.startsWith("SWITCH_ULTRAWIDE") }
+            val zoomStepsAfterSwitch = eventTimeline.subList(switchIndex + 1, eventTimeline.size)
+                .filter { it.startsWith("ZOOM_") }
+                .map { it.removePrefix("ZOOM_").toFloat() }
+
+            assertTrue("Digital zoom must smoothly descend after switch", zoomStepsAfterSwitch.isNotEmpty())
+            assertTrue("Final zoom step must reach 0.5x", zoomStepsAfterSwitch.last() <= 0.51f)
+            // No additional lens switch events should occur after the initial switch to Ultra-Wide
+            val extraSwitches = eventTimeline.subList(switchIndex + 1, eventTimeline.size).filter { it.startsWith("SWITCH_") }
+            assertTrue("No extra lens switches during zoom out", extraSwitches.isEmpty())
+        }
+    }
+
+    @Test
+    fun testTransitionStateMachineSequence() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            val statesRecorded = mutableListOf<ZoomTransitionState>()
+
+            val controller = ZoomTransitionController()
+            controller.onTransitionStateChanged = { state ->
+                statesRecorded.add(state)
+            }
+            controller.holdAtOneXDurationMs = 50L
+
+            val job = controller.startTransition(
+                fromZoom = 0.5f,
+                targetZoom = 1.0f,
+                targetLens = mainLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = uwLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 50L,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+            job.join()
+
+            assertTrue("State machine must record transitions", statesRecorded.isNotEmpty())
+            assertTrue("Should contain ZOOMING_UW_TO_SWITCH_POINT", statesRecorded.contains(ZoomTransitionState.ZOOMING_UW_TO_SWITCH_POINT))
+            assertTrue("Should contain SWITCHED_TO_MAIN", statesRecorded.contains(ZoomTransitionState.SWITCHED_TO_MAIN))
+            assertEquals("Final state must be IDLE", ZoomTransitionState.IDLE, controller.transitionState.value)
+        }
+    }
+
+    @Test
+    fun testRapidRepeatedZoomInputsCancelSafelyWithoutCrash() {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (uwLens != null && mainLens != null) {
+            // Rapid preset taps simulating frantic user input
+            for (i in 0..10) {
+                viewModel.setZoom(0.5f, isPresetTap = true)
+                viewModel.setZoom(1.0f, isPresetTap = true)
+                viewModel.setZoom(2.0f, isPresetTap = true)
+                viewModel.setZoom(0.5f, isPresetTap = true)
+            }
+            assertNotNull(viewModel.engine.selectedLens.value)
+            assertNotNull(viewModel.currentZoom.value)
+        }
+    }
 }

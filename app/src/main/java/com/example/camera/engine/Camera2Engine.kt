@@ -2454,6 +2454,11 @@ class Camera2Engine(private val context: Context) {
         }
 
         if (currentActive != null) {
+            if (_isFastLensSwitch.value && !isClosingCamera && currentActive.facing == CameraCharacteristics.LENS_FACING_BACK) {
+                backgroundHandler?.post {
+                    ensureUltraWideSimultaneousReady()
+                }
+            }
             onLensSwitchCompletedListener?.invoke(currentActive, currentZoom)
             for (listener in lensSwitchListeners) {
                 try {
@@ -5799,6 +5804,14 @@ class Camera2Engine(private val context: Context) {
             }
             pendingIsContinuousTransitionWhileSwitching = isContinuousTransition
             scheduleZoomPreviewUpdate(immediate = isPresetTap || isContinuousTransition, explicitZoom = pZoom)
+            return
+        }
+
+        // During an active ZoomTransitionController transition, the controller orchestrates
+        // the exact timing of lens switching. setZoom must strictly apply digital zoom/crop
+        // on the active camera session and never trigger physical lens switches!
+        if (zoomTransitionController.isTransitionActive.value) {
+            scheduleZoomPreviewUpdate(immediate = true, explicitZoom = pZoom)
             return
         }
 
