@@ -168,6 +168,7 @@ fun CameraScreen(
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
     val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
     val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
+    val isVideoHdrEnabled by viewModel.isVideoHdrEnabled.collectAsStateWithLifecycle()
     val isHorizonLockEnabled by viewModel.isHorizonLockEnabled.collectAsStateWithLifecycle()
     val horizonRollDegrees by viewModel.horizonRollDegrees.collectAsStateWithLifecycle()
     val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
@@ -660,6 +661,8 @@ fun CameraScreen(
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
+            isVideoHdrEnabled = isVideoHdrEnabled,
+            onToggleVideoHdr = { viewModel.toggleVideoHdr() },
             isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
             isHorizonLockEnabled = isHorizonLockEnabled,
             onToggleHorizonLock = { viewModel.toggleHorizonLock() },
@@ -729,6 +732,8 @@ fun CameraScreen(
             isHorizonLockEnabled = isHorizonLockEnabled,
             isDollyZoomActive = isDollyZoomActive,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
+            isVideoHdrEnabled = isVideoHdrEnabled,
+            onToggleVideoHdr = { viewModel.toggleVideoHdr() },
             cinemaConfig = cinemaConfig,
             isEvOpen = isEvControlOpen,
             exposureCompensation = exposureCompensation,

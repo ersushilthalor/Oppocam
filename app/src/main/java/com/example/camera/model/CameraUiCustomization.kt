@@ -146,6 +146,7 @@ enum class TopControlItem(val id: String, val label: String) {
     HORIZON_LOCK("horizon_lock", "Horizontal Lock"),
     DOLLY_ZOOM("dolly_zoom", "Dolly Zoom"),
     VIDEO_ADJUSTMENTS("video_adjustments", "Video Adjustments"),
+    VIDEO_HDR("video_hdr", "Video HDR Preset"),
     MOTION_PHOTO("motion_photo", "Motion Photo"),
     STABILIZATION("stabilization", "Video Stabilization (OFF/EIS/EIS+)"),
     PIPELINE("pipeline", "Custom Pipeline"),
@@ -206,7 +207,7 @@ data class ModeLayoutConfig(
 ) {
     fun getIconPosition(item: TopControlItem): TopIconPosition {
         return topIconPositions[item] ?: when (item) {
-            TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
+            TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK, TopControlItem.STABILIZATION, TopControlItem.VIDEO_HDR -> TopIconPosition.LEFT
             TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
             TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
         }
@@ -556,12 +557,14 @@ object CameraUiTemplates {
             CameraMode.VIDEO -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
+                    TopControlItem.VIDEO_HDR,
                     TopControlItem.RESOLUTION,
                     TopControlItem.TIMER,
                     TopControlItem.SIX_DOT_MENU
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.VIDEO_HDR to TopIconPosition.LEFT,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
                     TopControlItem.TIMER to TopIconPosition.RIGHT,
                     TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT

@@ -567,6 +567,78 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _isVideoAdjustmentsOpen = MutableStateFlow(false)
     val isVideoAdjustmentsOpen: StateFlow<Boolean> = _isVideoAdjustmentsOpen.asStateFlow()
 
+    // Video HDR-style visual preset (Reuses existing Video Adjust controls)
+    private val _videoHdrConfig = MutableStateFlow(preferences.getVideoHdrPresetConfig())
+    val videoHdrConfig: StateFlow<com.example.camera.model.VideoHdrPresetConfig> = _videoHdrConfig.asStateFlow()
+
+    private val _isVideoHdrEnabled = MutableStateFlow(preferences.isVideoHdrPresetActive)
+    val isVideoHdrEnabled: StateFlow<Boolean> = _isVideoHdrEnabled.asStateFlow()
+
+    private var manualPreHdrAdjustments: com.example.camera.model.VideoAdjustments = preferences.getPreHdrVideoAdjustments()
+
+    fun toggleVideoHdr() {
+        setVideoHdrEnabled(!_isVideoHdrEnabled.value)
+    }
+
+    fun setVideoHdrEnabled(enabled: Boolean) {
+        if (_isVideoHdrEnabled.value == enabled) return
+        _isVideoHdrEnabled.value = enabled
+        preferences.isVideoHdrPresetActive = enabled
+        _videoHdrConfig.value = _videoHdrConfig.value.copy(isEnabled = enabled)
+
+        if (enabled) {
+            // Save previous manual adjustment values without losing user's settings
+            manualPreHdrAdjustments = _videoAdjustments.value
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                preferences.savePreHdrVideoAdjustments(manualPreHdrAdjustments)
+            }
+
+            // Apply configured HDR preset immediately to live viewfinder and recording pipeline
+            val hdrAdjusted = _videoHdrConfig.value.applyPreset(manualPreHdrAdjustments)
+            _videoAdjustments.value = hdrAdjusted
+            engine.currentVideoAdjustments = hdrAdjusted
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                preferences.saveVideoAdjustments(hdrAdjusted)
+            }
+            showToast("Video HDR Preset: ON")
+        } else {
+            // Immediately restore the previous manual adjustment values without losing user's settings
+            val restored = manualPreHdrAdjustments
+            _videoAdjustments.value = restored
+            engine.currentVideoAdjustments = restored
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                preferences.saveVideoAdjustments(restored)
+            }
+            showToast("Video HDR Preset: OFF")
+        }
+    }
+
+    fun updateVideoHdrPresetConfig(config: com.example.camera.model.VideoHdrPresetConfig) {
+        _videoHdrConfig.value = config
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            preferences.saveVideoHdrPresetConfig(config)
+        }
+        // If HDR is active, apply configured preset immediately to live viewfinder and recording pipeline
+        if (_isVideoHdrEnabled.value) {
+            val hdrAdjusted = config.applyPreset(manualPreHdrAdjustments)
+            _videoAdjustments.value = hdrAdjusted
+            engine.currentVideoAdjustments = hdrAdjusted
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                preferences.saveVideoAdjustments(hdrAdjusted)
+            }
+        }
+    }
+
+    fun resetVideoHdrPresetToDefault() {
+        val defaultConfig = com.example.camera.model.VideoHdrPresetConfig(
+            isEnabled = _isVideoHdrEnabled.value,
+            enabledControls = com.example.camera.model.VideoHdrPresetConfig.defaultEnabledControls,
+            adjustments = com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments
+        )
+        updateVideoHdrPresetConfig(defaultConfig)
+        showToast("HDR Preset reset to defaults")
+    }
+
     fun setVideoAdjustmentsOpen(isOpen: Boolean) {
         _isVideoAdjustmentsOpen.value = isOpen
         if (isOpen) {
@@ -586,11 +658,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _videoAdjustments.value = adjustments
         engine.currentVideoAdjustments = adjustments
 
+        if (!_isVideoHdrEnabled.value) {
+            manualPreHdrAdjustments = adjustments
+        }
+
         // Debounce persistence to background thread to prevent UI lag while dragging sliders
         saveVideoAdjustmentsJob?.cancel()
         saveVideoAdjustmentsJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             kotlinx.coroutines.delay(300)
             preferences.saveVideoAdjustments(adjustments)
+            if (!_isVideoHdrEnabled.value) {
+                preferences.savePreHdrVideoAdjustments(adjustments)
+            }
         }
     }
 
@@ -599,10 +678,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val def = com.example.camera.model.VideoAdjustments()
         _videoAdjustments.value = def
         engine.currentVideoAdjustments = def
+        if (!_isVideoHdrEnabled.value) {
+            manualPreHdrAdjustments = def
+        }
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             preferences.saveVideoAdjustments(def)
+            if (!_isVideoHdrEnabled.value) {
+                preferences.savePreHdrVideoAdjustments(def)
+            }
         }
     }
+
 
 
 

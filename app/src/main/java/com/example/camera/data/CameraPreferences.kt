@@ -1592,4 +1592,129 @@ class CameraPreferences(context: Context) {
             .putFloat("pref_va_tex_micro_contrast", va.textureMicroContrast)
             .apply()
     }
+
+    var isVideoHdrPresetActive: Boolean
+        get() = prefs.getBoolean("pref_video_hdr_preset_active", false)
+        set(value) = prefs.edit().putBoolean("pref_video_hdr_preset_active", value).apply()
+
+    fun getVideoHdrPresetConfig(): com.example.camera.model.VideoHdrPresetConfig {
+        val enabledControls = prefs.getStringSet(
+            "pref_video_hdr_enabled_controls",
+            com.example.camera.model.VideoHdrPresetConfig.defaultEnabledControls
+        ) ?: com.example.camera.model.VideoHdrPresetConfig.defaultEnabledControls
+
+        val adjustments = com.example.camera.model.VideoAdjustments(
+            highlights = prefs.getFloat("pref_hdr_va_highlights", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.highlights),
+            shadows = prefs.getFloat("pref_hdr_va_shadows", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.shadows),
+            contrast = prefs.getFloat("pref_hdr_va_contrast", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.contrast),
+            clarity = prefs.getFloat("pref_hdr_va_clarity", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.clarity),
+            colorVibrance = prefs.getFloat("pref_hdr_va_color_vibrance", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.colorVibrance),
+            saturation = prefs.getFloat("pref_hdr_va_saturation", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.saturation),
+            tonality = prefs.getFloat("pref_hdr_va_tonality", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.tonality),
+            exposure = prefs.getFloat("pref_hdr_va_exposure", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.exposure),
+            temperature = prefs.getFloat("pref_hdr_va_temperature", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.temperature),
+            tint = prefs.getFloat("pref_hdr_va_tint", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.tint),
+            sharpness = prefs.getFloat("pref_hdr_va_sharpness", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.sharpness),
+            vignette = prefs.getFloat("pref_hdr_va_vignette", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.vignette),
+            grain = prefs.getFloat("pref_hdr_va_grain", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.grain),
+            textureMicroContrast = prefs.getFloat("pref_hdr_va_tex_micro_contrast", com.example.camera.model.VideoHdrPresetConfig.defaultPresetAdjustments.textureMicroContrast)
+        )
+
+        return com.example.camera.model.VideoHdrPresetConfig(
+            isEnabled = isVideoHdrPresetActive,
+            enabledControls = enabledControls,
+            adjustments = adjustments
+        )
+    }
+
+    fun saveVideoHdrPresetConfig(config: com.example.camera.model.VideoHdrPresetConfig) {
+        prefs.edit()
+            .putBoolean("pref_video_hdr_preset_active", config.isEnabled)
+            .putStringSet("pref_video_hdr_enabled_controls", config.enabledControls)
+            .putFloat("pref_hdr_va_highlights", config.adjustments.highlights)
+            .putFloat("pref_hdr_va_shadows", config.adjustments.shadows)
+            .putFloat("pref_hdr_va_contrast", config.adjustments.contrast)
+            .putFloat("pref_hdr_va_clarity", config.adjustments.clarity)
+            .putFloat("pref_hdr_va_color_vibrance", config.adjustments.colorVibrance)
+            .putFloat("pref_hdr_va_saturation", config.adjustments.saturation)
+            .putFloat("pref_hdr_va_tonality", config.adjustments.tonality)
+            .putFloat("pref_hdr_va_exposure", config.adjustments.exposure)
+            .putFloat("pref_hdr_va_temperature", config.adjustments.temperature)
+            .putFloat("pref_hdr_va_tint", config.adjustments.tint)
+            .putFloat("pref_hdr_va_sharpness", config.adjustments.sharpness)
+            .putFloat("pref_hdr_va_vignette", config.adjustments.vignette)
+            .putFloat("pref_hdr_va_grain", config.adjustments.grain)
+            .putFloat("pref_hdr_va_tex_micro_contrast", config.adjustments.textureMicroContrast)
+            .apply()
+    }
+
+    fun getPreHdrVideoAdjustments(): com.example.camera.model.VideoAdjustments {
+        val hasSaved = prefs.contains("pref_pre_hdr_va_saved")
+        if (!hasSaved) {
+            return getVideoAdjustments()
+        }
+        return com.example.camera.model.VideoAdjustments(
+            tonality = prefs.getFloat("pref_pre_hdr_va_tonality", 0f),
+            saturation = prefs.getFloat("pref_pre_hdr_va_saturation", 0f),
+            contrast = prefs.getFloat("pref_pre_hdr_va_contrast", 0f),
+            exposure = prefs.getFloat("pref_pre_hdr_va_exposure", 0.0f),
+            temperature = prefs.getFloat("pref_pre_hdr_va_temperature", 0f),
+            tint = prefs.getFloat("pref_pre_hdr_va_tint", 0f),
+            highlights = prefs.getFloat("pref_pre_hdr_va_highlights", 0f),
+            shadows = prefs.getFloat("pref_pre_hdr_va_shadows", 0f),
+            vignette = prefs.getFloat("pref_pre_hdr_va_vignette", 0f),
+            grain = prefs.getFloat("pref_pre_hdr_va_grain", 0f),
+            clarity = prefs.getFloat("pref_pre_hdr_va_clarity", 0f),
+            sharpness = prefs.getFloat("pref_pre_hdr_va_sharpness", 0f),
+            curveBlacks = prefs.getFloat("pref_pre_hdr_va_curve_blacks", 0f),
+            curveShadows = prefs.getFloat("pref_pre_hdr_va_curve_shadows", 0f),
+            curveMidtones = prefs.getFloat("pref_pre_hdr_va_curve_midtones", 0f),
+            curveHighlights = prefs.getFloat("pref_pre_hdr_va_curve_highlights", 0f),
+            curveWhites = prefs.getFloat("pref_pre_hdr_va_curve_whites", 0f),
+            colorVibrance = prefs.getFloat("pref_pre_hdr_va_color_vibrance", 0f),
+            colorBalanceR = prefs.getFloat("pref_pre_hdr_va_color_bal_r", 0f),
+            colorBalanceG = prefs.getFloat("pref_pre_hdr_va_color_bal_g", 0f),
+            colorBalanceB = prefs.getFloat("pref_pre_hdr_va_color_bal_b", 0f),
+            lightFxFlash = prefs.getFloat("pref_pre_hdr_va_lfx_flash", 0f),
+            lightFxBloom = prefs.getFloat("pref_pre_hdr_va_lfx_bloom", 0f),
+            lightFxSoftLight = prefs.getFloat("pref_pre_hdr_va_lfx_soft_light", 0f),
+            textureFilmGrain = prefs.getFloat("pref_pre_hdr_va_tex_grain", 0f),
+            textureHalation = prefs.getFloat("pref_pre_hdr_va_tex_halation", 0f),
+            textureMicroContrast = prefs.getFloat("pref_pre_hdr_va_tex_micro_contrast", 0f)
+        )
+    }
+
+    fun savePreHdrVideoAdjustments(va: com.example.camera.model.VideoAdjustments) {
+        prefs.edit()
+            .putBoolean("pref_pre_hdr_va_saved", true)
+            .putFloat("pref_pre_hdr_va_tonality", va.tonality)
+            .putFloat("pref_pre_hdr_va_saturation", va.saturation)
+            .putFloat("pref_pre_hdr_va_contrast", va.contrast)
+            .putFloat("pref_pre_hdr_va_exposure", va.exposure)
+            .putFloat("pref_pre_hdr_va_temperature", va.temperature)
+            .putFloat("pref_pre_hdr_va_tint", va.tint)
+            .putFloat("pref_pre_hdr_va_highlights", va.highlights)
+            .putFloat("pref_pre_hdr_va_shadows", va.shadows)
+            .putFloat("pref_pre_hdr_va_vignette", va.vignette)
+            .putFloat("pref_pre_hdr_va_grain", va.grain)
+            .putFloat("pref_pre_hdr_va_clarity", va.clarity)
+            .putFloat("pref_pre_hdr_va_sharpness", va.sharpness)
+            .putFloat("pref_pre_hdr_va_curve_blacks", va.curveBlacks)
+            .putFloat("pref_pre_hdr_va_curve_shadows", va.curveShadows)
+            .putFloat("pref_pre_hdr_va_curve_midtones", va.curveMidtones)
+            .putFloat("pref_pre_hdr_va_curve_highlights", va.curveHighlights)
+            .putFloat("pref_pre_hdr_va_curve_whites", va.curveWhites)
+            .putFloat("pref_pre_hdr_va_color_vibrance", va.colorVibrance)
+            .putFloat("pref_pre_hdr_va_color_bal_r", va.colorBalanceR)
+            .putFloat("pref_pre_hdr_va_color_bal_g", va.colorBalanceG)
+            .putFloat("pref_pre_hdr_va_color_bal_b", va.colorBalanceB)
+            .putFloat("pref_pre_hdr_va_lfx_flash", va.lightFxFlash)
+            .putFloat("pref_pre_hdr_va_lfx_bloom", va.lightFxBloom)
+            .putFloat("pref_pre_hdr_va_lfx_soft_light", va.lightFxSoftLight)
+            .putFloat("pref_pre_hdr_va_tex_grain", va.textureFilmGrain)
+            .putFloat("pref_pre_hdr_va_tex_halation", va.textureHalation)
+            .putFloat("pref_pre_hdr_va_tex_micro_contrast", va.textureMicroContrast)
+            .apply()
+    }
 }
+

@@ -171,6 +171,8 @@ fun TopControlBar(
     isVideoAdjustmentsOpen: Boolean = false,
     hasActiveVideoAdjustments: Boolean = false,
     onVideoAdjustmentsClick: () -> Unit = {},
+    isVideoHdrEnabled: Boolean = false,
+    onToggleVideoHdr: () -> Unit = {},
     isHorizontalLockSettingEnabled: Boolean = true,
     isHorizonLockEnabled: Boolean = false,
     onToggleHorizonLock: () -> Unit = {},
@@ -733,6 +735,26 @@ fun TopControlBar(
             }
         }
 
+        val videoHdrButton = @Composable {
+            IconButton(
+                onClick = onToggleVideoHdr,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(
+                        layoutConfig,
+                        activeColor = if (isVideoHdrEnabled) Color(0xFFFFD54F) else null
+                    )
+                    .testTag("video_hdr_button")
+            ) {
+                Icon(
+                    imageVector = if (isVideoHdrEnabled) Icons.Filled.HdrOn else Icons.Outlined.HdrOff,
+                    contentDescription = if (isVideoHdrEnabled) "Video HDR Preset: ON" else "Video HDR Preset: OFF",
+                    tint = if (isVideoHdrEnabled) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
         val horizonLockButton = @Composable {
             IconButton(
                 onClick = onToggleHorizonLock,
@@ -881,6 +903,7 @@ fun TopControlBar(
                     TopControlItem.HORIZON_LOCK -> horizonLockButton()
                     TopControlItem.DOLLY_ZOOM -> dollyZoomButton()
                     TopControlItem.VIDEO_ADJUSTMENTS -> videoAdjustmentsButton()
+                    TopControlItem.VIDEO_HDR -> videoHdrButton()
                     TopControlItem.MOTION_PHOTO -> motionPhotoButton()
                     TopControlItem.PIPELINE -> pipelineButton()
                     TopControlItem.SIX_DOT_MENU -> sixDotMenuButton()
@@ -893,6 +916,14 @@ fun TopControlBar(
         val visibleItems = run {
             var items = layoutConfig.topControlsOrder
                 .filterNot { layoutConfig.hiddenTopControls.contains(it) || it == TopControlItem.STABILIZATION }
+            if (cameraMode == CameraMode.VIDEO && !items.contains(TopControlItem.VIDEO_HDR) && !layoutConfig.hiddenTopControls.contains(TopControlItem.VIDEO_HDR)) {
+                val flashIdx = items.indexOf(TopControlItem.FLASH)
+                items = if (flashIdx >= 0) {
+                    items.toMutableList().apply { add(flashIdx + 1, TopControlItem.VIDEO_HDR) }
+                } else {
+                    listOf(TopControlItem.VIDEO_HDR) + items
+                }
+            }
             if (!items.contains(TopControlItem.SIX_DOT_MENU) && !layoutConfig.hiddenTopControls.contains(TopControlItem.SIX_DOT_MENU)) {
                 items = if (items.contains(TopControlItem.SETTINGS)) {
                     items.map { if (it == TopControlItem.SETTINGS) TopControlItem.SIX_DOT_MENU else it }

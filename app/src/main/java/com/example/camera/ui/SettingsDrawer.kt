@@ -151,6 +151,11 @@ fun SettingsDrawer(
     onManualFocusDistanceChange: (Float) -> Unit = {},
     onPhotoFilterSelected: (PhotoFilter) -> Unit = {},
     onResetAllSettings: () -> Unit = {},
+    videoHdrConfig: com.example.camera.model.VideoHdrPresetConfig = com.example.camera.model.VideoHdrPresetConfig(),
+    onVideoHdrConfigChange: (com.example.camera.model.VideoHdrPresetConfig) -> Unit = {},
+    onResetVideoHdrPreset: () -> Unit = {},
+    onApplyCurrentAdjustmentsToHdrPreset: () -> Unit = {},
+    currentVideoAdjustments: com.example.camera.model.VideoAdjustments = com.example.camera.model.VideoAdjustments(),
     // UI Customization callbacks
     uiCustomizationState: UiCustomizationState = UiCustomizationState(),
     onSelectTemplate: (UiTemplateType) -> Unit = {},
@@ -395,7 +400,12 @@ fun SettingsDrawer(
                             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
                             onUltraStabilizationToggle = onUltraStabilizationToggle,
                             isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
-                            onDollyZoomSettingToggle = onDollyZoomSettingToggle
+                            onDollyZoomSettingToggle = onDollyZoomSettingToggle,
+                            videoHdrConfig = videoHdrConfig,
+                            onVideoHdrConfigChange = onVideoHdrConfigChange,
+                            onResetVideoHdrPreset = onResetVideoHdrPreset,
+                            onApplyCurrentAdjustmentsToHdrPreset = onApplyCurrentAdjustmentsToHdrPreset,
+                            currentVideoAdjustments = currentVideoAdjustments
                         )
                         SettingsPage.CINEMA -> CinemaSettingsPage(
                             cinemaConfig = cinemaConfig,
@@ -740,13 +750,28 @@ private fun VideoSettingsPage(
     isUltraStabilizationEnabled: Boolean,
     onUltraStabilizationToggle: () -> Unit,
     isDollyZoomSettingEnabled: Boolean = false,
-    onDollyZoomSettingToggle: (Boolean) -> Unit = {}
+    onDollyZoomSettingToggle: (Boolean) -> Unit = {},
+    videoHdrConfig: com.example.camera.model.VideoHdrPresetConfig = com.example.camera.model.VideoHdrPresetConfig(),
+    onVideoHdrConfigChange: (com.example.camera.model.VideoHdrPresetConfig) -> Unit = {},
+    onResetVideoHdrPreset: () -> Unit = {},
+    onApplyCurrentAdjustmentsToHdrPreset: () -> Unit = {},
+    currentVideoAdjustments: com.example.camera.model.VideoAdjustments = com.example.camera.model.VideoAdjustments()
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        item {
+            VideoHdrPresetSettingsCard(
+                config = videoHdrConfig,
+                onConfigChange = onVideoHdrConfigChange,
+                onResetToDefaults = onResetVideoHdrPreset,
+                onApplyCurrentAdjustments = onApplyCurrentAdjustmentsToHdrPreset,
+                currentAdjustments = currentVideoAdjustments
+            )
+        }
+
         item {
             val supportedResolutions = capabilities.supportedVideoResolutions
                 .filterNot { it.width >= 7680 || it.height >= 7680 }
@@ -895,6 +920,266 @@ private fun VideoSettingsPage(
                     selectedOption = audioSource,
                     onOptionSelected = onAudioSourceSelected
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoHdrPresetSettingsCard(
+    config: com.example.camera.model.VideoHdrPresetConfig,
+    onConfigChange: (com.example.camera.model.VideoHdrPresetConfig) -> Unit,
+    onResetToDefaults: () -> Unit,
+    onApplyCurrentAdjustments: () -> Unit,
+    currentAdjustments: com.example.camera.model.VideoAdjustments
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF131622),
+        border = BorderStroke(1.dp, if (config.isEnabled) Color(0xFFFFD54F).copy(alpha = 0.45f) else Color.White.copy(alpha = 0.08f)),
+        modifier = Modifier.fillMaxWidth().testTag("video_hdr_preset_settings_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            // Master Toggle Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(if (config.isEnabled) Color(0xFFFFD54F).copy(alpha = 0.2f) else Color.White.copy(alpha = 0.05f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (config.isEnabled) Icons.Filled.HdrOn else Icons.Outlined.HdrOff,
+                            contentDescription = "HDR Preset",
+                            tint = if (config.isEnabled) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "HDR Video Visual Preset",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (config.isEnabled) {
+                                Surface(
+                                    color = Color(0xFFFFD54F),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "ACTIVE",
+                                        color = Color.Black,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Black,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Simulated HDR tone mapping reusing existing Video Adjust controls across live preview and recording. Does not alter standard 8-bit SDR bit depth, color space, codec, or metadata.",
+                            color = Color.White.copy(alpha = 0.65f),
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+
+                Switch(
+                    checked = config.isEnabled,
+                    onCheckedChange = { onConfigChange(config.copy(isEnabled = it)) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.Black,
+                        checkedTrackColor = Color(0xFFFFD54F),
+                        uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                        uncheckedTrackColor = Color.White.copy(alpha = 0.15f)
+                    ),
+                    modifier = Modifier.testTag("toggle_video_hdr_preset")
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = Color.White.copy(alpha = 0.08f), thickness = 1.dp)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Action Buttons Row: Reset Defaults & Copy Current Adjustments
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onResetToDefaults,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White.copy(alpha = 0.9f)),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.weight(1f).testTag("btn_reset_hdr_preset")
+                ) {
+                    Icon(Icons.Outlined.RestartAlt, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = "Reset Preset", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+
+                OutlinedButton(
+                    onClick = onApplyCurrentAdjustments,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFFD54F)),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.weight(1.2f).testTag("btn_copy_tuning_to_hdr")
+                ) {
+                    Icon(Icons.Outlined.Tune, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = "Copy Manual Tuning", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Text(
+                text = "CHOOSE CONTROLS & TARGET VALUES",
+                color = Color(0xFFFFD54F),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.8.sp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Select which existing adjustment controls the HDR preset will apply, and adjust each target value. Viewfinder and recording use the same pipeline in real time. Turning HDR off immediately restores your previous manual settings.",
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 11.5.sp,
+                lineHeight = 15.sp
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // List of existing controls with checkboxes and sliders
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                com.example.camera.model.HdrPresetTargetControl.values().forEach { control ->
+                    val isIncluded = config.enabledControls.contains(control.key)
+                    val currentValue = control.getValue(config.adjustments)
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isIncluded) Color(0xFF1B1E2E) else Color(0xFF161822),
+                        border = BorderStroke(1.dp, if (isIncluded) Color(0xFFFFD54F).copy(alpha = 0.25f) else Color.White.copy(alpha = 0.04f)),
+                        modifier = Modifier.fillMaxWidth().testTag("hdr_control_item_${control.key.lowercase()}")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = isIncluded,
+                                        onCheckedChange = { checked ->
+                                            val updatedSet = if (checked) {
+                                                config.enabledControls + control.key
+                                            } else {
+                                                config.enabledControls - control.key
+                                            }
+                                            onConfigChange(config.copy(enabledControls = updatedSet))
+                                        },
+                                        colors = CheckboxDefaults.colors(
+                                            checkedColor = Color(0xFFFFD54F),
+                                            checkmarkColor = Color.Black,
+                                            uncheckedColor = Color.White.copy(alpha = 0.4f)
+                                        ),
+                                        modifier = Modifier.size(24.dp).testTag("checkbox_hdr_${control.key.lowercase()}")
+                                    )
+                                    Column {
+                                        Text(
+                                            text = control.label,
+                                            color = if (isIncluded) Color.White else Color.White.copy(alpha = 0.6f),
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = control.description,
+                                            color = Color.White.copy(alpha = 0.45f),
+                                            fontSize = 10.5.sp
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isIncluded) Color(0xFFFFD54F).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f)
+                                ) {
+                                    Text(
+                                        text = if (isIncluded) control.formatValue(currentValue) else "OFF",
+                                        color = if (isIncluded) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.4f),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+
+                            if (isIncluded) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = control.formatValue(control.min),
+                                        color = Color.White.copy(alpha = 0.35f),
+                                        fontSize = 10.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
+                                    Slider(
+                                        value = currentValue,
+                                        onValueChange = { newVal ->
+                                            val updatedAdjustments = control.withValue(config.adjustments, newVal)
+                                            onConfigChange(config.copy(adjustments = updatedAdjustments))
+                                        },
+                                        valueRange = control.min..control.max,
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color(0xFFFFD54F),
+                                            activeTrackColor = Color(0xFFFFD54F),
+                                            inactiveTrackColor = Color.White.copy(alpha = 0.15f)
+                                        ),
+                                        modifier = Modifier.weight(1f).height(24.dp).testTag("slider_hdr_${control.key.lowercase()}")
+                                    )
+                                    Text(
+                                        text = control.formatValue(control.max),
+                                        color = Color.White.copy(alpha = 0.35f),
+                                        fontSize = 10.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -4055,6 +4340,8 @@ fun CameraSettingsScreen(
     val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
+    val videoHdrConfig by viewModel.videoHdrConfig.collectAsStateWithLifecycle()
+    val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
 
     val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
         val oisEffective = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred
@@ -4141,6 +4428,13 @@ fun CameraSettingsScreen(
         onManualFocusDistanceChange = { viewModel.setManualFocusDistance(it) },
         onPhotoFilterSelected = { viewModel.setPhotoFilter(it) },
         onResetAllSettings = { viewModel.resetAllSettings() },
+        videoHdrConfig = videoHdrConfig,
+        onVideoHdrConfigChange = { viewModel.updateVideoHdrPresetConfig(it) },
+        onResetVideoHdrPreset = { viewModel.resetVideoHdrPresetToDefault() },
+        onApplyCurrentAdjustmentsToHdrPreset = {
+            viewModel.updateVideoHdrPresetConfig(videoHdrConfig.copy(adjustments = videoAdjustments))
+        },
+        currentVideoAdjustments = videoAdjustments,
         uiCustomizationState = uiCustomizationState,
         onSelectTemplate = { viewModel.selectUiTemplate(it) },
         onUpdateGlobalLayoutConfig = { viewModel.updateGlobalLayoutConfig(it) },

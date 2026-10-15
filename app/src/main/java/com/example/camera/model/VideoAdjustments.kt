@@ -137,3 +137,141 @@ enum class BasicAdjustmentControl(
         }
     }
 }
+
+/**
+ * Configuration for the Video HDR-style visual preset.
+ * Reuses the existing Video Adjust controls (highlights compression, shadows lift,
+ * contrast, clarity, vibrance, etc.) to simulate high dynamic range tone mapping on both
+ * the live viewfinder and recorded video without altering 8-bit SDR video codec, bit depth, or metadata.
+ */
+data class VideoHdrPresetConfig(
+    val isEnabled: Boolean = false,
+    val enabledControls: Set<String> = defaultEnabledControls,
+    val adjustments: VideoAdjustments = defaultPresetAdjustments
+) {
+    companion object {
+        // High-dynamic-range simulated visual look:
+        // Compressed highlights (-30), boosted shadows (+35), expanded micro-contrast/clarity (+20),
+        // balanced mid-contrast (+12), rich color vibrance (+15), subtle saturation (+5), and texture micro-contrast (+15).
+        val defaultPresetAdjustments = VideoAdjustments(
+            highlights = -30f,
+            shadows = 35f,
+            contrast = 12f,
+            clarity = 20f,
+            colorVibrance = 15f,
+            saturation = 5f,
+            tonality = 0f,
+            exposure = 0.0f,
+            temperature = 0f,
+            tint = 0f,
+            sharpness = 0f,
+            vignette = 0f,
+            textureMicroContrast = 15f
+        )
+
+        val defaultEnabledControls: Set<String> = setOf(
+            "HIGHLIGHTS",
+            "SHADOWS",
+            "CONTRAST",
+            "CLARITY",
+            "COLOR_VIBRANCE"
+        )
+    }
+
+    /**
+     * Applies the configured HDR preset values to only the selected controls,
+     * preserving other adjustments from [base].
+     */
+    fun applyPreset(base: VideoAdjustments): VideoAdjustments {
+        var res = base
+        if (enabledControls.contains("HIGHLIGHTS")) res = res.copy(highlights = adjustments.highlights)
+        if (enabledControls.contains("SHADOWS")) res = res.copy(shadows = adjustments.shadows)
+        if (enabledControls.contains("CONTRAST")) res = res.copy(contrast = adjustments.contrast)
+        if (enabledControls.contains("CLARITY")) res = res.copy(clarity = adjustments.clarity)
+        if (enabledControls.contains("COLOR_VIBRANCE")) res = res.copy(colorVibrance = adjustments.colorVibrance)
+        if (enabledControls.contains("SATURATION")) res = res.copy(saturation = adjustments.saturation)
+        if (enabledControls.contains("TONALITY")) res = res.copy(tonality = adjustments.tonality)
+        if (enabledControls.contains("EXPOSURE")) res = res.copy(exposure = adjustments.exposure)
+        if (enabledControls.contains("TEMP")) res = res.copy(temperature = adjustments.temperature)
+        if (enabledControls.contains("TINT")) res = res.copy(tint = adjustments.tint)
+        if (enabledControls.contains("SHARPNESS")) res = res.copy(sharpness = adjustments.sharpness)
+        if (enabledControls.contains("VIGNETTE")) res = res.copy(vignette = adjustments.vignette)
+        if (enabledControls.contains("MICRO_CONTRAST")) res = res.copy(textureMicroContrast = adjustments.textureMicroContrast)
+        return res
+    }
+}
+
+/**
+ * Controls available for inclusion in the Video HDR preset.
+ * All controls map directly to existing VideoAdjustments fields.
+ */
+enum class HdrPresetTargetControl(
+    val key: String,
+    val label: String,
+    val description: String,
+    val min: Float,
+    val max: Float,
+    val isDecimal: Boolean = false
+) {
+    HIGHLIGHTS("HIGHLIGHTS", "Highlights Compression", "Compresses bright sky & highlight clipping", -100f, 100f),
+    SHADOWS("SHADOWS", "Shadows Lift", "Recovers details in deep shadow zones", -100f, 100f),
+    CONTRAST("CONTRAST", "Dynamic Contrast", "Local midtone tonal separation", -100f, 100f),
+    CLARITY("CLARITY", "Clarity / Structure", "Edge micro-acutance enhancement", -100f, 100f),
+    COLOR_VIBRANCE("COLOR_VIBRANCE", "Color Vibrance", "Expands color dynamics without clipping skin tones", -100f, 100f),
+    SATURATION("SATURATION", "Saturation", "Overall color intensity", -100f, 100f),
+    TONALITY("TONALITY", "Tonality", "Global tonal shift bias", -100f, 100f),
+    EXPOSURE("EXPOSURE", "Exposure Bias", "Photometric exposure compensation", -3.0f, 3.0f, isDecimal = true),
+    MICRO_CONTRAST("MICRO_CONTRAST", "Micro-Contrast", "Fine texture and detail contrast boost", 0f, 100f),
+    TEMP("TEMP", "Color Temp", "Warmth / Coolness white balance bias", -100f, 100f),
+    TINT("TINT", "Tint", "Magenta / Green tint balance", -100f, 100f),
+    SHARPNESS("SHARPNESS", "Sharpness", "High-frequency edge sharpness", 0f, 100f);
+
+    fun getValue(adjustments: VideoAdjustments): Float {
+        return when (this) {
+            HIGHLIGHTS -> adjustments.highlights
+            SHADOWS -> adjustments.shadows
+            CONTRAST -> adjustments.contrast
+            CLARITY -> adjustments.clarity
+            COLOR_VIBRANCE -> adjustments.colorVibrance
+            SATURATION -> adjustments.saturation
+            TONALITY -> adjustments.tonality
+            EXPOSURE -> adjustments.exposure
+            MICRO_CONTRAST -> adjustments.textureMicroContrast
+            TEMP -> adjustments.temperature
+            TINT -> adjustments.tint
+            SHARPNESS -> adjustments.sharpness
+        }
+    }
+
+    fun withValue(adjustments: VideoAdjustments, value: Float): VideoAdjustments {
+        val clamped = value.coerceIn(min, max)
+        return when (this) {
+            HIGHLIGHTS -> adjustments.copy(highlights = clamped)
+            SHADOWS -> adjustments.copy(shadows = clamped)
+            CONTRAST -> adjustments.copy(contrast = clamped)
+            CLARITY -> adjustments.copy(clarity = clamped)
+            COLOR_VIBRANCE -> adjustments.copy(colorVibrance = clamped)
+            SATURATION -> adjustments.copy(saturation = clamped)
+            TONALITY -> adjustments.copy(tonality = clamped)
+            EXPOSURE -> adjustments.copy(exposure = Math.round(clamped * 10f) / 10f)
+            MICRO_CONTRAST -> adjustments.copy(textureMicroContrast = clamped)
+            TEMP -> adjustments.copy(temperature = clamped)
+            TINT -> adjustments.copy(tint = clamped)
+            SHARPNESS -> adjustments.copy(sharpness = clamped)
+        }
+    }
+
+    fun formatValue(value: Float): String {
+        return if (isDecimal) {
+            String.format(Locale.US, "%.1f", value)
+        } else {
+            val intVal = Math.round(value)
+            if (intVal > 0 && this != MICRO_CONTRAST && this != SHARPNESS) {
+                "+$intVal"
+            } else {
+                "$intVal"
+            }
+        }
+    }
+}
+

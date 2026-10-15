@@ -645,6 +645,7 @@ fun LivePreviewCanvas(
                     TopControlItem.HORIZON_LOCK -> Icons.Outlined.ScreenLockRotation
                     TopControlItem.DOLLY_ZOOM -> Icons.Outlined.CenterFocusStrong
                     TopControlItem.VIDEO_ADJUSTMENTS -> Icons.Outlined.Tune
+                    TopControlItem.VIDEO_HDR -> Icons.Filled.HdrOn
                     TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                     TopControlItem.PIPELINE -> Icons.Outlined.Tune

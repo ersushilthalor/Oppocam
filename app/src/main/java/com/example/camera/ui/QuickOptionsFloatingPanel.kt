@@ -63,6 +63,8 @@ fun QuickOptionsFloatingPanel(
     isHorizonLockEnabled: Boolean,
     isDollyZoomActive: Boolean,
     hasActiveVideoAdjustments: Boolean,
+    isVideoHdrEnabled: Boolean = false,
+    onToggleVideoHdr: () -> Unit = {},
     // Cinema properties
     cinemaConfig: CinemaConfig = CinemaConfig(),
     isEvOpen: Boolean = false,
@@ -166,6 +168,17 @@ fun QuickOptionsFloatingPanel(
                                 )
 
 
+
+                                QuickOptionCircleButton(
+                                    icon = if (isVideoHdrEnabled) Icons.Filled.HdrOn else Icons.Outlined.HdrOff,
+                                    label = "HDR Look",
+                                    statusText = if (isVideoHdrEnabled) "ON" else "OFF",
+                                    isActive = isVideoHdrEnabled,
+                                    activeColor = accentColor,
+                                    onClick = onToggleVideoHdr,
+                                    testTag = "panel_video_hdr_button",
+                                    modifier = Modifier.weight(1f)
+                                )
 
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.VideoSettings,

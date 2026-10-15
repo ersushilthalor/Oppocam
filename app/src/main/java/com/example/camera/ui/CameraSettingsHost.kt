@@ -97,6 +97,8 @@ fun CameraSettingsHost(
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
     val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
     val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
+    val videoHdrConfig by viewModel.videoHdrConfig.collectAsStateWithLifecycle()
+    val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
 
     androidx.compose.runtime.CompositionLocalProvider(
         com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
@@ -183,6 +185,13 @@ fun CameraSettingsHost(
         onManualFocusDistanceChange = { viewModel.setManualFocusDistance(it) },
         onPhotoFilterSelected = { viewModel.setPhotoFilter(it) },
         onResetAllSettings = { viewModel.resetAllSettings() },
+        videoHdrConfig = videoHdrConfig,
+        onVideoHdrConfigChange = { viewModel.updateVideoHdrPresetConfig(it) },
+        onResetVideoHdrPreset = { viewModel.resetVideoHdrPresetToDefault() },
+        onApplyCurrentAdjustmentsToHdrPreset = {
+            viewModel.updateVideoHdrPresetConfig(videoHdrConfig.copy(adjustments = videoAdjustments))
+        },
+        currentVideoAdjustments = videoAdjustments,
         uiCustomizationState = uiCustomizationState,
         onSelectTemplate = { viewModel.selectUiTemplate(it) },
         onUpdateGlobalLayoutConfig = { viewModel.updateGlobalLayoutConfig(it) },
