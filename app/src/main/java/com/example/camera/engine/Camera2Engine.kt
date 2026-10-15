@@ -378,7 +378,7 @@ class Camera2Engine(private val context: Context) {
             if (session == ultraWideStandbyCaptureSession) {
                 standbyDroppedFramesCount.incrementAndGet()
                 CameraPerformanceMonitor.recordStandbyDroppedFrame()
-                Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby capture failed: reason=${failure.reason}")
+                Log.w(TAG, "[FAST_LENS_SWITCH] Standby capture failed: reason=${failure.reason}")
             }
         }
     }
@@ -793,7 +793,7 @@ class Camera2Engine(private val context: Context) {
             if (!isClosingCamera && _isFastLensSwitch.value && _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_BACK) {
                 if (ultraWideStandbyCameraDevice == null && !isPreparingUltraWideStandby.get()) {
                     ultraWideReconnectCount++
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Reopening background camera (attempt $ultraWideReconnectCount)...")
+                    Log.i(TAG, "[FAST_LENS_SWITCH] Reopening background camera (attempt $ultraWideReconnectCount)...")
                     ensureUltraWideSimultaneousReady()
                 }
             }
@@ -837,7 +837,7 @@ class Camera2Engine(private val context: Context) {
             return
         }
         if (!isConfiguringStandbySession.compareAndSet(false, true)) {
-            Log.d(TAG, "[KEEP_ULTRAWIDE_READY] Standby session configuration already in progress on ${camera.id}, skipping duplicate request")
+            Log.d(TAG, "[FAST_LENS_SWITCH] Standby session configuration already in progress on ${camera.id}, skipping duplicate request")
             return
         }
         standbyConfigStartTimeNs = System.nanoTime()
@@ -945,7 +945,7 @@ class Camera2Engine(private val context: Context) {
                             applySynchronizedStandbySettings(recordBuilder, standbyLens)
                             recordBuilder.set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
                             session.setRepeatingRequest(recordBuilder.build(), standbyCaptureCallback, backgroundHandler)
-                            Log.i(TAG, "[KEEP_ULTRAWIDE_READY] [STANDBY_SESSION] Prewarmed recording-capable standby session active on ID ${camera.id}, session=${session.hashCode()} (${standbyLens.lensType}, duration=${durationMs}ms, initCount=${standbySessionInitCount.get()})")
+                            Log.i(TAG, "[FAST_LENS_SWITCH] [STANDBY_SESSION] Prewarmed recording-capable standby session active on ID ${camera.id}, session=${session.hashCode()} (${standbyLens.lensType}, duration=${durationMs}ms, initCount=${standbySessionInitCount.get()})")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed repeating recording request on standby camera ${camera.id}", e)
                             try { session.close() } catch (_: Throwable) {}
@@ -986,7 +986,7 @@ class Camera2Engine(private val context: Context) {
                         }
                         if (!retriedWithoutAdvancedConfig && (is10BitStandby || targetPhysId != null)) {
                             retriedWithoutAdvancedConfig = true
-                            Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby recording session with 10-bit/physical config rejected; retrying standard recording session")
+                            Log.w(TAG, "[FAST_LENS_SWITCH] Standby recording session with 10-bit/physical config rejected; retrying standard recording session")
                             createRecordingCaptureSession(
                                 camera = camera,
                                 previewSurface = standbyPreviewSurf,
@@ -998,7 +998,7 @@ class Camera2Engine(private val context: Context) {
                             )
                             return
                         }
-                        Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Hardware rejected concurrent recording session on standby camera ${camera.id}; safe recording switch fallback will be used")
+                        Log.w(TAG, "[FAST_LENS_SWITCH] Hardware rejected concurrent recording session on standby camera ${camera.id}; safe recording switch fallback will be used")
                         standbyConfiguredForRecording = false
                         standbyRecordingSessionFailed = true
                         isPreparingUltraWideStandby.set(false)
@@ -1080,7 +1080,7 @@ class Camera2Engine(private val context: Context) {
 
                     try {
                         session.setRepeatingRequest(builder.build(), standbyCaptureCallback, backgroundHandler)
-                        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] [STANDBY_SESSION] Persistent background session active on ID ${camera.id}, session=${session.hashCode()} (${standbyLens.lensType}, duration=${durationMs}ms, initCount=${standbySessionInitCount.get()})")
+                        Log.i(TAG, "[FAST_LENS_SWITCH] [STANDBY_SESSION] Persistent background session active on ID ${camera.id}, session=${session.hashCode()} (${standbyLens.lensType}, duration=${durationMs}ms, initCount=${standbySessionInitCount.get()})")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed repeating request on standby camera ${camera.id}", e)
                         try { session.close() } catch (_: Throwable) {}
@@ -1100,7 +1100,7 @@ class Camera2Engine(private val context: Context) {
                         pendingLensWhileSwitching = null
                         val pendingContinuous = pendingIsContinuousTransitionWhileSwitching
                         pendingIsContinuousTransitionWhileSwitching = false
-                        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Standby session ready; executing pending lens switch to ${pendingLens.lensType}")
+                        Log.i(TAG, "[FAST_LENS_SWITCH] Standby session ready; executing pending lens switch to ${pendingLens.lensType}")
                         switchUsingPrewarmedStandby(pendingLens, standbySessionGeneration.get(), isContinuousTransition = pendingContinuous)
                         return
                     }
@@ -1126,7 +1126,7 @@ class Camera2Engine(private val context: Context) {
                         return
                     }
                     if (includeJpegReader && sessionSurfaces.size > 1) {
-                        Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Standby session with JPEG reader rejected; retrying with preview surface only")
+                        Log.w(TAG, "[FAST_LENS_SWITCH] Standby session with JPEG reader rejected; retrying with preview surface only")
                         try { ultraWideStandbyJpegReader?.close() } catch (_: Throwable) {}
                         ultraWideStandbyJpegReader = null
                         configureStandbySessionOnDevice(camera, standbyLens, includeJpegReader = false)
@@ -1201,7 +1201,7 @@ class Camera2Engine(private val context: Context) {
 
         val standbyLens = if (currentLens.lensType == LensType.ULTRAWIDE) mainLens else ultraWideLens
         val dualMode = detectSimultaneousStreamingMode(mainLens, ultraWideLens)
-        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Dual streaming mode: $dualMode (main=${mainLens.cameraId}, uw=${ultraWideLens.cameraId}, phys=${ultraWideLens.physicalCameraId})")
+        Log.i(TAG, "[FAST_LENS_SWITCH] Dual streaming mode: $dualMode (main=${mainLens.cameraId}, uw=${ultraWideLens.cameraId}, phys=${ultraWideLens.physicalCameraId})")
 
         if (dualMode == DualStreamingMode.NONE) {
             return
@@ -1220,7 +1220,7 @@ class Camera2Engine(private val context: Context) {
                 isUltraWideStreaming.set(true)
                 activeLogicalMultiCamUltraWideConfigured = true
                 _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
-                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Logical multi-camera Ultra-Wide stream active on ID ${camera.id}")
+                Log.i(TAG, "[FAST_LENS_SWITCH] Logical multi-camera Ultra-Wide stream active on ID ${camera.id}")
             }
             return
         }
@@ -1244,13 +1244,13 @@ class Camera2Engine(private val context: Context) {
                     _ultraWideStreamStatus.value = BackgroundCameraStatus.READY_QUIET
                     standbySessionReuseCount.incrementAndGet()
                     CameraPerformanceMonitor.recordStandbySessionReuse()
-                    Log.d(TAG, "[KEEP_ULTRAWIDE_READY] [STANDBY_SESSION] Reusing valid existing standby session on ${existingStandbyCam.id}, session=${ultraWideStandbyCaptureSession.hashCode()} (${optimalStandbySize.width}x${optimalStandbySize.height}, reuseCount=${standbySessionReuseCount.get()})")
+                    Log.d(TAG, "[FAST_LENS_SWITCH] [STANDBY_SESSION] Reusing valid existing standby session on ${existingStandbyCam.id}, session=${ultraWideStandbyCaptureSession.hashCode()} (${optimalStandbySize.width}x${optimalStandbySize.height}, reuseCount=${standbySessionReuseCount.get()})")
                     syncStandbyStreamSettings()
                     return
                 }
 
                 if (isConfiguringStandbySession.get()) {
-                    Log.d(TAG, "[KEEP_ULTRAWIDE_READY] Standby session already configuring on ${existingStandbyCam.id}, skipping duplicate reconfiguration")
+                    Log.d(TAG, "[FAST_LENS_SWITCH] Standby session already configuring on ${existingStandbyCam.id}, skipping duplicate reconfiguration")
                     return
                 }
 
@@ -1292,7 +1292,7 @@ class Camera2Engine(private val context: Context) {
                         isClosingCamera ||
                         cameraDevice == null ||
                         !_isCameraInitialized.value) {
-                        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Stale standby camera opened (${camera.id}, token=$openToken), closing safely")
+                        Log.i(TAG, "[FAST_LENS_SWITCH] Stale standby camera opened (${camera.id}, token=$openToken), closing safely")
                         isPreparingUltraWideStandby.set(false)
                         try { camera.close() } catch (_: Throwable) {}
                         return
@@ -2466,6 +2466,12 @@ class Camera2Engine(private val context: Context) {
                 } catch (ignored: Exception) {}
             }
         }
+
+        if (_isFastLensSwitch.value && !nextIsContinuous && !isContinuousZoomTransitionActive && currentActive?.facing == CameraCharacteristics.LENS_FACING_BACK) {
+            backgroundHandler?.post {
+                ensureFastLensSwitchReady()
+            }
+        }
     }
 
     /**
@@ -2591,7 +2597,7 @@ class Camera2Engine(private val context: Context) {
                     _selectedLens.value = lens
                     activeSessionPhysicalCameraId = if (useUw) lens.physicalCameraId else primaryMainLens?.physicalCameraId
 
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
+                    Log.i(TAG, "[FAST_LENS_SWITCH] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
                     scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
                     completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
                     return
@@ -2600,7 +2606,7 @@ class Camera2Engine(private val context: Context) {
                 // Case B: Persistent dual-session across separate CameraDevices (both sessions continuously running)
                 val prewarmedCamera = ultraWideStandbyCameraDevice
                 if (prewarmedCamera != null && prewarmedCamera.id == lens.cameraId) {
-                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Persistent dual-session switch to CameraDevice ID ${lens.cameraId} (${lens.lensType}, recording=${_isRecordingVideo.value})")
+                    Log.i(TAG, "[FAST_LENS_SWITCH] Persistent dual-session switch to CameraDevice ID ${lens.cameraId} (${lens.lensType}, recording=${_isRecordingVideo.value})")
                     switchUsingPrewarmedStandby(lens, switchGen, isContinuousTransition = isContinuousTransition)
                     return
                 }
@@ -2797,7 +2803,7 @@ class Camera2Engine(private val context: Context) {
                     syncStandbyStreamSettings()
                 }
                 completeLensSwitch(targetLens, isContinuousTransition = isContinuousTransition)
-                Log.i(TAG, "[KEEP_ULTRAWIDE_READY] 0ms instant stream swap completed to ${targetLens.lensType} (ID=${targetCam.id}, recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
+                Log.i(TAG, "[FAST_LENS_SWITCH] 0ms instant stream swap completed to ${targetLens.lensType} (ID=${targetCam.id}, recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
                 return
             }
 
@@ -4630,7 +4636,7 @@ class Camera2Engine(private val context: Context) {
                                         _isCameraReady.value = true
                                         CameraPerformanceMonitor.start()
                                         completeLensSwitch(_selectedLens.value)
-                                        Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Simultaneous Main + Physical Ultra-Wide ($uwPhysId) session active on logical camera ${camera.id}")
+                                        Log.i(TAG, "[FAST_LENS_SWITCH] Simultaneous Main + Physical Ultra-Wide ($uwPhysId) session active on logical camera ${camera.id}")
                                     } catch (e: Exception) {
                                         Log.e(TAG, "Failed repeating request on simultaneous dual-physical session", e)
                                         completeLensSwitch(_selectedLens.value)
@@ -4641,7 +4647,7 @@ class Camera2Engine(private val context: Context) {
                                     if (configGen != sessionConfigGeneration.get() || cameraDevice != camera) return
                                     onSessionConfigurationFinished()
                                     activeLogicalMultiCamUltraWideConfigured = false
-                                    Log.w(TAG, "[KEEP_ULTRAWIDE_READY] Simultaneous dual-physical session rejected by HAL; falling back to standard session")
+                                    Log.w(TAG, "[FAST_LENS_SWITCH] Simultaneous dual-physical session rejected by HAL; falling back to standard session")
                                     createCameraCaptureSession(forceLogicalStream = true)
                                 }
                             }
@@ -7756,7 +7762,7 @@ class Camera2Engine(private val context: Context) {
                                     if (pendingLensWhileSwitching != null || pendingZoomWhileSwitching != null) {
                                         completeLensSwitch(lens)
                                     }
-                                    Log.i(TAG, "[KEEP_ULTRAWIDE_READY] Logical multi-camera dual-physical recording session active on ${camera.id} (dualRec=$dualRecConfigured)")
+                                    Log.i(TAG, "[FAST_LENS_SWITCH] Logical multi-camera dual-physical recording session active on ${camera.id} (dualRec=$dualRecConfigured)")
                                 }
 
                                 fun tryThreeOutputLogicalPhysicalRecording(fallbackToSingleOnFail: () -> Unit) {
@@ -7856,7 +7862,7 @@ class Camera2Engine(private val context: Context) {
                                                 }
                                                 override fun onConfigureFailed(s4: CameraCaptureSession) {
                                                     try { s4.close() } catch (_: Throwable) {}
-                                                    Log.w(TAG, "[KEEP_ULTRAWIDE_READY] 4-output logical physical recording rejected; trying 3-output physical recording session")
+                                                    Log.w(TAG, "[FAST_LENS_SWITCH] 4-output logical physical recording rejected; trying 3-output physical recording session")
                                                     tryThreeOutputLogicalPhysicalRecording {
                                                         // Fallback to standard single-stream recording session below
                                                         val fallbackBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {

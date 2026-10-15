@@ -565,7 +565,7 @@ fun Viewfinder(
                                 ultraWideTextureViewInstance = this
                                 val isUw = currentIsUsingUltraWideSurface
                                 alpha = if (isUw) 1f else 0f
-                                visibility = android.view.View.VISIBLE
+                                visibility = if (isUw) android.view.View.VISIBLE else android.view.View.INVISIBLE
                                 translationZ = if (isUw) 2f else 0f
                                 (this.parent as? android.view.View)?.translationZ = if (isUw) 2f else 0f
                                 addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->

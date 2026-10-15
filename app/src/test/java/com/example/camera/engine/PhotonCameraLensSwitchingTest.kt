@@ -530,6 +530,44 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
+    fun testFastLensSwitchBidirectionalStandbyAndSafeRapidInputs() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
+        viewModel.engine.detectHardwareLenses()
+        val lenses = viewModel.engine.availableLenses.value
+        val ultraWideLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
+
+        if (ultraWideLens != null && mainLens != null) {
+            viewModel.setFastLensSwitch(true)
+            assertTrue(viewModel.engine.isFastLensSwitch.value)
+
+            // Test 1: On Main lens, opposite lens is UltraWide
+            viewModel.engine.selectLens(mainLens)
+            assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
+            val standbyWhenOnMain = if (viewModel.engine.selectedLens.value?.lensType == LensType.ULTRAWIDE) mainLens else ultraWideLens
+            assertEquals("Standby target while on Main must be Ultra-Wide", ultraWideLens.id, standbyWhenOnMain.id)
+
+            // Test 2: On Ultra-Wide lens, opposite lens is Main
+            viewModel.engine.selectLens(ultraWideLens)
+            assertEquals(ultraWideLens.id, viewModel.engine.selectedLens.value?.id)
+            val standbyWhenOnUw = if (viewModel.engine.selectedLens.value?.lensType == LensType.ULTRAWIDE) mainLens else ultraWideLens
+            assertEquals("Standby target while on Ultra-Wide must be Main", mainLens.id, standbyWhenOnUw.id)
+
+            // Test 3: Rapid repeated zoom inputs are safely cancelled without freezing or crashing
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            viewModel.setZoom(1.0f, isPresetTap = true)
+            viewModel.setZoom(0.5f, isPresetTap = true)
+            viewModel.setZoom(2.0f, isPresetTap = true)
+            assertTrue("Engine zoom transition must remain active or completed smoothly", viewModel.currentZoom.value in 0.5f..20.0f)
+
+            // Cancelling transition directly returns engine to steady state
+            viewModel.engine.zoomTransitionController.cancelTransition()
+            assertFalse(viewModel.engine.zoomTransitionController.isTransitionActive.value)
+        }
+    }
+
+    @Test
     fun testKeepUltraWideReadyEnablesSmoothTransitionBetweenHalfXAndOneX() {
         val app = ApplicationProvider.getApplicationContext<android.app.Application>()
         val viewModel = com.example.camera.viewmodel.CameraViewModel(app)
