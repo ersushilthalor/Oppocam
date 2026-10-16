@@ -326,10 +326,6 @@ class DualCameraRecordingRelay(
     }
 
     /**
-     * Atomically switches the active camera stream feeding the video encoder (0 ms latency).
-     * Neither camera session nor the video encoder is stopped or reconfigured.
-     */
-    /**
      * Changes the active recording source. Explicit instant switches still use the default 0ms
      * path; continuous zoom handoffs may request a short GPU crossfade while the encoder surface
      * and Camera2 sessions remain attached and running.
@@ -532,7 +528,7 @@ class DualCameraRecordingRelay(
         ptOutputAlphaHandle = GLES20.glGetUniformLocation(passthroughProgramId, "uOutputAlpha")
 
         val fragmentShader = VideoAdjustmentsPipeline.GLES_VIDEO_ADJUSTMENTS_FRAGMENT_SHADER
-            .replace("uniform float uExposure;", "uniform float uOutputAlpha;\\n        uniform float uExposure;")
+            .replace("uniform float uExposure;", "uniform float uOutputAlpha;\n        uniform float uExposure;")
             .replace("gl_FragColor = color;", "gl_FragColor = vec4(color.rgb, uOutputAlpha);")
             .replace("gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);", "gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), uOutputAlpha);")
 
@@ -656,12 +652,10 @@ class DualCameraRecordingRelay(
 
         // Keep draining both inputs, but render only on the destination camera's frame clock.
         // This keeps encoder FPS unchanged while allowing both latest textures to be blended.
+        // Only the selected source advances the encoder timeline. The other source is
+        // still drained above so its latest frame is ready for a crossfade.
+        if (activeSource != expectedSource) return
         val transitionSnapshot = getSourceTransitionSnapshot(SystemClock.uptimeMillis())
-        if (transitionSnapshot == null) {
-            if (activeSource != expectedSource) return
-        } else if (expectedSource != activeSource) {
-            return
-        }
 
         if (!encoderTargetSurface.isValid) return
 
