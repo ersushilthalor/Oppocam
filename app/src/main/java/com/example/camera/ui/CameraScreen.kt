@@ -436,38 +436,6 @@ fun CameraScreen(
             frameCount = fastShutterFrameCount,
             modifier = Modifier.align(Alignment.Center)
         )
-
-        // Motion Photo post-shutter recording pill
-        if (isMotionPhotoRecording) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xCC0F172A),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 74.dp)
-                    .testTag("motion_photo_recording_indicator")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(Color(0xFF38BDF8), CircleShape)
-                    )
-                    Text(
-                        text = "Recording motion...",
-                        color = Color.White,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-
         // Non-blocking video background saving indicator pill
         if (isSavingVideo) {
             Surface(
@@ -476,7 +444,7 @@ fun CameraScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.7f)),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = if (isMotionPhotoRecording) 116.dp else 74.dp)
+                    .padding(top = 74.dp)
                     .testTag("video_saving_indicator")
             ) {
                 Row(
