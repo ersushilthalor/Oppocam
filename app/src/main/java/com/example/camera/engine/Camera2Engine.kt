@@ -1614,7 +1614,14 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private val _hybridStabilizationConfig = MutableStateFlow(HybridStabilizationConfig())
+    private val _hybridStabilizationConfig = MutableStateFlow(
+        HybridStabilizationConfig().copy(
+            isHybridEnabled = false,
+            isEisPreferred = false,
+            isEisOnly = false,
+            isUltraStabilizationEnabled = false
+        )
+    )
     val hybridStabilizationConfig: StateFlow<HybridStabilizationConfig> = _hybridStabilizationConfig.asStateFlow()
 
     // Pro Mode Advanced Image Adjustments
