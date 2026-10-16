@@ -49,13 +49,7 @@ fun LutFloatingWindow(
     var isExpandedSettingsOpen by remember { mutableStateOf(false) }
 
     val builtInPresets = remember {
-        listOf(
-            CinematicLut.OFF,
-            CinematicLut.STANDARD,
-            CinematicLut.BLOCKBUSTER,
-            CinematicLut.THRILLER,
-            CinematicLut.WEDDING
-        )
+        listOf(CinematicLut.OFF)
     }
 
     // Build unified item list
@@ -68,7 +62,7 @@ fun LutFloatingWindow(
 
     val selectedSelection = remember(config.selectedLut, config.customLutPath, customLuts) {
         if (config.selectedLut == CinematicLut.CUSTOM && config.customLutPath != null) {
-            val custom = customLuts.firstOrNull { it.filePath == config.customLutPath }
+            val custom = customLuts.firstOrNull { it.filePath == config.customLutPath || it.title == config.customLutName }
             if (custom != null) LutSelection.Custom(custom) else LutSelection.BuiltIn(CinematicLut.OFF)
         } else {
             LutSelection.BuiltIn(config.selectedLut)
@@ -209,7 +203,7 @@ fun LutFloatingWindow(
                     }
 
                     // Delete current custom LUT if custom is selected
-                    if (selectedSelection is LutSelection.Custom) {
+                    if (selectedSelection is LutSelection.Custom && !selectedSelection.item.isBuiltIn) {
                         Spacer(modifier = Modifier.width(8.dp))
                         IconButton(
                             onClick = { onDeleteCustomLut(selectedSelection.item.id) },

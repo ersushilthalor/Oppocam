@@ -896,7 +896,16 @@ fun CameraScreen(
                     viewModel.selectLut(lut)
                 },
                 onSelectCustomLut = { customLutItem ->
-                    viewModel.selectCustomLut(customLutItem.filePath, customLutItem.title)
+                    val lutPath = customLutRepo.ensureLutReady(customLutItem)
+                    if (lutPath != null) {
+                        viewModel.selectCustomLut(lutPath, customLutItem.title)
+                    } else {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Could not load LUT: ${customLutItem.title}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
                 },
                 onIntensityChange = { intensity ->
                     viewModel.updateCinemaConfig(cinemaConfig.copy(lutIntensity = intensity))

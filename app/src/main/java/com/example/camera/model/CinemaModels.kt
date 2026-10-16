@@ -220,14 +220,7 @@ data class CinemaHardwareCapabilities(
     val supportedCodecs: List<CinemaCodec> = listOf(CinemaCodec.H265, CinemaCodec.H264),
     val supportedColorProfiles: List<CinemaColorProfile> = listOf(
         CinemaColorProfile.NATIVE,
-        CinemaColorProfile.S_LOG,
-        CinemaColorProfile.N_LOG,
-        CinemaColorProfile.HLG10,
-        CinemaColorProfile.HLG_2,
-        CinemaColorProfile.APPLE_LOG_2,
-        CinemaColorProfile.D_LOG_2,
-        CinemaColorProfile.SAMSUNG_APV_LOG,
-        CinemaColorProfile.PROCESSED_JPEG
+        CinemaColorProfile.HLG_2
     )
 ) {
     /**
