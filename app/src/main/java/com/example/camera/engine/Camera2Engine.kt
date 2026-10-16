@@ -1506,18 +1506,13 @@ class Camera2Engine(private val context: Context) {
         }
     var isAfLocked: Boolean = false
     var isRawCaptureEnabled: Boolean = false
-    var isVideoStabilizationEnabled: Boolean = true
-        set(value) {
-            field = value
-            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            val hybridConfig = _hybridStabilizationConfig.value
-            val isStabActive = value && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || hybridConfig.isEisPreferred || hybridConfig.isEisOnly)
-            if (isVideoMode && isStabActive) {
-                gyroStabilizationEngine.start()
-            } else {
-                gyroStabilizationEngine.stop()
-                lastStabilizedCrop = null
-            }
+    // EIS is intentionally disabled: it caused recording freezes and frame drops.
+    // Keep OIS independent and hardware-controlled.
+    var isVideoStabilizationEnabled: Boolean = false
+        set(@Suppress("UNUSED_PARAMETER") value) {
+            field = false
+            gyroStabilizationEngine.stop()
+            lastStabilizedCrop = null
         }
     var videoBitrateOption: VideoBitrateOption = VideoBitrateOption.AUTO
     var videoFps: Int = 30
@@ -1595,24 +1590,12 @@ class Camera2Engine(private val context: Context) {
 
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
 
-    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = preferences.videoStabilizationMode
-        set(value) {
-            field = value
-            val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            if (isVideoMode) {
-                when (value) {
-                    com.example.camera.model.VideoStabilizationMode.EIS -> {
-                        gyroStabilizationEngine.start()
-                    }
-                    com.example.camera.model.VideoStabilizationMode.OFF -> {
-                        gyroStabilizationEngine.stop()
-                        lastStabilizedCrop = null
-                    }
-                }
-            } else {
-                gyroStabilizationEngine.stop()
-                lastStabilizedCrop = null
-            }
+    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.OFF
+        set(@Suppress("UNUSED_PARAMETER") value) {
+            field = com.example.camera.model.VideoStabilizationMode.OFF
+            preferences.videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.OFF
+            gyroStabilizationEngine.stop()
+            lastStabilizedCrop = null
             updatePreviewSettings()
         }
 
@@ -1663,18 +1646,17 @@ class Camera2Engine(private val context: Context) {
         }
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
-        _hybridStabilizationConfig.value = config
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        if (config.isEisOnly || config.isHybridEnabled || config.isEisPreferred || config.isUltraStabilizationEnabled) {
-            videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
-        }
-        val isStabActive = isVideoStabilizationEnabled && (config.isUltraStabilizationEnabled || config.isHybridEnabled || config.isEisPreferred || config.isEisOnly || videoStabilizationMode.isEnabled)
-        if (isVideoMode && isStabActive) {
-            gyroStabilizationEngine.start()
-        } else {
-            gyroStabilizationEngine.stop()
-            lastStabilizedCrop = null
-        }
+        // Remove every EIS/software stabilization route. Preserve the user's OIS choice.
+        _hybridStabilizationConfig.value = config.copy(
+            isHybridEnabled = false,
+            isEisPreferred = false,
+            isEisOnly = false,
+            isUltraStabilizationEnabled = false
+        )
+        isVideoStabilizationEnabled = false
+        videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.OFF
+        gyroStabilizationEngine.stop()
+        lastStabilizedCrop = null
         updatePreviewSettings()
     }
 
