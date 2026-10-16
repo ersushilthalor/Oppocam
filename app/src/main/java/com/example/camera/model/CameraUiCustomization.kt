@@ -431,7 +431,7 @@ data class ModeLayoutConfig(
 }
 
 data class UiCustomizationState(
-    val selectedTemplate: UiTemplateType = UiTemplateType.STOCK_PIXEL,
+    val selectedTemplate: UiTemplateType = UiTemplateType.SAMSUNG,
     val globalConfig: ModeLayoutConfig = CameraUiTemplates.getTemplateConfig(UiTemplateType.STOCK_PIXEL),
     val modeSpecificConfigs: Map<CameraMode, ModeLayoutConfig> = emptyMap(),
     val customPresets: List<CustomUiPreset> = emptyList()
@@ -474,8 +474,8 @@ data class UiCustomizationState(
             return try {
                 val root = JSONObject(jsonStr)
                 val template = try {
-                    UiTemplateType.valueOf(root.optString("selectedTemplate", UiTemplateType.STOCK_PIXEL.name))
-                } catch (e: Exception) { UiTemplateType.STOCK_PIXEL }
+                    UiTemplateType.valueOf(root.optString("selectedTemplate", UiTemplateType.SAMSUNG.name))
+                } catch (e: Exception) { UiTemplateType.SAMSUNG }
 
                 val gConfig = root.optJSONObject("globalConfig")?.let { ModeLayoutConfig.fromJson(it) }
                     ?: CameraUiTemplates.getTemplateConfig(template)
