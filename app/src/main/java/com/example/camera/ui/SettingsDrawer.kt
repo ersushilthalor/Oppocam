@@ -1312,32 +1312,28 @@ private fun CinemaSettingsPage(
         // 5. Log & Color Profile
         item {
             SettingsSegmentedCard(
-                title = "Pro Video Color Profile",
-                description = "Logarithmic & HDR curves preserve maximum dynamic range for color grading. Native provides iPhone-style natural processing.",
+                title = "Pro Video Log Toggle / Profile",
+                description = "Enable HLG10 log mode or keep Natural profile for balanced dynamic range.",
                 options = listOf(
-                    CinemaColorProfile.NATIVE to "Native",
-                    CinemaColorProfile.S_LOG to "S-Log",
-                    CinemaColorProfile.N_LOG to "N-Log",
-                    CinemaColorProfile.HLG10 to "HLG10 HDR",
-                    CinemaColorProfile.HLG_2 to "HLG 2",
-                    CinemaColorProfile.APPLE_LOG_2 to "Apple Log 2",
-                    CinemaColorProfile.D_LOG_2 to "D-Log 2",
-                    CinemaColorProfile.SAMSUNG_APV_LOG to "Samsung APV Log",
-                    CinemaColorProfile.PROCESSED_JPEG to "Processed JPEG"
+                    CinemaColorProfile.NATIVE to "Natural",
+                    CinemaColorProfile.HLG10 to "HLG10"
                 ),
                 selectedOption = cinemaConfig.colorProfile,
                 onOptionSelected = { profile ->
                     val canDo10Bit = cinemaCapabilities.getSupportedBitDepthsForCodec(cinemaConfig.codec).contains(LogBitDepth.BIT_10)
-                    val updated = when (profile) {
-                        CinemaColorProfile.HLG10 -> {
-                            cinemaConfig.copy(
-                                colorProfile = CinemaColorProfile.HLG10,
-                                colorSpace = CinemaColorSpace.REC_2020,
-                                logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
-                                codec = if (cinemaConfig.codec == CinemaCodec.H264 && cinemaCapabilities.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else cinemaConfig.codec
-                            )
-                        }
-                        else -> cinemaConfig.copy(colorProfile = profile)
+                    val updated = if (profile == CinemaColorProfile.HLG10) {
+                        cinemaConfig.copy(
+                            colorProfile = CinemaColorProfile.HLG10,
+                            colorSpace = CinemaColorSpace.REC_2020,
+                            logBitDepth = if (canDo10Bit) LogBitDepth.BIT_10 else LogBitDepth.BIT_8,
+                            codec = if (cinemaConfig.codec == CinemaCodec.H264 && cinemaCapabilities.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else cinemaConfig.codec
+                        )
+                    } else {
+                        cinemaConfig.copy(
+                            colorProfile = CinemaColorProfile.NATIVE,
+                            colorSpace = CinemaColorSpace.REC_709,
+                            logBitDepth = LogBitDepth.OFF
+                        )
                     }
                     onCinemaConfigChange(updated)
                 }

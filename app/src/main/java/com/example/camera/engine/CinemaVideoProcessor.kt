@@ -537,7 +537,7 @@ object CinemaVideoProcessor {
                                 GLES20.glUniform1f(uBrillianceHandle, config.brilliance.coerceIn(-1f, 1f))
 
                                 val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
-                                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2)
+                                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10)
                                 val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
                                 GLES20.glUniform1f(uFilmicOutputHandle, filmicOutput)
 

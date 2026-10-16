@@ -349,61 +349,7 @@ fun TopControlBar(
                     }
                 }
                 CameraMode.CINEMA -> {
-                    val resLabel = when {
-                        cinemaConfig.selectedResolution?.width == 3840 || cinemaConfig.selectedResolution?.height == 3840 -> "4K"
-                        cinemaConfig.selectedResolution?.width == 2560 || cinemaConfig.selectedResolution?.height == 2560 -> "2K"
-                        cinemaConfig.selectedResolution?.width == 1920 || cinemaConfig.selectedResolution?.height == 1920 -> "1080p"
-                        cinemaConfig.selectedResolution?.width == 1280 || cinemaConfig.selectedResolution?.height == 1280 -> "720p"
-                        else -> "4K"
-                    }
-                    val aspectLabel = cinemaConfig.aspectRatio.label
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(17.dp))
-                                .background(Color(0xB21A1A1E))
-                                .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                                .clickable { onCinemaResolutionClick() }
-                                .padding(horizontal = 10.dp)
-                                .testTag("pro_video_resolution_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = resLabel,
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(17.dp))
-                                .background(Color(0xB21A1A1E))
-                                .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f), RoundedCornerShape(17.dp))
-                                .clickable { onCinemaAspectRatioClick() }
-                                .padding(horizontal = 10.dp)
-                                .testTag("cinema_aspect_ratio_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = aspectLabel,
-                                color = Color(0xFFFFD54F),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
+                    // Resolution and aspect ratio are inside the six-dot (⋮) menu only in Pro Video Mode
                 }
                 CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> {
                     Box(
@@ -481,10 +427,10 @@ fun TopControlBar(
                 }
                 CameraMode.CINEMA -> {
                     val bitLabel = if (cinemaConfig.logBitDepth == LogBitDepth.BIT_10) "10b" else "8b"
-                    val label = if (cinemaConfig.colorProfile == CinemaColorProfile.PROCESSED_JPEG) {
-                        "RAW JPEG"
-                    } else {
+                    val label = if (cinemaConfig.colorProfile == CinemaColorProfile.HLG10) {
                         "LOG $bitLabel"
+                    } else {
+                        "NATURAL"
                     }
                     Box(
                         modifier = Modifier
@@ -606,13 +552,13 @@ fun TopControlBar(
 
 
         val logButton = @Composable {
-            val isLogActive = cinemaConfig.colorProfile != CinemaColorProfile.NATIVE || cinemaConfig.logBitDepth != LogBitDepth.OFF
+            val isLogActive = cinemaConfig.colorProfile == CinemaColorProfile.HLG10
             Box(
                 modifier = Modifier
                     .height(34.dp)
                     .topControlStyle(
                         layoutConfig,
-                        activeColor = if (isLogWindowOpen || isLogActive) accentColor else null,
+                        activeColor = if (isLogActive) accentColor else null,
                         isPill = true
                     )
                     .clickable { onLogClick() }
@@ -622,7 +568,7 @@ fun TopControlBar(
             ) {
                 Text(
                     text = "LOG",
-                    color = if (isLogWindowOpen || isLogActive) accentColor else Color.White,
+                    color = if (isLogActive) accentColor else Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 0.8.sp,
@@ -778,7 +724,7 @@ fun TopControlBar(
                     TopControlItem.TIMER -> timerAudioButton()
                     TopControlItem.GRID -> gridAssistButton()
                     TopControlItem.RESOLUTION -> {
-                        if (cameraMode != CameraMode.PHOTO || photoMegapixelMode == PhotoMegapixelMode.M50) {
+                        if ((cameraMode != CameraMode.PHOTO || photoMegapixelMode == PhotoMegapixelMode.M50) && cameraMode != CameraMode.CINEMA) {
                             primaryBadge()
                         }
                     }
@@ -789,7 +735,11 @@ fun TopControlBar(
                     TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
                     TopControlItem.STABILIZATION -> { /* Removed */ }
                     TopControlItem.VIDEO_ADJUSTMENTS -> videoAdjustmentsButton()
-                    TopControlItem.VIDEO_HDR -> videoHdrButton()
+                    TopControlItem.VIDEO_HDR -> {
+                        if (cameraMode != CameraMode.VIDEO) {
+                            videoHdrButton()
+                        }
+                    }
                     TopControlItem.PIPELINE -> pipelineButton()
                     TopControlItem.SIX_DOT_MENU -> sixDotMenuButton()
                     TopControlItem.SETTINGS -> settingsButton()
@@ -800,15 +750,12 @@ fun TopControlBar(
         // Render Top Controls according to layoutConfig and position
         val visibleItems = run {
             var items = layoutConfig.topControlsOrder
-                .filterNot { layoutConfig.hiddenTopControls.contains(it) || it == TopControlItem.STABILIZATION }
-            if (cameraMode == CameraMode.VIDEO && !items.contains(TopControlItem.VIDEO_HDR) && !layoutConfig.hiddenTopControls.contains(TopControlItem.VIDEO_HDR)) {
-                val flashIdx = items.indexOf(TopControlItem.FLASH)
-                items = if (flashIdx >= 0) {
-                    items.toMutableList().apply { add(flashIdx + 1, TopControlItem.VIDEO_HDR) }
-                } else {
-                    listOf(TopControlItem.VIDEO_HDR) + items
+                .filterNot {
+                    layoutConfig.hiddenTopControls.contains(it) ||
+                    it == TopControlItem.STABILIZATION ||
+                    (cameraMode == CameraMode.VIDEO && it == TopControlItem.VIDEO_HDR) ||
+                    (cameraMode == CameraMode.CINEMA && it == TopControlItem.RESOLUTION)
                 }
-            }
             if (!items.contains(TopControlItem.SIX_DOT_MENU) && !layoutConfig.hiddenTopControls.contains(TopControlItem.SIX_DOT_MENU)) {
                 items = if (items.contains(TopControlItem.SETTINGS)) {
                     items.map { if (it == TopControlItem.SETTINGS) TopControlItem.SIX_DOT_MENU else it }

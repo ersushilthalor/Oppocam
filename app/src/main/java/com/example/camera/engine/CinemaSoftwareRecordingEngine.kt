@@ -1777,7 +1777,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             GLES20.glUniform1f(uBrillianceHandle, cfg.brilliance.coerceIn(-1f, 1f))
 
             val isGraded = (!cfg.selectedLut.isOff || cfg.colorProfile != CinemaColorProfile.NATIVE || !vadj.isDefault)
-            val isHdrProfile = (cfg.colorProfile == CinemaColorProfile.HLG10 || cfg.colorProfile == CinemaColorProfile.HLG_2)
+            val isHdrProfile = (cfg.colorProfile == CinemaColorProfile.HLG10)
             val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
             GLES20.glUniform1f(uFilmicOutputHandle, filmicOutput)
 

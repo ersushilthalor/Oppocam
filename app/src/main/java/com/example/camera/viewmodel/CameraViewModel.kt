@@ -143,30 +143,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _isCinemaSettingsOpen = MutableStateFlow(false)
     val isCinemaSettingsOpen: StateFlow<Boolean> = _isCinemaSettingsOpen.asStateFlow()
 
-    // Pro Video Log Profile Floating Window
-    private val _isLogProfileWindowOpen = MutableStateFlow(false)
-    val isLogProfileWindowOpen: StateFlow<Boolean> = _isLogProfileWindowOpen.asStateFlow()
-
-    fun setLogProfileWindowOpen(open: Boolean) {
-        _isLogProfileWindowOpen.value = open
-        if (open) {
-            _isLutWindowOpen.value = false
-            _isCinemaSettingsOpen.value = false
-        }
-    }
-
-    fun toggleLogProfileWindow() {
-        setLogProfileWindowOpen(!_isLogProfileWindowOpen.value)
-    }
-
-    // Pro Video LUT Floating Window
     private val _isLutWindowOpen = MutableStateFlow(false)
     val isLutWindowOpen: StateFlow<Boolean> = _isLutWindowOpen.asStateFlow()
 
     fun setLutWindowOpen(open: Boolean) {
         _isLutWindowOpen.value = open
         if (open) {
-            _isLogProfileWindowOpen.value = false
             _isCinemaSettingsOpen.value = false
         }
     }
@@ -175,22 +157,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setLutWindowOpen(!_isLutWindowOpen.value)
     }
 
-    // Video Stabilization Floating Window (OFF / EIS / EIS+)
-    private val _isStabilizationWindowOpen = MutableStateFlow(false)
-    val isStabilizationWindowOpen: StateFlow<Boolean> = _isStabilizationWindowOpen.asStateFlow()
-
-    fun setStabilizationWindowOpen(open: Boolean) {
-        _isStabilizationWindowOpen.value = open
-        if (open) {
-            _isLogProfileWindowOpen.value = false
-            _isLutWindowOpen.value = false
-            _isCinemaSettingsOpen.value = false
+    fun toggleLog() {
+        val current = cinemaConfig.value
+        val isCurrentlyLog = current.colorProfile == CinemaColorProfile.HLG10
+        if (isCurrentlyLog) {
+            selectLogProfile(CinemaColorProfile.NATIVE)
+        } else {
+            selectLogProfile(CinemaColorProfile.HLG10)
         }
     }
 
-    fun toggleStabilizationWindow() {
-        setStabilizationWindowOpen(!_isStabilizationWindowOpen.value)
-    }
+
 
     fun selectLogProfile(profile: CinemaColorProfile) {
         val current = cinemaConfig.value
@@ -203,10 +180,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 codec = if (current.codec == CinemaCodec.H264 && cinemaCapabilities.value.supportedCodecs.contains(CinemaCodec.H265)) CinemaCodec.H265 else current.codec
             )
         } else {
-            current.copy(colorProfile = profile)
+            current.copy(
+                colorProfile = CinemaColorProfile.NATIVE,
+                colorSpace = CinemaColorSpace.REC_709,
+                logBitDepth = LogBitDepth.OFF
+            )
         }
         updateCinemaConfig(updated)
-        showToast("Log Profile: ${profile.label}")
+        showToast(if (profile == CinemaColorProfile.HLG10) "Log: ON (HLG10)" else "Log: OFF (Natural)")
     }
 
     fun selectLut(lut: CinematicLut) {
@@ -722,6 +703,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun cycleCinemaResolution() {
         val supported = cinemaCapabilities.value.supportedResolutions
             .filterNot { it.width >= 7680 || it.height >= 7680 }
+            .distinctBy { "${it.width}x${it.height}" }
             .takeIf { it.isNotEmpty() }
             ?: listOf(
                 CameraResolution(3840, 2160),
@@ -1355,7 +1337,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val mStabMode = preferences.getModeVideoStabilizationMode(mode)
         _videoStabilizationMode.value = mStabMode
         engine.videoStabilizationMode = mStabMode
-        _isStabilizationWindowOpen.value = false
 
         val mVideoStab = preferences.getModeVideoStabilization(mode)
         _isVideoStabilizationEnabled.value = mVideoStab

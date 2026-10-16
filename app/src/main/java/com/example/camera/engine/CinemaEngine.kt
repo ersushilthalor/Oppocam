@@ -306,14 +306,7 @@ class CinemaEngine(private val context: Context) {
 
         val supportedColorProfiles = mutableListOf(
             CinemaColorProfile.NATIVE,
-            CinemaColorProfile.S_LOG,
-            CinemaColorProfile.N_LOG,
-            CinemaColorProfile.HLG10,
-            CinemaColorProfile.HLG_2,
-            CinemaColorProfile.APPLE_LOG_2,
-            CinemaColorProfile.D_LOG_2,
-            CinemaColorProfile.SAMSUNG_APV_LOG,
-            CinemaColorProfile.PROCESSED_JPEG
+            CinemaColorProfile.HLG10
         )
 
         // 4. Inspect target FPS ranges
@@ -424,14 +417,7 @@ class CinemaEngine(private val context: Context) {
                 // Adaptive logarithmic gamma fallback for HALs without custom curve support
                 val baseGamma = when (config.colorProfile) {
                     CinemaColorProfile.NATIVE -> 2.2f
-                    CinemaColorProfile.S_LOG -> 1.62f
-                    CinemaColorProfile.N_LOG -> 1.68f
                     CinemaColorProfile.HLG10 -> 2.2f
-                    CinemaColorProfile.HLG_2 -> 2.2f
-                    CinemaColorProfile.APPLE_LOG_2 -> 1.60f
-                    CinemaColorProfile.D_LOG_2 -> 1.62f
-                    CinemaColorProfile.SAMSUNG_APV_LOG -> 1.65f
-                    CinemaColorProfile.PROCESSED_JPEG -> 2.2f
                 }
                 val lutContrastOffset = if (lutForIsp != CinematicLut.NONE) (lutForIsp.contrast - 1.0f) * 0.3f else 0.0f
                 val washedOutOffset = config.washedOut * 0.35f
@@ -701,7 +687,7 @@ class CinemaEngine(private val context: Context) {
             }
 
             var finalY = y.coerceIn(0f, 1f)
-            if (profile == CinemaColorProfile.PROCESSED_JPEG && baseNormalizedX == 0.0f) {
+            if (profile == CinemaColorProfile.NATIVE && baseNormalizedX == 0.0f) {
                 finalY = 0.0f
             }
             val idx = i * 2
@@ -737,146 +723,15 @@ class CinemaEngine(private val context: Context) {
     internal fun evaluateLogTransferFunction(profile: CinemaColorProfile, x: Float): Float {
         val inVal = x.coerceIn(0f, 1f)
         return when (profile) {
-            CinemaColorProfile.PROCESSED_JPEG -> {
-                // Smartphone JPEG photo rendering from RAW sensor source:
-                // 1. Deeper controlled inky blacks: Strictly anchored at y=0 when x=0
-                // 2. Rich shadows: parabolic toe transition (x < 0.18) preserving rich shadow texture without milky fog
-                // 3. Punchier midtones: expanded tonal separation around 18% middle-grey with steep dynamic contrast
-                // 4. Highlight roll-off: smooth asymptotic shoulder compression (x > 0.70) rolling smoothly to 0.992,
-                //    preserving fine textures in clouds and highlights instead of abrupt clipping or flat log dullness.
-                if (inVal < 0.18f) {
-                    val t = inVal / 0.18f
-                    0.18f * (t.pow(1.42f))
-                } else if (inVal < 0.70f) {
-                    val t = (inVal - 0.18f) / (0.70f - 0.18f)
-                    val s = t * t * (3f - 2f * t)
-                    val base = 0.18f + (0.74f - 0.18f) * s
-                    (base + 0.025f * kotlin.math.sin(t * Math.PI.toFloat())).coerceIn(0f, 1f)
-                } else {
-                    val t = (inVal - 0.70f) / 0.30f
-                    val shoulder = 1.0f - (1.0f - t).pow(2.2f)
-                    (0.74f + 0.252f * shoulder).coerceIn(0f, 1f)
-                }
-            }
             CinemaColorProfile.NATIVE -> {
-                // Natural standard video rendering: BT.709 OETF with punchy natural contrast, rich inky blacks (y=0 at x=0), and clean highlight roll-off
                 if (inVal < 0.018f) {
                     (4.5f * inVal).coerceIn(0f, 1f)
                 } else {
                     (1.099f * inVal.pow(0.45f) - 0.099f).coerceIn(0f, 1f)
                 }
             }
-            CinemaColorProfile.S_LOG -> {
-                // Official authentic Sony S-Log transfer function specification:
-                // y = (log10(x + 0.037584) + 1.301449) / 1.701225
-                // Anchors clean black pedestal (~0.04) with middle-gray at ~0.38 (38% IRE)
-                val sLogBase = (log10(inVal * 0.962416f + 0.037584f) + 1.301449f) / 1.701225f
-                val blackOffset = (log10(0.037584f) + 1.301449f) / 1.701225f
-                ((sLogBase - blackOffset) / (1.0f - blackOffset) * 0.96f + 0.04f).coerceIn(0f, 1f)
-            }
-            CinemaColorProfile.N_LOG -> {
-                // Official authentic Nikon N-Log transfer function specification:
-                // For x < 0.328: y = (650 / 1023) * ((x + 0.0075) / 1.0075)^(1/3)
-                // For x >= 0.328: y = (150 * ln(x) + 619) / 1023
-                if (inVal >= 0.999f) {
-                    1.0f
-                } else if (inVal < 0.328f) {
-                    val norm = ((inVal + 0.0075f) / 1.0075f).pow(1.0f / 3.0f)
-                    ((650.0f / 1023.0f) * norm).coerceIn(0f, 1f)
-                } else {
-                    val rawNLog = (150.0f * ln(inVal.coerceAtLeast(0.0001f)) + 619.0f) / 1023.0f
-                    val nLogAt1 = 619.0f / 1023.0f
-                    val nLogAt0 = (650.0f / 1023.0f) * (0.0075f / 1.0075f).pow(1.0f / 3.0f)
-                    val scaled = (rawNLog - nLogAt0) / (nLogAt1 - nLogAt0) * (1.0f - nLogAt0) + nLogAt0
-                    scaled.coerceIn(0f, 1f)
-                }
-            }
             CinemaColorProfile.HLG10 -> {
-                // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR OETF Transfer Function:
                 Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
-            }
-            CinemaColorProfile.HLG_2 -> {
-                // Enhanced HLG 2 profile: Based on HLG, but less flat, more depth, natural contrast, and close to Rec.709
-                if (inVal <= 0.001f) {
-                    0.0f
-                } else if (inVal >= 0.999f) {
-                    1.0f
-                } else if (inVal < 0.018f) {
-                    // Inky black toe transition anchored at 0.0
-                    (4.5f * inVal).coerceIn(0f, 1f)
-                } else {
-                    val hlgBase = Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
-                    val rec709Base = (1.099f * inVal.pow(0.45f) - 0.099f).coerceIn(0f, 1f)
-                    // Natural contrast close to Rec.709 with HLG highlight roll-off
-                    val blended = (0.85f * rec709Base + 0.15f * (hlgBase * 0.65f + rec709Base * 0.35f)).coerceIn(0f, 1f)
-                    blended
-                }
-            }
-            CinemaColorProfile.APPLE_LOG_2 -> {
-                // Official Apple Log 2 transfer function specification:
-                if (inVal >= 0.999f) {
-                    1.0f
-                } else {
-                    val r0 = -0.05641088f
-                    val rt = 0.01f
-                    val c = 47.28711236f
-                    val beta = 0.00964052f
-                    val gamma = 0.08550479f
-                    val delta = 0.69336945f
-                    val ln2 = 0.69314718056f
-
-                    val r = if (inVal <= 0.18f) {
-                        inVal
-                    } else {
-                        val t = (inVal - 0.18f) / 0.82f
-                        0.18f + t * (1.0f + 8.5f * t)
-                    }
-
-                    val rawY = when {
-                        r < r0 -> 0.0f
-                        r < rt -> c * (r - r0) * (r - r0)
-                        else -> {
-                            val log2Val = ln(r + beta) / ln2
-                            gamma * log2Val + delta
-                        }
-                    }
-                    val yAt0 = c * (0.0f - r0) * (0.0f - r0)
-                    val yAt1 = gamma * (ln(9.68f + beta) / ln2) + delta
-                    val scaled = (rawY - yAt0) / (yAt1 - yAt0) * (1.0f - yAt0) + yAt0
-                    scaled.coerceIn(0f, 1f)
-                }
-            }
-            CinemaColorProfile.D_LOG_2 -> {
-                // DJI D-Log 2 authentic logarithmic curve:
-                // - 18% middle-grey maps to 0.392 (code ~100 in 8-bit, 39.2% IRE) for balanced exposure without underexposure.
-                // - Linear/smooth shadow toe anchors black floor at 0.080 (code ~20 in 8-bit) to preserve shadow detail without crushing or noise clipping.
-                // - Smooth logarithmic shoulder roll-off preserves high specular latitude up to 1.0 (100% IRE).
-                // - Identical transfer function across all color channels guarantees zero green/red tint or color cast.
-                // - Flat, neutral dynamic profile ready for professional grading or 3D LUTs.
-                if (inVal <= 0.005f) {
-                    (0.080f + 4.0f * inVal).coerceIn(0f, 1f)
-                } else {
-                    val a = 0.5865f
-                    val b = 3.8f
-                    val c = 1.0f
-                    val d = 0.080f
-                    val logVal = ln(b * inVal + c)
-                    (a * logVal + d).coerceIn(0f, 1f)
-                }
-            }
-            CinemaColorProfile.SAMSUNG_APV_LOG -> {
-                // Samsung APV (Advanced Professional Video) Log transfer function:
-                // Smooth linear shadow toe anchoring deep blacks at 0.025, logarithmic midtone curve
-                // with middle-grey at 0.385, and extended highlight latitude for professional color grading
-                if (inVal < 0.01f) {
-                    (5.25f * inVal).coerceIn(0f, 1f)
-                } else {
-                    val a = 0.285f
-                    val b = 14.5f
-                    val c = 0.085f
-                    val d = 0.365f
-                    (a * log10(b * inVal + c) + d).coerceIn(0f, 1f)
-                }
             }
         }
     }
@@ -910,7 +765,7 @@ class CinemaEngine(private val context: Context) {
         }
 
         // Log profiles map Rec.709 into Rec.2020 primaries
-        val effectiveBase = if ((profile == CinemaColorProfile.APPLE_LOG_2 || profile == CinemaColorProfile.D_LOG_2 || profile == CinemaColorProfile.SAMSUNG_APV_LOG || profile == CinemaColorProfile.S_LOG || profile == CinemaColorProfile.N_LOG) && colorSpace == CinemaColorSpace.REC_709) {
+        val effectiveBase = if (profile == CinemaColorProfile.HLG10 && colorSpace == CinemaColorSpace.REC_709) {
             floatArrayOf(
                 0.6274f, 0.3293f, 0.0433f,
                 0.0691f, 0.9195f, 0.0114f,
@@ -922,15 +777,8 @@ class CinemaEngine(private val context: Context) {
 
         // Apply profile-specific saturation compensation & user saturation
         val profileSatMultiplier = when (profile) {
-            CinemaColorProfile.PROCESSED_JPEG -> 1.16f // Rich natural saturation for smartphone photo rendering
             CinemaColorProfile.NATIVE -> 1.0f
             CinemaColorProfile.HLG10 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
-            CinemaColorProfile.HLG_2 -> 1.10f // Enhanced vibrant Rec.709 color balance
-            CinemaColorProfile.S_LOG -> 0.90f // Authentic Sony S-Log wide-gamut baseline
-            CinemaColorProfile.N_LOG -> 0.92f // Authentic Nikon N-Log baseline
-            CinemaColorProfile.APPLE_LOG_2 -> 0.88f // Flat wide-gamut baseline for grading headroom
-            CinemaColorProfile.D_LOG_2 -> 0.90f // Flat wide-gamut neutral baseline with zero green/red cast
-            CinemaColorProfile.SAMSUNG_APV_LOG -> 0.90f // Samsung APV master baseline
         }
         // Washed-out restoration adds intelligent chroma vibrance without harsh clipping
         val washedOutChromaBoost = 1.0f + (washedOut * 0.35f)

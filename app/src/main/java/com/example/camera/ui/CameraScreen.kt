@@ -163,7 +163,6 @@ fun CameraScreen(
     val cinemaConfig by viewModel.cinemaConfig.collectAsStateWithLifecycle()
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
     val isCinemaSettingsOpen by viewModel.isCinemaSettingsOpen.collectAsStateWithLifecycle()
-    val isLogProfileWindowOpen by viewModel.isLogProfileWindowOpen.collectAsStateWithLifecycle()
     val isLutWindowOpen by viewModel.isLutWindowOpen.collectAsStateWithLifecycle()
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
     val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
@@ -211,11 +210,7 @@ fun CameraScreen(
         }
     }
 
-    if (isLogProfileWindowOpen) {
-        BackHandler {
-            viewModel.setLogProfileWindowOpen(false)
-        }
-    }
+
 
     if (isLutWindowOpen) {
         BackHandler {
@@ -314,7 +309,7 @@ fun CameraScreen(
     val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
 
     val isAnyWindowOpen = isPhotoFilterBarOpen ||
-            isCinemaSettingsOpen || isLogProfileWindowOpen || isLutWindowOpen ||
+            isCinemaSettingsOpen || isLutWindowOpen ||
             isManualProOpen || isMoreModesOpen ||
             isVideoSettingsPanelOpen ||
             isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
@@ -642,8 +637,7 @@ fun CameraScreen(
             onPipelineClick = { viewModel.togglePipelinePresetFloatingWindow() },
             isPipelineActive = isCustomPipelineEnabled,
             onCinemaSettingsClick = { viewModel.toggleCinemaSettings() },
-            onLogClick = { viewModel.toggleLogProfileWindow() },
-            isLogWindowOpen = isLogProfileWindowOpen,
+            onLogClick = { viewModel.toggleLog() },
             onLutClick = { viewModel.toggleLutWindow() },
             isLutWindowOpen = isLutWindowOpen,
             exposureCompensation = exposureCompensation,
@@ -679,7 +673,6 @@ fun CameraScreen(
         // Dismiss barrier behind floating windows to close them when tapping on the camera preview
         val isAnyFloatingOverlayOpen = isQuickOptionsOpen ||
                 (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
-                (isLogProfileWindowOpen && cameraMode == CameraMode.CINEMA) ||
                 (isLutWindowOpen && cameraMode == CameraMode.CINEMA) ||
                 isEvControlOpen
         if (isAnyFloatingOverlayOpen) {
@@ -692,7 +685,6 @@ fun CameraScreen(
                     ) {
                         isQuickOptionsOpen = false
                         viewModel.setVideoSettingsPanelOpen(false)
-                        viewModel.setLogProfileWindowOpen(false)
                         viewModel.setLutWindowOpen(false)
                         viewModel.setEvControlOpen(false)
                     }
@@ -757,8 +749,7 @@ fun CameraScreen(
                 viewModel.setCinemaSettingsOpen(true)
             },
             onLogClick = {
-                isQuickOptionsOpen = false
-                viewModel.setLogProfileWindowOpen(true)
+                viewModel.toggleLog()
             },
             onLutClick = {
                 isQuickOptionsOpen = false
@@ -935,28 +926,7 @@ fun CameraScreen(
             )
         }
 
-        // 3d_log. Dedicated Pro Video Log Profiles Floating Window
-        AnimatedVisibility(
-            visible = cameraMode == CameraMode.CINEMA && isLogProfileWindowOpen,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 2 }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it / 2 }),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 56.dp)
-        ) {
-            com.example.camera.ui.components.LogProfileFloatingWindow(
-                config = cinemaConfig,
-                capabilities = cinemaCapabilities,
-                onSelectProfile = { profile ->
-                    viewModel.selectLogProfile(profile)
-                },
-                onSelectBitDepth = { depth ->
-                    viewModel.updateCinemaConfig(cinemaConfig.copy(logBitDepth = depth))
-                },
-                onDismissRequest = { viewModel.setLogProfileWindowOpen(false) }
-            )
-        }
+
 
         // 3d_lut. Dedicated Pro Video Cinematic LUTs Floating Window
         val customLutRepo = remember(context) { com.example.camera.data.CustomLutRepository(context) }

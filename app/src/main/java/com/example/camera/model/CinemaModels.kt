@@ -66,15 +66,8 @@ enum class CinemaColorProfile(
     val description: String,
     val gammaName: String
 ) {
-    NATIVE("Native", "iPhone-style natural video processing with true-to-life colors, balanced sky/ground, and intelligent shadow recovery", "Native"),
-    S_LOG("S-Log", "Original authentic Sony S-Log wide dynamic range logarithmic transfer curve", "S-Log"),
-    N_LOG("N-Log", "Original authentic Nikon N-Log 12-stop transfer curve with balanced shadow-to-highlight roll-off", "N-Log"),
-    HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10"),
-    HLG_2("HLG 2", "Enhanced Hybrid Log-Gamma with natural contrast, deep tonal depth, and balanced Rec.709 color rendering", "HLG 2"),
-    APPLE_LOG_2("Apple Log 2", "Apple Log 2 wide-gamut log transfer curve with extended highlight latitude and parabolic shadow retention", "Apple Log 2"),
-    D_LOG_2("D-Log 2", "DJI D-Log 2 wide dynamic range logarithmic transfer curve with balanced exposure, preserved highlight/shadow latitude, neutral colorimetry, and flat grading profile", "D-Log 2"),
-    SAMSUNG_APV_LOG("Samsung APV Log", "Samsung Advanced Professional Video (APV) Log profile with high-efficiency mastering curve, wide dynamic range, and clean shadow-to-highlight roll-off", "Samsung APV Log"),
-    PROCESSED_JPEG("Processed JPEG", "Smartphone JPEG photo technical transform with natural contrast and saturation", "Processed JPEG")
+    NATIVE("Natural", "True-to-life natural video processing with balanced color rendering and shadow detail", "Natural"),
+    HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10")
 }
 
 enum class CinemaColorSpace(val label: String) {
@@ -120,7 +113,7 @@ enum class CinemaNoiseReduction(val label: String, val mode: Int) {
 
 data class CinemaConfig(
     val aspectRatio: CinemaAspectRatio = CinemaAspectRatio.RATIO_16_9,
-    val logBitDepth: LogBitDepth = LogBitDepth.BIT_8,
+    val logBitDepth: LogBitDepth = LogBitDepth.OFF,
     val codec: CinemaCodec = CinemaCodec.H265,
     val selectedLut: CinematicLut = CinematicLut.OFF, // Default OFF
     val customLutPath: String? = null,
@@ -195,7 +188,7 @@ data class CinemaConfig(
     val effectiveColorSpace: CinemaColorSpace get() = if (colorProfile == CinemaColorProfile.HLG10) CinemaColorSpace.REC_2020 else colorSpace
     val effectiveBitDepth: LogBitDepth get() = logBitDepth
     val effectiveCodec: CinemaCodec get() = codec
-    val isLogMode: Boolean get() = colorProfile != CinemaColorProfile.NATIVE || logBitDepth != LogBitDepth.OFF
+    val isLogMode: Boolean get() = colorProfile == CinemaColorProfile.HLG10
     val activeLut: CinematicLut get() = selectedLut
     val shouldBakeLut: Boolean get() = !selectedLut.isOff && isBakeLutToOutput
     val isLutPreviewOnly: Boolean get() = false
@@ -220,14 +213,7 @@ data class CinemaHardwareCapabilities(
     val supportedCodecs: List<CinemaCodec> = listOf(CinemaCodec.H265, CinemaCodec.H264),
     val supportedColorProfiles: List<CinemaColorProfile> = listOf(
         CinemaColorProfile.NATIVE,
-        CinemaColorProfile.S_LOG,
-        CinemaColorProfile.N_LOG,
-        CinemaColorProfile.HLG10,
-        CinemaColorProfile.HLG_2,
-        CinemaColorProfile.APPLE_LOG_2,
-        CinemaColorProfile.D_LOG_2,
-        CinemaColorProfile.SAMSUNG_APV_LOG,
-        CinemaColorProfile.PROCESSED_JPEG
+        CinemaColorProfile.HLG10
     )
 ) {
     /**

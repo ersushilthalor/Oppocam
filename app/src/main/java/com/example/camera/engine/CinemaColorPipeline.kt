@@ -243,109 +243,9 @@ object CinemaColorPipeline {
         profile: CinemaColorProfile
     ): ColorMatrix? {
         return when (profile) {
-            CinemaColorProfile.S_LOG -> {
-                // Sony S-Log Technical Transform:
-                // S-Log has code 90 (0.088) baseline black floor and middle-gray at 0.38 (code 97 in 8-bit).
-                // Technical transform normalizes S-Log black floor (-18f), expands log midtones (1.18x), and restores wide-gamut chroma (1.14x).
-                val c = 1.18f
-                val pivot = 97f
-                val pedestalOffset = -18f
-                val t = (1.0f - c) * pivot + pedestalOffset
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.14f)
-                mat.postConcat(chroma)
-                mat
-            }
-
-            CinemaColorProfile.N_LOG -> {
-                // Nikon N-Log Technical Transform:
-                // N-Log has code 128 (0.125) baseline black floor and middle-gray at 0.36 (code 92 in 8-bit).
-                // Technical transform normalizes N-Log pedestal (-22f), expands midtones (1.20x), and restores rich chroma (1.12x).
-                val c = 1.20f
-                val pivot = 92f
-                val pedestalOffset = -22f
-                val t = (1.0f - c) * pivot + pedestalOffset
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.12f)
-                mat.postConcat(chroma)
-                mat
-            }
-
-            CinemaColorProfile.SAMSUNG_APV_LOG -> {
-                // Samsung APV (Advanced Professional Video) Log Technical Transform:
-                // APV Log encodes wide dynamic range with code 0.025 black floor and middle-grey at 0.385 (code 98).
-                // Linearization expands APV midtones (1.20x) with code 98 pivot and anchors code 6 black pedestal (-20f)
-                val c = 1.20f
-                val pivot = 98f
-                val pedestalOffset = -20f
-                val t = (1.0f - c) * pivot + pedestalOffset
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.16f)
-                mat.postConcat(chroma)
-                mat
-            }
-
-            CinemaColorProfile.APPLE_LOG_2 -> {
-                // Apple Log 2 Technical Transform:
-                // Pulls down the code 38 baseline pedestal (-24f), expands dynamic latitude by 1.22x around middle-grey 124
-                val c = 1.22f
-                val pivot = 124f
-                val pedestalOffset = -24f
-                val t = (1.0f - c) * pivot + pedestalOffset
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.12f)
-                mat.postConcat(chroma)
-                mat
-            }
-
-            CinemaColorProfile.D_LOG_2 -> {
-                // DJI D-Log 2 Technical Transform:
-                // Purely neutral color balance with zero green/red color cast across the entire tonal range.
-                // Anchors lifted black floor (-14f pedestal offset) and normalizes middle-grey 0.392 (pivot 100f) with 1.16x midtone expansion.
-                // Perfectly balanced R, G, B diagonal matrix ensures identical channel response without color tinting.
-                val c = 1.16f
-                val pivot = 100f
-                val pedestalOffset = -14f
-                val t = (1.0f - c) * pivot + pedestalOffset
-                ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-            }
-
             CinemaColorProfile.HLG10 -> {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR Technical Transform:
-                // - Faithful Rec.2020 wide color gamut primaries with calibrated HLG tone response
-                // - Zero pedestal offset (strictly 0.0f): preserves inky blacks without crushing shadow details
-                // - 0.38 middle-gray reference alignment (code 97 in 8-bit, 387 in 10-bit)
-                // - Preserves full HLG dynamic range, natural skin tones, vibrant foliage, and realistic highlights
-                val c = 1.04f // Clean, natural contrast calibration conforming to ARIB STD-B67
+                val c = 1.04f
                 val mat = ColorMatrix(floatArrayOf(
                     c, 0f, 0f, 0f, 0f,
                     0f, c, 0f, 0f, 0f,
@@ -353,52 +253,10 @@ object CinemaColorPipeline {
                     0f, 0f, 0f, 1f, 0f
                 ))
                 val hlg10Sat = ColorMatrix()
-                hlg10Sat.setSaturation(1.05f) // Natural, accurate Rec.2020 wide-gamut chroma balance
+                hlg10Sat.setSaturation(1.05f)
                 mat.postConcat(hlg10Sat)
                 mat
             }
-
-            CinemaColorProfile.HLG_2 -> {
-                // HLG 2 Technical Transform:
-                // - Anchored black pedestal (0.0f)
-                // - Rich natural contrast (1.14x)
-                // - Rec.709 color space with vibrant, faithful chroma (1.10x)
-                val c = 1.14f
-                val pivot = 128f
-                val t = (1.0f - c) * pivot
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.10f)
-                mat.postConcat(chroma)
-                mat
-            }
-
-            CinemaColorProfile.PROCESSED_JPEG -> {
-                // Smartphone JPEG Photo Technical Transform:
-                // - Stronger but natural contrast (1.18x around 18% middle-grey pivot 128)
-                // - Deeper controlled inky blacks (pedestal offset -10f)
-                // - Rich natural saturation (1.16x) with faithful skin tones
-                val c = 1.18f
-                val pivot = 128f
-                val pedestalOffset = -10f
-                val t = (1.0f - c) * pivot + pedestalOffset
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.16f)
-                mat.postConcat(chroma)
-                mat
-            }
-
             CinemaColorProfile.NATIVE -> null
         }
     }
