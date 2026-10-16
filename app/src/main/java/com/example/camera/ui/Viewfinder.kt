@@ -84,6 +84,8 @@ fun Viewfinder(
     isFrontCamera: Boolean = false,
     cameraMode: CameraMode = CameraMode.PHOTO,
     previewBufferSize: CameraSize? = null,
+    /** Buffer geometry for the main/front TextureView stream. */
+    mainPreviewBufferSize: CameraSize? = null,
     /** Buffer geometry for the separately streaming ultra-wide preview layer. */
     ultraWidePreviewBufferSize: CameraSize? = null,
     sensorOrientation: Int = 90,
@@ -179,7 +181,7 @@ fun Viewfinder(
         val transformBufferSize = if (isUltraWide) {
             ultraWidePreviewBufferSize ?: previewBufferSize
         } else {
-            previewBufferSize
+            mainPreviewBufferSize ?: previewBufferSize
         }
         updateTextureViewTransform(
             textureView = tv,
@@ -198,6 +200,7 @@ fun Viewfinder(
         textureViewInstance,
         ultraWideTextureViewInstance,
         previewBufferSize,
+        mainPreviewBufferSize,
         ultraWidePreviewBufferSize,
         targetRatioCalc,
         cameraMode,
