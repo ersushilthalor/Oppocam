@@ -98,6 +98,7 @@ fun Viewfinder(
     isProModeActive: Boolean = false,
     floatingWindowBlurStrength: Float = 24.0f,
     isSettingsOpen: Boolean = false,
+    viewfinderCornerRadiusDp: Int = 0,
     isCameraReady: Boolean = false,
     onSurfaceTextureAvailable: (SurfaceTexture?, Int, Int) -> Unit = { _, _, _ -> },
     onSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
@@ -183,8 +184,7 @@ fun Viewfinder(
             opticalOffsetY = calib.offsetYNorm
         )
     }
-
-    ) {
+    LaunchedEffect(isSettingsOpen, textureViewInstance, ultraWideTextureViewInstance) {
         if (!isSettingsOpen) {
             listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
                 val isUw = (tv === ultraWideTextureViewInstance)
@@ -320,17 +320,11 @@ fun Viewfinder(
                             onTap = { offset ->
                                 val normX = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
                                 val normY = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
-                                if (isDollyZoomActive && cameraMode == CameraMode.VIDEO) {
-                                    onTapToLockDollySubject?.invoke(normX, normY)
-                                }
                                 onTapToFocus(offset, normX, normY)
                             },
                             onLongPress = { offset ->
                                 val normX = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
                                 val normY = (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
-                                if (isDollyZoomActive && cameraMode == CameraMode.VIDEO) {
-                                    onTapToLockDollySubject?.invoke(normX, normY)
-                                }
                                 onTapToFocus(offset, normX, normY)
                             }
                         )
@@ -526,10 +520,6 @@ fun Viewfinder(
                                             uwLumaSampleBitmap?.recycle()
                                             uwLumaSampleBitmap = null
                                         } catch (ignored: Exception) {}
-                                        try {
-                                            uwMotionSampleBitmap?.recycle()
-                                            uwMotionSampleBitmap = null
-                                        } catch (ignored: Exception) {}
                                         return true
                                     }
 
@@ -537,27 +527,6 @@ fun Viewfinder(
                                         if (!currentIsUsingUltraWideSurface) return
 
                                         val modeNow = currentCameraMode
-                                        val motionCallback = currentOnMotionPhotoPreviewFrame
-
-                                        if (currentIsMotionPhotoEnabled && modeNow == CameraMode.PHOTO && motionCallback != null) {
-                                            val nowMs = android.os.SystemClock.uptimeMillis()
-                                            if (nowMs - lastUwMotionSampleTime >= 33L) {
-                                                lastUwMotionSampleTime = nowMs
-                                                try {
-                                                    val aspect = currentTargetRatio.takeIf { it > 0 } ?: (4f / 3f)
-                                                    val sampleW = if (aspect > 1.3f) 1280 else if (aspect in 0.95f..1.05f) 720 else 960
-                                                    val sampleH = 720
-                                                    if (uwMotionSampleBitmap == null || uwMotionSampleBitmap?.width != sampleW || uwMotionSampleBitmap?.height != sampleH || uwMotionSampleBitmap?.isRecycled == true) {
-                                                        uwMotionSampleBitmap = Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888)
-                                                    }
-                                                    uwMotionSampleBitmap?.let { bmp ->
-                                                        getBitmap(bmp)
-                                                        motionCallback.invoke(bmp)
-                                                    }
-                                                } catch (ignored: Exception) {}
-                                            }
-                                        }
-
                                         val lumaCallback = currentOnFrameLuminanceStats
                                         val needsLumaAnalysis = lumaCallback != null && (
                                             modeNow == CameraMode.PHOTO ||
@@ -689,14 +658,6 @@ fun Viewfinder(
                             onLockClick = onToggleLock
                         )
                     }
-                }
-
-                // Dolly Zoom Subject Tracking Reticle & Framing Overlay
-                if (cameraMode == CameraMode.VIDEO && isDollyZoomActive && dollyCropState != null) {
-                    DollyZoomReticleOverlay(
-                        cropState = dollyCropState,
-                        modifier = Modifier.fillMaxSize()
-                    )
                 }
             }
         }
