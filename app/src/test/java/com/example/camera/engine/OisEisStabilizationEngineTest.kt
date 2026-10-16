@@ -39,26 +39,23 @@ class OisEisStabilizationEngineTest {
     }
 
     @Test
-    fun testEisCompletelyRemovedInVideoAndCinemaModes() {
-        // Video mode initialization: EIS must NOT be active
+    fun testEisCanBeEnabledAndDisabledForVideoAndCinemaModes() {
         viewModel.setCameraMode(CameraMode.VIDEO)
-        assertFalse("Video mode must have EIS completely disabled", viewModel.isVideoStabilizationEnabled.value)
-        assertEquals(VideoStabilizationMode.OFF, viewModel.videoStabilizationMode.value)
-
-        // Switching to Cinema Mode: EIS remains strictly disabled
-        viewModel.setCameraMode(CameraMode.CINEMA)
-        assertFalse("Cinema mode must have EIS completely disabled", viewModel.isVideoStabilizationEnabled.value)
-        assertEquals(VideoStabilizationMode.OFF, viewModel.videoStabilizationMode.value)
-
-        // Attempting to toggle or set EIS must remain strictly disabled
-        viewModel.setVideoStabilization(true)
-        assertFalse("EIS must not be enabled", viewModel.isVideoStabilizationEnabled.value)
-        assertFalse("Engine EIS must remain false", viewModel.engine.isVideoStabilizationEnabled)
-        assertEquals(VideoStabilizationMode.OFF, viewModel.engine.videoStabilizationMode)
-
         viewModel.setVideoStabilizationMode(VideoStabilizationMode.EIS)
-        assertFalse("Setting EIS mode must remain disabled", viewModel.isVideoStabilizationEnabled.value)
+        assertTrue("Video mode should allow EIS", viewModel.isVideoStabilizationEnabled.value)
+        assertEquals(VideoStabilizationMode.EIS, viewModel.videoStabilizationMode.value)
+        assertTrue("Camera engine should receive the enabled state", viewModel.engine.isVideoStabilizationEnabled)
+        assertEquals(VideoStabilizationMode.EIS, viewModel.engine.videoStabilizationMode)
+
+        viewModel.setVideoStabilization(false)
+        assertFalse("EIS should turn off when requested", viewModel.isVideoStabilizationEnabled.value)
         assertEquals(VideoStabilizationMode.OFF, viewModel.videoStabilizationMode.value)
+        assertFalse("Camera engine should receive OFF", viewModel.engine.isVideoStabilizationEnabled)
+
+        viewModel.setCameraMode(CameraMode.CINEMA)
+        viewModel.setVideoStabilization(true)
+        assertTrue("Cinema mode should allow EIS", viewModel.isVideoStabilizationEnabled.value)
+        assertEquals(VideoStabilizationMode.EIS, viewModel.videoStabilizationMode.value)
     }
 
     @Test
