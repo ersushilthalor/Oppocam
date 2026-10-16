@@ -649,23 +649,20 @@ class Camera2Engine(private val context: Context) {
                         evToApply.coerceIn(evRange.lower, evRange.upper)
                     )
                 }
-                // Match OIS/EIS stabilization against standby camera's hardware capabilities
-                val oisModes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
+                // Check the actual standby physical sensor where possible; logical camera
+                // capabilities may describe the main sensor instead of the standby lens.
+                val oisChars = standbyLens.physicalCameraId?.let { getCharacteristics(it) } ?: chars
+                val oisModes = oisChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                    ?: intArrayOf()
                 val standbySupportsOis = oisModes.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON)
-                val effectiveOisAllowed = (if (isRecordingActive && recConfig != null) recConfig.isOisAllowed else isOisAllowed) && standbySupportsOis
-                if (effectiveOisAllowed) {
-                    builder.set(
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-                    )
-                } else {
-                    try {
-                        builder.set(
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                        )
-                    } catch (_: Throwable) {}
-                }
+                val desiredOis = if (isRecordingActive && recConfig != null) recConfig.isOisAllowed else isOisAllowed
+                val effectiveOisAllowed = desiredOis && isOisSupportedForLens(standbyLens, standbyLens.physicalCameraId)
+                applyHardwareOisRequest(
+                    builder,
+                    oisAllowed = effectiveOisAllowed,
+                    physicalCameraId = standbyLens.physicalCameraId,
+                    vendorCameraIdOverride = standbyLens.cameraId
+                )
 
                 // EIS completely removed: video uses normal camera output without electronic stabilization
                 builder.set(
@@ -4854,8 +4851,7 @@ class Camera2Engine(private val context: Context) {
                     lastOisForceOffTimeMs = nowMs
                     try {
                         previewRequestBuilder?.let { b ->
-                            b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
-                            applyVendorOisControls(b, oisAllowed = false)
+                            applyHardwareOisRequest(b, oisAllowed = false)
                             captureSession?.setRepeatingRequest(b.build(), this, backgroundHandler)
                         }
                     } catch (_: Throwable) {}
@@ -5069,33 +5065,122 @@ class Camera2Engine(private val context: Context) {
 
 
     /**
-     * Forcefully disables vendor-specific OIS capture request controls when OIS is OFF.
+     * Check OIS against the sensor that actually feeds this session.
+     *
+     * A logical multi-camera's capability flags are not always identical to its active physical
+     * sensor. Prefer the active physical ID when one is selected, then fall back to the openable
+     * camera's Camera2 characteristics.
      */
-    private fun applyVendorOisControls(builder: CaptureRequest.Builder, oisAllowed: Boolean) {
-        if (oisAllowed) return
+    private fun isOisSupportedForLens(
+        lens: LensInfo?,
+        physicalCameraId: String? = lens?.physicalCameraId
+    ): Boolean {
+        val cameraId = physicalCameraId ?: lens?.cameraId ?: cameraDevice?.id
+        if (cameraId != null) {
+            val chars = getCharacteristics(cameraId)
+            if (chars != null) {
+                val modes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                    ?: intArrayOf()
+                return modes.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON)
+            }
+        }
+        return _capabilities.value.supportsOis
+    }
+
+    private fun isOisSupportedForActiveLens(): Boolean {
+        val lens = activeSessionLens ?: _selectedLens.value
+        val physicalId = activeSessionPhysicalCameraId ?: lens?.physicalCameraId
+        return isOisSupportedForLens(lens, physicalId)
+    }
+
+    /**
+     * Apply native Camera2 OIS to the active request and, when this is a logical camera's
+     * physical stream, also apply the physical-camera-specific override.
+     */
+    private fun applyHardwareOisRequest(
+        builder: CaptureRequest.Builder,
+        oisAllowed: Boolean,
+        physicalCameraId: String? = activeSessionPhysicalCameraId
+            ?: activeSessionLens?.physicalCameraId
+            ?: _selectedLens.value?.physicalCameraId,
+        vendorCameraIdOverride: String? = null
+    ) {
+        val mode = if (oisAllowed) {
+            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+        } else {
+            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+        }
         try {
-            val camId = cameraDevice?.id ?: activeSessionLens?.cameraId ?: _selectedLens.value?.cameraId ?: return
+            builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, mode)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Unable to set native OIS mode=$mode", t)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && physicalCameraId != null) {
+            try {
+                val logicalCameraId = cameraDevice?.id
+                val logicalChars = logicalCameraId?.let { getCharacteristics(it) }
+                if (logicalChars?.physicalCameraIds?.contains(physicalCameraId) == true) {
+                    builder.setPhysicalCameraKey(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        mode,
+                        physicalCameraId
+                    )
+                }
+            } catch (t: Throwable) {
+                Log.d(TAG, "Physical-camera OIS override unavailable for $physicalCameraId", t)
+            }
+        }
+
+        // The same CaptureRequest.Builder is reused for setting changes. Always write both states
+        // so vendor overrides left by a previous OFF toggle cannot keep OIS disabled after ON.
+        applyVendorOisControls(builder, oisAllowed, vendorCameraIdOverride)
+    }
+
+    /**
+     * Apply vendor-specific OIS controls symmetrically for ON and OFF.
+     *
+     * Restrict this to vendor keys. The old contains("ois") matched Android's standard
+     * noiseReduction key ("noise" contains "ois"), so turning OIS off could accidentally
+     * write NOISE_REDUCTION_MODE=OFF. Android's standard OIS key is handled separately above.
+     */
+    private fun applyVendorOisControls(
+        builder: CaptureRequest.Builder,
+        oisAllowed: Boolean,
+        cameraIdOverride: String? = null
+    ) {
+        try {
+            val camId = cameraIdOverride
+                ?: cameraDevice?.id
+                ?: activeSessionLens?.cameraId
+                ?: _selectedLens.value?.cameraId
+                ?: return
             val chars = getCharacteristics(camId) ?: return
             val requestKeys = chars.availableCaptureRequestKeys ?: return
+            val intValue = if (oisAllowed) 1 else 0
             for (key in requestKeys) {
                 val keyName = key.name.lowercase(Locale.ROOT)
-                if (keyName.contains("ois") || keyName.contains("optical_stabilization") || keyName.contains("opticalstabilization")) {
+                val isVendorOisKey = !keyName.startsWith("android.") &&
+                    (keyName.contains("optical_stabilization") ||
+                        keyName.contains("opticalstabilization") ||
+                        (keyName.contains("ois") && !keyName.contains("noise")))
+                if (!isVendorOisKey) continue
+
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    val typedKey = key as CaptureRequest.Key<Any>
                     try {
-                        @Suppress("UNCHECKED_CAST")
-                        val typedKey = key as CaptureRequest.Key<Any>
+                        builder.set(typedKey, intValue)
+                    } catch (_: Throwable) {
                         try {
-                            builder.set(typedKey, 0)
+                            builder.set(typedKey, intValue.toByte())
                         } catch (_: Throwable) {
                             try {
-                                builder.set(typedKey, 0.toByte())
-                            } catch (_: Throwable) {
-                                try {
-                                    builder.set(typedKey, false)
-                                } catch (_: Throwable) {}
-                            }
+                                builder.set(typedKey, oisAllowed)
+                            } catch (_: Throwable) {}
                         }
-                    } catch (_: Throwable) {}
-                }
+                    }
+                } catch (_: Throwable) {}
             }
         } catch (_: Throwable) {}
     }
@@ -5279,26 +5364,10 @@ class Camera2Engine(private val context: Context) {
             }
         }
 
-        // Coordinated Hybrid OIS + EIS Stabilization:
-        // EIS and OIS are fully independent.
-        // 1. Hardware OIS: Physical voice-coil motor hardware.
-        // When OIS is OFF: forcefully disable hardware OIS and any vendor OIS controls on every path.
-        // When OIS is ON: allow the main camera lens to use hardware OIS normally.
-        val oisAllowed = isOisAllowed && caps.supportsOis
-        if (oisAllowed) {
-            builder.set(
-                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-            )
-        } else {
-            try {
-                builder.set(
-                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-                )
-            } catch (_: Throwable) {}
-            applyVendorOisControls(builder, oisAllowed = false)
-        }
+        // Native OIS is independent from EIS. Resolve support for the actual active sensor rather
+        // than relying only on a potentially stale logical-camera capability snapshot.
+        val oisAllowed = isOisAllowed && isOisSupportedForActiveLens()
+        applyHardwareOisRequest(builder, oisAllowed)
 
         // 2. Electronic Image Stabilization (EIS) completely removed:
         // Video uses normal camera output without electronic stabilization.
@@ -7803,16 +7872,10 @@ class Camera2Engine(private val context: Context) {
                                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
                             }
                             set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-                            if (isOisAllowed && _capabilities.value.supportsOis) {
-                                try {
-                                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
-                                } catch (_: Throwable) {}
-                            } else {
-                                try {
-                                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
-                                } catch (_: Throwable) {}
-                                applyVendorOisControls(this, oisAllowed = false)
-                            }
+                            applyHardwareOisRequest(
+                                this,
+                                oisAllowed = isOisAllowed && isOisSupportedForActiveLens()
+                            )
                         }
                         synchronized(previewRequestLock) {
                             previewRequestBuilder = recordBuilder
@@ -7827,16 +7890,10 @@ class Camera2Engine(private val context: Context) {
                                     synchronized(previewRequestLock) {
                                         applyCommonSettings(recordBuilder)
                                         recordBuilder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-                                        if (isOisAllowed && _capabilities.value.supportsOis) {
-                                            try {
-                                                recordBuilder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
-                                            } catch (_: Throwable) {}
-                                        } else {
-                                            try {
-                                                recordBuilder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
-                                            } catch (_: Throwable) {}
-                                            applyVendorOisControls(recordBuilder, oisAllowed = false)
-                                        }
+                                        applyHardwareOisRequest(
+                                            recordBuilder,
+                                            oisAllowed = isOisAllowed && isOisSupportedForActiveLens()
+                                        )
                                         session.setRepeatingRequest(recordBuilder.build(), captureCallback, backgroundHandler)
                                     }
                                     if (!isSoftwareCinema) {
