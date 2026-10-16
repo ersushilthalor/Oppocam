@@ -1887,8 +1887,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             null
         }
 
-        engine.isContinuousZoomTransitionActive = true
         engine.ensureUltraWideSimultaneousReady()
+        engine.isContinuousZoomTransitionActive = true
         engine.zoomTransitionController.startTransition(
             fromZoom = clampedFrom,
             targetZoom = clampedTarget,
