@@ -4825,6 +4825,12 @@ class Camera2Engine(private val context: Context) {
             val isActualOisHwActive = (actualOisMode == CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_ON)
             if (_actualOisHardwareActive.value != isActualOisHwActive) {
                 _actualOisHardwareActive.value = isActualOisHwActive
+                Log.i(
+                    TAG,
+                    "OIS HAL state changed: requested=${isOisAllowed}, actualMode=$actualOisMode, " +
+                        "activeCamera=${cameraDevice?.id}, physicalCamera=${activeSessionPhysicalCameraId ?: activeSessionLens?.physicalCameraId}, " +
+                        "lens=${activeSessionLens?.cameraId ?: _selectedLens.value?.cameraId}"
+                )
             }
 
             val actualEisMode = result.get(CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE)
@@ -5064,15 +5070,39 @@ class Camera2Engine(private val context: Context) {
         lens: LensInfo?,
         physicalCameraId: String? = lens?.physicalCameraId
     ): Boolean {
-        val cameraId = physicalCameraId ?: lens?.cameraId ?: cameraDevice?.id
-        if (cameraId != null) {
-            val chars = getCharacteristics(cameraId)
-            if (chars != null) {
-                val modes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
-                    ?: intArrayOf()
-                return modes.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON)
+        val logicalCameraId = lens?.cameraId ?: cameraDevice?.id
+        val physicalId = physicalCameraId
+
+        // Prefer physical-sensor metadata, but some vendor HALs omit the OIS mode list on
+        // physical IDs while advertising it on the logical camera. Missing metadata alone is
+        // not proof that OIS is unsupported.
+        if (physicalId != null) {
+            val physicalChars = getCharacteristics(physicalId)
+            val physicalModes = physicalChars?.get(
+                CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION
+            )
+            if (physicalModes?.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON) == true) {
+                return true
             }
         }
+
+        if (logicalCameraId != null) {
+            val logicalChars = getCharacteristics(logicalCameraId)
+            val logicalModes = logicalChars?.get(
+                CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION
+            )
+            if (logicalModes?.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON) == true) {
+                Log.d(TAG, "OIS supported by logical camera $logicalCameraId; physicalId=$physicalId")
+                return true
+            }
+        }
+
+        val checkedChars = (physicalId?.let { getCharacteristics(it) })
+            ?: logicalCameraId?.let { getCharacteristics(it) }
+        val checkedModes = checkedChars?.get(
+            CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION
+        )
+        if (checkedModes != null && checkedModes.isNotEmpty()) return false
         return _capabilities.value.supportsOis
     }
 
@@ -5101,6 +5131,11 @@ class Camera2Engine(private val context: Context) {
         }
         try {
             builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, mode)
+            Log.d(
+                TAG,
+                "OIS request=$mode allowed=${oisAllowed} logical=${cameraDevice?.id} " +
+                    "physical=$physicalCameraId supported=${isOisSupportedForLens(activeSessionLens ?: _selectedLens.value, physicalCameraId)}"
+            )
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to set native OIS mode=$mode", t)
         }
