@@ -40,6 +40,8 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
     companion object {
         private const val TAG = "GyroStabilization"
         private const val MAX_RING_BUFFER_SIZE = 1024
+        // Target 200Hz gyro sampling so 30/60fps frames have dense motion history.
+        private const val GYRO_SAMPLE_PERIOD_US = 5_000
 
         // Adaptive Panning Thresholds (in radians per second)
         private const val PAN_START_THRESHOLD = 0.045f // ~2.6 deg/s: transitions from stationary to pan
@@ -129,23 +131,23 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
                 sensorThread = thread
                 sensorHandler = handler
                 val registered = sensorManager.registerListener(
-                    this, gyroSensor, SensorManager.SENSOR_DELAY_GAME, handler,
+                    this, gyroSensor, GYRO_SAMPLE_PERIOD_US, handler,
                 )
                 if (!registered) {
                     val fallbackRegistered = sensorManager.registerListener(
-                        this, gyroSensor, SensorManager.SENSOR_DELAY_UI, handler,
+                        this, gyroSensor, SensorManager.SENSOR_DELAY_GAME, handler,
                     )
                     if (!fallbackRegistered) {
                         throw IllegalStateException("Gyroscope sensor registration was rejected")
                     }
                 }
-                Log.d(TAG, "GyroStabilization sensor listening started on background thread")
+                Log.d(TAG, "GyroStabilization sensor listening started on background thread at 200Hz target")
             } catch (se: SecurityException) {
-                Log.w(TAG, "Gyro registration denied at game rate; retrying UI rate: ${se.message}")
+                Log.w(TAG, "Gyro high-rate registration denied; retrying game rate: ${se.message}")
                 try {
                     val handler = sensorHandler ?: Handler(thread.looper)
                     val registered = sensorManager.registerListener(
-                        this, gyroSensor, SensorManager.SENSOR_DELAY_UI, handler,
+                        this, gyroSensor, SensorManager.SENSOR_DELAY_GAME, handler,
                     )
                     if (!registered) {
                         throw IllegalStateException("Gyroscope fallback registration was rejected")
