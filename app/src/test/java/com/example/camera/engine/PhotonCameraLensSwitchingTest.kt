@@ -173,45 +173,21 @@ class PhotonCameraLensSwitchingTest {
     }
 
     @Test
-    fun testFastLensSwitchDefaultOn() {
+    fun testFastLensSwitchDefaultDisabled() {
         val prefs = com.example.camera.data.CameraPreferences(context)
-        assertTrue("Fast Lens Switch must be ON by default in preferences", prefs.isFastLensSwitch)
-        assertTrue("Fast Lens Switch must be ON by default in engine", engine.isFastLensSwitch.value)
+        assertFalse("Fast Lens Switch must be disabled by default in preferences", prefs.isFastLensSwitch)
+        assertFalse("Fast Lens Switch must be disabled in engine", engine.isFastLensSwitch.value)
     }
 
     @Test
-    fun testFastLensSwitchTogglePersistsAndUpdatesState() {
+    fun testKeepUltraWideReadyDefaultDisabled() {
         val prefs = com.example.camera.data.CameraPreferences(context)
-        engine.setFastLensSwitch(true)
-        assertTrue("Setting Fast Lens Switch to true must update engine state", engine.isFastLensSwitch.value)
-        assertTrue("Setting Fast Lens Switch to true must persist in preferences", prefs.isFastLensSwitch)
-
-        engine.setFastLensSwitch(false)
-        assertFalse("Setting Fast Lens Switch to false must update engine state", engine.isFastLensSwitch.value)
-        assertFalse("Setting Fast Lens Switch to false must persist in preferences", prefs.isFastLensSwitch)
+        assertFalse("Keep Ultra Wide Ready must be disabled by default in preferences", prefs.isKeepUltraWideReady)
+        assertFalse("Keep Ultra Wide Ready must be disabled in engine", engine.isKeepUltraWideReady.value)
     }
 
     @Test
-    fun testKeepUltraWideReadyDefaultOn() {
-        val prefs = com.example.camera.data.CameraPreferences(context)
-        assertTrue("Keep Ultra Wide Ready must be ON by default in preferences", prefs.isKeepUltraWideReady)
-        assertTrue("Keep Ultra Wide Ready must be ON by default in engine", engine.isKeepUltraWideReady.value)
-    }
-
-    @Test
-    fun testKeepUltraWideReadyTogglePersistsAndUpdatesState() {
-        val prefs = com.example.camera.data.CameraPreferences(context)
-        engine.setKeepUltraWideReady(true)
-        assertTrue("Setting Keep Ultra Wide Ready to true must update engine state", engine.isKeepUltraWideReady.value)
-        assertTrue("Setting Keep Ultra Wide Ready to true must persist in preferences", prefs.isKeepUltraWideReady)
-
-        engine.setKeepUltraWideReady(false)
-        assertFalse("Setting Keep Ultra Wide Ready to false must update engine state", engine.isKeepUltraWideReady.value)
-        assertFalse("Setting Keep Ultra Wide Ready to false must persist in preferences", prefs.isKeepUltraWideReady)
-    }
-
-    @Test
-    fun testKeepUltraWideReadyInstantSwitchMainAndUltraWide() {
+    fun testNormalLensSwitchMainAndUltraWide() {
         engine.detectHardwareLenses()
         val lenses = engine.availableLenses.value
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
@@ -221,11 +197,7 @@ class PhotonCameraLensSwitchingTest {
         engine.selectLens(mainLens!!)
         assertEquals(mainLens.id, engine.selectedLens.value?.id)
 
-        // Enable Keep Ultra Wide Ready
-        engine.setKeepUltraWideReady(true)
-        assertTrue(engine.isKeepUltraWideReady.value)
-
-        // If an ultra-wide lens is present, test instant digital switch
+        // Normal switch between lenses
         if (ultraWideLens != null) {
             engine.selectLens(ultraWideLens)
             assertEquals(ultraWideLens.id, engine.selectedLens.value?.id)

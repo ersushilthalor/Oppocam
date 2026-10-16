@@ -164,11 +164,11 @@ class CameraPreferences(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS, value).apply()
 
     var isFastLensSwitch: Boolean
-        get() = prefs.getBoolean("pref_fast_lens_switch", true)
+        get() = prefs.getBoolean("pref_fast_lens_switch", false)
         set(value) = prefs.edit().putBoolean("pref_fast_lens_switch", value).apply()
 
     var isKeepUltraWideReady: Boolean
-        get() = prefs.getBoolean("pref_keep_ultra_wide_ready", true)
+        get() = prefs.getBoolean("pref_keep_ultra_wide_ready", false)
         set(value) = prefs.edit().putBoolean("pref_keep_ultra_wide_ready", value).apply()
 
     fun getEffectiveZoomPresets(

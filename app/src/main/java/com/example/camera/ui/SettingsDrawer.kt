@@ -2116,39 +2116,86 @@ private fun CameraLensSettingsPage(
             )
         }
 
-        item {
-            SwitchPointSettingCard(
-                switchPointMm = lensSwitchPointMm,
-                onSwitchPointChange = onLensSwitchPointChange
-            )
-        }
+        if (availableLenses.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("setting_active_lens_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Cameraswitch,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFD54F),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "Select Camera Lens",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Active: ${selectedLens?.displayName ?: "Main (1x)"}",
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
 
-        item {
-            LensSwitchHoldDurationSettingCard(
-                holdDurationSec = lensSwitchHoldDurationSec,
-                onHoldDurationChange = onLensSwitchHoldDurationChange,
-                isOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled
-            )
-        }
+                        Spacer(modifier = Modifier.height(12.dp))
 
-        item {
-            SettingsSwitchCard(
-                title = "Lens Switch Overlap Animation",
-                description = "Smoothly blend the cropped Ultra-Wide 1x preview into the native Main 1x preview using the selected hold duration, eliminating abrupt hold steps.",
-                isChecked = isLensSwitchOverlapAnimationEnabled,
-                onCheckedChange = onLensSwitchOverlapAnimationToggle,
-                tag = "toggle_lens_switch_overlap_animation"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Include Switch Points in Zoom Presets",
-                description = "Automatically add non-default lens-switch points to zoom presets at their exact positions (e.g. 28mm placed at ~1.3x between 1x and 2x).",
-                isChecked = isIncludeLensSwitchPointsInPresetsEnabled,
-                onCheckedChange = onIncludeLensSwitchPointsInPresetsToggle,
-                tag = "toggle_include_lens_switch_points_in_presets"
-            )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            availableLenses.forEach { lens ->
+                                val isSelected = selectedLens?.id == lens.id
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = { onLensSelected(lens) },
+                                    label = {
+                                        Text(
+                                            text = lens.displayName,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = Color(0xFFFFD54F),
+                                        selectedLabelColor = Color.Black,
+                                        containerColor = Color.White.copy(alpha = 0.08f),
+                                        labelColor = Color.White
+                                    ),
+                                    modifier = Modifier.testTag("lens_select_chip_${lens.id}")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
 
@@ -2191,329 +2238,6 @@ private fun CameraLensSettingsPage(
     }
 }
 
-@Composable
-private fun LensSwitchHoldDurationSettingCard(
-    holdDurationSec: Float,
-    onHoldDurationChange: (Float) -> Unit,
-    isOverlapAnimationEnabled: Boolean = false
-) {
-    val roundedDuration = ((holdDurationSec.coerceIn(0.05f, 0.30f) * 20f).roundToInt() / 20f).coerceIn(0.05f, 0.30f)
-    val isDefault = kotlin.math.abs(roundedDuration - 0.10f) < 0.001f
-    val displayValue = if (isOverlapAnimationEnabled) {
-        if (isDefault) {
-            String.format(java.util.Locale.US, "%.2f sec (Default • Overlap Blend)", roundedDuration)
-        } else {
-            String.format(java.util.Locale.US, "%.2f sec (Overlap Blend)", roundedDuration)
-        }
-    } else {
-        if (isDefault) {
-            String.format(java.util.Locale.US, "%.2f sec (Default)", roundedDuration)
-        } else {
-            String.format(java.util.Locale.US, "%.2f sec", roundedDuration)
-        }
-    }
-
-    val options = listOf(
-        0.05f to "0.05 sec",
-        0.10f to "0.10 sec",
-        0.15f to "0.15 sec",
-        0.20f to "0.20 sec",
-        0.25f to "0.25 sec",
-        0.30f to "0.30 sec"
-    )
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("setting_lens_switch_hold_duration_card"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Timer,
-                            contentDescription = null,
-                            tint = Color(0xFFFFD54F),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = "Lens Switch Hold Duration",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = if (isOverlapAnimationEnabled) {
-                                "Duration used for the Overlap Animation. Smoothly blends cropped Ultra-Wide into native Main lens over this exact duration."
-                            } else {
-                                "Hold duration at the selected switch point field of view on the Ultra-Wide lens before switching to the Main lens."
-                            },
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = Color.Black.copy(alpha = 0.35f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (isOverlapAnimationEnabled) "Animation Duration" else "Current Hold Time",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = displayValue,
-                        color = Color(0xFFFFD54F),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                options.forEach { (value, label) ->
-                    val isSelected = kotlin.math.abs(roundedDuration - value) < 0.01f
-                    val tagValue = String.format(java.util.Locale.US, "%.2f", value)
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { onHoldDurationChange(value) },
-                        modifier = Modifier.testTag("hold_duration_option_$tagValue"),
-                        label = {
-                            Text(
-                                text = label,
-                                fontSize = 11.5.sp,
-                                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFFD54F),
-                            selectedLabelColor = Color.Black,
-                            containerColor = Color.White.copy(alpha = 0.08f),
-                            labelColor = Color.White
-                        )
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SwitchPointSettingCard(
-    switchPointMm: Float,
-    onSwitchPointChange: (Float) -> Unit
-) {
-    val roundedFocal = switchPointMm.roundToInt().coerceIn(23, 85)
-    val uwCrop = (roundedFocal.toFloat() / 16.0f * 100f).roundToInt() / 100f
-    val mainCrop = (roundedFocal.toFloat() / 23.0f * 100f).roundToInt() / 100f
-
-    val isDefaultOriginal = roundedFocal == 23
-    val displayValue = if (isDefaultOriginal) "23mm (Original)" else "${roundedFocal}mm"
-
-    val presets = listOf(
-        23 to "23mm (Original)",
-        28 to "28mm",
-        32 to "32mm",
-        40 to "40mm",
-        50 to "50mm",
-        60 to "60mm",
-        85 to "85mm"
-    )
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("setting_lens_switch_point_card"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Cameraswitch,
-                            contentDescription = null,
-                            tint = Color(0xFFFFD54F),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = "Switch Point",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "Lens handoff: Ultra-Wide (16mm) → Main (23mm)",
-                            color = Color.White.copy(alpha = 0.55f),
-                            fontSize = 11.5.sp
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFFFFD54F).copy(alpha = 0.18f))
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = displayValue,
-                        color = Color(0xFFFFD54F),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Real-time crop calculation and active value readout banner
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF26262E))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Ultra-wide: ${String.format(java.util.Locale.US, "%.2f", uwCrop)}× crop",
-                    color = Color(0xFF64FFDA),
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = "Main: ${String.format(java.util.Locale.US, "%.2f", mainCrop)}× crop",
-                    color = Color(0xFFFFD54F),
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Continuous Slider 23mm -> 85mm
-            Slider(
-                value = roundedFocal.toFloat(),
-                onValueChange = { onSwitchPointChange(it.roundToInt().toFloat()) },
-                valueRange = 23f..85f,
-                steps = 61,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFFFFD54F),
-                    activeTrackColor = Color(0xFFFFD54F),
-                    inactiveTrackColor = Color.White.copy(alpha = 0.18f)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("slider_lens_switch_point")
-            )
-
-            // Preset Quick Selection Chips
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                presets.forEach { (presetFocal, label) ->
-                    val isSelected = roundedFocal == presetFocal
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { onSwitchPointChange(presetFocal.toFloat()) },
-                        label = {
-                            Text(
-                                text = label,
-                                fontSize = 11.5.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFFD54F),
-                            selectedLabelColor = Color.Black,
-                            containerColor = Color.White.copy(alpha = 0.08f),
-                            labelColor = Color.White
-                        ),
-                        border = FilterChipDefaults.filterChipBorder(
-                            enabled = true,
-                            selected = isSelected,
-                            borderColor = Color.White.copy(alpha = 0.15f),
-                            selectedBorderColor = Color(0xFFFFD54F)
-                        ),
-                        modifier = Modifier.testTag("chip_switch_point_$presetFocal")
-                    )
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun StabilizationSettingsPage(

@@ -232,10 +232,10 @@ class Camera2Engine(private val context: Context) {
         preferences.isLensSwitchOverlapAnimationEnabled = enabled
     }
 
-    private val _isFastLensSwitch = MutableStateFlow(true)
+    private val _isFastLensSwitch = MutableStateFlow(false)
     val isFastLensSwitch: StateFlow<Boolean> = _isFastLensSwitch.asStateFlow()
 
-    private val _isKeepUltraWideReady = MutableStateFlow(true)
+    private val _isKeepUltraWideReady = MutableStateFlow(false)
     val isKeepUltraWideReady: StateFlow<Boolean> = _isKeepUltraWideReady.asStateFlow()
 
 
@@ -834,27 +834,16 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun setFastLensSwitch(enabled: Boolean) {
-        _isFastLensSwitch.value = enabled
-        // preferences.isFastLensSwitch = enabled
-        ultraWideReconnectCount = 0
-        _ultraWideStreamStatus.value = if (enabled) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF
+        _isFastLensSwitch.value = false
+        _isKeepUltraWideReady.value = false
+        _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
         backgroundHandler?.post {
-            if (enabled) {
-                ensureUltraWideSimultaneousReady()
-            } else {
-                releaseUltraWideStandby()
-            }
-        } ?: run {
-            if (enabled) {
-                ensureUltraWideSimultaneousReady()
-            } else {
-                releaseUltraWideStandby()
-            }
-        }
+            releaseUltraWideStandby()
+        } ?: releaseUltraWideStandby()
     }
 
     fun setKeepUltraWideReady(enabled: Boolean) {
-        setFastLensSwitch(enabled)
+        setFastLensSwitch(false)
     }
 
     private fun configureStandbySessionOnDevice(
@@ -1207,11 +1196,12 @@ class Camera2Engine(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun ensureFastLensSwitchReady() {
-        ensureUltraWideSimultaneousReady()
+        return
     }
 
     @SuppressLint("MissingPermission")
     fun ensureUltraWideSimultaneousReady() {
+        return
         val isAnimationActive = isContinuousZoomTransitionActive || zoomTransitionController.isTransitionActive.value
         if (!_isFastLensSwitch.value && !isAnimationActive) return
         if (isClosingCamera || isStartingCamera || isConfiguringSession) {
@@ -2728,73 +2718,7 @@ class Camera2Engine(private val context: Context) {
                     !isPhysicalStreamRequired &&
                     canUseLogicalZoomForLens(lens.cameraId, lens, effectiveTargetZoom)
 
-            // 1. Instant 0ms switch when Keep Ultra Wide Ready or continuous zoom transition is active (both Photo mode AND active Video recording):
-            // Neither close(), stopRepeating(), openCamera(), nor createCameraCaptureSession() is called!
-            if ((_isFastLensSwitch.value || isContinuousZoomTransitionActive || isContinuousTransition || ultraWideStandbyCaptureSession != null) && isSwitchBetweenMainAndUW) {
-                val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
-                val primaryMainLens = backLenses.firstOrNull { it.isPrimaryMain }
-                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
-                    ?: backLenses.firstOrNull { it.lensType == LensType.WIDE }
-
-                // Case A: Logical multi-camera with simultaneous Main + Physical Ultra-Wide surfaces already active in captureSession
-                val isLogicalPrewarmedReady = isSameCameraDevice &&
-                    captureSession != null &&
-                    activeLogicalMultiCamUltraWideConfigured &&
-                    (!_isRecordingVideo.value || !logicalMultiCamRecordingFailed)
-                if (isLogicalPrewarmedReady) {
-                    val useUw = (lens.lensType == LensType.ULTRAWIDE)
-                    val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
-                    if (_isRecordingVideo.value) {
-                        dualCameraRecordingRelay?.setActiveSource(targetSource)
-                        dualCameraRecordingRelay?.getRecorderSurfaceForLens(lens)?.let { surf ->
-                            if (surf.isValid) activeRecordingSurface = surf
-                        }
-                    }
-                    _isUsingUltraWideSurface.value = useUw
-                    _displayedPreviewSource.value = targetSource
-                    activeSessionLens = lens
-                    _selectedLens.value = lens
-                    activeSessionPhysicalCameraId = if (useUw) lens.physicalCameraId else primaryMainLens?.physicalCameraId
-
-                    Log.i(TAG, "[FAST_LENS_SWITCH] 0ms simultaneous logical-physical surface switch to ${lens.lensType} (recording=${_isRecordingVideo.value}, source=${_displayedPreviewSource.value})")
-                    scheduleZoomPreviewUpdate(immediate = true, explicitZoom = effectiveTargetZoom)
-                    completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
-                    return
-                }
-
-                // Case B: Persistent dual-session across separate CameraDevices (both sessions continuously running)
-                val prewarmedCamera = ultraWideStandbyCameraDevice
-                if (prewarmedCamera != null && prewarmedCamera.id == lens.cameraId) {
-                    Log.i(TAG, "[FAST_LENS_SWITCH] Persistent dual-session switch to CameraDevice ID ${lens.cameraId} (${lens.lensType}, recording=${_isRecordingVideo.value})")
-                    switchUsingPrewarmedStandby(lens, switchGen, isContinuousTransition = isContinuousTransition)
-                    return
-                }
-
-                // Case C: Headless / pre-open state where both preview surfaces are prepared at viewfinder resolution
-                if (cameraDevice == null && !_isRecordingVideo.value) {
-                    val useUw = (lens.lensType == LensType.ULTRAWIDE)
-                    if (useUw) {
-                        getOrCreateUltraWidePreviewSurface(lens.cameraId)
-                    } else {
-                        getOrCreateMainPreviewSurface(lens.cameraId)
-                    }
-                    _isUsingUltraWideSurface.value = useUw
-                    _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
-                    activeSessionLens = lens
-                    _selectedLens.value = lens
-                    activeSessionPhysicalCameraId = lens.physicalCameraId
-                    completeLensSwitch(lens, isContinuousTransition = isContinuousTransition)
-                    return
-                }
-
-                // Case D: Standby camera device is not opened yet or switch between separate camera devices requested:
-                // Switch camera devices seamlessly without tearing down the active preview stream (ZERO black screen)
-                if (cameraDevice != null) {
-                    Log.i(TAG, "[LENS_SWITCH] Switching camera device to ${lens.cameraId} (${lens.lensType}) seamlessly (recording=${_isRecordingVideo.value})")
-                    switchCameraDevice(lens, switchGen, isContinuousTransition = isContinuousTransition)
-                    return
-                }
-            }
+            // Normal lens switching: independent device switch or logical camera zoom/physical stream
 
             // On the same camera device / logical multi-camera with genuine continuous zoom support: keep ONE continuous CameraCaptureSession alive
             if (canUseLogicalContinuousZoom && captureSession != null) {
@@ -3032,11 +2956,7 @@ class Camera2Engine(private val context: Context) {
                         // Inspect target capabilities on background thread
                         inspectCapabilities(targetLens.cameraId)
 
-                        val surf = if (targetLens.lensType == LensType.ULTRAWIDE) {
-                            ultraWideViewfinderSurface ?: ultraWideStandbySurface ?: previewSurface
-                        } else {
-                            previewSurface ?: fallbackMainSurface
-                        } ?: run {
+                        val surf = previewSurface ?: fallbackMainSurface ?: run {
                             try { newCamera.close() } catch (_: Throwable) {}
                             fallbackToSequentialSwitch(targetLens, switchGen, isContinuousTransition)
                             return@synchronized
@@ -3094,16 +3014,15 @@ class Camera2Engine(private val context: Context) {
                                         }
                                     }
 
-                                    val useUw = (targetLens.lensType == LensType.ULTRAWIDE)
-                                    val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+                                    val targetSource = PreviewStreamSource.MAIN
                                     if (_isRecordingVideo.value) {
                                         dualCameraRecordingRelay?.setActiveSource(targetSource)
                                         if (recSurf != null && recSurf.isValid) {
                                             activeRecordingSurface = recSurf
                                         }
                                     }
-                                    _isUsingUltraWideSurface.value = useUw
-                                    _displayedPreviewSource.value = targetSource
+                                    _isUsingUltraWideSurface.value = false
+                                    _displayedPreviewSource.value = PreviewStreamSource.MAIN
                                     activeSessionLens = targetLens
                                     _selectedLens.value = targetLens
                                     activeSessionPhysicalCameraId = targetLens.physicalCameraId

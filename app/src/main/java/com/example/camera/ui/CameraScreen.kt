@@ -363,14 +363,6 @@ fun CameraScreen(
                 onSurfaceTextureSizeChanged = { texture, width, height ->
                     viewModel.engine.onViewfinderSurfaceSizeChanged(texture, width, height)
                 },
-                isUsingUltraWideSurface = isUsingUltraWideSurface,
-                previewOverlapState = previewOverlapState,
-                onUltraWideSurfaceTextureAvailable = { texture, width, height ->
-                    viewModel.engine.setUltraWidePreviewSurfaceTexture(texture, width, height)
-                },
-                onUltraWideSurfaceTextureSizeChanged = { texture, width, height ->
-                    viewModel.engine.onUltraWideViewfinderSurfaceSizeChanged(texture, width, height)
-                },
                 onTapToFocus = { point, normX, normY ->
                     viewModel.onTapToFocus(point, normX, normY)
                 },

@@ -975,34 +975,29 @@ class ZoomTransitionVerificationTest {
         val uwLens = vm.engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE }
 
         if (mainLens != null && uwLens != null) {
-            // Fast Lens Switch is active by default
-            assertTrue(vm.engine.isFastLensSwitch.value)
+            // Fast Lens Switch is disabled by default
+            assertFalse(vm.engine.isFastLensSwitch.value)
             vm.engine.ensureUltraWideSimultaneousReady()
-            // Standby mode is detected and preparing or ready
-            val dualMode = vm.engine.detectSimultaneousStreamingMode(mainLens, uwLens)
-            assertNotEquals(Camera2Engine.DualStreamingMode.NONE, dualMode)
         }
     }
 
     @Test
-    fun testActiveLensChangeAutomaticallyUpdatesStandbyTarget() {
+    fun testActiveLensChangeUpdatesSelectedLens() {
         val lenses = viewModel.engine.availableLenses.value
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
         val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
 
         if (mainLens != null && uwLens != null) {
-            // Start on Main lens: Standby target must be Ultra-Wide
-            viewModel.selectLens(mainLens, instant = true)
+            // Start on Main lens
+            viewModel.selectLens(mainLens)
             assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
-            viewModel.engine.ensureUltraWideSimultaneousReady()
 
-            // Switch to Ultra-Wide lens: Standby target must be Main
-            viewModel.selectLens(uwLens, instant = true)
+            // Switch to Ultra-Wide lens
+            viewModel.selectLens(uwLens)
             assertEquals(uwLens.id, viewModel.engine.selectedLens.value?.id)
-            viewModel.engine.ensureUltraWideSimultaneousReady()
 
-            // Switch back to Main lens: Standby target must be Ultra-Wide
-            viewModel.selectLens(mainLens, instant = true)
+            // Switch back to Main lens
+            viewModel.selectLens(mainLens)
             assertEquals(mainLens.id, viewModel.engine.selectedLens.value?.id)
         }
     }
