@@ -245,36 +245,7 @@ object CameraDiscovery {
                 }
             }
 
-            // 3. Fallback for logical ultra-wide zoom (< 0.95x) if physical IDs were not advertised
-            if (hasLogicalUltraWide && !detectedPhysicalUltraWide && !registeredLensesTypes.contains("BACK_ULTRAWIDE")) {
-                registeredLensesTypes.add("BACK_ULTRAWIDE")
-                val uwRatio = 0.5f
-                lenses.add(
-                    LensInfo(
-                        cameraId = primaryBackId,
-                        facing = CameraCharacteristics.LENS_FACING_BACK,
-                        lensType = LensType.ULTRAWIDE,
-                        displayName = "0.5x Ultra Wide",
-                        focalLengthMm = primaryMainFocal * uwRatio,
-                        maxAperture = primaryMainAperture,
-                        isPhysical = true,
-                        isHiddenAux = false,
-                        isZoomPreset = false,
-                        baseZoomRatio = 0.5f,
-                        minZoomRatio = 0.5f,
-                        maxZoomRatio = primaryBackMaxZoom,
-                        isLogicalMultiCamera = isPrimaryBackLogical,
-                        isIndependentCamera = false,
-                        supportsPhysicalStream = false,
-                        intrinsicZoomRatio = 0.5f,
-                        fovDegrees = 110f,
-                        equivalent35mmFocalMm = primaryMainEq35 * uwRatio,
-                        idTypeDescription = "Logical Multi-Cam Optical Ultra-Wide"
-                    )
-                )
-            }
-
-            // 4. Standalone & Auxiliary Cameras (e.g. independent camera IDs like 1 for Front, 2 for Ultra-wide, 3 for Tele)
+            // 3. Standalone & Auxiliary Cameras (e.g. independent camera IDs like 1 for Front, 2 for Ultra-wide, 3 for Tele)
             for (id in candidateIds) {
                 if (id == primaryBackId) continue
                 val chars = getChars(id) ?: continue
@@ -304,6 +275,10 @@ object CameraDiscovery {
                     (eq35mm in 45f..70f || focalMm in 5.8f..9.0f) -> LensType.TELEPHOTO
                     minFocus > 10f && focalMm < 3.2f -> LensType.MACRO
                     else -> LensType.WIDE
+                }
+
+                if (lensType == LensType.ULTRAWIDE) {
+                    detectedPhysicalUltraWide = true
                 }
 
                 val key = if (isFront) "FRONT" else "BACK_${lensType.name}"
@@ -352,6 +327,35 @@ object CameraDiscovery {
                         intrinsicZoomRatio = effectiveRatio,
                         maxZoomRatio = primaryBackMaxZoom,
                         idTypeDescription = if (!isOfficial) "Aux Camera ID $id" else "Camera ID $id"
+                    )
+                )
+            }
+
+            // 4. Fallback for logical ultra-wide zoom (< 0.95x) ONLY if no physical ultra-wide was detected
+            if (hasLogicalUltraWide && !detectedPhysicalUltraWide && !registeredLensesTypes.contains("BACK_ULTRAWIDE")) {
+                registeredLensesTypes.add("BACK_ULTRAWIDE")
+                val uwRatio = 0.5f
+                lenses.add(
+                    LensInfo(
+                        cameraId = primaryBackId,
+                        facing = CameraCharacteristics.LENS_FACING_BACK,
+                        lensType = LensType.ULTRAWIDE,
+                        displayName = "0.5x Ultra Wide",
+                        focalLengthMm = primaryMainFocal * uwRatio,
+                        maxAperture = primaryMainAperture,
+                        isPhysical = true,
+                        isHiddenAux = false,
+                        isZoomPreset = false,
+                        baseZoomRatio = 0.5f,
+                        minZoomRatio = 0.5f,
+                        maxZoomRatio = primaryBackMaxZoom,
+                        isLogicalMultiCamera = isPrimaryBackLogical,
+                        isIndependentCamera = false,
+                        supportsPhysicalStream = false,
+                        intrinsicZoomRatio = 0.5f,
+                        fovDegrees = 110f,
+                        equivalent35mmFocalMm = primaryMainEq35 * uwRatio,
+                        idTypeDescription = "Logical Multi-Cam Optical Ultra-Wide"
                     )
                 )
             }

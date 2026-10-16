@@ -1052,10 +1052,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         engine.onLensSwitchCompletedListener = { switchedLens, targetZoom ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
+                preferences.lastFacing = switchedLens.facing
+                preferences.saveLastLens(switchedLens)
+                preferences.setModeLens(_cameraMode.value, switchedLens)
                 if (!engine.zoomTransitionController.isTransitionActive.value) {
                     _currentZoom.value = targetZoom
                     preferences.setModeZoom(_cameraMode.value, targetZoom)
                 }
+                refreshActiveZoomPresets()
+                val lensDesc = when (switchedLens.lensType) {
+                    LensType.ULTRAWIDE -> "0.5x Ultra-Wide"
+                    LensType.WIDE -> "1x Main"
+                    LensType.TELEPHOTO -> "2x Telephoto"
+                    LensType.TELEPHOTO_3X -> "3x Telephoto"
+                    LensType.MACRO -> "Macro"
+                    LensType.FRONT -> "Front Selfie"
+                }
+                showToast("Switched to $lensDesc Lens")
             }
         }
 

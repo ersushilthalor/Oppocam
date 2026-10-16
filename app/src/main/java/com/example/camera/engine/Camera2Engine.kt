@@ -232,10 +232,10 @@ class Camera2Engine(private val context: Context) {
         preferences.isLensSwitchOverlapAnimationEnabled = enabled
     }
 
-    private val _isFastLensSwitch = MutableStateFlow(false)
+    private val _isFastLensSwitch = MutableStateFlow(preferences.isFastLensSwitch)
     val isFastLensSwitch: StateFlow<Boolean> = _isFastLensSwitch.asStateFlow()
 
-    private val _isKeepUltraWideReady = MutableStateFlow(false)
+    private val _isKeepUltraWideReady = MutableStateFlow(preferences.isKeepUltraWideReady)
     val isKeepUltraWideReady: StateFlow<Boolean> = _isKeepUltraWideReady.asStateFlow()
 
 
@@ -834,12 +834,16 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun setFastLensSwitch(enabled: Boolean) {
-        _isFastLensSwitch.value = false
-        _isKeepUltraWideReady.value = false
-        _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
-        backgroundHandler?.post {
-            releaseUltraWideStandby()
-        } ?: releaseUltraWideStandby()
+        _isFastLensSwitch.value = enabled
+        preferences.isFastLensSwitch = enabled
+        if (enabled) {
+            ensureUltraWideSimultaneousReady()
+        } else {
+            _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+            backgroundHandler?.post {
+                releaseUltraWideStandby()
+            } ?: releaseUltraWideStandby()
+        }
     }
 
     fun setKeepUltraWideReady(enabled: Boolean) {
@@ -848,7 +852,10 @@ class Camera2Engine(private val context: Context) {
         if (enabled) {
             ensureUltraWideSimultaneousReady()
         } else {
-            releaseUltraWideStandby()
+            _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+            backgroundHandler?.post {
+                releaseUltraWideStandby()
+            } ?: releaseUltraWideStandby()
         }
     }
 
@@ -857,7 +864,7 @@ class Camera2Engine(private val context: Context) {
         standbyLens: LensInfo,
         includeJpegReader: Boolean = false
     ) {
-        if (isClosingCamera || (!_isFastLensSwitch.value && !isContinuousZoomTransitionActive)) {
+        if (isClosingCamera || (!_isFastLensSwitch.value && !_isKeepUltraWideReady.value && !isContinuousZoomTransitionActive)) {
             isPreparingUltraWideStandby.set(false)
             isConfiguringStandbySession.set(false)
             return
@@ -954,7 +961,7 @@ class Camera2Engine(private val context: Context) {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) !targetSurfaceTexture.isReleased else true
                             }
                         if (configToken != standbySessionGeneration.get() ||
-                            (!_isFastLensSwitch.value && !isContinuousZoomTransitionActive) ||
+                            (!_isFastLensSwitch.value && !_isKeepUltraWideReady.value && !isContinuousZoomTransitionActive) ||
                             ultraWideStandbyCameraDevice != camera ||
                             !isTextureValid) {
                             isPreparingUltraWideStandby.set(false)
@@ -1094,7 +1101,7 @@ class Camera2Engine(private val context: Context) {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) !targetSurfaceTexture.isReleased else true
                         }
                     if (configToken != standbySessionGeneration.get() ||
-                        (!_isFastLensSwitch.value && !isContinuousZoomTransitionActive) ||
+                        (!_isFastLensSwitch.value && !_isKeepUltraWideReady.value && !isContinuousZoomTransitionActive) ||
                         ultraWideStandbyCameraDevice != camera ||
                         !isTextureValid) {
                         isPreparingUltraWideStandby.set(false)
@@ -1328,7 +1335,7 @@ class Camera2Engine(private val context: Context) {
             mgr.openCamera(standbyLens.cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     if (openToken != standbyCameraDeviceGeneration.get() ||
-                        (!_isFastLensSwitch.value && !isContinuousZoomTransitionActive) ||
+                        (!_isFastLensSwitch.value && !_isKeepUltraWideReady.value && !isContinuousZoomTransitionActive) ||
                         isClosingCamera ||
                         cameraDevice == null ||
                         !_isCameraInitialized.value) {
@@ -2945,6 +2952,9 @@ class Camera2Engine(private val context: Context) {
         if (activeCam == null) {
             _selectedLens.value = targetLens
             activeSessionLens = targetLens
+            val useUw = (targetLens.lensType == LensType.ULTRAWIDE)
+            _isUsingUltraWideSurface.value = useUw
+            _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
             startCamera()
             return
         }
@@ -2962,10 +2972,24 @@ class Camera2Engine(private val context: Context) {
                         // Inspect target capabilities on background thread
                         inspectCapabilities(targetLens.cameraId)
 
-                        val surf = previewSurface ?: fallbackMainSurface ?: run {
+                        val surf = if (targetLens.lensType == LensType.ULTRAWIDE) {
+                            ultraWideViewfinderSurface ?: getOrCreateUltraWidePreviewSurface(targetLens.cameraId)
+                        } else {
+                            previewSurface ?: getOrCreateMainPreviewSurface(targetLens.cameraId)
+                        } ?: run {
                             try { newCamera.close() } catch (_: Throwable) {}
                             fallbackToSequentialSwitch(targetLens, switchGen, isContinuousTransition)
                             return@synchronized
+                        }
+
+                        // If new camera needs the same surface that old session is using, release old session first
+                        val oldDevice = cameraDevice
+                        val oldSess = captureSession
+                        val isSharingSurface = (surf === previewSurface)
+                        if (isSharingSurface && oldSess != null) {
+                            try { oldSess.stopRepeating() } catch (_: Throwable) {}
+                            try { oldSess.close() } catch (_: Throwable) {}
+                            captureSession = null
                         }
 
                         val sessionConfigGen = sessionConfigGeneration.incrementAndGet()
@@ -3002,8 +3026,6 @@ class Camera2Engine(private val context: Context) {
                                     }
 
                                     // Swap pointers seamlessly
-                                    val oldDevice = cameraDevice
-                                    val oldSess = captureSession
                                     val oldBuilder = synchronized(previewRequestLock) { previewRequestBuilder }
                                     val oldJpeg = imageReaderJpeg
 
@@ -3020,22 +3042,23 @@ class Camera2Engine(private val context: Context) {
                                         }
                                     }
 
-                                    val targetSource = PreviewStreamSource.MAIN
+                                    val isTargetUw = (targetLens.lensType == LensType.ULTRAWIDE)
+                                    val targetSource = if (isTargetUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                                     if (_isRecordingVideo.value) {
                                         dualCameraRecordingRelay?.setActiveSource(targetSource)
                                         if (recSurf != null && recSurf.isValid) {
                                             activeRecordingSurface = recSurf
                                         }
                                     }
-                                    _isUsingUltraWideSurface.value = false
-                                    _displayedPreviewSource.value = PreviewStreamSource.MAIN
+                                    _isUsingUltraWideSurface.value = isTargetUw
+                                    _displayedPreviewSource.value = targetSource
                                     activeSessionLens = targetLens
                                     _selectedLens.value = targetLens
                                     activeSessionPhysicalCameraId = targetLens.physicalCameraId
                                     _isCameraReady.value = true
 
-                                    // If keep-ultrawide-ready is enabled and old camera is still valid, retain as standby
-                                    if (_isFastLensSwitch.value && oldDevice != null && oldSess != null) {
+                                    // If keep-ultrawide-ready or fast lens switch is enabled and old camera has distinct surface, retain as standby
+                                    if ((_isFastLensSwitch.value || _isKeepUltraWideReady.value) && oldDevice != null && oldSess != null && !isSharingSurface) {
                                         ultraWideStandbyCameraDevice = oldDevice
                                         ultraWideStandbyCaptureSession = oldSess
                                         ultraWideStandbyRequestBuilder = oldBuilder
