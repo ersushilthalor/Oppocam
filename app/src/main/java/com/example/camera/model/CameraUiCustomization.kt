@@ -11,7 +11,7 @@ enum class UiTemplateType(
     val subtitle: String,
     val accentHex: String
 ) {
-    STOCK_PIXEL("Stock Pixel Camera", "Google Pixel layout with dual exposure slider, zoom pill & bottom switch dock", "#8AB4F8"),
+    STOCK_PIXEL("Arnova GCam 8.7", "Google Camera 8.7-inspired layout with a clean mode strip, minimal controls and zoom selector", "#FFFFFF"),
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
     IPHONE("iPhone (iOS)", "Clean, minimal Apple iPhone layout with yellow accents & top pill indicators", "#FFD54F"),
     VIVO("Vivo OriginOS", "Vivo OriginOS/Funtouch camera layout with circular icons, gimbal cues & vivid shutter ring", "#FF7043"),
@@ -432,7 +432,7 @@ data class ModeLayoutConfig(
 
 data class UiCustomizationState(
     val selectedTemplate: UiTemplateType = UiTemplateType.SAMSUNG,
-    val globalConfig: ModeLayoutConfig = CameraUiTemplates.getTemplateConfig(UiTemplateType.STOCK_PIXEL),
+    val globalConfig: ModeLayoutConfig = CameraUiTemplates.getTemplateConfig(UiTemplateType.SAMSUNG),
     val modeSpecificConfigs: Map<CameraMode, ModeLayoutConfig> = emptyMap(),
     val customPresets: List<CustomUiPreset> = emptyList()
 ) {
@@ -593,25 +593,34 @@ object CameraUiTemplates {
                     CameraMode.CINEMA,
                     CameraMode.AI_SUBJECT_TRACKING
                 ),
-                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.PIXEL_PILL,
+                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
+                modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
                 shutterStyle = ShutterStyle.PIXEL_SOLID,
-                shutterSizeDp = 84,
+                shutterSizeDp = 80,
                 shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 54,
-                galleryThumbSizeDp = 54,
+                flipButtonSizeDp = 52,
+                galleryThumbSizeDp = 52,
                 topControlsIconSizeDp = 18,
-                topControlsSpacingDp = 18,
+                topControlsSpacingDp = 16,
                 topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#8AB4F8",
-                modeTextSizeSp = 13.0f,
-                modeFontFamily = FontFamilyOption.ROUNDED,
-                topPaddingDp = 10,
-                bottomPaddingDp = 10,
+                accentColorHex = "#FFFFFF",
+                modeTextSizeSp = 12.5f,
+                modeFontFamily = FontFamilyOption.DEFAULT,
+                topPaddingDp = 8,
+                bottomPaddingDp = 12,
                 showZoomCapsule = true,
-                zoomCapsuleScale = 1.0f,
+                zoomCapsuleScale = 0.96f,
                 zoomCapsuleVerticalOffsetDp = 0,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
+                textColorHex = "#FFFFFF",
+                fontWeightOption = FontWeightOption.SEMI_BOLD,
+                textCaseOption = TextCaseOption.TITLE_CASE,
+                letterSpacingSp = 0.2f,
+                textShadowOption = TextShadowOption.NONE,
+                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
+                iconColorHex = "#FFFFFF",
+                iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
+                iconContainerOpacity = 0.0f,
+                iconStrokeWidthDp = 1.6f
             )
             UiTemplateType.MINIMAL_PRO -> ModeLayoutConfig(
                 modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
