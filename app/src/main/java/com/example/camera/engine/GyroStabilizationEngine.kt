@@ -7,6 +7,9 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.hardware.camera2.CaptureResult
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Process
 import android.util.Log
 import android.util.SizeF
 import java.util.concurrent.ConcurrentLinkedDeque
@@ -65,6 +68,8 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
 
     private val gyroRingBuffer = ConcurrentLinkedDeque<GyroSample>()
     private val isSensorRunning = AtomicBoolean(false)
+    @Volatile private var sensorThread: HandlerThread? = null
+    @Volatile private var sensorHandler: Handler? = null
 
     // Trajectory tracking
     private var lastMidFrameTimestamp: Long = 0L
@@ -114,23 +119,48 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
             normalizedOffsetX = 0f
             normalizedOffsetY = 0f
             currentCropScale = 1.0f
+            val thread = HandlerThread(
+                "Oppocam-Gyro-Stabilization",
+                Process.THREAD_PRIORITY_DISPLAY,
+            )
             try {
-                val registered = sensorManager.registerListener(this, gyroSensor, SensorManager.SENSOR_DELAY_GAME)
+                thread.start()
+                val handler = Handler(thread.looper)
+                sensorThread = thread
+                sensorHandler = handler
+                val registered = sensorManager.registerListener(
+                    this, gyroSensor, SensorManager.SENSOR_DELAY_GAME, handler,
+                )
                 if (!registered) {
-                    sensorManager.registerListener(this, gyroSensor, SensorManager.SENSOR_DELAY_UI)
+                    val fallbackRegistered = sensorManager.registerListener(
+                        this, gyroSensor, SensorManager.SENSOR_DELAY_UI, handler,
+                    )
+                    if (!fallbackRegistered) {
+                        throw IllegalStateException("Gyroscope sensor registration was rejected")
+                    }
                 }
-                Log.d(TAG, "GyroStabilization sensor listening started (SENSOR_DELAY_GAME)")
+                Log.d(TAG, "GyroStabilization sensor listening started on background thread")
             } catch (se: SecurityException) {
-                Log.w(TAG, "SecurityException registering gyro (HIGH_SAMPLING_RATE_SENSORS), falling back to UI rate: ${se.message}")
+                Log.w(TAG, "Gyro registration denied at game rate; retrying UI rate: ${se.message}")
                 try {
-                    sensorManager.registerListener(this, gyroSensor, SensorManager.SENSOR_DELAY_UI)
+                    val handler = sensorHandler ?: Handler(thread.looper)
+                    val registered = sensorManager.registerListener(
+                        this, gyroSensor, SensorManager.SENSOR_DELAY_UI, handler,
+                    )
+                    if (!registered) {
+                        throw IllegalStateException("Gyroscope fallback registration was rejected")
+                    }
                 } catch (t: Throwable) {
-                    Log.e(TAG, "Fail-safe gyro sensor registration fallback failed", t)
+                    Log.e(TAG, "Gyroscope registration fallback failed", t)
                     isSensorRunning.set(false)
+                    sensorManager.unregisterListener(this)
+                    stopSensorThread()
                 }
             } catch (e: Throwable) {
-                Log.e(TAG, "Fail-safe gyro sensor registration failed", e)
+                Log.e(TAG, "Gyroscope registration failed", e)
                 isSensorRunning.set(false)
+                sensorManager.unregisterListener(this)
+                stopSensorThread()
             }
         }
     }
@@ -142,10 +172,31 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
             } catch (ignored: Exception) {}
             gyroRingBuffer.clear()
             lastMidFrameTimestamp = 0L
+            integratedPitch = 0f
+            integratedYaw = 0f
+            smoothPanPitch = 0f
+            smoothPanYaw = 0f
+            currentOffsetDx = 0f
+            currentOffsetDy = 0f
+            velocityDx = 0f
+            velocityDy = 0f
+            dynamicCropMargin = MIN_CROP_MARGIN
             normalizedOffsetX = 0f
             normalizedOffsetY = 0f
             currentCropScale = 1.0f
+            stopSensorThread()
             Log.d(TAG, "GyroStabilization sensor listening stopped")
+        }
+    }
+
+    private fun stopSensorThread() {
+        val thread = sensorThread
+        sensorThread = null
+        sensorHandler = null
+        try {
+            thread?.quitSafely()
+        } catch (error: Throwable) {
+            Log.w(TAG, "Unable to stop gyro worker thread cleanly", error)
         }
     }
 
