@@ -367,6 +367,7 @@ class Camera2Engine(private val context: Context) {
         val uwSize = getOptimalPreviewSize(uwLens?.cameraId, targetRatio)
         val uwW = max(uwSize.width, uwSize.height)
         val uwH = min(uwSize.width, uwSize.height)
+        _ultraWidePreviewBufferSize.value = Size(uwW, uwH)
         try { ultraWideViewfinderSurfaceTexture?.setDefaultBufferSize(uwW, uwH) } catch (_: Throwable) {}
         try { ultraWideStandbySurfaceTexture?.setDefaultBufferSize(uwW, uwH) } catch (_: Throwable) {}
     }
@@ -382,6 +383,7 @@ class Camera2Engine(private val context: Context) {
         val optimalSize = getOptimalPreviewSize(lensId, targetRatio)
         val cameraW = max(optimalSize.width, optimalSize.height)
         val cameraH = min(optimalSize.width, optimalSize.height)
+        _ultraWidePreviewBufferSize.value = Size(cameraW, cameraH)
 
         val uiTexture = ultraWideViewfinderSurfaceTexture
         if (uiTexture != null) {
@@ -472,6 +474,7 @@ class Camera2Engine(private val context: Context) {
             }
             val cameraW = max(optimalSize.width, optimalSize.height)
             val cameraH = min(optimalSize.width, optimalSize.height)
+            _ultraWidePreviewBufferSize.value = Size(cameraW, cameraH)
             try { texture.setDefaultBufferSize(cameraW, cameraH) } catch (_: Throwable) {}
 
             if (prevTexture !== texture) {
@@ -541,6 +544,7 @@ class Camera2Engine(private val context: Context) {
         }
         val cameraW = max(optimalSize.width, optimalSize.height)
         val cameraH = min(optimalSize.width, optimalSize.height)
+        _ultraWidePreviewBufferSize.value = Size(cameraW, cameraH)
         try { texture.setDefaultBufferSize(cameraW, cameraH) } catch (_: Throwable) {}
         if (ultraWideViewfinderSurface == null || !ultraWideViewfinderSurface!!.isValid) {
             try { ultraWideViewfinderSurface?.release() } catch (_: Throwable) {}
@@ -1525,6 +1529,10 @@ class Camera2Engine(private val context: Context) {
 
     private val _previewBufferSize = MutableStateFlow<Size?>(null)
     val previewBufferSize: StateFlow<Size?> = _previewBufferSize.asStateFlow()
+
+    // The standby ultra-wide SurfaceTexture has independent geometry from the selected stream.
+    private val _ultraWidePreviewBufferSize = MutableStateFlow<Size?>(null)
+    val ultraWidePreviewBufferSize: StateFlow<Size?> = _ultraWidePreviewBufferSize.asStateFlow()
 
     private val _sensorOrientation = MutableStateFlow(90)
     val sensorOrientation: StateFlow<Int> = _sensorOrientation.asStateFlow()

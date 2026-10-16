@@ -138,6 +138,7 @@ fun CameraScreen(
     val selectedVideoResolution by viewModel.engine.selectedVideoResolution.collectAsStateWithLifecycle()
     val previewAspectRatio by viewModel.engine.previewAspectRatio.collectAsStateWithLifecycle()
     val previewBufferSize by viewModel.engine.previewBufferSize.collectAsStateWithLifecycle()
+    val ultraWidePreviewBufferSize by viewModel.engine.ultraWidePreviewBufferSize.collectAsStateWithLifecycle()
     val isUsingUltraWideSurface by viewModel.isUsingUltraWideSurface.collectAsStateWithLifecycle()
     val previewOverlapState by viewModel.previewOverlapState.collectAsStateWithLifecycle()
     val sensorOrientation by viewModel.engine.sensorOrientation.collectAsStateWithLifecycle()
@@ -346,6 +347,7 @@ fun CameraScreen(
                 isFrontCamera = selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT,
                 cameraMode = cameraMode,
                 previewBufferSize = previewBufferSize,
+                ultraWidePreviewBufferSize = ultraWidePreviewBufferSize,
                 sensorOrientation = sensorOrientation,
                 activePhotoFilter = selectedPhotoFilter,
                 activeLut = cinemaConfig.selectedLut,

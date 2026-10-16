@@ -84,6 +84,8 @@ fun Viewfinder(
     isFrontCamera: Boolean = false,
     cameraMode: CameraMode = CameraMode.PHOTO,
     previewBufferSize: CameraSize? = null,
+    /** Buffer geometry for the separately streaming ultra-wide preview layer. */
+    ultraWidePreviewBufferSize: CameraSize? = null,
     sensorOrientation: Int = 90,
     activePhotoFilter: PhotoFilter? = null,
     activeLut: CinematicLut? = null,
@@ -172,9 +174,16 @@ fun Viewfinder(
         val viewH = if (h > 0) h else tv.height
         if (viewW <= 0 || viewH <= 0) return@rememberUpdatedState
         val calib = if (isUltraWide) currentUwCalib else com.example.camera.engine.CameraOpticalCalibration.OpticalFramingCalibration()
+        // Main and ultra-wide TextureViews can be fed by different Camera2 output sizes.
+        // Use the buffer geometry belonging to this stream, not the currently selected lens.
+        val transformBufferSize = if (isUltraWide) {
+            ultraWidePreviewBufferSize ?: previewBufferSize
+        } else {
+            previewBufferSize
+        }
         updateTextureViewTransform(
             textureView = tv,
-            previewBufferSize = previewBufferSize,
+            previewBufferSize = transformBufferSize,
             targetRatio = targetRatioCalc,
             sensorOrientation = sensorOrientation,
             viewWidth = viewW,
@@ -184,8 +193,21 @@ fun Viewfinder(
             opticalOffsetY = calib.offsetYNorm
         )
     }
-    LaunchedEffect(isSettingsOpen, textureViewInstance, ultraWideTextureViewInstance) {
+    LaunchedEffect(
+        isSettingsOpen,
+        textureViewInstance,
+        ultraWideTextureViewInstance,
+        previewBufferSize,
+        ultraWidePreviewBufferSize,
+        targetRatioCalc,
+        cameraMode,
+        sensorOrientation,
+        isUsingUltraWideSurface
+    ) {
         if (!isSettingsOpen) {
+            // Apply after Compose has committed the restored layout. This also refreshes
+            // matrices when Camera2 changes a stream's buffer size without resizing the view.
+            withFrameNanos { }
             listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
                 val isUw = (tv === ultraWideTextureViewInstance)
                 if (tv.width > 0 && tv.height > 0) {

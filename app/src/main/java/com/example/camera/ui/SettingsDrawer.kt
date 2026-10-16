@@ -737,6 +737,20 @@ private fun VideoSettingsPage(
         }
 
         item {
+            SettingsSwitchCard(
+                title = "Hardware OIS (Optical Image Stabilization)",
+                description = if (isOisPreferred) {
+                    "ON: Main camera uses physical hardware Optical Image Stabilization whenever supported."
+                } else {
+                    "OFF: Hardware Optical Image Stabilization is disabled."
+                },
+                isChecked = isOisPreferred,
+                onCheckedChange = onOisToggle,
+                tag = "toggle_ois_video_settings"
+            )
+        }
+
+        item {
             SettingsSegmentedCard(
                 title = "Video Encoding Codec",
                 description = "HEVC (H.265) provides superior compression; H.264 offers broader device compatibility.",
