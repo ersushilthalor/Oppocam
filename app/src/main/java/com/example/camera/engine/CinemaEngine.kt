@@ -418,6 +418,7 @@ class CinemaEngine(private val context: Context) {
                 val baseGamma = when (config.colorProfile) {
                     CinemaColorProfile.NATIVE -> 2.2f
                     CinemaColorProfile.HLG10 -> 2.2f
+                    else -> 2.2f
                 }
                 val lutContrastOffset = if (lutForIsp != CinematicLut.NONE) (lutForIsp.contrast - 1.0f) * 0.3f else 0.0f
                 val washedOutOffset = config.washedOut * 0.35f
@@ -730,8 +731,26 @@ class CinemaEngine(private val context: Context) {
                     (1.099f * inVal.pow(0.45f) - 0.099f).coerceIn(0f, 1f)
                 }
             }
-            CinemaColorProfile.HLG10 -> {
+            CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> {
                 Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
+            }
+            CinemaColorProfile.D_LOG_2 -> {
+                (0.08f + 0.92f * inVal.pow(0.65f)).coerceIn(0f, 1f)
+            }
+            CinemaColorProfile.S_LOG -> {
+                (0.07f + 0.93f * inVal.pow(0.60f)).coerceIn(0f, 1f)
+            }
+            CinemaColorProfile.APPLE_LOG_2 -> {
+                (0.075f + 0.925f * inVal.pow(0.62f)).coerceIn(0f, 1f)
+            }
+            CinemaColorProfile.N_LOG -> {
+                (0.07f + 0.93f * inVal.pow(0.60f)).coerceIn(0f, 1f)
+            }
+            CinemaColorProfile.PROCESSED_JPEG -> {
+                inVal
+            }
+            CinemaColorProfile.SAMSUNG_APV_LOG -> {
+                (0.07f + 0.93f * inVal.pow(0.60f)).coerceIn(0f, 1f)
             }
         }
     }
@@ -779,6 +798,7 @@ class CinemaEngine(private val context: Context) {
         val profileSatMultiplier = when (profile) {
             CinemaColorProfile.NATIVE -> 1.0f
             CinemaColorProfile.HLG10 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
+            else -> 1.0f
         }
         // Washed-out restoration adds intelligent chroma vibrance without harsh clipping
         val washedOutChromaBoost = 1.0f + (washedOut * 0.35f)

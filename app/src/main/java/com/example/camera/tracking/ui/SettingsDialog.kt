@@ -34,7 +34,6 @@ import com.example.camera.tracking.model.TrackingCameraLens
 import com.example.camera.tracking.model.TrackingFpsOption
 import com.example.camera.tracking.model.TrackingResolution
 import com.example.camera.tracking.model.VideoResolution
-import com.example.camera.tracking.model.ViewfinderResolution
 import com.example.camera.tracking.viewmodel.CameraTrackingUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,7 +44,6 @@ fun SettingsBottomSheet(
     onAspectRatioChanged: (TrackingAspectRatio) -> Unit,
     onTrackingIntensityChanged: (Float) -> Unit,
     onVideoResolutionChanged: (VideoResolution) -> Unit,
-    onViewfinderResolutionChanged: (ViewfinderResolution) -> Unit = {},
     onTrackingResolutionChanged: (TrackingResolution) -> Unit = {},
     onCameraLensChanged: (TrackingCameraLens) -> Unit = {},
     onFpsOptionChanged: (TrackingFpsOption) -> Unit = {},
@@ -473,55 +471,6 @@ fun SettingsBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
             HorizontalDivider(color = Color(0xFF1E293B))
 
-            // 6. VIEWFINDER RESOLUTION
-            Spacer(modifier = Modifier.height(12.dp))
-            SettingSectionHeader(
-                icon = Icons.Default.CropFree,
-                title = "Viewfinder Resolution (2K to 4K)",
-                subtitle = "Live camera sensor feed & tracking engine resolution (1080p • 2K QHD • 4K UHD)"
-            )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                ViewfinderResolution.values().forEach { res ->
-                    val isSelected = uiState.viewfinderResolution == res
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isSelected) Color(0xFF0F766E) else Color(0xFF1E293B)
-                        ),
-                        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF2DD4BF)) else null,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onViewfinderResolutionChanged(res) }
-                            .testTag("viewfinder_res_${res.name}")
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = res.label,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "${res.width}p",
-                                fontSize = 10.sp,
-                                color = if (isSelected) Color(0xFF99F6E4) else Color(0xFF94A3B8)
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(color = Color(0xFF1E293B))
 
             // 6b. AI TRACKING INPUT RESOLUTION (720p / 1080p)
             Spacer(modifier = Modifier.height(12.dp))

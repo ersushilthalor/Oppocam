@@ -777,24 +777,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast(if (enabled) "Custom Image Pipeline: ON" else "Custom Image Pipeline: OFF")
     }
 
-    // --- Camera Switching State ---
-    private val _instantSwitchState = MutableStateFlow(
-        MotorolaInstantSwitchState(
-            isFastLensSwitch = preferences.isFastLensSwitch,
-            isKeepUltraWideReady = preferences.isFastLensSwitch,
-            isAutoSwitchToUltraWide = preferences.isAutoSwitchToUltraWide,
-            isShowUltraWidePreview = preferences.isShowUltraWidePreview,
-            isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
-            isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
-            ultraWideStatus = if (preferences.isFastLensSwitch) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF,
-            switchPointMm = preferences.lensSwitchPointMm,
-            lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
-            lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec,
-            isLensSwitchOverlapAnimationEnabled = preferences.isLensSwitchOverlapAnimationEnabled
-        )
-    )
-    val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
-
     private val _isLensSwitchOverlapAnimationEnabled = MutableStateFlow(preferences.isLensSwitchOverlapAnimationEnabled)
     val isLensSwitchOverlapAnimationEnabled: StateFlow<Boolean> = _isLensSwitchOverlapAnimationEnabled.asStateFlow()
 
@@ -802,9 +784,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isLensSwitchOverlapAnimationEnabled.value = enabled
         preferences.isLensSwitchOverlapAnimationEnabled = enabled
         engine.setLensSwitchOverlapAnimationEnabled(enabled)
-        _instantSwitchState.update { it.copy(isLensSwitchOverlapAnimationEnabled = enabled) }
         showToast("Lens Switch Overlap Animation: ${if (enabled) "Enabled" else "Disabled"}")
     }
+
+    fun setFastLensSwitch(enabled: Boolean) {
+        preferences.isFastLensSwitch = enabled
+        engine.setFastLensSwitch(enabled)
+    }
+
+    fun setKeepUltraWideReady(enabled: Boolean) {
+        preferences.isKeepUltraWideReady = enabled
+        engine.setKeepUltraWideReady(enabled)
+    }
+
+    val activeSource: StateFlow<Any?> = engine.activeSource
 
     private val _lensSwitchOverlapDurationSec = MutableStateFlow(preferences.lensSwitchOverlapDurationSec)
     val lensSwitchOverlapDurationSec: StateFlow<Float> = _lensSwitchOverlapDurationSec.asStateFlow()
@@ -829,7 +822,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _lensSwitchHoldDurationSec.value = clamped
         val ms = (clamped * 1000f + 0.5f).toLong()
         engine.zoomTransitionController.holdAtOneXDurationMs = ms
-        _instantSwitchState.update { it.copy(lensSwitchHoldDurationSec = clamped) }
         showToast("Lens Switch Hold: ${String.format(java.util.Locale.US, "%.2f", clamped)} sec")
     }
 
@@ -838,7 +830,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.lensSwitchOverlapDurationSec = clamped
         _lensSwitchOverlapDurationSec.value = clamped
         engine.zoomTransitionController.overlapDurationMs = (clamped * 1000f + 0.5f).toLong()
-        _instantSwitchState.update { it.copy(lensSwitchOverlapDurationSec = clamped) }
         showToast("Lens Switch Overlap: ${String.format(java.util.Locale.US, "%.1f", clamped)} sec")
     }
 
@@ -848,98 +839,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             CameraOpticalCalibration.MAX_SWITCH_POINT_MM
         )
         preferences.lensSwitchPointMm = clamped
-        _instantSwitchState.update { it.copy(switchPointMm = clamped) }
         engine.setLensSwitchPointMm(clamped)
         refreshActiveZoomPresets()
         val uwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(clamped)
         val mainCrop = CameraOpticalCalibration.calculateMainCropForSwitchPoint(clamped)
         showToast("Switch Point: ${clamped.toInt()}mm (UW ${String.format(java.util.Locale.US, "%.2f", uwCrop)}×, Main ${String.format(java.util.Locale.US, "%.2f", mainCrop)}×)")
-    }
-
-    fun setFastLensSwitch(enabled: Boolean) {
-        preferences.isFastLensSwitch = enabled
-        _instantSwitchState.value = _instantSwitchState.value.copy(
-            isFastLensSwitch = enabled,
-            isKeepUltraWideReady = enabled,
-            ultraWideStatus = if (enabled) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF
-        )
-        engine.setFastLensSwitch(enabled)
-        showToast(if (enabled) "Fast Lens Switch: ON" else "Fast Lens Switch: OFF")
-    }
-
-    fun setKeepUltraWideReady(enabled: Boolean) {
-        setFastLensSwitch(enabled)
-    }
-
-    fun setAutoSwitchToUltraWide(enabled: Boolean) {
-        preferences.isAutoSwitchToUltraWide = enabled
-        _instantSwitchState.update { it.copy(isAutoSwitchToUltraWide = enabled) }
-        engine.setAutoSwitchToUltraWide(enabled)
-        showToast(if (enabled) "Auto Switch to Ultra Wide: ON" else "Auto Switch to Ultra Wide: OFF")
-    }
-
-    fun setShowUltraWidePreview(enabled: Boolean) {
-        _instantSwitchState.value = _instantSwitchState.value.copy(isShowUltraWidePreview = enabled)
-        showToast(if (enabled) "Ultra-Wide Little Preview: ON" else "Ultra-Wide Little Preview: OFF")
-    }
-
-    fun setKeepFrontCameraReady(enabled: Boolean) {
-        _instantSwitchState.value = _instantSwitchState.value.copy(isKeepFrontCameraReady = enabled)
-        showToast(if (enabled) "Keep Front Camera Ready: ON" else "Keep Front Camera Ready: OFF")
-    }
-
-    fun setShowFrontCameraPreview(enabled: Boolean) {
-        _instantSwitchState.value = _instantSwitchState.value.copy(isShowFrontCameraPreview = enabled)
-        showToast(if (enabled) "Front Camera Little Preview: ON" else "Front Camera Little Preview: OFF")
-    }
-
-    fun onUltraWideLittlePreviewSurfaceAvailable(surfaceTexture: SurfaceTexture?) {
-        // Safe stub - no background camera HAL lock
-    }
-
-    fun onFrontLittlePreviewSurfaceAvailable(surfaceTexture: SurfaceTexture?) {
-        // Safe stub - no background camera HAL lock
-    }
-
-    fun switchToUltraWideInstant() {
-        val ultraLens = engine.availableLenses.value.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
-        if (ultraLens != null) {
-            selectLens(ultraLens)
-        } else {
-            showToast("Real Ultra-Wide lens is not available on this device")
-        }
-    }
-
-    fun switchToFrontInstant() {
-        val frontLens = engine.availableLenses.value.firstOrNull {
-            it.facing == CameraCharacteristics.LENS_FACING_FRONT
-        }
-        if (frontLens != null) {
-            _currentZoom.value = 1.0f
-            preferences.setModeZoom(_cameraMode.value, 1.0f)
-            preferences.lastFacing = frontLens.facing
-            preferences.saveLastLens(frontLens)
-            preferences.setModeLens(_cameraMode.value, frontLens)
-            selectLens(frontLens, instant = true)
-            refreshActiveZoomPresets()
-        } else {
-            toggleCameraFacing()
-        }
-    }
-
-    fun switchToMainInstant() {
-        val mainLens = engine.availableLenses.value.firstOrNull {
-            it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset
-        } ?: engine.availableLenses.value.firstOrNull {
-            it.facing == CameraCharacteristics.LENS_FACING_BACK
-        }
-        if (mainLens != null) {
-            preferences.lastFacing = mainLens.facing
-            preferences.saveLastLens(mainLens)
-            preferences.setModeLens(_cameraMode.value, mainLens)
-            selectLens(mainLens, instant = true)
-            refreshActiveZoomPresets()
-        }
     }
 
     fun selectPipelinePreset(preset: com.example.camera.pipeline.model.PipelinePreset) {
@@ -1068,8 +972,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _videoFps = MutableStateFlow(preferences.getModeVideoFps(preferences.cameraMode))
     val videoFps: StateFlow<Int> = _videoFps.asStateFlow()
 
-    private val _viewfinderResolution = MutableStateFlow(preferences.viewfinderResolution)
-    val viewfinderResolution: StateFlow<ViewfinderResolution> = _viewfinderResolution.asStateFlow()
 
     private val _colorProfile = MutableStateFlow(preferences.getModeColorProfile(preferences.cameraMode))
     val colorProfile: StateFlow<ColorProfile> = _colorProfile.asStateFlow()
@@ -1125,7 +1027,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.manualExposureTimeNs = preferences.getModeShutter(initialMode)
         engine.manualFocusDistance = preferences.getModeFocusDistance(initialMode)
         engine.saveSelfieAsPreviewed = preferences.saveSelfieAsPreviewed
-        engine.viewfinderResolution = preferences.viewfinderResolution
         engine.photoMegapixelMode = preferences.getModePhotoMegapixelMode(initialMode)
         engine.isRefocusPhotoEnabled = preferences.getModeRefocusEnabled(initialMode)
         engine.refocusFrameCount = preferences.getModeRefocusFrameCount(initialMode)
@@ -1136,26 +1037,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setCinemaConfig(preferences.getCinemaConfig())
         engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
-        engine.setFastLensSwitch(preferences.isFastLensSwitch)
-        engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
         engine.zoomTransitionController.holdAtOneXDurationMs = preferences.lensSwitchHoldDurationMs
         engine.setLensSwitchOverlapAnimationEnabled(preferences.isLensSwitchOverlapAnimationEnabled)
         engine.setLensSwitchPointMm(preferences.lensSwitchPointMm)
         engine.antiBandingMode = preferences.antiBanding
         com.example.camera.sound.CameraSoundManager.setFeedbackMode(preferences.shutterFeedback)
-
-        viewModelScope.launch {
-            engine.ultraWideStreamStatus.collect { status ->
-                _instantSwitchState.update { it.copy(ultraWideStatus = status) }
-            }
-        }
-
-        viewModelScope.launch {
-            engine.isAutoMacroActive.collect { isMacro ->
-                _instantSwitchState.update { it.copy(isAutoMacroActive = isMacro) }
-            }
-        }
 
         engine.onLensSwitchCompletedListener = { switchedLens, targetZoom ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -2113,12 +2000,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setViewfinderResolution(res: ViewfinderResolution) {
-        _viewfinderResolution.value = res
-        preferences.viewfinderResolution = res
-        engine.applyViewfinderResolution(res)
-        showToast("Viewfinder: ${res.label}")
-    }
 
     fun setSettingsOpen(open: Boolean) {
         _isSettingsOpen.value = open

@@ -100,26 +100,6 @@ enum class VideoQualityOption(
         get() = CameraResolution(width, height)
 }
 
-enum class ViewfinderResolution(
-    val label: String,
-    val description: String,
-    val maxDimension: Int
-) {
-    NORMAL("Normal", "1080p live preview (Optimized battery & latency)", 1920),
-    RES_2K("2K", "1440p / 2K live preview clarity", 2560),
-    RES_4K("4K", "2160p / 4K ultra high-definition live preview", 4096);
-
-    companion object {
-        fun fromName(name: String): ViewfinderResolution {
-            return when (name.uppercase()) {
-                "HIGH", "RES_2K", "TWO_K", "2K" -> RES_2K
-                "MAX", "RES_4K", "FOUR_K", "4K" -> RES_4K
-                else -> NORMAL
-            }
-        }
-    }
-}
-
 enum class ColorProfile(val title: String, val isFlat: Boolean) {
     STANDARD("Standard", false),
     VIBRANT("Vibrant", false),
@@ -327,29 +307,6 @@ enum class PreviewStreamSource {
     MAIN,
     ULTRAWIDE
 }
-
-data class MotorolaInstantSwitchState(
-    val isFastLensSwitch: Boolean = true,
-    val isKeepUltraWideReady: Boolean = isFastLensSwitch,
-    val isAutoSwitchToUltraWide: Boolean = false,
-    val isAutoMacroActive: Boolean = false,
-    val isShowUltraWidePreview: Boolean = false,
-    val isKeepFrontCameraReady: Boolean = false,
-    val isShowFrontCameraPreview: Boolean = false,
-    val ultraWideStatus: BackgroundCameraStatus = BackgroundCameraStatus.OFF,
-    val frontStatus: BackgroundCameraStatus = BackgroundCameraStatus.OFF,
-    val isMotorolaDevice: Boolean = false,
-    val isConcurrentHardwareSupported: Boolean = true,
-    val activeStandbyLens: LensType? = null,
-    val switchLatencyEstimateMs: Int = 0,
-    val lastMeasuredLatencyMs: Long = 0L,
-    val statusMessage: String = "Motorola Instant Switching Ready",
-    val switchPointMm: Float = 23.0f,
-    val displayedPreviewSource: PreviewStreamSource = PreviewStreamSource.MAIN,
-    val lensSwitchOverlapDurationSec: Float = 0.3f,
-    val lensSwitchHoldDurationSec: Float = 0.10f,
-    val isLensSwitchOverlapAnimationEnabled: Boolean = false
-)
 
 /**
  * Styles for floating windows selectable from Settings:

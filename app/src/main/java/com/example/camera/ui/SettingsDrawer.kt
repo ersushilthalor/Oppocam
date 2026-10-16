@@ -106,7 +106,6 @@ fun SettingsDrawer(
     gridType: GridType = GridType.NONE,
     cinemaConfig: CinemaConfig = CinemaConfig(),
     cinemaCapabilities: CinemaHardwareCapabilities = CinemaHardwareCapabilities(),
-    viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL,
     hybridStabilizationConfig: HybridStabilizationConfig = HybridStabilizationConfig(),
     tapFocusConfig: TapFocusConfig = TapFocusConfig(),
     mainCameraStabilizationMode: MainCameraStabilizationMode = MainCameraStabilizationMode.HYBRID_OIS_EIS,
@@ -173,7 +172,6 @@ fun SettingsDrawer(
     onPhotoResolutionSelected: (CameraResolution) -> Unit = {},
     onPhotoMegapixelModeSelected: (PhotoMegapixelMode) -> Unit = {},
     onVideoResolutionSelected: (CameraResolution) -> Unit = {},
-    onViewfinderResolutionSelected: (ViewfinderResolution) -> Unit = {},
     onVideoFpsSelected: (Int) -> Unit = {},
     onVideoBitrateSelected: (VideoBitrateOption) -> Unit = {},
     onStabilizationToggle: (Boolean) -> Unit = {},
@@ -193,12 +191,6 @@ fun SettingsDrawer(
     onSelectPipelinePreset: (com.example.camera.pipeline.model.PipelinePreset) -> Unit = {},
     onOpenPipelineStudio: () -> Unit = {},
     onOpenBeforeAfter: () -> Unit = {},
-    instantSwitchState: MotorolaInstantSwitchState = MotorolaInstantSwitchState(),
-    onFastLensSwitchToggle: (Boolean) -> Unit = {},
-    onKeepUltraWideReadyToggle: (Boolean) -> Unit = onFastLensSwitchToggle,
-    onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
-    onShowUltraWidePreviewToggle: (Boolean) -> Unit = {},
-    onShowFrontCameraPreviewToggle: (Boolean) -> Unit = {},
     floatingWindowAppearance: FloatingWindowAppearanceConfig = FloatingWindowAppearanceConfig.GLASSMORPHISM,
     onFloatingWindowTransparencyChange: (Float) -> Unit = {},
     onFloatingWindowBlurStrengthChange: (Float) -> Unit = {},
@@ -430,7 +422,6 @@ fun SettingsDrawer(
                             selectedLens = selectedLens,
                             onLensSelected = onLensSelected,
                             onForceDeepScan = onForceDeepScan,
-                            instantSwitchState = instantSwitchState,
                             lensSwitchPointMm = lensSwitchPointMm,
                             onLensSwitchPointChange = onLensSwitchPointChange,
                             isIncludeLensSwitchPointsInPresetsEnabled = isIncludeLensSwitchPointsInPresetsEnabled,
@@ -441,14 +432,8 @@ fun SettingsDrawer(
                             onLensSwitchHoldDurationChange = onLensSwitchHoldDurationChange,
                             isLensSwitchOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled,
                             onLensSwitchOverlapAnimationToggle = onLensSwitchOverlapAnimationToggle,
-                            onKeepUltraWideReadyToggle = onKeepUltraWideReadyToggle,
-                            onAutoSwitchToUltraWideToggle = onAutoSwitchToUltraWideToggle,
-                            onShowUltraWidePreviewToggle = onShowUltraWidePreviewToggle,
-                            onShowFrontCameraPreviewToggle = onShowFrontCameraPreviewToggle,
                             viewfinderFps = viewfinderFps,
                             onViewfinderFpsSelected = onViewfinderFpsSelected,
-                            viewfinderResolution = viewfinderResolution,
-                            onViewfinderResolutionSelected = onViewfinderResolutionSelected,
                             gridType = gridType,
                             onGridTypeSelected = onGridTypeSelected,
                             horizonLeveler = horizonLeveler,
@@ -466,9 +451,7 @@ fun SettingsDrawer(
                             onFloatingWindowAppearanceChange = onFloatingWindowAppearanceChange,
                             onResetFloatingWindowAppearance = onResetFloatingWindowAppearance,
                             viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
-                            onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange,
-                            viewfinderResolution = viewfinderResolution,
-                            onViewfinderResolutionSelected = onViewfinderResolutionSelected
+                            onViewfinderCornerRadiusChange = onViewfinderCornerRadiusChange
                         )
                         SettingsPage.GENERAL -> GeneralSettingsPage(
                             volumeKeyAction = volumeKeyAction,
@@ -2102,7 +2085,6 @@ private fun CameraLensSettingsPage(
     selectedLens: LensInfo?,
     onLensSelected: (LensInfo) -> Unit,
     onForceDeepScan: () -> Unit,
-    instantSwitchState: MotorolaInstantSwitchState,
     lensSwitchPointMm: Float = com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
     onLensSwitchPointChange: (Float) -> Unit = {},
     isIncludeLensSwitchPointsInPresetsEnabled: Boolean = false,
@@ -2113,15 +2095,8 @@ private fun CameraLensSettingsPage(
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
-    onFastLensSwitchToggle: (Boolean) -> Unit = {},
-    onKeepUltraWideReadyToggle: (Boolean) -> Unit = onFastLensSwitchToggle,
-    onAutoSwitchToUltraWideToggle: (Boolean) -> Unit = {},
-    onShowUltraWidePreviewToggle: (Boolean) -> Unit,
-    onShowFrontCameraPreviewToggle: (Boolean) -> Unit,
     viewfinderFps: Int,
     onViewfinderFpsSelected: (Int) -> Unit,
-    viewfinderResolution: ViewfinderResolution,
-    onViewfinderResolutionSelected: (ViewfinderResolution) -> Unit,
     gridType: GridType,
     onGridTypeSelected: (GridType) -> Unit,
     horizonLeveler: Boolean,
@@ -2176,35 +2151,6 @@ private fun CameraLensSettingsPage(
             )
         }
 
-        item {
-            SettingsSwitchCard(
-                title = "Fast Lens Switch",
-                description = "Seamless, zero-lag lens switching and smooth continuous zoom transitions between 0.5x and 1x with optimized hardware resource utilization.",
-                isChecked = instantSwitchState.isFastLensSwitch,
-                onCheckedChange = onFastLensSwitchToggle,
-                tag = "toggle_fast_lens_switch"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Auto Switch to Ultra Wide",
-                description = "Automatically switch to the ultra-wide lens when close-up subjects cannot achieve focus on the main lens, and switch back when moving away.",
-                isChecked = instantSwitchState.isAutoSwitchToUltraWide,
-                onCheckedChange = onAutoSwitchToUltraWideToggle,
-                tag = "toggle_auto_switch_to_ultra_wide"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
-                title = "Ultra-Wide Mini Preview",
-                description = "Picture-in-picture live view from the ultra-wide lens.",
-                isChecked = instantSwitchState.isShowUltraWidePreview,
-                onCheckedChange = onShowUltraWidePreviewToggle,
-                tag = "toggle_uw_preview"
-            )
-        }
 
         item {
             SettingsSegmentedCard(
@@ -2242,19 +2188,6 @@ private fun CameraLensSettingsPage(
             )
         }
 
-        item {
-            SettingsSegmentedCard(
-                title = "Viewfinder Resolution",
-                description = "Live camera preview resolution on viewfinder (Normal 1080p, 2K 1440p, or 4K 2160p). This controls only the real-time preview display and does not affect photo or video recording resolution.",
-                options = listOf(
-                    ViewfinderResolution.NORMAL to "Normal",
-                    ViewfinderResolution.RES_2K to "2K",
-                    ViewfinderResolution.RES_4K to "4K"
-                ),
-                selectedOption = viewfinderResolution,
-                onOptionSelected = onViewfinderResolutionSelected
-            )
-        }
     }
 }
 
@@ -2656,9 +2589,7 @@ private fun UiLayoutSettingsPage(
     onFloatingWindowAppearanceChange: (FloatingWindowAppearanceConfig) -> Unit,
     onResetFloatingWindowAppearance: () -> Unit,
     viewfinderCornerRadiusDp: Int,
-    onViewfinderCornerRadiusChange: (Int) -> Unit,
-    viewfinderResolution: ViewfinderResolution = ViewfinderResolution.NORMAL,
-    onViewfinderResolutionSelected: (ViewfinderResolution) -> Unit = {}
+    onViewfinderCornerRadiusChange: (Int) -> Unit
 ) {
     val allTemplates = remember {
         listOf(
@@ -3078,20 +3009,6 @@ private fun UiLayoutSettingsPage(
             )
         }
 
-        // 2c. Viewfinder Preview Resolution
-        item {
-            SettingsSegmentedCard(
-                title = "Viewfinder Resolution",
-                description = "Live camera viewfinder preview resolution. Controls only the on-screen preview clarity and does not affect final photo or video recording resolution.",
-                options = listOf(
-                    ViewfinderResolution.NORMAL to "Normal",
-                    ViewfinderResolution.RES_2K to "2K",
-                    ViewfinderResolution.RES_4K to "4K"
-                ),
-                selectedOption = viewfinderResolution,
-                onOptionSelected = onViewfinderResolutionSelected
-            )
-        }
 
         // 3. All Floating Windows Size (Scale) Control
         item {
@@ -4226,7 +4143,6 @@ fun CameraSettingsScreen(
     val gridType by viewModel.gridType.collectAsStateWithLifecycle()
     val cinemaConfig by viewModel.cinemaConfig.collectAsStateWithLifecycle()
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
-    val viewfinderResolution by viewModel.viewfinderResolution.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
     val videoCodec by viewModel.videoCodec.collectAsStateWithLifecycle()
@@ -4252,7 +4168,6 @@ fun CameraSettingsScreen(
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
     val activePipelinePreset by viewModel.activePipelinePreset.collectAsStateWithLifecycle()
-    val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val videoHdrConfig by viewModel.videoHdrConfig.collectAsStateWithLifecycle()
@@ -4297,7 +4212,6 @@ fun CameraSettingsScreen(
         gridType = gridType,
         cinemaConfig = cinemaConfig,
         cinemaCapabilities = cinemaCapabilities,
-        viewfinderResolution = viewfinderResolution,
         hybridStabilizationConfig = hybridStabilizationConfig,
         tapFocusConfig = tapFocusConfig,
         mainCameraStabilizationMode = mainCameraStabilizationMode,
@@ -4366,7 +4280,6 @@ fun CameraSettingsScreen(
         onRefocusPhotoToggle = { viewModel.setRefocusPhotoEnabled(it) },
         onRefocusFrameCountChange = { viewModel.setRefocusFrameCount(it) },
         onVideoResolutionSelected = { viewModel.selectVideoResolution(it) },
-        onViewfinderResolutionSelected = { viewModel.setViewfinderResolution(it) },
         onVideoFpsSelected = { viewModel.setVideoFps(it) },
         onVideoBitrateSelected = { viewModel.setVideoBitrate(it) },
         onStabilizationToggle = { viewModel.setVideoStabilization(it) },
@@ -4392,8 +4305,7 @@ fun CameraSettingsScreen(
             viewModel.setSettingsOpen(false)
             viewModel.setBeforeAfterOpen(true)
         },
-        instantSwitchState = instantSwitchState,
-        lensSwitchPointMm = instantSwitchState.switchPointMm,
+        lensSwitchPointMm = viewModel.lensSwitchPointMm.collectAsStateWithLifecycle().value,
         onLensSwitchPointChange = { viewModel.setLensSwitchPointMm(it) },
         isIncludeLensSwitchPointsInPresetsEnabled = isIncludeLensSwitchPointsInPresetsEnabled,
         onIncludeLensSwitchPointsInPresetsToggle = { viewModel.setIncludeLensSwitchPointsInPresets(it) },
@@ -4403,11 +4315,6 @@ fun CameraSettingsScreen(
         onLensSwitchHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
         isLensSwitchOverlapAnimationEnabled = viewModel.isLensSwitchOverlapAnimationEnabled.collectAsStateWithLifecycle().value,
         onLensSwitchOverlapAnimationToggle = { viewModel.setLensSwitchOverlapAnimationEnabled(it) },
-        onFastLensSwitchToggle = { viewModel.setFastLensSwitch(it) },
-        onKeepUltraWideReadyToggle = { viewModel.setFastLensSwitch(it) },
-        onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
-        onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
-        onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },
         floatingWindowAppearance = floatingWindowAppearance,
         onFloatingWindowTransparencyChange = { viewModel.setFloatingWindowTransparency(it) },
         onFloatingWindowBlurStrengthChange = { viewModel.setFloatingWindowBlurStrength(it) },

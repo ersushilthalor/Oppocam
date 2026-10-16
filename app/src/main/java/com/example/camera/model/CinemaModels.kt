@@ -66,8 +66,15 @@ enum class CinemaColorProfile(
     val description: String,
     val gammaName: String
 ) {
+    PROCESSED_JPEG("JPEG", "Processed JPEG", "JPEG"),
     NATIVE("Natural", "True-to-life natural video processing with balanced color rendering and shadow detail", "Natural"),
-    HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10")
+    S_LOG("S-Log", "Sony S-Log", "S-Log"),
+    N_LOG("N-Log", "Nikon N-Log", "N-Log"),
+    HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10"),
+    HLG_2("HLG2", "HLG 2", "HLG2"),
+    APPLE_LOG_2("AppleLog2", "Apple Log 2", "AppleLog2"),
+    D_LOG_2("D-Log 2", "DJI D-Log 2", "D-Log2"),
+    SAMSUNG_APV_LOG("SamsungLog", "Samsung APV Log", "SamsungLog")
 }
 
 enum class CinemaColorSpace(val label: String) {

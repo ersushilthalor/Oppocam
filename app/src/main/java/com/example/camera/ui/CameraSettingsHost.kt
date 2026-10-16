@@ -46,7 +46,6 @@ fun CameraSettingsHost(
     val gridType by viewModel.gridType.collectAsStateWithLifecycle()
     val cinemaConfig by viewModel.cinemaConfig.collectAsStateWithLifecycle()
     val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
-    val viewfinderResolution by viewModel.viewfinderResolution.collectAsStateWithLifecycle()
     val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
 
@@ -86,7 +85,6 @@ fun CameraSettingsHost(
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
     val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
     val activePipelinePreset by viewModel.activePipelinePreset.collectAsStateWithLifecycle()
-    val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val lensSwitchPointMm by viewModel.lensSwitchPointMm.collectAsStateWithLifecycle()
     val isIncludeLensSwitchPointsInPresetsEnabled by viewModel.isIncludeLensSwitchPointsInPresetsEnabled.collectAsStateWithLifecycle()
     val lensSwitchOverlapDurationSec by viewModel.lensSwitchOverlapDurationSec.collectAsStateWithLifecycle()
@@ -139,7 +137,6 @@ fun CameraSettingsHost(
         gridType = gridType,
         cinemaConfig = cinemaConfig,
         cinemaCapabilities = cinemaCapabilities,
-        viewfinderResolution = viewfinderResolution,
         hybridStabilizationConfig = hybridStabilizationConfig,
         tapFocusConfig = tapFocusConfig,
         mainCameraStabilizationMode = mainCameraStabilizationMode,
@@ -208,7 +205,6 @@ fun CameraSettingsHost(
         onRefocusPhotoToggle = { viewModel.setRefocusPhotoEnabled(it) },
         onRefocusFrameCountChange = { viewModel.setRefocusFrameCount(it) },
         onVideoResolutionSelected = { viewModel.selectVideoResolution(it) },
-        onViewfinderResolutionSelected = { viewModel.setViewfinderResolution(it) },
         onVideoFpsSelected = { viewModel.setVideoFps(it) },
         onVideoBitrateSelected = { viewModel.setVideoBitrate(it) },
         onStabilizationToggle = { viewModel.setVideoStabilization(it) },
@@ -228,12 +224,6 @@ fun CameraSettingsHost(
         onSelectPipelinePreset = { viewModel.selectPipelinePreset(it) },
         onOpenPipelineStudio = onOpenPipelineStudio,
         onOpenBeforeAfter = onOpenBeforeAfter,
-        instantSwitchState = instantSwitchState,
-        onFastLensSwitchToggle = { viewModel.setFastLensSwitch(it) },
-        onKeepUltraWideReadyToggle = { viewModel.setFastLensSwitch(it) },
-        onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
-        onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
-        onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },
         floatingWindowAppearance = floatingWindowAppearance,
         onFloatingWindowTransparencyChange = { viewModel.setFloatingWindowTransparency(it) },
         onFloatingWindowBlurStrengthChange = { viewModel.setFloatingWindowBlurStrength(it) },

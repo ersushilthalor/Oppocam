@@ -258,6 +258,11 @@ object CinemaColorPipeline {
                 mat
             }
             CinemaColorProfile.NATIVE -> null
+            else -> {
+                val mat = ColorMatrix()
+                mat.setSaturation(1.0f)
+                mat
+            }
         }
     }
 

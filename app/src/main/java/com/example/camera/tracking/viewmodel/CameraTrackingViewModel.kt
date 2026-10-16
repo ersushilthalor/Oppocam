@@ -134,7 +134,7 @@ class CameraTrackingViewModel(application: Application) : AndroidViewModel(appli
         cameraXManager = manager
         manager.setFps(_uiState.value.selectedFpsOption)
         manager.setTrackingResolution(_uiState.value.trackingResolution)
-        manager.setViewfinderResolution(_uiState.value.viewfinderResolution.width, _uiState.value.viewfinderResolution.height)
+        manager.setViewfinderResolution(1080, 1920)
         val available = manager.getAvailableLenses()
         val preferredLens = preferences.trackingLens
         val targetLens = if (available.contains(preferredLens)) preferredLens else TrackingCameraLens.WIDE
@@ -430,11 +430,6 @@ class CameraTrackingViewModel(application: Application) : AndroidViewModel(appli
 
     fun setVideoResolution(res: VideoResolution) {
         _uiState.update { it.copy(videoResolution = res) }
-    }
-
-    fun setViewfinderResolution(res: ViewfinderResolution) {
-        _uiState.update { it.copy(viewfinderResolution = res) }
-        cameraXManager?.setViewfinderResolution(res.width, res.height)
     }
 
     /**

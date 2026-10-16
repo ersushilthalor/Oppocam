@@ -90,7 +90,6 @@ fun AiSubjectTrackingScreen(
                 onAspectRatioChanged = { viewModel.setAspectRatio(it) },
                 onTrackingIntensityChanged = { viewModel.setTrackingIntensity(it) },
                 onVideoResolutionChanged = { viewModel.setVideoResolution(it) },
-                onViewfinderResolutionChanged = { viewModel.setViewfinderResolution(it) },
                 onTrackingResolutionChanged = { viewModel.setTrackingResolution(it) },
                 onCameraLensChanged = { viewModel.setCameraLens(it) },
                 onFpsOptionChanged = { viewModel.setTrackingFps(it) },

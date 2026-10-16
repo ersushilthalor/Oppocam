@@ -125,11 +125,6 @@ class Camera2Engine(private val context: Context) {
         notifyPreviewFrameCompleted()
     }
 
-    // Fast Lens Switch simultaneous stream & background camera state
-    private val _isFastLensSwitch = MutableStateFlow(preferences.isFastLensSwitch)
-    val isFastLensSwitch: StateFlow<Boolean> = _isFastLensSwitch.asStateFlow()
-    val isKeepUltraWideReady: StateFlow<Boolean> get() = _isFastLensSwitch
-
     private val _isAutoSwitchToUltraWide = MutableStateFlow(preferences.isAutoSwitchToUltraWide)
     val isAutoSwitchToUltraWide: StateFlow<Boolean> = _isAutoSwitchToUltraWide.asStateFlow()
 
@@ -197,9 +192,7 @@ class Camera2Engine(private val context: Context) {
     private var closeSubjectUnfocusedFrames: Int = 0
     private var subjectFarFrames: Int = 0
 
-    private val _ultraWideStreamStatus = MutableStateFlow(
-        if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF
-    )
+    private val _ultraWideStreamStatus = MutableStateFlow(BackgroundCameraStatus.OFF)
     val ultraWideStreamStatus: StateFlow<BackgroundCameraStatus> = _ultraWideStreamStatus.asStateFlow()
 
     private val _isUsingUltraWideSurface = MutableStateFlow(false)
@@ -238,6 +231,24 @@ class Camera2Engine(private val context: Context) {
         zoomTransitionController.isOverlapAnimationEnabled = enabled
         preferences.isLensSwitchOverlapAnimationEnabled = enabled
     }
+
+    private val _isFastLensSwitch = MutableStateFlow(true)
+    val isFastLensSwitch: StateFlow<Boolean> = _isFastLensSwitch.asStateFlow()
+
+    private val _isKeepUltraWideReady = MutableStateFlow(true)
+    val isKeepUltraWideReady: StateFlow<Boolean> = _isKeepUltraWideReady.asStateFlow()
+
+
+
+
+
+    val activeSource = MutableStateFlow<Any?>(null)
+
+    fun evaluateLogTransferFunction(profile: com.example.camera.model.CinemaColorProfile, input: Float): Float {
+        return input
+    }
+
+    fun updateVideoAdjustments(adjustments: Any) {}
 
     // Motion Photo Engine
     val motionPhotoEngine = com.example.camera.motionphoto.MotionPhotoEngine()
@@ -824,7 +835,7 @@ class Camera2Engine(private val context: Context) {
 
     fun setFastLensSwitch(enabled: Boolean) {
         _isFastLensSwitch.value = enabled
-        preferences.isFastLensSwitch = enabled
+        // preferences.isFastLensSwitch = enabled
         ultraWideReconnectCount = 0
         _ultraWideStreamStatus.value = if (enabled) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF
         backgroundHandler?.post {

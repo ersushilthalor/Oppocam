@@ -235,39 +235,6 @@ class ExampleUnitTest {
         tempFile.delete()
         assertFalse(tempFile.exists())
     }
-
-    @Test
-    fun testMotorolaInstantSwitchPreferencesIndependence() {
-        val prefs = com.example.camera.data.CameraPreferences(
-            androidx.test.core.app.ApplicationProvider.getApplicationContext()
-        )
-
-        // Test default values
-        assertFalse(prefs.isShowUltraWidePreview)
-        assertTrue(prefs.isKeepFrontCameraReady)
-        assertFalse(prefs.isShowFrontCameraPreview)
-
-        // Test independent toggling for Ultra-Wide Preview
-        prefs.isShowUltraWidePreview = false
-        assertFalse(prefs.isShowUltraWidePreview)
-
-        prefs.isShowUltraWidePreview = true
-        assertTrue(prefs.isShowUltraWidePreview)
-
-        // Test independent toggling for Front Camera
-        // Front Ready ON + Preview OFF
-        prefs.isKeepFrontCameraReady = true
-        prefs.isShowFrontCameraPreview = false
-        assertTrue(prefs.isKeepFrontCameraReady)
-        assertFalse(prefs.isShowFrontCameraPreview)
-
-        // Front Ready ON + Preview ON
-        prefs.isShowFrontCameraPreview = true
-        assertTrue(prefs.isKeepFrontCameraReady)
-        assertTrue(prefs.isShowFrontCameraPreview)
-
-        // Front Ready OFF
-        prefs.isKeepFrontCameraReady = false
-        assertFalse(prefs.isKeepFrontCameraReady)
-    }
 }
+
+

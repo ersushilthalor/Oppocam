@@ -30,19 +30,12 @@ class CameraPreferences(context: Context) {
         private const val KEY_FOCUS_MODE = "pref_focus_mode"
         private const val KEY_LAST_FACING = "pref_last_facing"
         private const val KEY_SAVE_SELFIE_AS_PREVIEWED = "pref_save_selfie_as_previewed"
-        private const val KEY_VIEWFINDER_RESOLUTION = "pref_viewfinder_resolution"
         private const val KEY_REFOCUS_PHOTO_ENABLED = "pref_refocus_photo_enabled"
         private const val KEY_REFOCUS_FRAME_COUNT = "pref_refocus_frame_count"
         private const val KEY_ULTRA_FAST_SHUTTER_ENABLED = "pref_ultra_fast_shutter_enabled"
         private const val KEY_ULTRA_FAST_SHUTTER_FPS = "pref_ultra_fast_shutter_fps"
         private const val KEY_ULTRA_FAST_SHUTTER_BURST_COUNT = "pref_ultra_fast_shutter_burst_count"
         private const val KEY_TRACKING_LENS = "pref_tracking_lens"
-        private const val KEY_FAST_LENS_SWITCH = "pref_fast_lens_switch"
-        private const val KEY_KEEP_ULTRAWIDE_READY = "pref_keep_ultrawide_ready"
-        private const val KEY_AUTO_SWITCH_TO_ULTRAWIDE = "pref_auto_switch_to_ultrawide"
-        private const val KEY_SHOW_ULTRAWIDE_PREVIEW = "pref_show_ultrawide_preview"
-        private const val KEY_KEEP_FRONT_READY = "pref_keep_front_ready"
-        private const val KEY_SHOW_FRONT_PREVIEW = "pref_show_front_preview"
         private const val KEY_FLOATING_WINDOW_TRANSPARENCY = "pref_floating_window_transparency"
         private const val KEY_FLOATING_WINDOW_BLUR_STRENGTH = "pref_floating_window_blur_strength"
         private const val KEY_FLOATING_WINDOW_GLASS_STYLE = "pref_floating_window_glass_style"
@@ -69,7 +62,12 @@ class CameraPreferences(context: Context) {
         private const val KEY_HORIZONTAL_LOCK_SETTING_ENABLED = "pref_horizontal_lock_setting_enabled"
         private const val KEY_HORIZON_LOCK_ACTIVE = "pref_horizon_lock_active"
         private const val KEY_DOLLY_ZOOM_SETTING_ENABLED = "pref_dolly_zoom_setting_enabled"
+        private const val KEY_AUTO_SWITCH_TO_ULTRA_WIDE = "pref_auto_switch_to_ultra_wide"
     }
+
+    var isAutoSwitchToUltraWide: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_SWITCH_TO_ULTRA_WIDE, false)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_SWITCH_TO_ULTRA_WIDE, value).apply()
 
     var isMotionPhotoEnabled: Boolean
         get() = prefs.getBoolean(KEY_MOTION_PHOTO_ENABLED, false)
@@ -164,6 +162,14 @@ class CameraPreferences(context: Context) {
     var isIncludeLensSwitchPointsInPresetsEnabled: Boolean
         get() = prefs.getBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS, false)
         set(value) = prefs.edit().putBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS, value).apply()
+
+    var isFastLensSwitch: Boolean
+        get() = prefs.getBoolean("pref_fast_lens_switch", true)
+        set(value) = prefs.edit().putBoolean("pref_fast_lens_switch", value).apply()
+
+    var isKeepUltraWideReady: Boolean
+        get() = prefs.getBoolean("pref_keep_ultra_wide_ready", true)
+        set(value) = prefs.edit().putBoolean("pref_keep_ultra_wide_ready", value).apply()
 
     fun getEffectiveZoomPresets(
         hasUltraWide: Boolean,
@@ -269,37 +275,6 @@ class CameraPreferences(context: Context) {
             .putBoolean("fw_show_pipe_list", config.showPipelinePresetList)
             .apply()
     }
-
-    var isFastLensSwitch: Boolean
-        get() = prefs.getBoolean(KEY_FAST_LENS_SWITCH, prefs.getBoolean(KEY_KEEP_ULTRAWIDE_READY, true))
-        set(value) {
-            prefs.edit()
-                .putBoolean(KEY_FAST_LENS_SWITCH, value)
-                .putBoolean(KEY_KEEP_ULTRAWIDE_READY, value)
-                .apply()
-        }
-
-    var isKeepUltraWideReady: Boolean
-        get() = isFastLensSwitch
-        set(value) {
-            isFastLensSwitch = value
-        }
-
-    var isAutoSwitchToUltraWide: Boolean
-        get() = prefs.getBoolean(KEY_AUTO_SWITCH_TO_ULTRAWIDE, false)
-        set(value) = prefs.edit().putBoolean(KEY_AUTO_SWITCH_TO_ULTRAWIDE, value).apply()
-
-    var isShowUltraWidePreview: Boolean
-        get() = prefs.getBoolean(KEY_SHOW_ULTRAWIDE_PREVIEW, false)
-        set(value) = prefs.edit().putBoolean(KEY_SHOW_ULTRAWIDE_PREVIEW, value).apply()
-
-    var isKeepFrontCameraReady: Boolean
-        get() = prefs.getBoolean(KEY_KEEP_FRONT_READY, true)
-        set(value) = prefs.edit().putBoolean(KEY_KEEP_FRONT_READY, value).apply()
-
-    var isShowFrontCameraPreview: Boolean
-        get() = prefs.getBoolean(KEY_SHOW_FRONT_PREVIEW, false)
-        set(value) = prefs.edit().putBoolean(KEY_SHOW_FRONT_PREVIEW, value).apply()
 
     var trackingLens: com.example.camera.tracking.model.TrackingCameraLens
         get() {
@@ -456,14 +431,6 @@ class CameraPreferences(context: Context) {
     var saveSelfieAsPreviewed: Boolean
         get() = prefs.getBoolean(KEY_SAVE_SELFIE_AS_PREVIEWED, true)
         set(value) = prefs.edit().putBoolean(KEY_SAVE_SELFIE_AS_PREVIEWED, value).apply()
-
-    var viewfinderResolution: com.example.camera.model.ViewfinderResolution
-        get() {
-            val name = prefs.getString(KEY_VIEWFINDER_RESOLUTION, com.example.camera.model.ViewfinderResolution.RES_2K.name)
-                ?: com.example.camera.model.ViewfinderResolution.RES_2K.name
-            return try { com.example.camera.model.ViewfinderResolution.fromName(name) } catch (e: Exception) { com.example.camera.model.ViewfinderResolution.RES_2K }
-        }
-        set(value) = prefs.edit().putString(KEY_VIEWFINDER_RESOLUTION, value.name).apply()
 
     // Photo Megapixel Mode (12M vs 50M)
     var photoMegapixelMode: com.example.camera.model.PhotoMegapixelMode

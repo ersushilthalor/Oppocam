@@ -254,17 +254,8 @@ fun CameraScreen(
     val selectedPhotoFilter by viewModel.selectedPhotoFilter.collectAsStateWithLifecycle()
     val isPhotoFilterBarOpen by viewModel.isPhotoFilterBarOpen.collectAsStateWithLifecycle()
 
-    val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
     val isCameraReady by viewModel.engine.isCameraReady.collectAsStateWithLifecycle()
     val doubleTapAction by viewModel.doubleTapAction.collectAsStateWithLifecycle()
-
-    val isUsingRearMainLens = remember(selectedLens, currentZoom) {
-        selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
-                (selectedLens?.lensType == LensType.WIDE || (currentZoom in 0.85f..1.5f))
-    }
-    val isUsingRearLens = remember(selectedLens) {
-        selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
-    }
 
     val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
     val activePipelinePreset by viewModel.activePipelinePreset.collectAsStateWithLifecycle()
@@ -591,32 +582,6 @@ fun CameraScreen(
                 }
             }
         }
-
-        // 1g. Motorola Instant Camera Switching Picture-in-Picture Little Preview
-        LittlePreviewOverlay(
-            showUltraWidePreview = instantSwitchState.isShowUltraWidePreview && isUsingRearMainLens,
-            showFrontPreview = instantSwitchState.isShowFrontCameraPreview && isUsingRearLens,
-            ultraWideStatus = instantSwitchState.ultraWideStatus,
-            frontStatus = instantSwitchState.frontStatus,
-            onUltraWideSurfaceTextureAvailable = { texture ->
-                viewModel.onUltraWideLittlePreviewSurfaceAvailable(texture)
-            },
-            onFrontSurfaceTextureAvailable = { texture ->
-                viewModel.onFrontLittlePreviewSurfaceAvailable(texture)
-            },
-            onUltraWideClick = {
-                viewModel.switchToUltraWideInstant()
-            },
-            onFrontClick = {
-                viewModel.switchToFrontInstant()
-            },
-            onCloseUltraWidePreview = {
-                viewModel.setShowUltraWidePreview(false)
-            },
-            onCloseFrontPreview = {
-                viewModel.setShowFrontCameraPreview(false)
-            }
-        )
 
         // 2. Top Controls
         TopControlBar(
