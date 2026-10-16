@@ -77,23 +77,42 @@ fun CameraScreen(
         )
     }
 
+    var pendingAudioEnable by remember { mutableStateOf(false) }
+    var pendingVideoStart by remember { mutableStateOf(false) }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         hasCameraPermission = permissions[Manifest.permission.CAMERA] == true ||
                 ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        hasAudioPermission = permissions[Manifest.permission.RECORD_AUDIO] == true ||
+
+        val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
                 ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        hasAudioPermission = audioGranted
+
+        // Ask for microphone access only when the user explicitly enables audio or starts
+        // an audio-enabled video recording; never block the initial camera UI with this prompt.
+        if (pendingAudioEnable) {
+            pendingAudioEnable = false
+            if (audioGranted && !viewModel.isAudioEnabled.value) {
+                viewModel.toggleAudio()
+            }
+        }
+        if (pendingVideoStart) {
+            pendingVideoStart = false
+            if (!audioGranted && viewModel.isAudioEnabled.value) {
+                // Keep video recording usable when microphone permission is denied.
+                viewModel.toggleAudio()
+            }
+            viewModel.onMainActionButtonClick()
+        }
     }
 
     LaunchedEffect(Unit) {
-        if (!hasCameraPermission || !hasAudioPermission) {
-            permissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.RECORD_AUDIO
-                )
-            )
+        // Camera permission is required for the preview. Microphone permission is not
+        // required to open the app or take photos, so defer it until audio is requested.
+        if (!hasCameraPermission) {
+            permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
         }
     }
 
@@ -106,12 +125,7 @@ fun CameraScreen(
     if (!hasCameraPermission) {
         CameraPermissionPrompt(
             onRequestPermission = {
-                permissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.CAMERA,
-                        Manifest.permission.RECORD_AUDIO
-                    )
-                )
+                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
             },
             modifier = modifier
         )
@@ -232,6 +246,14 @@ fun CameraScreen(
     val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
     val colorProfile by viewModel.colorProfile.collectAsStateWithLifecycle()
     val isAudioEnabled by viewModel.isAudioEnabled.collectAsStateWithLifecycle()
+    val onAudioToggleRequested: () -> Unit = {
+        if (!isAudioEnabled && !hasAudioPermission) {
+            pendingAudioEnable = true
+            permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+        } else {
+            viewModel.toggleAudio()
+        }
+    }
     val currentVideoQuality by viewModel.currentVideoQuality.collectAsStateWithLifecycle()
     val currentZoom by viewModel.currentZoom.collectAsStateWithLifecycle()
     val displayedLenses by viewModel.displayedLenses.collectAsStateWithLifecycle()
@@ -543,7 +565,7 @@ fun CameraScreen(
             isProActive = isManualProOpen,
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
             isAudioEnabled = isAudioEnabled,
-            onAudioToggle = { viewModel.toggleAudio() },
+            onAudioToggle = onAudioToggleRequested,
             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
             onStabilizationClick = { viewModel.toggleVideoStabilization() },
@@ -611,7 +633,7 @@ fun CameraScreen(
                 isQuickOptionsOpen = false
                 viewModel.setVideoSettingsPanelOpen(true)
             },
-            onAudioToggle = { viewModel.toggleAudio() },
+            onAudioToggle = onAudioToggleRequested,
             onVideoAdjustmentsClick = {
                 isQuickOptionsOpen = false
                 viewModel.setVideoAdjustmentsOpen(true)
@@ -1014,7 +1036,16 @@ fun CameraScreen(
             lastCapturedMedia = lastCapturedMedia,
             activeTimerCountdown = activeTimerCountdown,
             onModeSelected = { viewModel.setCameraMode(it) },
-            onShutterClick = { viewModel.onMainActionButtonClick() },
+            onShutterClick = {
+                if ((cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) &&
+                    !isRecordingVideo && isAudioEnabled && !hasAudioPermission
+                ) {
+                    pendingVideoStart = true
+                    permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                } else {
+                    viewModel.onMainActionButtonClick()
+                }
+            },
             isUltraFastShutterEnabled = isUltraFastShutterEnabled,
             ultraFastFps = ultraFastShutterFps,
             onFastShutterSingleTap = { viewModel.onFastShutterSingleTap() },

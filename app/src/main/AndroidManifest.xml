@@ -45,7 +45,7 @@
             android:screenOrientation="fullUser"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:label="@string/app_name"
-            android:theme="@style/Theme.MyApplication">
+            android:theme="@style/Theme.MyApplication.Launch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

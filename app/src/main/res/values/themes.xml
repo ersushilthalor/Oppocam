@@ -2,4 +2,9 @@
 <resources>
 
     <style name="Theme.MyApplication" parent="android:Theme.Material.NoActionBar" />
+
+    <!-- Match the pre-draw launch window to the camera's black viewfinder background. -->
+    <style name="Theme.MyApplication.Launch" parent="Theme.MyApplication">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
 </resources>
