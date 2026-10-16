@@ -358,61 +358,7 @@ fun TopControlBar(
                     }
                 }
                 CameraMode.CINEMA -> {
-                    val resLabel = when {
-                        cinemaConfig.selectedResolution?.width == 3840 || cinemaConfig.selectedResolution?.height == 3840 -> "4K"
-                        cinemaConfig.selectedResolution?.width == 2560 || cinemaConfig.selectedResolution?.height == 2560 -> "2K"
-                        cinemaConfig.selectedResolution?.width == 1920 || cinemaConfig.selectedResolution?.height == 1920 -> "1080p"
-                        cinemaConfig.selectedResolution?.width == 1280 || cinemaConfig.selectedResolution?.height == 1280 -> "720p"
-                        else -> "4K"
-                    }
-                    val aspectLabel = cinemaConfig.aspectRatio.label
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(17.dp))
-                                .background(Color(0xB21A1A1E))
-                                .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-                                .clickable { onCinemaResolutionClick() }
-                                .padding(horizontal = 10.dp)
-                                .testTag("pro_video_resolution_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = resLabel,
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(17.dp))
-                                .background(Color(0xB21A1A1E))
-                                .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f), RoundedCornerShape(17.dp))
-                                .clickable { onCinemaAspectRatioClick() }
-                                .padding(horizontal = 10.dp)
-                                .testTag("cinema_aspect_ratio_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = aspectLabel,
-                                color = Color(0xFFFFD54F),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.5.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
-                    }
+                    // Pro Video resolution and aspect ratio are available from the six-dot menu.
                 }
                 CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> {
                     Box(
