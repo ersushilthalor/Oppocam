@@ -544,12 +544,14 @@ class Camera2Engine(private val context: Context) {
 
             if (prevTexture !== texture) {
                 standbySessionGeneration.incrementAndGet()
-                try { ultraWideStandbyCaptureSession?.stopRepeating() } catch (_: Throwable) {}
-                try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
-                ultraWideStandbyCaptureSession = null
-                isUltraWideStreaming.set(false)
-                standbyConfiguredForRecording = false
-                _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                if (cameraDevice !== ultraWideStandbyCameraDevice) {
+                    try { ultraWideStandbyCaptureSession?.stopRepeating() } catch (_: Throwable) {}
+                    try { ultraWideStandbyCaptureSession?.close() } catch (_: Throwable) {}
+                    ultraWideStandbyCaptureSession = null
+                    isUltraWideStreaming.set(false)
+                    standbyConfiguredForRecording = false
+                    _ultraWideStreamStatus.value = BackgroundCameraStatus.OFF
+                }
                 if (ultraWideStandbySurface === ultraWideViewfinderSurface) {
                     ultraWideStandbySurface = null
                 }
@@ -2807,22 +2809,11 @@ class Camera2Engine(private val context: Context) {
                 return
             }
 
-            // If targetCam was just opened and standbySession is still configuring, prepare session
-            // while keeping the current valid preview visible until the target stream is usable.
-            Log.w(TAG, "Standby session not configured on target camera ${targetCam.id}; preparing session before switching preview source")
-            cameraDevice = targetCam
-            ultraWideStandbyCameraDevice = oldCam
-            ultraWideStandbyCaptureSession = oldSession
-            ultraWideStandbyRequestBuilder = synchronized(previewRequestLock) { previewRequestBuilder }
-            ultraWideStandbyJpegReader = imageReaderJpeg
-            activeSessionLens = targetLens
-            activeSessionPhysicalCameraId = targetLens.physicalCameraId
-
-            backgroundHandler?.post {
-                inspectCapabilities(targetLens.cameraId)
-                setupImageReaders(targetLens.cameraId)
-                createCameraCaptureSession()
-            }
+            // If targetCam was opened but standbySession is not yet configured or ready,
+            // seamlessly switch camera device to targetLens so proper preview surface is attached
+            Log.i(TAG, "[FAST_LENS_SWITCH] Standby session not ready yet on target camera ${targetCam.id}; switching seamlessly via switchCameraDevice")
+            switchCameraDevice(targetLens, switchGen, isContinuousTransition = isContinuousTransition)
+            return
         }
     }
 
@@ -4437,8 +4428,13 @@ class Camera2Engine(private val context: Context) {
     }
 
     private fun getEffectiveMainPreviewSurface(): Surface? {
-        if (_isUsingUltraWideSurface.value && !activeLogicalMultiCamUltraWideConfigured) {
-            val uwSurf = getOrCreateUltraWidePreviewSurface(_selectedLens.value?.cameraId)
+        val isTargetUw = _isUsingUltraWideSurface.value ||
+            _selectedLens.value?.lensType == LensType.ULTRAWIDE ||
+            activeSessionLens?.lensType == LensType.ULTRAWIDE ||
+            activeSwitchingTargetLens?.lensType == LensType.ULTRAWIDE
+
+        if (isTargetUw && !activeLogicalMultiCamUltraWideConfigured) {
+            val uwSurf = ultraWideViewfinderSurface ?: getOrCreateUltraWidePreviewSurface(_selectedLens.value?.cameraId)
             if (uwSurf != null && uwSurf.isValid) {
                 return uwSurf
             }
@@ -6975,8 +6971,13 @@ class Camera2Engine(private val context: Context) {
      * Helper to resolve the active preview surface for either Main or Ultra-Wide streams.
      */
     private fun getActivePreviewSurface(): Surface? {
-        if (_isUsingUltraWideSurface.value && !activeLogicalMultiCamUltraWideConfigured) {
-            val uwSurf = ultraWideViewfinderSurface ?: ultraWideStandbySurface
+        val isTargetUw = _isUsingUltraWideSurface.value ||
+            _selectedLens.value?.lensType == LensType.ULTRAWIDE ||
+            activeSessionLens?.lensType == LensType.ULTRAWIDE ||
+            activeSwitchingTargetLens?.lensType == LensType.ULTRAWIDE
+
+        if (isTargetUw && !activeLogicalMultiCamUltraWideConfigured) {
+            val uwSurf = ultraWideViewfinderSurface ?: ultraWideStandbySurface ?: getOrCreateUltraWidePreviewSurface(_selectedLens.value?.cameraId)
             if (uwSurf != null && uwSurf.isValid) return uwSurf
         }
         return if (previewSurface?.isValid == true) previewSurface else getOrCreateMainPreviewSurface(_selectedLens.value?.cameraId)

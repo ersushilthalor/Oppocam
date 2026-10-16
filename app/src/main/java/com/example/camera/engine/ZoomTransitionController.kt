@@ -398,66 +398,53 @@ class ZoomTransitionController(
 
             if (isMainToUltraWideSwitch) {
                 // 2. 1x -> 0.5x workflow:
-                // - Instantly switch to the ultra-wide lens feed, initially cropped to match the current 1x field of view.
-                // - Hold this cropped ultra-wide view for the configured hold time (if any).
-                // - Then smoothly transition digitally from 1x down to 0.5x.
-                // - No additional lens switch command can execute until this zoom transition completes.
+                // - Smoothly zoom out digitally from 1x down to 0.5x using the current (Main) lens.
+                // - Respect the configured select-hold duration at the target focal length.
+                // - Switch to the ultra-wide lens instantly ONLY after digital zoom and hold complete.
 
+                updateState(ZoomTransitionState.ZOOMING_MAIN_TO_TARGET)
                 val startNorm = zoomToNormalizedLog(startZ, minZoom, maxZoom)
-                val switchNorm = zoomToNormalizedLog(effectiveSwitchZoom, minZoom, maxZoom)
                 val endNorm = zoomToNormalizedLog(endZ, minZoom, maxZoom)
 
-                // If starting above 1x (e.g. 2x -> 0.5x), first smoothly transition on Main down to 1x
-                if (startZ > effectiveSwitchZoom + 0.05f) {
-                    updateState(ZoomTransitionState.ZOOMING_MAIN_TO_TARGET)
-                    val totalSpan = abs(endNorm - startNorm).coerceAtLeast(0.001f)
-                    val mainSpan = abs(startNorm - switchNorm)
-                    val mainPhaseDurationMs = ((mainSpan / totalSpan) * transitionDurationMs.toFloat()).toLong().coerceIn(60L, transitionDurationMs)
+                val startTime = SystemClock.uptimeMillis()
+                var lastDispatchedZoom = startZ
+                var lastDispatchedTime = 0L
 
-                    val mainStartTime = SystemClock.uptimeMillis()
-                    var lastDispatchedZoom = startZ
-                    var lastDispatchedTime = 0L
+                while (isActive) {
+                    val now = SystemClock.uptimeMillis()
+                    val elapsed = now - startTime
+                    if (elapsed >= transitionDurationMs) break
 
-                    while (isActive) {
-                        val now = SystemClock.uptimeMillis()
-                        val elapsed = now - mainStartTime
-                        if (elapsed >= mainPhaseDurationMs) break
+                    val linearProgress = (elapsed.toDouble() / transitionDurationMs.toDouble()).coerceIn(0.0, 1.0)
+                    val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+                    val currentNorm = (startNorm + (endNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
-                        val linearProgress = (elapsed.toDouble() / mainPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                        val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                        val currentNorm = (startNorm + (switchNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
+                    val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
+                    val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(endZ, startZ)
 
-                        val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                        val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(effectiveSwitchZoom, startZ)
+                    if (abs(currentZ - lastDispatchedZoom) >= 0.005f || (now - lastDispatchedTime) >= 16L) {
+                        lastDispatchedZoom = currentZ
+                        lastDispatchedTime = now
+                        _currentInterpolatedZoom.value = currentZ
+                        onZoomUpdate(currentZ)
+                        onApplyZoomToEngine(currentZ, true)
+                    }
 
-                        if (currentZ > effectiveSwitchZoom && (abs(currentZ - lastDispatchedZoom) >= 0.005f || (now - lastDispatchedTime) >= 16L)) {
-                            lastDispatchedZoom = currentZ
-                            lastDispatchedTime = now
-                            _currentInterpolatedZoom.value = currentZ
-                            onZoomUpdate(currentZ)
-                            onApplyZoomToEngine(currentZ, true)
-                        }
-
-                        val nextTick = minOf(mainStartTime + mainPhaseDurationMs, now + 16L)
-                        val waitMs = nextTick - SystemClock.uptimeMillis()
-                        if (waitMs > 0) {
-                            delay(waitMs)
-                        }
+                    val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
+                    val waitMs = nextTick - SystemClock.uptimeMillis()
+                    if (waitMs > 0) {
+                        delay(waitMs)
                     }
                 }
 
-                // Step 1: Instantly switch to the ultra-wide lens feed, initially cropped to match the current 1x field of view
-                updateState(ZoomTransitionState.SWITCHED_TO_UW_CROPPED)
-                _currentInterpolatedZoom.value = effectiveSwitchZoom
-                onZoomUpdate(effectiveSwitchZoom)
-                onSelectLensOnEngine(ultraWideLens, effectiveSwitchZoom, true)
-                setSteadyStatePreview(true)
-                onApplyZoomToEngine(effectiveSwitchZoom, true)
+                _currentInterpolatedZoom.value = endZ
+                onZoomUpdate(endZ)
+                onApplyZoomToEngine(endZ, true)
 
-                // Step 2: Hold this cropped ultra-wide view if configured
+                // Respect full select-hold duration at target 0.5x focal length
                 val holdDuration = if (holdAtOneXDurationMs <= 0L) 0L else holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 if (holdDuration > 0L) {
-                    updateState(ZoomTransitionState.HOLDING_AT_CROPPED_UW)
+                    updateState(ZoomTransitionState.HOLDING_AT_SWITCH_POINT)
                     val holdStartTime = SystemClock.uptimeMillis()
                     while (isActive) {
                         val now = SystemClock.uptimeMillis()
@@ -470,46 +457,14 @@ class ZoomTransitionController(
                     }
                 }
 
-                // Step 3: Smoothly transition digitally from 1x down to 0.5x with sinusoidal ease
-                updateState(ZoomTransitionState.ZOOMING_UW_OUT_TO_TARGET)
-                val uwPhaseDurationMs = transitionDurationMs
-                val uwStartNorm = switchNorm
-                val uwEndNorm = endNorm
-
-                val smoothStartTime = SystemClock.uptimeMillis()
-                var lastDispatchedZoom = effectiveSwitchZoom
-                var lastDispatchedTime = 0L
-
-                while (isActive) {
-                    val now = SystemClock.uptimeMillis()
-                    val elapsed = now - smoothStartTime
-                    if (elapsed >= uwPhaseDurationMs) break
-
-                    val linearProgress = (elapsed.toDouble() / uwPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                    val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                    val currentNorm = (uwStartNorm + (uwEndNorm - uwStartNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
-
-                    val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                    val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(endZ, effectiveSwitchZoom)
-
-                    if (abs(currentZ - lastDispatchedZoom) >= 0.005f || (now - lastDispatchedTime) >= 16L) {
-                        lastDispatchedZoom = currentZ
-                        lastDispatchedTime = now
-                        _currentInterpolatedZoom.value = currentZ
-                        onZoomUpdate(currentZ)
-                        onApplyZoomToEngine(currentZ, true)
-                    }
-
-                    val nextTick = minOf(smoothStartTime + uwPhaseDurationMs, now + 16L)
-                    val waitMs = nextTick - SystemClock.uptimeMillis()
-                    if (waitMs > 0) {
-                        delay(waitMs)
-                    }
-                }
-
+                // Switch to Ultra-Wide lens instantly after digital zoom and hold are complete
+                updateState(ZoomTransitionState.SWITCHED_TO_UW_CROPPED)
+                onSelectLensOnEngine(ultraWideLens, endZ, false)
+                setSteadyStatePreview(true)
                 _currentInterpolatedZoom.value = endZ
                 onZoomUpdate(endZ)
                 onApplyZoomToEngine(endZ, false)
+
                 updateState(ZoomTransitionState.IDLE)
                 _isTransitionActive.value = false
                 activeTransitionJob = null
