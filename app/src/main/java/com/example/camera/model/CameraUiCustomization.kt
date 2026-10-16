@@ -143,10 +143,7 @@ enum class TopControlItem(val id: String, val label: String) {
     LUT("lut", "Cinematic LUTs (Pro Video)"),
     PRO_VIDEO_SETTINGS("pro_video_settings", "Fine Tuning Controls"),
     EV("ev", "Exposure Compensation (EV)"),
-    HORIZON_LOCK("horizon_lock", "Horizontal Lock"),
-    DOLLY_ZOOM("dolly_zoom", "Dolly Zoom"),
     VIDEO_ADJUSTMENTS("video_adjustments", "Video Adjustments"),
-    MOTION_PHOTO("motion_photo", "Motion Photo"),
     STABILIZATION("stabilization", "Video Stabilization (OFF/EIS/EIS+)"),
     PIPELINE("pipeline", "Custom Pipeline"),
     SIX_DOT_MENU("six_dot_menu", "Quick Options Menu (6-Dot)"),
@@ -206,9 +203,9 @@ data class ModeLayoutConfig(
 ) {
     fun getIconPosition(item: TopControlItem): TopIconPosition {
         return topIconPositions[item] ?: when (item) {
-            TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HORIZON_LOCK, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
+            TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
             TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
-            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.MOTION_PHOTO, TopControlItem.PIPELINE, TopControlItem.DOLLY_ZOOM -> TopIconPosition.RIGHT
+            TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.PIPELINE -> TopIconPosition.RIGHT
         }
     }
 
@@ -571,14 +568,12 @@ object CameraUiTemplates {
             CameraMode.PHOTO -> baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
-                    TopControlItem.MOTION_PHOTO,
                     TopControlItem.RESOLUTION,
                     TopControlItem.PIPELINE,
                     TopControlItem.SIX_DOT_MENU
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
-                    TopControlItem.MOTION_PHOTO to TopIconPosition.LEFT,
                     TopControlItem.RESOLUTION to TopIconPosition.CENTER,
                     TopControlItem.PIPELINE to TopIconPosition.RIGHT,
                     TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT

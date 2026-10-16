@@ -633,30 +633,6 @@ private fun PhotoSettingsPage(
             )
         }
 
-        item {
-            SettingsSwitchCard(
-                title = "Motion Photo",
-                description = "Captures a continuous motion video synchronized around the shutter press, saved as a single Google Photos compatible Motion Photo.",
-                isChecked = isMotionPhotoEnabled,
-                onCheckedChange = onMotionPhotoToggle,
-                tag = "toggle_motion_photo"
-            )
-        }
-
-        if (isMotionPhotoEnabled) {
-            item {
-                SettingsSegmentedCard(
-                    title = "Motion Photo Duration",
-                    description = "Duration of motion captured before and after the shutter moment.",
-                    options = listOf(
-                        com.example.camera.motionphoto.MotionPhotoDuration.ONE_SECOND to "1 Second (0.5s + 0.5s)",
-                        com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS to "2 Seconds (1s + 1s)"
-                    ),
-                    selectedOption = motionPhotoDuration,
-                    onOptionSelected = onMotionPhotoDurationSelect
-                )
-            }
-        }
 
         item {
             SettingsSwitchCard(

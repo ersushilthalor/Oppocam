@@ -168,10 +168,6 @@ fun CameraScreen(
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
     val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
     val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
-    val isHorizonLockEnabled by viewModel.isHorizonLockEnabled.collectAsStateWithLifecycle()
-    val horizonRollDegrees by viewModel.horizonRollDegrees.collectAsStateWithLifecycle()
-    val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
-    val horizonMotionOffset by viewModel.horizonMotionOffset.collectAsStateWithLifecycle()
 
     val flashMode by viewModel.flashMode.collectAsStateWithLifecycle()
     val timerMode by viewModel.timerMode.collectAsStateWithLifecycle()
@@ -278,11 +274,6 @@ fun CameraScreen(
     val isBeforeAfterOpen by viewModel.isBeforeAfterOpen.collectAsStateWithLifecycle()
     val latestPipelineCapture by viewModel.latestPipelineCapture.collectAsStateWithLifecycle()
 
-    val isMotionPhotoEnabled by viewModel.isMotionPhotoEnabled.collectAsStateWithLifecycle()
-    val isMotionPhotoRecording by viewModel.isMotionPhotoRecording.collectAsStateWithLifecycle()
-    val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
-    val isDollyZoomActive by viewModel.isDollyZoomActive.collectAsStateWithLifecycle()
-    val dollyCropState by viewModel.dollyCropState.collectAsStateWithLifecycle()
 
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
@@ -406,97 +397,8 @@ fun CameraScreen(
                 onFrameLuminanceStats = { stats ->
                     viewModel.engine.onFrameLuminanceStats(stats)
                 },
-                isMotionPhotoEnabled = isMotionPhotoEnabled,
-                onMotionPhotoPreviewFrame = { bmp ->
-                    viewModel.onMotionPhotoPreviewFrame(bmp)
-                },
-                isHorizonLockEnabled = isHorizonLockEnabled && isHorizontalLockSettingEnabled,
-                horizonRollDegrees = horizonRollDegrees,
-                horizonNormX = horizonMotionOffset.first,
-                horizonNormY = horizonMotionOffset.second,
-                isDollyZoomActive = isDollyZoomActive,
-                dollyCropState = dollyCropState,
-                onTapToLockDollySubject = { normX, normY ->
-                    viewModel.onTapToLockDollySubject(normX, normY)
-                },
-                viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
-                stabilizationMode = videoStabilizationMode,
-                doubleTapAction = doubleTapAction,
-                onDoubleTapFlip = { viewModel.toggleCameraFacing() },
-                onDoubleTapLock = { viewModel.toggleAeAfLock() },
                 modifier = Modifier.fillMaxSize()
             )
-
-        // 1b. Dedicated Horizon Lock On-Screen Indicator (Video & Cinema Mode)
-        if ((cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) && isHorizontalLockSettingEnabled && isHorizonLockEnabled) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 58.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xCC0D0F18))
-                    .border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
-                    .clickable { viewModel.toggleHorizonLock() }
-                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                    .testTag("horizon_lock_badge")
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ScreenLockRotation,
-                        contentDescription = "Horizontal Lock",
-                        tint = Color(0xFFFFD54F),
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = "HORIZON LOCK",
-                        color = Color(0xFFFFD54F),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.6.sp
-                    )
-                }
-            }
-        }
-
-        // 1c. Dedicated Dolly Zoom On-Screen Indicator (Video Mode)
-        if (cameraMode == CameraMode.VIDEO && isDollyZoomActive) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = if (isHorizonLockEnabled) 96.dp else 58.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xCC0D0F18))
-                    .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
-                    .clickable { viewModel.toggleDollyZoomActive() }
-                    .padding(horizontal = 12.dp, vertical = 5.dp)
-                    .testTag("dolly_zoom_badge")
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CenterFocusStrong,
-                        contentDescription = "Dolly Zoom Active",
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = "DOLLY ZOOM • ${String.format(java.util.Locale.US, "%.1fX", dollyCropState.scaleFactor)}",
-                        color = Color(0xFF00E5FF),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.6.sp
-                    )
-                }
-            }
-        }
-
         // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
         if (cameraMode == CameraMode.VIDEO) {
             VideoAdjustmentsViewfinderOverlay(
@@ -661,18 +563,10 @@ fun CameraScreen(
             isVideoAdjustmentsOpen = isVideoAdjustmentsOpen,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             onVideoAdjustmentsClick = { viewModel.toggleVideoAdjustmentsOpen() },
-            isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
-            isHorizonLockEnabled = isHorizonLockEnabled,
-            onToggleHorizonLock = { viewModel.toggleHorizonLock() },
-            isDollyZoomSettingEnabled = isDollyZoomSettingEnabled,
-            isDollyZoomActive = isDollyZoomActive,
-            onToggleDollyZoom = { viewModel.toggleDollyZoomActive() },
             onFlashClick = { viewModel.cycleFlashMode() },
             onTimerClick = { viewModel.cycleTimerMode() },
             onGridClick = { viewModel.cycleGridType() },
             onRawClick = { viewModel.toggleRawCapture() },
-            isMotionPhotoEnabled = isMotionPhotoEnabled,
-            onMotionPhotoClick = { viewModel.toggleMotionPhoto() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
             isProActive = isManualProOpen,
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
@@ -719,7 +613,6 @@ fun CameraScreen(
             gridType = gridType,
             photoMegapixelMode = photoMegapixelMode,
             isRawEnabled = isRawEnabled,
-            isMotionPhotoEnabled = isMotionPhotoEnabled,
             activePhotoFilter = selectedPhotoFilter,
             isPipelineActive = isCustomPipelineEnabled,
             videoResolution = selectedVideoResolution,
@@ -727,8 +620,6 @@ fun CameraScreen(
             isAudioEnabled = isAudioEnabled,
             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
             isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-            isHorizonLockEnabled = isHorizonLockEnabled,
-            isDollyZoomActive = isDollyZoomActive,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             cinemaConfig = cinemaConfig,
             isEvOpen = isEvControlOpen,
@@ -739,13 +630,10 @@ fun CameraScreen(
             onGridClick = { viewModel.cycleGridType() },
             onToggleMegapixelMode = { viewModel.togglePhotoMegapixelMode() },
             onRawClick = { viewModel.toggleRawCapture() },
-            onMotionPhotoClick = { viewModel.toggleMotionPhoto() },
             onPhotoFilterClick = {
                 isQuickOptionsOpen = false
                 viewModel.setPhotoFilterBarOpen(true)
             },
-            onToggleDollyZoom = { viewModel.toggleDollyZoomActive() },
-            onToggleHorizonLock = { viewModel.toggleHorizonLock() },
             onStabilizationClick = { viewModel.cycleStabilizationMode() },
             onVideoSettingsClick = {
                 isQuickOptionsOpen = false

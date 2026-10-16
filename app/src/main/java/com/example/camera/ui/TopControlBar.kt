@@ -594,22 +594,6 @@ fun TopControlBar(
             }
         }
 
-        val motionPhotoButton = @Composable {
-            IconButton(
-                onClick = onMotionPhotoClick,
-                modifier = Modifier
-                    .size(buttonSize)
-                    .topControlStyle(layoutConfig, activeColor = if (isMotionPhotoEnabled) accentColor else null)
-                    .testTag("motion_photo_button")
-            ) {
-                Icon(
-                    imageVector = if (isMotionPhotoEnabled) Icons.Filled.MotionPhotosOn else Icons.Outlined.MotionPhotosOff,
-                    contentDescription = if (isMotionPhotoEnabled) "Motion Photo: ON" else "Motion Photo: OFF",
-                    tint = if (isMotionPhotoEnabled) accentColor else Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(iconSize)
-                )
-            }
-        }
 
         val pipelineButton = @Composable {
             IconButton(
@@ -733,45 +717,7 @@ fun TopControlBar(
             }
         }
 
-        val horizonLockButton = @Composable {
-            IconButton(
-                onClick = onToggleHorizonLock,
-                modifier = Modifier
-                    .size(buttonSize)
-                    .topControlStyle(
-                        layoutConfig,
-                        activeColor = if (isHorizonLockEnabled) Color(0xFFFFD54F) else null
-                    )
-                    .testTag("video_horizon_lock_button")
-            ) {
-                Icon(
-                    imageVector = if (isHorizonLockEnabled) Icons.Filled.ScreenLockRotation else Icons.Outlined.ScreenLockRotation,
-                    contentDescription = if (isHorizonLockEnabled) "Horizontal Lock Enabled" else "Horizontal Lock Disabled",
-                    tint = if (isHorizonLockEnabled) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(iconSize)
-                )
-            }
-        }
 
-        val dollyZoomButton = @Composable {
-            IconButton(
-                onClick = onToggleDollyZoom,
-                modifier = Modifier
-                    .size(buttonSize)
-                    .topControlStyle(
-                        layoutConfig,
-                        activeColor = if (isDollyZoomActive) Color(0xFF00E5FF) else null
-                    )
-                    .testTag("video_dolly_zoom_button")
-            ) {
-                Icon(
-                    imageVector = if (isDollyZoomActive) Icons.Filled.CenterFocusStrong else Icons.Outlined.CenterFocusStrong,
-                    contentDescription = if (isDollyZoomActive) "Dolly Zoom Enabled" else "Dolly Zoom Disabled",
-                    tint = if (isDollyZoomActive) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(iconSize)
-                )
-            }
-        }
 
         val isEvActive = exposureCompensation != 0
         val evButton = @Composable {
@@ -878,13 +824,10 @@ fun TopControlBar(
                     TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
                     TopControlItem.STABILIZATION -> { /* Removed: stabilization controls completely removed */ }
                     TopControlItem.EV -> evButton()
-                    TopControlItem.HORIZON_LOCK -> horizonLockButton()
-                    TopControlItem.DOLLY_ZOOM -> dollyZoomButton()
-                    TopControlItem.VIDEO_ADJUSTMENTS -> videoAdjustmentsButton()
-                    TopControlItem.MOTION_PHOTO -> motionPhotoButton()
                     TopControlItem.PIPELINE -> pipelineButton()
                     TopControlItem.SIX_DOT_MENU -> sixDotMenuButton()
                     TopControlItem.SETTINGS -> settingsButton()
+                    else -> {}
                 }
             }
         }

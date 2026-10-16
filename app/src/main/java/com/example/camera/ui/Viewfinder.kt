@@ -119,16 +119,6 @@ fun Viewfinder(
     onToggleLock: () -> Unit = {},
     currentExposureCompensation: Int = 0,
     onFrameLuminanceStats: ((com.example.camera.engine.FrameLuminanceStats) -> Unit)? = null,
-    isMotionPhotoEnabled: Boolean = false,
-    onMotionPhotoPreviewFrame: ((Bitmap) -> Unit)? = null,
-    isHorizonLockEnabled: Boolean = false,
-    horizonRollDegrees: Float = 0f,
-    horizonNormX: Float = 0f,
-    horizonNormY: Float = 0f,
-    viewfinderCornerRadiusDp: Int = 0,
-    isDollyZoomActive: Boolean = false,
-    dollyCropState: com.example.camera.dollyzoom.DollyCropState? = null,
-    onTapToLockDollySubject: ((Float, Float) -> Unit)? = null,
     stabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS,
     doubleTapAction: String = "FLIP",
     onDoubleTapFlip: () -> Unit = {},
@@ -143,8 +133,6 @@ fun Viewfinder(
     val currentPreviewOverlapState by rememberUpdatedState(previewOverlapState)
     val currentCameraMode by rememberUpdatedState(cameraMode)
     val currentCinemaConfig by rememberUpdatedState(cinemaConfig)
-    val currentIsMotionPhotoEnabled by rememberUpdatedState(isMotionPhotoEnabled)
-    val currentOnMotionPhotoPreviewFrame by rememberUpdatedState(onMotionPhotoPreviewFrame)
     val currentOnFrameLuminanceStats by rememberUpdatedState(onFrameLuminanceStats)
     val currentFloatingWindowBlurStrength by rememberUpdatedState(floatingWindowBlurStrength)
     val ultraWideFramingCalib = remember {
@@ -188,14 +176,6 @@ fun Viewfinder(
             previewBufferSize = previewBufferSize,
             targetRatio = targetRatioCalc,
             sensorOrientation = sensorOrientation,
-            isHorizonLockEnabled = isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA),
-            horizonRollDegrees = horizonRollDegrees,
-            horizonNormX = horizonNormX,
-            horizonNormY = horizonNormY,
-            isDollyZoomActive = isDollyZoomActive && cameraMode == CameraMode.VIDEO,
-            dollyScale = dollyCropState?.scaleFactor ?: 1.0f,
-            dollyFocusX = dollyCropState?.focusNormX ?: 0.5f,
-            dollyFocusY = dollyCropState?.focusNormY ?: 0.5f,
             viewWidth = viewW,
             viewHeight = viewH,
             opticalScale = calib.scaleCorrection,
@@ -204,22 +184,6 @@ fun Viewfinder(
         )
     }
 
-    LaunchedEffect(
-        textureViewInstance,
-        ultraWideTextureViewInstance,
-        isUsingUltraWideSurface,
-        currentZoom,
-        isHorizonLockEnabled,
-        horizonRollDegrees,
-        horizonNormX,
-        horizonNormY,
-        isDollyZoomActive,
-        dollyCropState,
-        cameraMode,
-        previewBufferSize,
-        isSettingsOpen,
-        aspectRatio,
-        isCameraReady
     ) {
         if (!isSettingsOpen) {
             listOfNotNull(textureViewInstance, ultraWideTextureViewInstance).forEach { tv ->
@@ -286,14 +250,6 @@ fun Viewfinder(
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
         val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
-        val currentIsHorizonLock by rememberUpdatedState(isHorizonLockEnabled && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA))
-        val currentHorizonRoll by rememberUpdatedState(horizonRollDegrees)
-        val currentHorizonNormX by rememberUpdatedState(horizonNormX)
-        val currentHorizonNormY by rememberUpdatedState(horizonNormY)
-        val currentIsDollyZoom by rememberUpdatedState(isDollyZoomActive && cameraMode == CameraMode.VIDEO)
-        val currentDollyScale by rememberUpdatedState(dollyCropState?.scaleFactor ?: 1.0f)
-        val currentDollyFocusX by rememberUpdatedState(dollyCropState?.focusNormX ?: 0.5f)
-        val currentDollyFocusY by rememberUpdatedState(dollyCropState?.focusNormY ?: 0.5f)
 
         // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame.
         // In portrait orientation, viewfinder always spans 100% full screen width (no side black bars),
@@ -429,38 +385,12 @@ fun Viewfinder(
                                         lumaSampleBitmap?.recycle()
                                         lumaSampleBitmap = null
                                     } catch (ignored: Exception) {}
-                                    try {
-                                        motionSampleBitmap?.recycle()
-                                        motionSampleBitmap = null
-                                    } catch (ignored: Exception) {}
                                     return true
                                 }
                                 override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
                                     if (currentIsUsingUltraWideSurface) return
 
                                     val modeNow = currentCameraMode
-                                    val motionCallback = currentOnMotionPhotoPreviewFrame
-
-                                    // Real-time Motion Photo frame buffering (30 FPS)
-                                    if (currentIsMotionPhotoEnabled && modeNow == CameraMode.PHOTO && motionCallback != null) {
-                                        val nowMs = android.os.SystemClock.uptimeMillis()
-                                        if (nowMs - lastMotionSampleTime >= 33L) {
-                                            lastMotionSampleTime = nowMs
-                                            try {
-                                                val aspect = currentTargetRatio.takeIf { it > 0 } ?: (4f / 3f)
-                                                val sampleW = if (aspect > 1.3f) 1280 else if (aspect in 0.95f..1.05f) 720 else 960
-                                                val sampleH = 720
-                                                if (motionSampleBitmap == null || motionSampleBitmap?.width != sampleW || motionSampleBitmap?.height != sampleH || motionSampleBitmap?.isRecycled == true) {
-                                                    motionSampleBitmap = Bitmap.createBitmap(sampleW, sampleH, Bitmap.Config.ARGB_8888)
-                                                }
-                                                motionSampleBitmap?.let { bmp ->
-                                                    getBitmap(bmp)
-                                                    motionCallback.invoke(bmp)
-                                                }
-                                            } catch (ignored: Exception) {}
-                                        }
-                                    }
-
                                     val lumaCallback = currentOnFrameLuminanceStats
                                     val needsLumaAnalysis = lumaCallback != null && (
                                         modeNow == CameraMode.PHOTO ||
@@ -1094,51 +1024,6 @@ internal fun updateTextureViewTransform(
     )
 }
 
-@Composable
-fun DollyZoomReticleOverlay(
-    cropState: com.example.camera.dollyzoom.DollyCropState,
-    modifier: Modifier = Modifier
-) {
-    BoxWithConstraints(modifier = modifier) {
-        val w = maxWidth
-        val h = maxHeight
-        val density = androidx.compose.ui.platform.LocalDensity.current
-
-        val bounds = cropState.postFilterBoxNorm
-        val leftPx = with(density) { (bounds.left * w.toPx()) }
-        val topPx = with(density) { (bounds.top * h.toPx()) }
-        val widthPx = with(density) { (bounds.width() * w.toPx()) }
-        val heightPx = with(density) { (bounds.height() * h.toPx()) }
-
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cyanColor = Color(0xFF00E5FF)
-            val strokeW = 2.dp.toPx()
-            val bracketLen = minOf(widthPx, heightPx) * 0.25f
-
-            // Top-Left corner
-            drawLine(cyanColor, Offset(leftPx, topPx), Offset(leftPx + bracketLen, topPx), strokeW)
-            drawLine(cyanColor, Offset(leftPx, topPx), Offset(leftPx, topPx + bracketLen), strokeW)
-
-            // Top-Right corner
-            drawLine(cyanColor, Offset(leftPx + widthPx, topPx), Offset(leftPx + widthPx - bracketLen, topPx), strokeW)
-            drawLine(cyanColor, Offset(leftPx + widthPx, topPx), Offset(leftPx + widthPx, topPx + bracketLen), strokeW)
-
-            // Bottom-Left corner
-            drawLine(cyanColor, Offset(leftPx, topPx + heightPx), Offset(leftPx + bracketLen, topPx + heightPx), strokeW)
-            drawLine(cyanColor, Offset(leftPx, topPx + heightPx), Offset(leftPx, topPx + heightPx - bracketLen), strokeW)
-
-            // Bottom-Right corner
-            drawLine(cyanColor, Offset(leftPx + widthPx, topPx + heightPx), Offset(leftPx + widthPx - bracketLen, topPx + heightPx), strokeW)
-            drawLine(cyanColor, Offset(leftPx + widthPx, topPx + heightPx), Offset(leftPx + widthPx, topPx + heightPx - bracketLen), strokeW)
-
-            // Small center crosshair
-            val cx = leftPx + widthPx / 2f
-            val cy = topPx + heightPx / 2f
-            drawLine(cyanColor.copy(alpha = 0.7f), Offset(cx - 8f, cy), Offset(cx + 8f, cy), 1.5.dp.toPx())
-            drawLine(cyanColor.copy(alpha = 0.7f), Offset(cx, cy - 8f), Offset(cx, cy + 8f), 1.5.dp.toPx())
-        }
-    }
-}
 
 private data class TextureViewEffectCacheKey(
     val cameraMode: CameraMode,

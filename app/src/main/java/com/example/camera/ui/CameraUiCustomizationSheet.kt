@@ -642,10 +642,7 @@ fun LivePreviewCanvas(
                     TopControlItem.LUT -> Icons.Outlined.Palette
                     TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
                     TopControlItem.EV -> Icons.Filled.Exposure
-                    TopControlItem.HORIZON_LOCK -> Icons.Outlined.ScreenLockRotation
-                    TopControlItem.DOLLY_ZOOM -> Icons.Outlined.CenterFocusStrong
                     TopControlItem.VIDEO_ADJUSTMENTS -> Icons.Outlined.Tune
-                    TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                     TopControlItem.PIPELINE -> Icons.Outlined.Tune
                     TopControlItem.SIX_DOT_MENU -> Icons.Outlined.GridView
@@ -1682,7 +1679,6 @@ fun TopBarControlsEditor(
                                             TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
                                             TopControlItem.EV -> Icons.Filled.Exposure
                                             TopControlItem.SETTINGS -> Icons.Outlined.Settings
-                                            TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                                             TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                             else -> Icons.Outlined.Tune
                                         },
@@ -1729,7 +1725,6 @@ fun TopBarControlsEditor(
                                                     TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
                                                     TopControlItem.EV -> Icons.Filled.Exposure
                                                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
-                                                    TopControlItem.MOTION_PHOTO -> Icons.Outlined.MotionPhotosOn
                                                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                                     else -> Icons.Outlined.Tune
                                                 },

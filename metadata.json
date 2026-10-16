@@ -1,6 +1,6 @@
 {
   "name": "Camera Pro",
-  "description": "Professional camera with user-configurable lens switch point, manual controls, 50MP RAW, and Cinema Log modes.",
+  "description": "Professional camera with hardware OIS, instant lens switching, manual controls, 50MP RAW, and Cinema Log modes.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

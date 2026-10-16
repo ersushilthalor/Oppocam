@@ -51,7 +51,6 @@ fun QuickOptionsFloatingPanel(
     gridType: GridType,
     photoMegapixelMode: PhotoMegapixelMode,
     isRawEnabled: Boolean,
-    isMotionPhotoEnabled: Boolean,
     activePhotoFilter: PhotoFilter,
     isPipelineActive: Boolean,
     // Video properties
@@ -60,8 +59,6 @@ fun QuickOptionsFloatingPanel(
     isAudioEnabled: Boolean,
     isVideoStabilizationEnabled: Boolean,
     isUltraStabilizationEnabled: Boolean,
-    isHorizonLockEnabled: Boolean,
-    isDollyZoomActive: Boolean,
     hasActiveVideoAdjustments: Boolean,
     // Cinema properties
     cinemaConfig: CinemaConfig = CinemaConfig(),
@@ -74,10 +71,7 @@ fun QuickOptionsFloatingPanel(
     onGridClick: () -> Unit,
     onToggleMegapixelMode: () -> Unit,
     onRawClick: () -> Unit,
-    onMotionPhotoClick: () -> Unit,
     onPhotoFilterClick: () -> Unit,
-    onToggleDollyZoom: () -> Unit,
-    onToggleHorizonLock: () -> Unit,
     onStabilizationClick: () -> Unit,
     onVideoSettingsClick: () -> Unit,
     onAudioToggle: () -> Unit,
@@ -143,27 +137,6 @@ fun QuickOptionsFloatingPanel(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                QuickOptionCircleButton(
-                                    icon = Icons.Filled.CenterFocusStrong,
-                                    label = "Dolly Zoom",
-                                    statusText = if (isDollyZoomActive) "ON" else "OFF",
-                                    isActive = isDollyZoomActive,
-                                    activeColor = accentColor,
-                                    onClick = onToggleDollyZoom,
-                                    testTag = "panel_dolly_zoom_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                QuickOptionCircleButton(
-                                    icon = Icons.Filled.ScreenLockRotation,
-                                    label = "Horizon Lock",
-                                    statusText = if (isHorizonLockEnabled) "ON" else "OFF",
-                                    isActive = isHorizonLockEnabled,
-                                    activeColor = accentColor,
-                                    onClick = onToggleHorizonLock,
-                                    testTag = "panel_horizon_lock_button",
-                                    modifier = Modifier.weight(1f)
-                                )
 
 
 
@@ -394,16 +367,6 @@ fun QuickOptionsFloatingPanel(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                QuickOptionCircleButton(
-                                    icon = if (isMotionPhotoEnabled) Icons.Filled.MotionPhotosOn else Icons.Outlined.MotionPhotosOff,
-                                    label = "Live Photo",
-                                    statusText = if (isMotionPhotoEnabled) "ON" else "OFF",
-                                    isActive = isMotionPhotoEnabled,
-                                    activeColor = accentColor,
-                                    onClick = onMotionPhotoClick,
-                                    testTag = "panel_motion_photo_button",
-                                    modifier = Modifier.weight(1f)
-                                )
                             }
 
                             Spacer(modifier = Modifier.height(12.dp))

@@ -111,20 +111,6 @@ class Camera2Engine(private val context: Context) {
     }
 
     private val preferences by lazy { com.example.camera.data.CameraPreferences(context) }
-    val motionPhotoEngine by lazy { com.example.camera.motionphoto.MotionPhotoEngine(context) }
-    var isMotionPhotoEnabled: Boolean = false
-        get() = preferences.isMotionPhotoEnabled
-        set(value) {
-            field = value
-            preferences.isMotionPhotoEnabled = value
-        }
-    var motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration = com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS
-        get() = preferences.motionPhotoDuration
-        set(value) {
-            field = value
-            preferences.motionPhotoDuration = value
-        }
-
     var antiBandingMode: String = preferences.antiBanding
         get() = preferences.antiBanding
         set(value) {
@@ -134,13 +120,7 @@ class Camera2Engine(private val context: Context) {
         }
 
     fun onPreviewBitmapFrame(bitmap: Bitmap) {
-        val isFront = _selectedLens.value?.facing == CameraCharacteristics.LENS_FACING_FRONT
-        motionPhotoEngine.onPreviewFrame(
-            bitmap = bitmap,
-            orientationDegrees = getCaptureJpegOrientation(),
-            isFrontCamera = isFront,
-            isEnabled = isMotionPhotoEnabled && currentMode == CameraMode.PHOTO
-        )
+        // Preview frame callback placeholder (motion photo removed)
     }
 
     // Keep Ultra Wide Ready simultaneous stream & background camera state
@@ -153,21 +133,6 @@ class Camera2Engine(private val context: Context) {
     private val _isAutoMacroActive = MutableStateFlow(false)
     val isAutoMacroActive: StateFlow<Boolean> = _isAutoMacroActive.asStateFlow()
 
-    // Dynamic Lens Switch Point Setting (23mm to 85mm)
-    private val _lensSwitchPointMm = MutableStateFlow(preferences.lensSwitchPointMm)
-    val lensSwitchPointMm: StateFlow<Float> = _lensSwitchPointMm.asStateFlow()
-
-    fun setLensSwitchPointMm(switchPointMm: Float) {
-        val clamped = switchPointMm.coerceIn(
-            CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
-            CameraOpticalCalibration.MAX_SWITCH_POINT_MM
-        )
-        _lensSwitchPointMm.value = clamped
-        preferences.lensSwitchPointMm = clamped
-        // Re-evaluate zoom and lens targeting with newly calibrated crops
-        setZoom(_currentZoom.value, isPresetTap = false)
-        syncStandbyStreamSettings()
-    }
 
     var onLensSwitchCompletedListener: ((LensInfo, Float) -> Unit)? = null
     private val lensSwitchListeners = java.util.concurrent.CopyOnWriteArrayList<(LensInfo, Float) -> Unit>()
@@ -592,9 +557,9 @@ class Camera2Engine(private val context: Context) {
     internal fun calculateStandbyCropRatio(standbyLens: LensInfo): Float {
         return if (standbyLens.lensType == LensType.ULTRAWIDE) {
             val uwEqFocal = if (standbyLens.equivalent35mmFocalMm > 0f) standbyLens.equivalent35mmFocalMm else CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
-            CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
+            CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, uwEqFocal)
         } else {
-            CameraOpticalCalibration.calculateMainCropForSwitchPoint(_lensSwitchPointMm.value, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+            CameraOpticalCalibration.calculateMainCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
         }
     }
 
@@ -1599,52 +1564,7 @@ class Camera2Engine(private val context: Context) {
         }
 
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
-    val stableActionHorizonEngine by lazy { com.example.camera.stableaction.StableActionHorizonEngine(context) }
-    val dollyZoomEngine by lazy { com.example.camera.dollyzoom.DollyZoomEngine() }
 
-    private val _isHorizonLockEnabled = MutableStateFlow(false)
-    val isHorizonLockEnabled: StateFlow<Boolean> = _isHorizonLockEnabled.asStateFlow()
-
-    private val _isDollyZoomActive = MutableStateFlow(false)
-    val isDollyZoomActive: StateFlow<Boolean> = _isDollyZoomActive.asStateFlow()
-
-    fun setDollyZoomActive(active: Boolean) {
-        _isDollyZoomActive.value = active
-        if (active && currentMode == CameraMode.VIDEO) {
-            dollyZoomEngine.start()
-        } else {
-            dollyZoomEngine.stop()
-        }
-        val session = captureSession
-        val builder = previewRequestBuilder
-        if (session != null && builder != null) {
-            try {
-                applyCommonSettings(builder)
-                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-            } catch (ignored: Exception) {}
-        }
-    }
-
-    fun setHorizonLockEnabled(enabled: Boolean) {
-        _isHorizonLockEnabled.value = enabled
-        if (enabled && currentMode == CameraMode.VIDEO) {
-            stableActionHorizonEngine.start()
-            val currentFacing = _selectedLens.value?.facing ?: CameraCharacteristics.LENS_FACING_BACK
-            val realUltraWide = _availableLenses.value.firstOrNull {
-                it.facing == currentFacing && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
-                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
-            } ?: _availableLenses.value.firstOrNull {
-                it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
-                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
-            }
-            if (realUltraWide != null && _selectedLens.value?.id != realUltraWide.id) {
-                Log.i(TAG, "Horizontal Lock enabled: switching to real ultra-wide lens ${realUltraWide.displayName}")
-                selectLens(realUltraWide)
-            }
-        } else if (!enabled) {
-            stableActionHorizonEngine.stop()
-        }
-    }
 
     fun refreshCaptureSessionForRaw() {
         val lens = _selectedLens.value ?: return
@@ -3687,32 +3607,7 @@ class Camera2Engine(private val context: Context) {
             gyroStabilizationEngine.start()
         }
 
-        val horizonLockActiveInVideo = (mode == CameraMode.VIDEO || mode == CameraMode.CINEMA) && (_isHorizonLockEnabled.value ||
-                (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive))
-        if (horizonLockActiveInVideo) {
-            _isHorizonLockEnabled.value = true
-            stableActionHorizonEngine.start()
-            val currentFacing = _selectedLens.value?.facing ?: CameraCharacteristics.LENS_FACING_BACK
-            val realUltraWide = _availableLenses.value.firstOrNull {
-                it.facing == currentFacing && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
-                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
-            } ?: _availableLenses.value.firstOrNull {
-                it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
-                    (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
-            }
-            if (realUltraWide != null && _selectedLens.value?.id != realUltraWide.id) {
-                Log.i(TAG, "Mode switched to Video with Horizon Lock: selecting real ultra-wide lens ${realUltraWide.displayName}")
-                selectLens(realUltraWide)
-            }
-        } else if (mode != CameraMode.VIDEO) {
-            stableActionHorizonEngine.stop()
-        }
 
-        if (mode == CameraMode.VIDEO && _isDollyZoomActive.value) {
-            dollyZoomEngine.start()
-        } else {
-            dollyZoomEngine.stop()
-        }
 
         val optimalSizeChanged = previousBufferSize != null && (previousBufferSize.width != optimalSize.width || previousBufferSize.height != optimalSize.height)
 
@@ -4907,15 +4802,7 @@ class Camera2Engine(private val context: Context) {
                 checkAutoLensSwitch(result)
             }
 
-            if (_isDollyZoomActive.value && currentMode == CameraMode.VIDEO) {
-                val faces = result.get(CaptureResult.STATISTICS_FACES) ?: emptyArray()
-                val lens = _selectedLens.value
-                val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
-                val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-                val isFront = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-                dollyZoomEngine.onFrameFaces(faces, activeArray, sensorOrientation, isFront)
-            }
+
 
             // EIS completely removed: video uses normal uncropped camera output without electronic stabilization
             dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
@@ -5424,17 +5311,6 @@ class Camera2Engine(private val context: Context) {
             cinemaEngine.applyToCaptureRequest(builder)
         }
 
-        // Hardware face detection for Dolly Zoom
-        if (_isDollyZoomActive.value && currentMode == CameraMode.VIDEO) {
-            val lens = activeSessionLens ?: _selectedLens.value
-            val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
-            val faceModes = chars?.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES) ?: intArrayOf()
-            if (faceModes.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)) {
-                builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_FULL)
-            } else if (faceModes.contains(CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)) {
-                builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE)
-            }
-        }
 
         // Digital Zoom / Crop Region
         applyZoom(builder, explicitZoom)
@@ -5491,7 +5367,7 @@ class Camera2Engine(private val context: Context) {
                 lensType = lens.lensType,
                 uwEquivalentFocalMm = uwEqFocal,
                 mainEquivalentFocalMm = mainEqFocal,
-                switchPointMm = _lensSwitchPointMm.value
+                switchPointMm = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
             )
 
             val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
@@ -5514,8 +5390,8 @@ class Camera2Engine(private val context: Context) {
                         digitalCrop
                     }
                     val maxAllowedZoom = if (lens.lensType == LensType.ULTRAWIDE && (!isLogicalMulti || isRunningOnPhysicalStream)) {
-                        val baseUwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
-                        val switchZ = CameraOpticalCalibration.switchPointToZoom(_lensSwitchPointMm.value)
+                        val baseUwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, uwEqFocal)
+                        val switchZ = CameraOpticalCalibration.switchPointToZoom(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM)
                         baseUwCrop * (effectiveUiZoom / switchZ).coerceAtLeast(1.0f)
                     } else {
                         zoomRange.upper
@@ -5543,8 +5419,8 @@ class Camera2Engine(private val context: Context) {
             // Fallback for devices without CONTROL_ZOOM_RATIO or legacy hardware: precise SCALER_CROP_REGION
             val maxDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
             val safeMaxZoom = if (lens.lensType == LensType.ULTRAWIDE) {
-                val baseUwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(_lensSwitchPointMm.value, uwEqFocal)
-                val switchZ = CameraOpticalCalibration.switchPointToZoom(_lensSwitchPointMm.value)
+                val baseUwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, uwEqFocal)
+                val switchZ = CameraOpticalCalibration.switchPointToZoom(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM)
                 maxOf(baseUwCrop, baseUwCrop * (effectiveUiZoom / switchZ))
             } else {
                 maxOf(maxDigitalZoom, lens.maxZoomRatio, 20.0f)
@@ -5715,7 +5591,7 @@ class Camera2Engine(private val context: Context) {
         val hasTele2x = backLenses.any { it.lensType == LensType.TELEPHOTO && it.isPhysical }
         val hasTele3x = backLenses.any { it.lensType == LensType.TELEPHOTO_3X && it.isPhysical }
 
-        val switchPoint = _lensSwitchPointMm.value
+        val switchPoint = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
         val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
         val referenceLensType = (activeSessionLens ?: currentLens).lensType
         val targetType = CameraOpticalCalibration.resolveTargetLensType(
@@ -6166,127 +6042,9 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Captures a Google Photos-compatible Motion Photo:
-     * - Continues recording pre-shutter frames and gathers post-shutter motion frames.
-     * - Captures full-resolution still JPEG from camera.
-     * - Encodes motion frames with hardware-accelerated MediaCodec H.264 into MP4.
-     * - Embeds Google Photos XMP metadata (GCamera:MotionPhoto="1", GCamera:MicroVideo="1", MicroVideoOffset, Container directory).
-     * - Appends MP4 bytes to the end of the JPEG.
-     * - Saves as a single JPEG-based Motion Photo in DCIM/Camera via MediaStore.
-     */
-    fun takeMotionPhoto(onComplete: (Uri?) -> Unit) {
-        val camera = cameraDevice ?: run {
-            onComplete(null)
-            return
-        }
-        val session = captureSession ?: run {
-            onComplete(null)
-            return
-        }
-        val readerJpeg = imageReaderJpeg ?: run {
-            onComplete(null)
-            return
-        }
-
-        _isCapturing.value = true
-        val shutterTimestampNs = System.nanoTime()
-        val duration = motionPhotoDuration
-        val orientation = getCaptureJpegOrientation()
-
-        val postShutterDone = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val stillJpegDone = kotlinx.coroutines.CompletableDeferred<ByteArray?>()
-
-        // 1. Begin post-shutter motion frame collection
-        motionPhotoEngine.beginMotionCapture(
-            duration = duration,
-            shutterTimestampNs = shutterTimestampNs
-        ) {
-            postShutterDone.complete(Unit)
-        }
-
-        // 2. Submit still capture request
-        try {
-            val captureBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                addTarget(readerJpeg.surface)
-                applyCommonSettings(this, isStillCapture = true)
-                set(CaptureRequest.JPEG_ORIENTATION, orientation)
-                set(CaptureRequest.JPEG_QUALITY, 98.toByte())
-            }
-
-            readerJpeg.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                try {
-                    val buffer = image.planes[0].buffer
-                    val bytes = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    stillJpegDone.complete(bytes)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error acquiring still image for motion photo", e)
-                    stillJpegDone.complete(null)
-                } finally {
-                    image.close()
-                }
-            }, backgroundHandler)
-
-            session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult
-                ) {
-                    Log.i(TAG, "[MOTION_PHOTO] Still photo frame captured")
-                }
-            }, backgroundHandler)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed submitting still capture request for Motion Photo", e)
-            stillJpegDone.complete(null)
-        }
-
-        // 3. Process, encode, and pack Motion Photo asynchronously
-        engineScope.launch(Dispatchers.IO) {
-            var finalUri: Uri? = null
-            try {
-                withTimeoutOrNull(6000L) {
-                    postShutterDone.await()
-                }
-                val stillBytes = withTimeoutOrNull(6000L) {
-                    stillJpegDone.await()
-                }
-
-                if (stillBytes != null && stillBytes.isNotEmpty()) {
-                    val (processedStillBytes, _) = processStillJpegBytes(stillBytes, skipPipeline = false)
-                    val packedBytes = motionPhotoEngine.finalizeMotionPhoto(
-                        stillJpegBytes = processedStillBytes,
-                        duration = duration,
-                        orientationDegrees = orientation
-                    )
-                    finalUri = saveMotionPhotoBytesToMediaStore(packedBytes)
-                    Log.i(TAG, "[MOTION_PHOTO] Saved to MediaStore: $finalUri (${packedBytes.size} bytes)")
-                } else {
-                    Log.e(TAG, "Motion photo failed: still image bytes were null")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error finalizing Motion Photo capture", e)
-            } finally {
-                _isCapturing.value = false
-                updateStorageStats()
-                withContext(Dispatchers.Main) {
-                    onComplete(finalUri)
-                }
-            }
-        }
-    }
-
-    /**
      * Take still photo (JPEG + optional RAW). In 50M mode, triggers single-frame computational 50MP capture.
      */
     fun takePhoto(onComplete: (Uri?) -> Unit) {
-        if (isMotionPhotoEnabled && currentMode == CameraMode.PHOTO) {
-            takeMotionPhoto(onComplete)
-            return
-        }
-
         if (photoMegapixelMode == PhotoMegapixelMode.M50) {
             takePhoto50M(onComplete)
             return
@@ -7252,13 +7010,7 @@ class Camera2Engine(private val context: Context) {
             return
         }
 
-        val isHorizonActive = _isHorizonLockEnabled.value ||
-                ((currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
-        if (isHorizonActive) {
-            _isHorizonLockEnabled.value = true
-            stableActionHorizonEngine.start()
-            stableActionHorizonEngine.startRecordingTrajectory()
-        }
+
 
         try {
             val chars = getCharacteristics(lens.cameraId)
@@ -8186,18 +7938,7 @@ class Camera2Engine(private val context: Context) {
 
     private fun startVideoTimer() {
         _videoDurationSeconds.value = 0
-        val isHorizonActive = _isHorizonLockEnabled.value ||
-                ((currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
-        if (isHorizonActive) {
-            _isHorizonLockEnabled.value = true
-            stableActionHorizonEngine.start()
-            if (!stableActionHorizonEngine.isTrajectoryRecording()) {
-                stableActionHorizonEngine.startRecordingTrajectory()
-            }
-        }
-        if (_isDollyZoomActive.value) {
-            dollyZoomEngine.startRecordingTrajectory()
-        }
+
         videoTimerJob?.cancel()
         videoTimerJob = engineScope.launch {
             while (_isRecordingVideo.value) {
@@ -8253,13 +7994,6 @@ class Camera2Engine(private val context: Context) {
         } else {
             normalVideoRecorder.pause()
         }
-
-        if (_isHorizonLockEnabled.value) {
-            stableActionHorizonEngine.pauseRecordingTrajectory()
-        }
-        if (_isDollyZoomActive.value) {
-            dollyZoomEngine.pauseRecordingTrajectory()
-        }
     }
 
     /**
@@ -8275,13 +8009,6 @@ class Camera2Engine(private val context: Context) {
             cinemaSoftwareRecorder.resume()
         } else {
             normalVideoRecorder.resume()
-        }
-
-        if (_isHorizonLockEnabled.value) {
-            stableActionHorizonEngine.resumeRecordingTrajectory()
-        }
-        if (_isDollyZoomActive.value) {
-            dollyZoomEngine.resumeRecordingTrajectory()
         }
     }
 
@@ -8344,22 +8071,6 @@ class Camera2Engine(private val context: Context) {
         val snapCinemaConfig = recordingCinemaConfig ?: cinemaConfig.value.copy()
         recordingCinemaConfig = null
 
-        val wasHorizonLockActive = _isHorizonLockEnabled.value ||
-                ((currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive)
-        val horizonTrajectory = if (wasHorizonLockActive) {
-            val list = stableActionHorizonEngine.stopRecordingTrajectory()
-            if (list.isNotEmpty()) list else listOf(
-                com.example.camera.stableaction.StableActionHorizonEngine.TrajectoryPoint(
-                    0L,
-                    stableActionHorizonEngine.smoothedRoll,
-                    stableActionHorizonEngine.smoothedNormX,
-                    stableActionHorizonEngine.smoothedNormY
-                )
-            )
-        } else emptyList()
-
-        val wasDollyZoomActive = _isDollyZoomActive.value
-        val dollyTrajectory = if (wasDollyZoomActive) dollyZoomEngine.stopRecordingTrajectory() else emptyList()
 
         val lockedOrientationHint = preparedVideoGeometry?.orientationHint ?: getVideoOrientationHint()
 
@@ -8429,10 +8140,6 @@ class Camera2Engine(private val context: Context) {
                     rawRecordedFile = recordedFile,
                     isCinema = isCinema,
                     snapCinemaConfig = snapCinemaConfig,
-                    wasHorizonLockActive = wasHorizonLockActive,
-                    horizonTrajectory = horizonTrajectory,
-                    wasDollyZoomActive = wasDollyZoomActive,
-                    dollyTrajectory = dollyTrajectory,
                     effectiveFileName = effectiveFileName,
                     effectiveMimeType = effectiveMimeType,
                     isFrontFacing = isFrontFacing,
@@ -8458,10 +8165,6 @@ class Camera2Engine(private val context: Context) {
         rawRecordedFile: File?,
         isCinema: Boolean,
         snapCinemaConfig: CinemaConfig,
-        wasHorizonLockActive: Boolean,
-        horizonTrajectory: List<com.example.camera.stableaction.StableActionHorizonEngine.TrajectoryPoint>,
-        wasDollyZoomActive: Boolean,
-        dollyTrajectory: List<com.example.camera.dollyzoom.DollyTrajectoryPoint>,
         effectiveFileName: String,
         effectiveMimeType: String,
         isFrontFacing: Boolean,
@@ -8485,46 +8188,7 @@ class Camera2Engine(private val context: Context) {
                 fileToSave = rawRecordedFile
             }
 
-            if (wasHorizonLockActive) {
-                try {
-                    val procDest = File(rawRecordedFile.parentFile, "horizon_locked_${System.currentTimeMillis()}.${fileToSave.extension}")
-                    val processed = com.example.camera.stableaction.StableActionVideoProcessor.processHorizonLockVideo(
-                        inputFile = fileToSave,
-                        outputFile = procDest,
-                        trajectory = horizonTrajectory,
-                        aspectRatio = getTargetAspectRatioForMode(if (isCinema) CameraMode.CINEMA else CameraMode.VIDEO),
-                        orientationDegrees = lockedOrientationHint
-                    )
-                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                        if (fileToSave != rawRecordedFile) {
-                            intermediateFiles.add(fileToSave)
-                        }
-                        fileToSave = processed
-                        gradedFile = processed
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error applying Stable Action Horizon Lock to final video", e)
-                }
-            } else if (wasDollyZoomActive && dollyTrajectory.isNotEmpty()) {
-                try {
-                    val procDest = File(rawRecordedFile.parentFile, "dolly_zoom_${System.currentTimeMillis()}.${fileToSave.extension}")
-                    val processed = com.example.camera.dollyzoom.DollyZoomVideoProcessor.processDollyZoomVideo(
-                        inputFile = fileToSave,
-                        outputFile = procDest,
-                        trajectory = dollyTrajectory,
-                        aspectRatio = getTargetAspectRatioForMode(if (isCinema) CameraMode.CINEMA else CameraMode.VIDEO)
-                    )
-                    if (processed.exists() && processed.length() > 0L && processed != fileToSave) {
-                        if (fileToSave != rawRecordedFile) {
-                            intermediateFiles.add(fileToSave)
-                        }
-                        fileToSave = processed
-                        gradedFile = processed
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error applying Dolly Zoom to final video", e)
-                }
-            }
+
 
 
 
@@ -9756,8 +9420,7 @@ class Camera2Engine(private val context: Context) {
         isConfiguringSession = false
         pendingReconfigureSession = false
         gyroStabilizationEngine.stop()
-        stableActionHorizonEngine.stop()
-        dollyZoomEngine.stop()
+
         ultraFastShutterEngine.reset()
         lastStabilizedCrop = null
         closeCameraCaptureSession()

@@ -49,11 +49,7 @@ class CameraPreferences(context: Context) {
         private const val KEY_HAS_PROMPTED_GALLERY = "pref_has_prompted_gallery"
         private const val KEY_ZOOM_PRESETS_MODE = "pref_zoom_presets_mode"
         private const val KEY_CUSTOM_ZOOM_PRESETS = "pref_custom_zoom_presets"
-        private const val KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS = "pref_include_lens_switch_points_in_presets"
-        private const val KEY_MOTION_PHOTO_ENABLED = "pref_motion_photo_enabled"
-        private const val KEY_MOTION_PHOTO_DURATION = "pref_motion_photo_duration"
         private const val KEY_VIEWFINDER_CORNER_RADIUS = "pref_viewfinder_corner_radius"
-        private const val KEY_LENS_SWITCH_POINT_MM = "pref_lens_switch_point_mm"
         private const val KEY_LENS_SWITCH_OVERLAP_DURATION_SEC = "pref_lens_switch_overlap_duration_sec"
         const val DEFAULT_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.3f
         const val MIN_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.1f
@@ -102,36 +98,9 @@ class CameraPreferences(context: Context) {
     val lensSwitchOverlapDurationMs: Long
         get() = (lensSwitchOverlapDurationSec * 1000f + 0.5f).toLong()
 
-    var lensSwitchPointMm: Float
-        get() = prefs.getFloat(
-            KEY_LENS_SWITCH_POINT_MM,
-            com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
-        ).coerceIn(
-            com.example.camera.engine.CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
-            com.example.camera.engine.CameraOpticalCalibration.MAX_SWITCH_POINT_MM
-        )
-        set(value) = prefs.edit().putFloat(
-            KEY_LENS_SWITCH_POINT_MM,
-            value.coerceIn(
-                com.example.camera.engine.CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
-                com.example.camera.engine.CameraOpticalCalibration.MAX_SWITCH_POINT_MM
-            )
-        ).apply()
-
     var viewfinderCornerRadiusDp: Int
         get() = prefs.getInt(KEY_VIEWFINDER_CORNER_RADIUS, 0).coerceIn(0, 48)
         set(value) = prefs.edit().putInt(KEY_VIEWFINDER_CORNER_RADIUS, value.coerceIn(0, 48)).apply()
-
-    var isMotionPhotoEnabled: Boolean
-        get() = prefs.getBoolean(KEY_MOTION_PHOTO_ENABLED, false)
-        set(value) = prefs.edit().putBoolean(KEY_MOTION_PHOTO_ENABLED, value).apply()
-
-    var motionPhotoDuration: com.example.camera.motionphoto.MotionPhotoDuration
-        get() {
-            val name = prefs.getString(KEY_MOTION_PHOTO_DURATION, com.example.camera.motionphoto.MotionPhotoDuration.TWO_SECONDS.name)
-            return com.example.camera.motionphoto.MotionPhotoDuration.fromName(name)
-        }
-        set(value) = prefs.edit().putString(KEY_MOTION_PHOTO_DURATION, value.name).apply()
 
     var zoomPresetsMode: String
         get() = prefs.getString(KEY_ZOOM_PRESETS_MODE, "STANDARD") ?: "STANDARD"
@@ -141,16 +110,10 @@ class CameraPreferences(context: Context) {
         get() = prefs.getString(KEY_CUSTOM_ZOOM_PRESETS, "1x, 2x, 4x, 8x") ?: "1x, 2x, 4x, 8x"
         set(value) = prefs.edit().putString(KEY_CUSTOM_ZOOM_PRESETS, value).apply()
 
-    var isIncludeLensSwitchPointsInPresetsEnabled: Boolean
-        get() = prefs.getBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS, false)
-        set(value) = prefs.edit().putBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS_IN_PRESETS, value).apply()
-
     fun getEffectiveZoomPresets(
-        hasUltraWide: Boolean,
-        additionalSwitchPoints: List<Float> = emptyList(),
-        includeSwitchPoints: Boolean = isIncludeLensSwitchPointsInPresetsEnabled
+        hasUltraWide: Boolean
     ): List<Float> {
-        val basePresets = when (zoomPresetsMode) {
+        return when (zoomPresetsMode) {
             "POWERS_OF_TWO" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 4.0f, 8.0f) else listOf(1.0f, 2.0f, 4.0f, 8.0f)
             "CINEMATIC" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 6.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 6.0f, 10.0f)
             "CUSTOM" -> {
@@ -164,18 +127,6 @@ class CameraPreferences(context: Context) {
             }
             else -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f) else listOf(1.0f, 2.0f, 3.0f)
         }
-
-        if (!includeSwitchPoints || additionalSwitchPoints.isEmpty()) {
-            return basePresets
-        }
-
-        val combined = basePresets.toMutableList()
-        additionalSwitchPoints.forEach { switchZoom ->
-            if (combined.none { kotlin.math.abs(it - switchZoom) < 0.05f }) {
-                combined.add(switchZoom)
-            }
-        }
-        return combined.sorted()
     }
 
     var preferredGalleryPackage: String?
@@ -918,18 +869,6 @@ class CameraPreferences(context: Context) {
     var showHorizonLevel: Boolean
         get() = prefs.getBoolean("pref_show_horizon_level", true)
         set(value) = prefs.edit().putBoolean("pref_show_horizon_level", value).apply()
-
-    var isDollyZoomSettingEnabled: Boolean
-        get() = prefs.getBoolean("pref_dolly_zoom_setting_enabled", false)
-        set(value) = prefs.edit().putBoolean("pref_dolly_zoom_setting_enabled", value).apply()
-
-    var isHorizontalLockSettingEnabled: Boolean
-        get() = prefs.getBoolean("pref_horizontal_lock_setting_enabled", true)
-        set(value) = prefs.edit().putBoolean("pref_horizontal_lock_setting_enabled", value).apply()
-
-    var isHorizonLockActive: Boolean
-        get() = prefs.getBoolean("pref_horizon_lock_active", false)
-        set(value) = prefs.edit().putBoolean("pref_horizon_lock_active", value).apply()
 
     var antiBanding: String
         get() = prefs.getString("pref_anti_banding", "AUTO") ?: "AUTO"

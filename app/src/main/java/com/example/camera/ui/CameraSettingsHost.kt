@@ -31,72 +31,6 @@ fun CameraSettingsHost(
     val photoMegapixelMode by viewModel.photoMegapixelMode.collectAsStateWithLifecycle()
     val isRefocusPhotoEnabled by viewModel.isRefocusPhotoEnabled.collectAsStateWithLifecycle()
     val refocusFrameCount by viewModel.refocusFrameCount.collectAsStateWithLifecycle()
-    val isMotionPhotoEnabled by viewModel.isMotionPhotoEnabled.collectAsStateWithLifecycle()
-    val motionPhotoDuration by viewModel.motionPhotoDuration.collectAsStateWithLifecycle()
-    val isUltraFastShutterEnabled by viewModel.isUltraFastShutterEnabled.collectAsStateWithLifecycle()
-    val ultraFastShutterFps by viewModel.ultraFastShutterFps.collectAsStateWithLifecycle()
-    val zoomPresetsMode by viewModel.zoomPresetsMode.collectAsStateWithLifecycle()
-    val customZoomPresetsStr by viewModel.customZoomPresetsStr.collectAsStateWithLifecycle()
-    val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
-    val videoBitrate by viewModel.videoBitrateOption.collectAsStateWithLifecycle()
-    val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
-    val isAudioEnabled by viewModel.isAudioEnabled.collectAsStateWithLifecycle()
-    val isRawEnabled by viewModel.isRawCaptureEnabled.collectAsStateWithLifecycle()
-    val saveSelfieAsPreviewed by viewModel.saveSelfieAsPreviewed.collectAsStateWithLifecycle()
-    val gridType by viewModel.gridType.collectAsStateWithLifecycle()
-    val cinemaConfig by viewModel.cinemaConfig.collectAsStateWithLifecycle()
-    val cinemaCapabilities by viewModel.cinemaCapabilities.collectAsStateWithLifecycle()
-    val viewfinderResolution by viewModel.viewfinderResolution.collectAsStateWithLifecycle()
-    val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
-    val tapFocusConfig by viewModel.tapFocusConfig.collectAsStateWithLifecycle()
-
-    val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
-        val oisEffective = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred
-        when {
-            !isVideoStabilizationEnabled -> MainCameraStabilizationMode.OFF
-            hybridStabilizationConfig.isUltraStabilizationEnabled -> MainCameraStabilizationMode.ULTRA
-            hybridStabilizationConfig.isEisOnly || (!oisEffective && hybridStabilizationConfig.isEisPreferred) -> MainCameraStabilizationMode.EIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled && oisEffective -> MainCameraStabilizationMode.HYBRID_OIS_EIS
-            oisEffective && !hybridStabilizationConfig.isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled -> MainCameraStabilizationMode.EIS_ONLY
-            else -> MainCameraStabilizationMode.OFF
-        }
-    }
-
-    val videoCodec by viewModel.videoCodec.collectAsStateWithLifecycle()
-    val jpegQuality by viewModel.jpegQuality.collectAsStateWithLifecycle()
-    val volumeKeyAction by viewModel.volumeKeyAction.collectAsStateWithLifecycle()
-    val doubleTapAction by viewModel.doubleTapAction.collectAsStateWithLifecycle()
-    val shutterFeedback by viewModel.shutterFeedback.collectAsStateWithLifecycle()
-    val antibandingMode by viewModel.antibandingMode.collectAsStateWithLifecycle()
-    val windNoiseReduction by viewModel.windNoiseReduction.collectAsStateWithLifecycle()
-    val audioSource by viewModel.audioSource.collectAsStateWithLifecycle()
-    val horizonLeveler by viewModel.horizonLeveler.collectAsStateWithLifecycle()
-    val viewfinderFps by viewModel.viewfinderFps.collectAsStateWithLifecycle()
-    val thermalProtection by viewModel.thermalProtection.collectAsStateWithLifecycle()
-    val isAutoHdrEnabled by viewModel.isAutoHdrEnabled.collectAsStateWithLifecycle()
-    val isAiAutoFramingEnabled by viewModel.isAiAutoFramingEnabled.collectAsStateWithLifecycle()
-    val currentZoom by viewModel.currentZoom.collectAsStateWithLifecycle()
-    val exposureCompensation by viewModel.exposureCompensation.collectAsStateWithLifecycle()
-    val manualIso by viewModel.manualIso.collectAsStateWithLifecycle()
-    val manualShutterSpeedNs by viewModel.manualShutterSpeedNs.collectAsStateWithLifecycle()
-    val focusMode by viewModel.focusMode.collectAsStateWithLifecycle()
-    val manualFocusDistance by viewModel.manualFocusDistance.collectAsStateWithLifecycle()
-    val selectedPhotoFilter by viewModel.selectedPhotoFilter.collectAsStateWithLifecycle()
-    val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
-    val isCustomPipelineEnabled by viewModel.isCustomPipelineEnabled.collectAsStateWithLifecycle()
-    val activePipelinePreset by viewModel.activePipelinePreset.collectAsStateWithLifecycle()
-    val instantSwitchState by viewModel.instantSwitchState.collectAsStateWithLifecycle()
-    val lensSwitchPointMm by viewModel.lensSwitchPointMm.collectAsStateWithLifecycle()
-    val isIncludeLensSwitchPointsInPresetsEnabled by viewModel.isIncludeLensSwitchPointsInPresetsEnabled.collectAsStateWithLifecycle()
-    val lensSwitchOverlapDurationSec by viewModel.lensSwitchOverlapDurationSec.collectAsStateWithLifecycle()
-    val lensSwitchHoldDurationSec by viewModel.lensSwitchHoldDurationSec.collectAsStateWithLifecycle()
-    val isLensSwitchOverlapAnimationEnabled by viewModel.isLensSwitchOverlapAnimationEnabled.collectAsStateWithLifecycle()
-    val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
-    val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
-    val viewfinderCornerRadiusDp by viewModel.viewfinderCornerRadiusDp.collectAsStateWithLifecycle()
-    val isDollyZoomSettingEnabled by viewModel.isDollyZoomSettingEnabled.collectAsStateWithLifecycle()
-    val isHorizontalLockSettingEnabled by viewModel.isHorizontalLockSettingEnabled.collectAsStateWithLifecycle()
 
     androidx.compose.runtime.CompositionLocalProvider(
         com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
@@ -178,71 +112,16 @@ fun CameraSettingsHost(
         onZoomChange = { viewModel.setZoom(it, isPresetTap = false) },
         onExposureCompensationChange = { viewModel.setExposureCompensation(it) },
         onManualIsoChange = { viewModel.setManualIso(it) },
-        onManualShutterSpeedChange = { viewModel.setManualShutterSpeed(it) },
-        onFocusModeChange = { viewModel.setFocusMode(it) },
-        onManualFocusDistanceChange = { viewModel.setManualFocusDistance(it) },
-        onPhotoFilterSelected = { viewModel.setPhotoFilter(it) },
-        onResetAllSettings = { viewModel.resetAllSettings() },
-        uiCustomizationState = uiCustomizationState,
-        onSelectTemplate = { viewModel.selectUiTemplate(it) },
-        onUpdateGlobalLayoutConfig = { viewModel.updateGlobalLayoutConfig(it) },
-        onUpdateModeLayoutConfig = { mode, config -> viewModel.updateModeLayoutConfig(mode, config) },
-        onResetModeLayoutConfig = { mode -> viewModel.resetModeLayoutToGlobal(mode) },
-        onSaveCustomPreset = { name, config -> viewModel.saveCustomPreset(name, config) },
-        onLoadCustomPreset = { viewModel.loadCustomPreset(it) },
-        onDeleteCustomPreset = { viewModel.deleteCustomPreset(it) },
-        onResetAllToTemplate = { viewModel.resetLayoutToTemplate(it) },
-        onLensSelected = { viewModel.selectLens(it) },
-        onForceDeepScan = { viewModel.forceDeepScanLenses() },
-        onPhotoResolutionSelected = { viewModel.selectPhotoResolution(it) },
-        onPhotoMegapixelModeSelected = { viewModel.setPhotoMegapixelMode(it) },
-        onRefocusPhotoToggle = { viewModel.setRefocusPhotoEnabled(it) },
-        onRefocusFrameCountChange = { viewModel.setRefocusFrameCount(it) },
-        onVideoResolutionSelected = { viewModel.selectVideoResolution(it) },
-        onViewfinderResolutionSelected = { viewModel.setViewfinderResolution(it) },
-        onVideoFpsSelected = { viewModel.setVideoFps(it) },
-        onVideoBitrateSelected = { viewModel.setVideoBitrate(it) },
-        onStabilizationToggle = { viewModel.setVideoStabilization(it) },
-        onHybridStabilizationChange = { viewModel.setHybridStabilizationConfig(it) },
-        onOisToggle = { viewModel.setOisEnabled(it) },
-        onUltraStabilizationToggle = { viewModel.toggleUltraStabilization() },
-        onTapFocusConfigChange = { viewModel.setTapFocusConfig(it) },
         onAudioToggle = { viewModel.toggleAudio() },
         onRawToggle = { viewModel.toggleRawCapture() },
         onSaveSelfieAsPreviewedToggle = { viewModel.setSaveSelfieAsPreviewed(it) },
         onGridTypeSelected = { viewModel.setGridType(it) },
         onCinemaConfigChange = { viewModel.updateCinemaConfig(it) },
         onOpenCustomUiStudio = onOpenCustomUiStudio,
-        isCustomPipelineEnabled = isCustomPipelineEnabled,
-        activePipelinePreset = activePipelinePreset,
-        onCustomPipelineToggle = { viewModel.toggleCustomPipelineEnabled(it) },
-        onSelectPipelinePreset = { viewModel.selectPipelinePreset(it) },
         onOpenPipelineStudio = onOpenPipelineStudio,
         onOpenBeforeAfter = onOpenBeforeAfter,
-        instantSwitchState = instantSwitchState,
-        onKeepUltraWideReadyToggle = { viewModel.setKeepUltraWideReady(it) },
-        onAutoSwitchToUltraWideToggle = { viewModel.setAutoSwitchToUltraWide(it) },
-        onShowUltraWidePreviewToggle = { viewModel.setShowUltraWidePreview(it) },
-        onShowFrontCameraPreviewToggle = { viewModel.setShowFrontCameraPreview(it) },
-        floatingWindowAppearance = floatingWindowAppearance,
-        onFloatingWindowTransparencyChange = { viewModel.setFloatingWindowTransparency(it) },
-        onFloatingWindowBlurStrengthChange = { viewModel.setFloatingWindowBlurStrength(it) },
-        onFloatingWindowAppearanceChange = { viewModel.setFloatingWindowAppearance(it) },
-        onResetFloatingWindowAppearance = { viewModel.resetFloatingWindowAppearance() },
-        preferredGalleryPackage = preferredGalleryPackage,
         onOpenGalleryChooser = onOpenGalleryChooser,
-        viewfinderCornerRadiusDp = viewfinderCornerRadiusDp,
         onViewfinderCornerRadiusChange = { viewModel.setViewfinderCornerRadius(it) },
-        lensSwitchPointMm = lensSwitchPointMm,
-        onLensSwitchPointChange = { viewModel.setLensSwitchPointMm(it) },
-        isIncludeLensSwitchPointsInPresetsEnabled = isIncludeLensSwitchPointsInPresetsEnabled,
-        onIncludeLensSwitchPointsInPresetsToggle = { viewModel.setIncludeLensSwitchPointsInPresets(it) },
-        lensSwitchOverlapDurationSec = lensSwitchOverlapDurationSec,
-        onLensSwitchOverlapDurationChange = { viewModel.setLensSwitchOverlapDuration(it) },
-        lensSwitchHoldDurationSec = lensSwitchHoldDurationSec,
-        onLensSwitchHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
-        isLensSwitchOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled,
-        onLensSwitchOverlapAnimationToggle = { viewModel.setLensSwitchOverlapAnimationEnabled(it) },
         onDismiss = onDismiss
     )
 }

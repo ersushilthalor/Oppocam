@@ -322,41 +322,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Refocus: $clamped Focus Planes")
     }
 
-    // Google Photos Compatible Motion Photo
-    private val _isMotionPhotoEnabled = MutableStateFlow(preferences.isMotionPhotoEnabled)
-    val isMotionPhotoEnabled: StateFlow<Boolean> = _isMotionPhotoEnabled.asStateFlow()
-
-    private val _motionPhotoDuration = MutableStateFlow(preferences.motionPhotoDuration)
-    val motionPhotoDuration: StateFlow<com.example.camera.motionphoto.MotionPhotoDuration> = _motionPhotoDuration.asStateFlow()
-
-    val isMotionPhotoRecording: StateFlow<Boolean> = engine.motionPhotoEngine.isRecordingPostShutter
-
-    fun toggleMotionPhoto() {
-        val next = !_isMotionPhotoEnabled.value
-        _isMotionPhotoEnabled.value = next
-        preferences.isMotionPhotoEnabled = next
-        engine.isMotionPhotoEnabled = next
-        showToast(if (next) "Motion Photo: ON (${_motionPhotoDuration.value.label})" else "Motion Photo: OFF")
-    }
-
-    fun setMotionPhotoEnabled(enabled: Boolean) {
-        _isMotionPhotoEnabled.value = enabled
-        preferences.isMotionPhotoEnabled = enabled
-        engine.isMotionPhotoEnabled = enabled
-        showToast(if (enabled) "Motion Photo: ON (${_motionPhotoDuration.value.label})" else "Motion Photo: OFF")
-    }
-
-    fun setMotionPhotoDuration(duration: com.example.camera.motionphoto.MotionPhotoDuration) {
-        _motionPhotoDuration.value = duration
-        preferences.motionPhotoDuration = duration
-        engine.motionPhotoDuration = duration
-        showToast("Motion Photo Duration: ${duration.title}")
-    }
-
-    fun onMotionPhotoPreviewFrame(bitmap: Bitmap) {
-        engine.onPreviewBitmapFrame(bitmap)
-    }
-
     // Ultra Fast Shutter System
     private val _isUltraFastShutterEnabled = MutableStateFlow(preferences.getModeUltraFastShutterEnabled(preferences.cameraMode))
     val isUltraFastShutterEnabled: StateFlow<Boolean> = _isUltraFastShutterEnabled.asStateFlow()
@@ -427,16 +392,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _activeZoomPresets = MutableStateFlow(preferences.getEffectiveZoomPresets(hasUltraWide = true))
     val activeZoomPresets: StateFlow<List<Float>> = _activeZoomPresets.asStateFlow()
 
-    private val _isIncludeLensSwitchPointsInPresetsEnabled = MutableStateFlow(preferences.isIncludeLensSwitchPointsInPresetsEnabled)
-    val isIncludeLensSwitchPointsInPresetsEnabled: StateFlow<Boolean> = _isIncludeLensSwitchPointsInPresetsEnabled.asStateFlow()
-
-    fun setIncludeLensSwitchPointsInPresets(enabled: Boolean) {
-        _isIncludeLensSwitchPointsInPresetsEnabled.value = enabled
-        preferences.isIncludeLensSwitchPointsInPresetsEnabled = enabled
-        refreshActiveZoomPresets()
-        showToast(if (enabled) "Switch points included in zoom presets" else "Standard zoom presets restored")
-    }
-
     fun setZoomPresetsMode(mode: String) {
         _zoomPresetsMode.value = mode
         preferences.zoomPresetsMode = mode
@@ -468,29 +423,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val lenses = engine.availableLenses.value
         val hasUW = lenses.any { it.lensType == LensType.ULTRAWIDE }
-        // 1x equivalent focal length for optical switch points (23mm Main lens: e.g. 40mm -> 40 / 23 = 1.7x)
-        val mainEqFocal = CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM // 23.0f
-        val currentSwitchPointMm = preferences.lensSwitchPointMm
-        val nonDefaultSwitchPoints = mutableListOf<Float>()
-        if (preferences.isIncludeLensSwitchPointsInPresetsEnabled) {
-            if (kotlin.math.abs(currentSwitchPointMm - 23.0f) > 0.5f) {
-                val switchZoom = (Math.round((currentSwitchPointMm / mainEqFocal) * 10f) / 10f).coerceIn(0.6f, 15.0f)
-                nonDefaultSwitchPoints.add(switchZoom)
-            }
-            lenses.forEach { lens ->
-                if (lens.isPhysical && !lens.isZoomPreset && lens.facing == CameraCharacteristics.LENS_FACING_BACK) {
-                    if (lens.equivalent35mmFocalMm > 24.5f && kotlin.math.abs(lens.equivalent35mmFocalMm - currentSwitchPointMm) > 1.0f) {
-                        val ratio = (Math.round((lens.equivalent35mmFocalMm / mainEqFocal) * 10f) / 10f).coerceIn(0.6f, 15.0f)
-                        nonDefaultSwitchPoints.add(ratio)
-                    }
-                }
-            }
-        }
-        _activeZoomPresets.value = preferences.getEffectiveZoomPresets(
-            hasUltraWide = hasUW,
-            additionalSwitchPoints = nonDefaultSwitchPoints,
-            includeSwitchPoints = preferences.isIncludeLensSwitchPointsInPresetsEnabled
-        )
+        _activeZoomPresets.value = preferences.getEffectiveZoomPresets(hasUltraWide = hasUW)
     }
 
     fun setRefocusPhotoEnabled(enabled: Boolean) {
@@ -718,7 +651,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             isKeepFrontCameraReady = preferences.isKeepFrontCameraReady,
             isShowFrontCameraPreview = preferences.isShowFrontCameraPreview,
             ultraWideStatus = if (preferences.isKeepUltraWideReady) BackgroundCameraStatus.PREPARING else BackgroundCameraStatus.OFF,
-            switchPointMm = preferences.lensSwitchPointMm,
+
             lensSwitchOverlapDurationSec = preferences.lensSwitchOverlapDurationSec,
             lensSwitchHoldDurationSec = preferences.lensSwitchHoldDurationSec,
             isLensSwitchOverlapAnimationEnabled = preferences.isLensSwitchOverlapAnimationEnabled
@@ -743,7 +676,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _lensSwitchHoldDurationSec = MutableStateFlow(preferences.lensSwitchHoldDurationSec)
     val lensSwitchHoldDurationSec: StateFlow<Float> = _lensSwitchHoldDurationSec.asStateFlow()
 
-    val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
     val isUsingUltraWideSurface: StateFlow<Boolean> = engine.isUsingUltraWideSurface
     val displayedPreviewSource: StateFlow<com.example.camera.engine.PreviewStreamSource> = engine.displayedPreviewSource
     val previewOverlapState: StateFlow<com.example.camera.engine.PreviewOverlapState> = engine.previewOverlapState
@@ -771,20 +703,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.zoomTransitionController.overlapDurationMs = (clamped * 1000f + 0.5f).toLong()
         _instantSwitchState.update { it.copy(lensSwitchOverlapDurationSec = clamped) }
         showToast("Lens Switch Overlap: ${String.format(java.util.Locale.US, "%.1f", clamped)} sec")
-    }
-
-    fun setLensSwitchPointMm(switchPointMm: Float) {
-        val clamped = switchPointMm.coerceIn(
-            CameraOpticalCalibration.MIN_SWITCH_POINT_MM,
-            CameraOpticalCalibration.MAX_SWITCH_POINT_MM
-        )
-        preferences.lensSwitchPointMm = clamped
-        _instantSwitchState.update { it.copy(switchPointMm = clamped) }
-        engine.setLensSwitchPointMm(clamped)
-        refreshActiveZoomPresets()
-        val uwCrop = CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(clamped)
-        val mainCrop = CameraOpticalCalibration.calculateMainCropForSwitchPoint(clamped)
-        showToast("Switch Point: ${clamped.toInt()}mm (UW ${String.format(java.util.Locale.US, "%.2f", uwCrop)}×, Main ${String.format(java.util.Locale.US, "%.2f", mainCrop)}×)")
     }
 
     fun setKeepUltraWideReady(enabled: Boolean) {
@@ -1065,7 +983,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
         engine.zoomTransitionController.holdAtOneXDurationMs = preferences.lensSwitchHoldDurationMs
         engine.setLensSwitchOverlapAnimationEnabled(preferences.isLensSwitchOverlapAnimationEnabled)
-        engine.setLensSwitchPointMm(preferences.lensSwitchPointMm)
+
         engine.antiBandingMode = preferences.antiBanding
         com.example.camera.sound.CameraSoundManager.setFeedbackMode(preferences.shutterFeedback)
 
@@ -1090,9 +1008,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        if (preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
-            engine.setHorizonLockEnabled(true)
-        }
+
 
         // Restore initial mode aspect ratio:
         // - Photo mode: fixed 3:4
@@ -1377,18 +1293,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _isMoreModesOpen.value = true
         }
 
-        if ((mode == CameraMode.VIDEO || mode == CameraMode.CINEMA) && preferences.isHorizontalLockSettingEnabled && preferences.isHorizonLockActive) {
-            engine.setHorizonLockEnabled(true)
-            switchToRealUltraWideIfAvailable()
-        }
     }
 
     fun selectLens(lens: LensInfo, instant: Boolean = false) {
         val currentLens = engine.selectedLens.value
         val currentZ = _currentZoom.value
 
-        val switchPoint = engine.lensSwitchPointMm.value
-        val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+        val switchPoint = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
+        val switchZoom = 1.0f
 
         val targetZ = when (lens.lensType) {
             LensType.ULTRAWIDE -> 0.5f
@@ -1780,8 +1692,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clampedFrom = fromZoom.coerceIn(minZoom, maxZoom)
         val clampedTarget = targetZoom.coerceIn(minZoom, maxZoom)
 
-        val switchPoint = engine.lensSwitchPointMm.value
-        val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+        val switchPoint = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
+        val switchZoom = 1.0f
 
         val resolvedTargetLens = targetLens ?: if (clampedTarget >= switchZoom && clampedFrom < switchZoom) {
             lensesForFacing.firstOrNull { it.isPrimaryMain }
@@ -1801,7 +1713,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             targetLens = resolvedTargetLens,
             availableLenses = engine.availableLenses.value,
             currentLens = engine.selectedLens.value,
-            switchPointMm = engine.lensSwitchPointMm.value,
+            switchPointMm = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
             scope = viewModelScope,
             durationMs = durationMs,
             onZoomUpdate = { interpolatedZoom ->
@@ -1872,8 +1784,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val currentZ = _currentZoom.value
         val currentLensType = engine.selectedLens.value?.lensType
-        val switchPoint = engine.lensSwitchPointMm.value
-        val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPoint)
+        val switchPoint = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
+        val switchZoom = 1.0f
         val isCrossingSwitch = !isFrontCamera && (
             (currentLensType == LensType.ULTRAWIDE && (clamped >= 0.95f || clamped >= switchZoom - 0.05f)) ||
             (currentLensType == LensType.WIDE && clamped < switchZoom) ||
@@ -2047,102 +1959,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleVideoSettingsPanel() {
         _isVideoSettingsPanelOpen.value = !_isVideoSettingsPanelOpen.value
-    }
-
-    val isHorizonLockEnabled: StateFlow<Boolean> = engine.isHorizonLockEnabled
-    val horizonRollDegrees: StateFlow<Float> = engine.stableActionHorizonEngine.rollDegreesFlow
-    val horizonMotionOffset: StateFlow<Pair<Float, Float>> = engine.stableActionHorizonEngine.motionOffsetFlow
-
-    private val _isHorizontalLockSettingEnabled = MutableStateFlow(preferences.isHorizontalLockSettingEnabled)
-    val isHorizontalLockSettingEnabled: StateFlow<Boolean> = _isHorizontalLockSettingEnabled.asStateFlow()
-
-    fun setHorizontalLockSettingEnabled(enabled: Boolean) {
-        _isHorizontalLockSettingEnabled.value = enabled
-        preferences.isHorizontalLockSettingEnabled = enabled
-        if (!enabled) {
-            setHorizonLockEnabled(false)
-        }
-        showToast(if (enabled) "Horizontal Lock: Available in Video & Cinema Mode" else "Horizontal Lock: Disabled")
-    }
-
-    fun toggleHorizontalLockSetting() {
-        setHorizontalLockSettingEnabled(!_isHorizontalLockSettingEnabled.value)
-    }
-
-    fun switchToRealUltraWideIfAvailable(): Boolean {
-        val currentFacing = selectedLens.value?.facing ?: CameraCharacteristics.LENS_FACING_BACK
-        if (currentFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-            return false
-        }
-        val realUltraWide = engine.availableLenses.value.firstOrNull {
-            it.facing == currentFacing && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
-                (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
-        } ?: engine.availableLenses.value.firstOrNull {
-            it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.ULTRAWIDE && !it.isZoomPreset &&
-                (it.isPhysical || it.physicalCameraId != null || it.isIndependentCamera || it.focalLengthMm <= 2.8f || it.fovDegrees >= 95f)
-        }
-        if (realUltraWide != null) {
-            if (selectedLens.value?.id != realUltraWide.id) {
-                Log.i("CameraViewModel", "Horizontal Lock active: auto-switching to real ultra-wide lens ${realUltraWide.displayName}")
-                selectLens(realUltraWide)
-            }
-            return true
-        } else {
-            Log.i("CameraViewModel", "No real ultra-wide lens available on device; continuing with current lens")
-            return false
-        }
-    }
-
-    fun toggleHorizonLock() {
-        val newState = !engine.isHorizonLockEnabled.value
-        setHorizonLockEnabled(newState)
-    }
-
-    fun setHorizonLockEnabled(enabled: Boolean) {
-        if (enabled && !_isHorizontalLockSettingEnabled.value) {
-            _isHorizontalLockSettingEnabled.value = true
-            preferences.isHorizontalLockSettingEnabled = true
-        }
-        preferences.isHorizonLockActive = enabled
-        engine.setHorizonLockEnabled(enabled)
-        if (enabled) {
-            switchToRealUltraWideIfAvailable()
-        }
-        showToast(if (enabled) "Horizontal Lock: ON" else "Horizontal Lock: OFF")
-    }
-
-    private val _isDollyZoomSettingEnabled = MutableStateFlow(preferences.isDollyZoomSettingEnabled)
-    val isDollyZoomSettingEnabled: StateFlow<Boolean> = _isDollyZoomSettingEnabled.asStateFlow()
-
-    fun setDollyZoomSettingEnabled(enabled: Boolean) {
-        _isDollyZoomSettingEnabled.value = enabled
-        preferences.isDollyZoomSettingEnabled = enabled
-        if (!enabled) {
-            setDollyZoomActive(false)
-        }
-        showToast(if (enabled) "Dolly Zoom: Available in Video Mode" else "Dolly Zoom: Disabled")
-    }
-
-    val isDollyZoomActive: StateFlow<Boolean> = engine.isDollyZoomActive
-    val dollyCropState: StateFlow<com.example.camera.dollyzoom.DollyCropState> = engine.dollyZoomEngine.cropStateFlow
-
-    fun toggleDollyZoomActive() {
-        val next = !engine.isDollyZoomActive.value
-        setDollyZoomActive(next)
-    }
-
-    fun setDollyZoomActive(active: Boolean) {
-        if (active && !_isDollyZoomSettingEnabled.value) {
-            _isDollyZoomSettingEnabled.value = true
-            preferences.isDollyZoomSettingEnabled = true
-        }
-        engine.setDollyZoomActive(active)
-        showToast(if (active) "Dolly Zoom: ON (Locking subject)" else "Dolly Zoom: OFF")
-    }
-
-    fun onTapToLockDollySubject(normX: Float, normY: Float) {
-        engine.dollyZoomEngine.lockSubjectAt(normX, normY)
-        showToast("Dolly Zoom: Subject Locked")
     }
 
     fun setPreferredGalleryPackage(packageName: String?) {
