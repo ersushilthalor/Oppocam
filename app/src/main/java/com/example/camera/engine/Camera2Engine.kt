@@ -656,7 +656,7 @@ class Camera2Engine(private val context: Context) {
                     ?: intArrayOf()
                 val standbySupportsOis = oisModes.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON)
                 val desiredOis = if (isRecordingActive && recConfig != null) recConfig.isOisAllowed else isOisAllowed
-                val effectiveOisAllowed = desiredOis && isOisSupportedForLens(standbyLens, standbyLens.physicalCameraId)
+                val effectiveOisAllowed = desiredOis && standbySupportsOis
                 applyHardwareOisRequest(
                     builder,
                     oisAllowed = effectiveOisAllowed,
