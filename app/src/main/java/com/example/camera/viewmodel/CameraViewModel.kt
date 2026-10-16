@@ -2580,7 +2580,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun resetAllSettingsToDefaults() {
         preferences.resetAllSettingsToDefaults()
-        selectUiTemplate(UiTemplateType.STOCK_PIXEL)
+        selectUiTemplate(UiTemplateType.SAMSUNG)
         setCameraMode(CameraMode.PHOTO)
         setGridType(GridType.NONE)
         setFlashMode(FlashMode.OFF)
