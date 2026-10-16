@@ -134,6 +134,24 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
+
+    /**
+     * Returns RMS angular speed (rad/s) across the recent gyro buffer.
+     * Used by HDR capture planning to avoid multi-frame brackets during hand shake.
+     */
+    fun getRecentRmsMotion(): Float {
+        var count = 0
+        var sumSquares = 0.0
+        for (sample in gyroRingBuffer) {
+            val speedSquared = sample.wx * sample.wx +
+                sample.wy * sample.wy +
+                sample.wz * sample.wz
+            sumSquares += speedSquared
+            count++
+        }
+        return if (count == 0) 0f else kotlin.math.sqrt(sumSquares / count).toFloat()
+    }
+
     /**
      * Computes the stabilized crop region for the current camera frame.
      * Synchronizes gyro timestamps with frame exposure midpoint and rolling shutter skew.
