@@ -1510,9 +1510,9 @@ class Camera2Engine(private val context: Context) {
         set(value) {
             field = value
             val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            val hybridConfig = _hybridStabilizationConfig.value
-            val isStabActive = value && (hybridConfig.isUltraStabilizationEnabled || hybridConfig.isHybridEnabled || hybridConfig.isEisPreferred || hybridConfig.isEisOnly)
-            if (isVideoMode && isStabActive) {
+            val useGyroFallback = value && isVideoMode && videoStabilizationMode.isEnabled &&
+                !isHardwareVideoEisSupportedForActiveLens()
+            if (useGyroFallback) {
                 gyroStabilizationEngine.start()
             } else {
                 gyroStabilizationEngine.stop()
@@ -1599,16 +1599,10 @@ class Camera2Engine(private val context: Context) {
         set(value) {
             field = value
             val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            if (isVideoMode) {
-                when (value) {
-                    com.example.camera.model.VideoStabilizationMode.EIS -> {
-                        gyroStabilizationEngine.start()
-                    }
-                    com.example.camera.model.VideoStabilizationMode.OFF -> {
-                        gyroStabilizationEngine.stop()
-                        lastStabilizedCrop = null
-                    }
-                }
+            val useGyroFallback = isVideoMode && isVideoStabilizationEnabled && value.isEnabled &&
+                !isHardwareVideoEisSupportedForActiveLens()
+            if (useGyroFallback) {
+                gyroStabilizationEngine.start()
             } else {
                 gyroStabilizationEngine.stop()
                 lastStabilizedCrop = null
@@ -1668,7 +1662,8 @@ class Camera2Engine(private val context: Context) {
         if (config.isEisOnly || config.isHybridEnabled || config.isEisPreferred || config.isUltraStabilizationEnabled) {
             videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.EIS
         }
-        val isStabActive = isVideoStabilizationEnabled && (config.isUltraStabilizationEnabled || config.isHybridEnabled || config.isEisPreferred || config.isEisOnly || videoStabilizationMode.isEnabled)
+        val isStabActive = isVideoStabilizationEnabled && videoStabilizationMode.isEnabled &&
+            !isHardwareVideoEisSupportedForActiveLens()
         if (isVideoMode && isStabActive) {
             gyroStabilizationEngine.start()
         } else {
@@ -4820,6 +4815,7 @@ class Camera2Engine(private val context: Context) {
     private var lastStabilizedCropTime = 0L
     private var lastStabilizedCrop: Rect? = null
     private var lastOisForceOffTimeMs = 0L
+    private var consecutiveEisInactiveFrames = 0
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -4864,7 +4860,31 @@ class Camera2Engine(private val context: Context) {
 
 
 
-            // EIS completely removed: video uses normal uncropped camera output without electronic stabilization
+            // Prefer native Camera2 EIS. Some HALs advertise EIS but report it OFF at runtime;
+            // after five consecutive OFF results, use timestamped gyro crop fallback on the rear lens.
+            val eisRequested = isHardwareVideoEisRequested()
+            if (!eisRequested || actualEisMode == CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE_ON) {
+                consecutiveEisInactiveFrames = 0
+                if (lastStabilizedCrop != null) {
+                    lastStabilizedCrop = null
+                    updatePreviewSettings()
+                }
+                gyroStabilizationEngine.stop()
+            } else if (actualEisMode == CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE_OFF) {
+                consecutiveEisInactiveFrames = (consecutiveEisInactiveFrames + 1).coerceAtMost(5)
+            }
+
+            val activeLensForEis = activeSessionLens ?: _selectedLens.value
+            val allowRearGyroFallback = activeLensForEis?.facing ==
+                CameraCharacteristics.LENS_FACING_BACK
+            val useGyroCropFallback = eisRequested && allowRearGyroFallback &&
+                (!isHardwareVideoEisSupportedForActiveLens() || consecutiveEisInactiveFrames >= 5)
+            if (useGyroCropFallback) {
+                gyroStabilizationEngine.start()
+                applyGyroStabilizationFallback(result, isOisActive = isActualOisHwActive)
+            }
+
+            // Do not apply a second software offset when the Camera2 stream is already stabilized.
             dualCameraRecordingRelay?.updateStabilizationOffset(0f, 0f, 1.0f)
             if (isSoftwareCinemaRecording) {
                 cinemaSoftwareRecorder.updateStabilizationOffset(0f, 0f, 1.0f)
@@ -5091,6 +5111,83 @@ class Camera2Engine(private val context: Context) {
         val lens = activeSessionLens ?: _selectedLens.value
         val physicalId = activeSessionPhysicalCameraId ?: lens?.physicalCameraId
         return isOisSupportedForLens(lens, physicalId)
+    }
+
+    private fun isVideoStabilizationSupportedForLens(
+        lens: LensInfo?,
+        physicalCameraId: String? = lens?.physicalCameraId,
+    ): Boolean {
+        val cameraIds = listOfNotNull(
+            physicalCameraId,
+            lens?.physicalCameraId,
+            lens?.cameraId,
+            cameraDevice?.id,
+        ).distinct()
+        for (cameraId in cameraIds) {
+            val characteristics = getCharacteristics(cameraId) ?: continue
+            val modes = characteristics.get(
+                CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
+            ) ?: continue
+            if (modes.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON)) {
+                return true
+            }
+        }
+        return lens == null && _capabilities.value.supportsEis
+    }
+
+    private fun isHardwareVideoEisSupportedForActiveLens(): Boolean {
+        val lens = activeSessionLens ?: _selectedLens.value
+        val physicalId = activeSessionPhysicalCameraId ?: lens?.physicalCameraId
+        return isVideoStabilizationSupportedForLens(lens, physicalId)
+    }
+
+    private fun isHardwareVideoEisRequested(): Boolean {
+        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
+        return isVideoMode && isVideoStabilizationEnabled && videoStabilizationMode.isEnabled
+    }
+
+    private fun applyHardwareVideoStabilizationRequest(builder: CaptureRequest.Builder) {
+        val eisMode = if (
+            isHardwareVideoEisRequested() && isHardwareVideoEisSupportedForActiveLens()
+        ) {
+            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
+        } else {
+            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+        }
+        try {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, eisMode)
+        } catch (error: Throwable) {
+            Log.w(TAG, "Unable to apply Camera2 video stabilization mode=$eisMode", error)
+        }
+    }
+
+    private fun applyGyroStabilizationFallback(
+        result: TotalCaptureResult,
+        isOisActive: Boolean,
+    ) {
+        val lens = activeSessionLens ?: _selectedLens.value ?: return
+        if (lens.facing != CameraCharacteristics.LENS_FACING_BACK) return
+        val physicalId = activeSessionPhysicalCameraId ?: lens.physicalCameraId
+        val characteristics = listOfNotNull(physicalId, lens.cameraId)
+            .distinct()
+            .firstNotNullOfOrNull { getCharacteristics(it) } ?: return
+        val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+        val physicalSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            ?: SizeF(6.4f, 4.8f)
+        val focalLength = result.get(CaptureResult.LENS_FOCAL_LENGTH)
+            ?: characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.firstOrNull()
+            ?: 4.38f
+
+        val crop = gyroStabilizationEngine.computeStabilizedCrop(
+            result = result,
+            activeArray = activeArray,
+            baseZoom = currentZoom,
+            focalLengthMm = focalLength,
+            sensorPhysicalSizeMm = physicalSize,
+            isOisActive = isOisActive,
+        )
+        if (crop != null) applyStabilizedCrop(crop)
     }
 
     /**
@@ -5369,12 +5466,8 @@ class Camera2Engine(private val context: Context) {
         val oisAllowed = isOisAllowed && isOisSupportedForActiveLens()
         applyHardwareOisRequest(builder, oisAllowed)
 
-        // 2. Electronic Image Stabilization (EIS) completely removed:
-        // Video uses normal camera output without electronic stabilization.
-        builder.set(
-            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-        )
+        // Request HAL EIS only for video recording modes and only when this active camera supports it.
+        applyHardwareVideoStabilizationRequest(builder)
 
         // Preserve video recording capture intent and target FPS range across lens switches & setting updates
         if (_isRecordingVideo.value) {
@@ -7871,7 +7964,7 @@ class Camera2Engine(private val context: Context) {
                             if (matchedFpsRange != null) {
                                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, matchedFpsRange)
                             }
-                            set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                            applyHardwareVideoStabilizationRequest(this)
                             applyHardwareOisRequest(
                                 this,
                                 oisAllowed = isOisAllowed && isOisSupportedForActiveLens()
@@ -7889,7 +7982,7 @@ class Camera2Engine(private val context: Context) {
                                 try {
                                     synchronized(previewRequestLock) {
                                         applyCommonSettings(recordBuilder)
-                                        recordBuilder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                                        applyHardwareVideoStabilizationRequest(recordBuilder)
                                         applyHardwareOisRequest(
                                             recordBuilder,
                                             oisAllowed = isOisAllowed && isOisSupportedForActiveLens()
