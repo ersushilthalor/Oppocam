@@ -61,6 +61,26 @@ class CameraPreferences(context: Context) {
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
+        private const val KEY_KAMERA_GYRO_EIS_MIGRATION = "pref_kamera_gyro_eis_migration_v1"
+    }
+
+    init {
+        // Earlier builds forced EIS to OFF. Re-enable the ZIP behavior once without changing OIS.
+        if (!prefs.getBoolean(KEY_KAMERA_GYRO_EIS_MIGRATION, false)) {
+            prefs.edit()
+                .putBoolean(KEY_VIDEO_STABILIZATION, true)
+                .putBoolean("pref_hybrid_stabilization", true)
+                .putBoolean("pref_eis_preferred", true)
+                .putBoolean("pref_eis_only", false)
+                .putBoolean("pref_ultra_stabilization", false)
+                .putString("key_video_stabilization_mode", VideoStabilizationMode.EIS.name)
+                .putBoolean(modeKey(CameraMode.VIDEO, "video_stab"), true)
+                .putBoolean(modeKey(CameraMode.CINEMA, "video_stab"), true)
+                .putString(modeKey(CameraMode.VIDEO, "video_stab_mode"), VideoStabilizationMode.EIS.name)
+                .putString(modeKey(CameraMode.CINEMA, "video_stab_mode"), VideoStabilizationMode.EIS.name)
+                .putBoolean(KEY_KAMERA_GYRO_EIS_MIGRATION, true)
+                .apply()
+        }
     }
 
     var lensSwitchHoldDurationSec: Float
@@ -305,16 +325,22 @@ class CameraPreferences(context: Context) {
         set(value) = prefs.edit().putString(KEY_VIDEO_BITRATE, value.name).apply()
 
     var isVideoStabilizationEnabled: Boolean
-        get() = false
-        set(_) {
-            prefs.edit().putBoolean(KEY_VIDEO_STABILIZATION, false).apply()
-        }
+        get() = prefs.getBoolean(KEY_VIDEO_STABILIZATION, true)
+        set(value) = prefs.edit().putBoolean(KEY_VIDEO_STABILIZATION, value).apply()
 
     var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode
-        get() = com.example.camera.model.VideoStabilizationMode.OFF
-        set(_) {
-            prefs.edit().putString("key_video_stabilization_mode", com.example.camera.model.VideoStabilizationMode.OFF.name).apply()
+        get() {
+            val name = prefs.getString(
+                "key_video_stabilization_mode",
+                com.example.camera.model.VideoStabilizationMode.EIS.name
+            ) ?: com.example.camera.model.VideoStabilizationMode.EIS.name
+            return try {
+                com.example.camera.model.VideoStabilizationMode.valueOf(name)
+            } catch (_: IllegalArgumentException) {
+                com.example.camera.model.VideoStabilizationMode.EIS
+            }
         }
+        set(value) = prefs.edit().putString("key_video_stabilization_mode", value.name).apply()
 
     var isAudioEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUDIO_ENABLED, true)
@@ -1224,15 +1250,28 @@ class CameraPreferences(context: Context) {
     }
 
     fun getModeVideoStabilization(mode: CameraMode): Boolean {
-        return false
+        return if (prefs.contains(modeKey(mode, "video_stab"))) {
+            prefs.getBoolean(modeKey(mode, "video_stab"), true)
+        } else {
+            isVideoStabilizationEnabled
+        }
     }
 
     fun setModeVideoStabilizationMode(mode: CameraMode, stabMode: com.example.camera.model.VideoStabilizationMode) {
-        // EIS removed - no-op
+        videoStabilizationMode = stabMode
+        prefs.edit().putString(modeKey(mode, "video_stab_mode"), stabMode.name).apply()
     }
 
     fun getModeVideoStabilizationMode(mode: CameraMode): com.example.camera.model.VideoStabilizationMode {
-        return com.example.camera.model.VideoStabilizationMode.OFF
+        val stored = prefs.getString(modeKey(mode, "video_stab_mode"), null)
+        if (stored != null) {
+            return try {
+                com.example.camera.model.VideoStabilizationMode.valueOf(stored)
+            } catch (_: IllegalArgumentException) {
+                videoStabilizationMode
+            }
+        }
+        return videoStabilizationMode
     }
 
     fun setModeVideoFps(mode: CameraMode, fps: Int) {
