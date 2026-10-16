@@ -123,7 +123,7 @@ fun CameraUiCustomizationView(
                         contentAlignment = Alignment.Center
                     ) {
                         val icon = when (template) {
-                            UiTemplateType.STOCK_PIXEL -> Icons.Outlined.PhotoCamera
+                            UiTemplateType.STOCK_PIXEL -> Icons.Outlined.CameraAlt
                             UiTemplateType.MINIMAL_PRO -> Icons.Outlined.CenterFocusStrong
                             UiTemplateType.FUTURISTIC_GLASS -> Icons.Outlined.AutoAwesome
                             UiTemplateType.DSLR_PRO -> Icons.Outlined.CameraAlt
