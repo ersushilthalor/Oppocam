@@ -52,9 +52,12 @@ class CameraPreferences(context: Context) {
         const val MAX_LENS_SWITCH_OVERLAP_DURATION_SEC = 1.0f
         const val STEP_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.1f
         private const val KEY_LENS_SWITCH_HOLD_DURATION_SEC = "pref_lens_switch_hold_duration_sec"
+        private const val KEY_LENS_SWITCH_HOLD_TIME_MS = "pref_lens_switch_hold_time_ms"
+        const val DEFAULT_LENS_SWITCH_HOLD_TIME_MS = 100L
+        val LENS_SWITCH_HOLD_TIME_OPTIONS_MS = listOf(0L, 100L, 200L, 300L, 500L, 1000L)
         const val DEFAULT_LENS_SWITCH_HOLD_DURATION_SEC = 0.10f
-        const val MIN_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
-        const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
+        const val MIN_LENS_SWITCH_HOLD_DURATION_SEC = 0.0f
+        const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 1.0f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
         private const val KEY_MOTION_PHOTO_ENABLED = "pref_motion_photo_enabled"
@@ -96,23 +99,32 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_DOLLY_ZOOM_SETTING_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_DOLLY_ZOOM_SETTING_ENABLED, value).apply()
 
-    var lensSwitchHoldDurationSec: Float
+    var lensSwitchHoldTimeMs: Long
         get() {
-            val raw = prefs.getFloat(
-                KEY_LENS_SWITCH_HOLD_DURATION_SEC,
-                DEFAULT_LENS_SWITCH_HOLD_DURATION_SEC
-            )
-            val clamped = raw.coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
-            return (Math.round(clamped * 20f) / 20f).coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
+            if (prefs.contains(KEY_LENS_SWITCH_HOLD_TIME_MS)) {
+                return prefs.getLong(KEY_LENS_SWITCH_HOLD_TIME_MS, DEFAULT_LENS_SWITCH_HOLD_TIME_MS)
+            }
+            val sec = prefs.getFloat(KEY_LENS_SWITCH_HOLD_DURATION_SEC, DEFAULT_LENS_SWITCH_HOLD_DURATION_SEC)
+            return (sec * 1000f + 0.5f).toLong()
         }
         set(value) {
-            val clamped = value.coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
-            val rounded = (Math.round(clamped * 20f) / 20f).coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
-            prefs.edit().putFloat(KEY_LENS_SWITCH_HOLD_DURATION_SEC, rounded).apply()
+            prefs.edit()
+                .putLong(KEY_LENS_SWITCH_HOLD_TIME_MS, value)
+                .putFloat(KEY_LENS_SWITCH_HOLD_DURATION_SEC, value / 1000f)
+                .apply()
+        }
+
+    var lensSwitchHoldDurationSec: Float
+        get() = prefs.getFloat(KEY_LENS_SWITCH_HOLD_DURATION_SEC, lensSwitchHoldTimeMs / 1000f)
+        set(value) {
+            prefs.edit()
+                .putFloat(KEY_LENS_SWITCH_HOLD_DURATION_SEC, value)
+                .putLong(KEY_LENS_SWITCH_HOLD_TIME_MS, (value * 1000f + 0.5f).toLong())
+                .apply()
         }
 
     val lensSwitchHoldDurationMs: Long
-        get() = (lensSwitchHoldDurationSec * 1000f + 0.5f).toLong()
+        get() = lensSwitchHoldTimeMs
 
     var isLensSwitchOverlapAnimationEnabled: Boolean
         get() = prefs.getBoolean(KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED, false)

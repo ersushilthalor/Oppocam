@@ -843,7 +843,13 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun setKeepUltraWideReady(enabled: Boolean) {
-        setFastLensSwitch(false)
+        _isKeepUltraWideReady.value = enabled
+        preferences.isKeepUltraWideReady = enabled
+        if (enabled) {
+            ensureUltraWideSimultaneousReady()
+        } else {
+            releaseUltraWideStandby()
+        }
     }
 
     private fun configureStandbySessionOnDevice(
@@ -1201,9 +1207,10 @@ class Camera2Engine(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun ensureUltraWideSimultaneousReady() {
-        return
         val isAnimationActive = isContinuousZoomTransitionActive || zoomTransitionController.isTransitionActive.value
-        if (!_isFastLensSwitch.value && !isAnimationActive) return
+        val shouldKeepReady = _isKeepUltraWideReady.value || _isFastLensSwitch.value || isAnimationActive ||
+            (currentMode == CameraMode.PHOTO || currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)
+        if (!shouldKeepReady) return
         if (isClosingCamera || isStartingCamera || isConfiguringSession) {
             pendingEnsureUltraWideReady = true
             return
@@ -2598,7 +2605,6 @@ class Camera2Engine(private val context: Context) {
     }
 
     fun isStandbyCameraReadyForTransition(): Boolean {
-        if (!_isFastLensSwitch.value) return false
         val currentLens = _selectedLens.value ?: return false
         if (currentLens.facing != CameraCharacteristics.LENS_FACING_BACK) return false
         val backLenses = _availableLenses.value.filter { it.facing == CameraCharacteristics.LENS_FACING_BACK }
@@ -2723,7 +2729,7 @@ class Camera2Engine(private val context: Context) {
             // On the same camera device / logical multi-camera with genuine continuous zoom support: keep ONE continuous CameraCaptureSession alive
             if (canUseLogicalContinuousZoom && captureSession != null) {
                 Log.i(TAG, "[LENS_SWITCH] Seamless continuous transition on open camera ID ${lens.cameraId} to ${lens.lensType} at zoom $effectiveTargetZoom (recording=${_isRecordingVideo.value})")
-                val useUw = (lens.lensType == LensType.ULTRAWIDE && _isFastLensSwitch.value && activeLogicalMultiCamUltraWideConfigured)
+                val useUw = (lens.lensType == LensType.ULTRAWIDE && activeLogicalMultiCamUltraWideConfigured)
                 val targetSource = if (lens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                 if (_isRecordingVideo.value) {
                     dualCameraRecordingRelay?.setActiveSource(targetSource)

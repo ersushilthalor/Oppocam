@@ -208,6 +208,8 @@ fun SettingsDrawer(
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     lensSwitchHoldDurationSec: Float = 0.10f,
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
+    lensSwitchHoldTimeMs: Long = 100L,
+    onLensSwitchHoldTimeChange: (Long) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
     onDismiss: () -> Unit = {}
@@ -430,6 +432,8 @@ fun SettingsDrawer(
                             onLensSwitchOverlapDurationChange = onLensSwitchOverlapDurationChange,
                             lensSwitchHoldDurationSec = lensSwitchHoldDurationSec,
                             onLensSwitchHoldDurationChange = onLensSwitchHoldDurationChange,
+                            lensSwitchHoldTimeMs = lensSwitchHoldTimeMs,
+                            onLensSwitchHoldTimeChange = onLensSwitchHoldTimeChange,
                             isLensSwitchOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled,
                             onLensSwitchOverlapAnimationToggle = onLensSwitchOverlapAnimationToggle,
                             viewfinderFps = viewfinderFps,
@@ -2093,6 +2097,8 @@ private fun CameraLensSettingsPage(
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
     lensSwitchHoldDurationSec: Float = 0.10f,
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
+    lensSwitchHoldTimeMs: Long = 100L,
+    onLensSwitchHoldTimeChange: (Long) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
     viewfinderFps: Int,
@@ -2196,6 +2202,23 @@ private fun CameraLensSettingsPage(
                     }
                 }
             }
+        }
+
+        item {
+            SettingsSegmentedCard(
+                title = "Lens Switch Hold Time",
+                description = "Pause duration at 1x field of view to ensure preview stability before or after lens switch.",
+                options = listOf(
+                    0L to "0 ms",
+                    100L to "100 ms",
+                    200L to "200 ms",
+                    300L to "300 ms",
+                    500L to "500 ms",
+                    1000L to "1000 ms"
+                ),
+                selectedOption = lensSwitchHoldTimeMs,
+                onOptionSelected = onLensSwitchHoldTimeChange
+            )
         }
 
 

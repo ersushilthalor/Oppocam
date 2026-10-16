@@ -805,24 +805,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _lensSwitchHoldDurationSec = MutableStateFlow(preferences.lensSwitchHoldDurationSec)
     val lensSwitchHoldDurationSec: StateFlow<Float> = _lensSwitchHoldDurationSec.asStateFlow()
 
+    private val _lensSwitchHoldTimeMs = MutableStateFlow(preferences.lensSwitchHoldTimeMs)
+    val lensSwitchHoldTimeMs: StateFlow<Long> = _lensSwitchHoldTimeMs.asStateFlow()
+
     val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
     val isUsingUltraWideSurface: StateFlow<Boolean> = engine.isUsingUltraWideSurface
     val displayedPreviewSource: StateFlow<com.example.camera.engine.PreviewStreamSource> = engine.displayedPreviewSource
     val previewOverlapState: StateFlow<com.example.camera.engine.PreviewOverlapState> = engine.previewOverlapState
 
+    fun setLensSwitchHoldTimeMs(ms: Long) {
+        val validMs = ms.coerceAtLeast(0L)
+        preferences.lensSwitchHoldTimeMs = validMs
+        _lensSwitchHoldTimeMs.value = validMs
+        _lensSwitchHoldDurationSec.value = validMs / 1000f
+        engine.zoomTransitionController.holdAtOneXDurationMs = validMs
+        showToast("Lens Switch Hold: $validMs ms")
+    }
+
     fun setLensSwitchHoldDuration(seconds: Float) {
-        val clamped = (Math.round(seconds.coerceIn(
-            CameraPreferences.MIN_LENS_SWITCH_HOLD_DURATION_SEC,
-            CameraPreferences.MAX_LENS_SWITCH_HOLD_DURATION_SEC
-        ) * 20f) / 20f).coerceIn(
-            CameraPreferences.MIN_LENS_SWITCH_HOLD_DURATION_SEC,
-            CameraPreferences.MAX_LENS_SWITCH_HOLD_DURATION_SEC
-        )
-        preferences.lensSwitchHoldDurationSec = clamped
-        _lensSwitchHoldDurationSec.value = clamped
-        val ms = (clamped * 1000f + 0.5f).toLong()
+        val ms = (seconds * 1000f + 0.5f).toLong().coerceAtLeast(0L)
+        preferences.lensSwitchHoldDurationSec = seconds
+        _lensSwitchHoldTimeMs.value = ms
+        _lensSwitchHoldDurationSec.value = seconds
         engine.zoomTransitionController.holdAtOneXDurationMs = ms
-        showToast("Lens Switch Hold: ${String.format(java.util.Locale.US, "%.2f", clamped)} sec")
+        showToast("Lens Switch Hold: $ms ms")
     }
 
     fun setLensSwitchOverlapDuration(seconds: Float) {
@@ -1081,26 +1087,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             engine.availableLenses.collect { lenses ->
                 if (lenses.isNotEmpty()) {
                     refreshActiveZoomPresets()
-                    val savedModeZoom = preferences.getModeZoom(preferences.cameraMode)
-                    val savedModeLens = preferences.getModeLens(preferences.cameraMode, lenses)
-                    val effectiveLens = savedModeLens ?: engine.selectedLens.value
-                    val isFront = effectiveLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
-                    if (savedModeLens != null && engine.selectedLens.value?.id != savedModeLens.id) {
-                        val initialZoom = if (isFront) 1.0f else savedModeZoom
-                        if (initialZoom > 0f) {
-                            _currentZoom.value = initialZoom
-                        }
-                        engine.selectLens(
-                            savedModeLens,
-                            preserveZoom = !isFront && savedModeZoom > 0f,
-                            targetZoom = initialZoom.takeIf { it > 0f }
-                        )
-                    } else if (isFront) {
-                        _currentZoom.value = 1.0f
-                        engine.setZoom(1.0f, isPresetTap = false)
-                    } else if (savedModeZoom > 0f) {
-                        _currentZoom.value = savedModeZoom
-                        engine.setZoom(savedModeZoom, isPresetTap = false)
+                    val isInitDefaultMain = (preferences.cameraMode == CameraMode.PHOTO ||
+                        preferences.cameraMode == CameraMode.VIDEO ||
+                        preferences.cameraMode == CameraMode.CINEMA)
+                    val isFront = preferences.lastFacing == CameraCharacteristics.LENS_FACING_FRONT
+                    val primaryMain = lenses.firstOrNull { it.isPrimaryMain }
+                        ?: lenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
+                        ?: lenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
+                    val targetLens = if (isFront) {
+                        lenses.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_FRONT }
+                    } else if (isInitDefaultMain) {
+                        primaryMain
+                    } else {
+                        preferences.getModeLens(preferences.cameraMode, lenses) ?: primaryMain
+                    }
+                    val targetZoom = if (isFront || isInitDefaultMain) 1.0f else {
+                        val mz = preferences.getModeZoom(preferences.cameraMode)
+                        if (mz > 0f) mz else 1.0f
+                    }
+                    _currentZoom.value = targetZoom
+                    if (targetLens != null && engine.selectedLens.value?.id != targetLens.id) {
+                        engine.selectLens(targetLens, preserveZoom = false, targetZoom = targetZoom)
+                    } else {
+                        engine.setZoom(targetZoom, isPresetTap = false)
                     }
                 }
             }
@@ -1297,41 +1306,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             safeInitializeCamera()
         }
 
-        // 6. Restore mode-specific lens and zoom if available
-        val modeZoom = preferences.getModeZoom(mode)
+        // 6. Default Camera State: Photo, Video, and Pro Video (Cinema) start with 1x main camera at 1.0x zoom
+        val isDefaultMainMode = (mode == CameraMode.PHOTO || mode == CameraMode.VIDEO || mode == CameraMode.CINEMA)
         val currentLens = engine.selectedLens.value
         val isCurrentlyFront = currentLens?.facing == CameraCharacteristics.LENS_FACING_FRONT ||
             preferences.lastFacing == CameraCharacteristics.LENS_FACING_FRONT
-        val modeLens = if (isCurrentlyFront) {
-            engine.availableLenses.value.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_FRONT }
-        } else {
-            preferences.getModeLens(mode, engine.availableLenses.value)
-        }
-        val effectiveLens = modeLens ?: currentLens
-        val isFront = effectiveLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
+        val primaryMainLens = engine.availableLenses.value.firstOrNull { it.isPrimaryMain }
+            ?: engine.availableLenses.value.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE && !it.isZoomPreset }
+            ?: engine.availableLenses.value.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.WIDE }
+            ?: engine.availableLenses.value.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_BACK }
 
-        if (isFront) {
-            _currentZoom.value = 1.0f
-            preferences.setModeZoom(mode, 1.0f)
-            if (modeLens != null && modeLens.id != engine.selectedLens.value?.id) {
-                engine.selectLens(modeLens, preserveZoom = false, targetZoom = 1.0f)
-            } else {
-                engine.setZoom(1.0f, isPresetTap = false)
-            }
-        } else if (modeLens != null && modeLens.id != engine.selectedLens.value?.id) {
-            if (modeZoom > 0f) {
-                _currentZoom.value = modeZoom
-            }
-            engine.selectLens(
-                modeLens,
-                preserveZoom = modeZoom > 0f,
-                targetZoom = modeZoom.takeIf { it > 0f }
-            )
-        } else if (modeZoom > 0f) {
-            _currentZoom.value = modeZoom
-            engine.setZoom(modeZoom, isPresetTap = false)
+        val targetLens = if (isCurrentlyFront) {
+            engine.availableLenses.value.firstOrNull { it.facing == CameraCharacteristics.LENS_FACING_FRONT }
+        } else if (isDefaultMainMode) {
+            primaryMainLens ?: currentLens
         } else {
-            engine.updatePreviewSettings()
+            preferences.getModeLens(mode, engine.availableLenses.value) ?: currentLens
+        }
+        val targetZoom = if (isCurrentlyFront || isDefaultMainMode) {
+            1.0f
+        } else {
+            val mz = preferences.getModeZoom(mode)
+            if (mz > 0f) mz else 1.0f
+        }
+
+        _currentZoom.value = targetZoom
+        preferences.setModeZoom(mode, targetZoom)
+        if (targetLens != null && targetLens.id != engine.selectedLens.value?.id) {
+            engine.selectLens(targetLens, preserveZoom = false, targetZoom = targetZoom)
+        } else {
+            engine.setZoom(targetZoom, isPresetTap = false)
         }
 
         _isCinemaSettingsOpen.value = false

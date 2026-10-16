@@ -71,10 +71,8 @@ class ZoomTransitionController(
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
         const val TOTAL_TRANSITION_DURATION_MS = 300L // Fixed duration of exactly 300ms (0.30s), never less
-        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 100L // 0.10 second default hold at exact 1x FOV before physical switch
+        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 100L // 0.10 second default hold at exact 1x FOV
         const val HOLD_AT_ONE_X_DURATION_MS = 100L // Preserved for backwards compatibility
-        const val MIN_HOLD_AT_ONE_X_DURATION_MS = 50L
-        const val MAX_HOLD_AT_ONE_X_DURATION_MS = 300L
         const val DEFAULT_OVERLAP_DURATION_MS = 300L
         const val PREVIEW_OVERLAP_DURATION_MS = 100L
         const val MIN_OVERLAP_DURATION_MS = 100L
@@ -119,6 +117,7 @@ class ZoomTransitionController(
     val previewOverlapState: StateFlow<PreviewOverlapState> = _previewOverlapState.asStateFlow()
 
     private var activeTransitionJob: Job? = null
+    private val transitionGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * Slider normalization helper methods reusing the actual HorizontalRulerZoomSlider mapping.
@@ -209,12 +208,14 @@ class ZoomTransitionController(
         onComplete: (Float, LensInfo?) -> Unit
     ): Job {
         cancelTransition()
+        val currentGen = transitionGeneration.incrementAndGet()
 
         // Use specified duration if positive, defaulting to TOTAL_TRANSITION_DURATION_MS (300ms)
         val transitionDurationMs = if (durationMs > 0L) durationMs else TOTAL_TRANSITION_DURATION_MS
         logDiag("TRANSITION_START", "fromZoom=$fromZoom targetZoom=$targetZoom targetLens=${targetLens?.lensType} currentLens=${currentLens?.lensType} durationMs=$transitionDurationMs")
 
         val job = scope.launch(Dispatchers.Main.immediate) {
+            if (currentGen != transitionGeneration.get() || !isActive) return@launch
             val currentFacing = currentLens?.facing
             val lensesForFacing = availableLenses.filter { currentFacing == null || it.facing == currentFacing }
             val ultraWideLens = lensesForFacing.firstOrNull { it.lensType == LensType.ULTRAWIDE && it.isPhysical }
@@ -342,12 +343,12 @@ class ZoomTransitionController(
                 logDiag("FRAME_CONFIRMED", "zoom=$effectiveSwitchZoom reached active preview pipeline")
 
                 // Start the configured hold timer ONLY AFTER that frame is available
-                val holdDuration = if (holdAtOneXDurationMs <= 0L) 0L else holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
+                val holdDuration = maxOf(0L, holdAtOneXDurationMs)
                 if (holdDuration > 0L) {
                     updateState(ZoomTransitionState.HOLDING_AT_SWITCH_POINT)
                     logDiag("HOLD_START", "durationMs=$holdDuration at switch point")
                     val holdStartTime = SystemClock.uptimeMillis()
-                    while (isActive) {
+                    while (isActive && currentGen == transitionGeneration.get()) {
                         val now = SystemClock.uptimeMillis()
                         val elapsedHold = now - holdStartTime
                         if (elapsedHold >= holdDuration) break
@@ -358,6 +359,7 @@ class ZoomTransitionController(
                     }
                     logDiag("HOLD_END", "hold duration elapsed")
                 }
+                if (currentGen != transitionGeneration.get() || !isActive) return@launch
 
                 // Trigger physical lens switching ONLY AFTER the entire hold duration has elapsed
                 updateState(ZoomTransitionState.SWITCHED_TO_MAIN)
@@ -461,12 +463,12 @@ class ZoomTransitionController(
                     logDiag("FRAME_CONFIRMED", "zoom=$effectiveSwitchZoom on Ultra-Wide cropped")
 
                     // Hold at 1.0x-equivalent crop on Ultra-Wide
-                    val holdDuration = if (holdAtOneXDurationMs <= 0L) 0L else holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
+                    val holdDuration = maxOf(0L, holdAtOneXDurationMs)
                     if (holdDuration > 0L) {
                         updateState(ZoomTransitionState.HOLDING_AT_CROPPED_UW)
                         logDiag("HOLD_START", "holding at cropped UW for $holdDuration ms")
                         val holdStartTime = SystemClock.uptimeMillis()
-                        while (isActive) {
+                        while (isActive && currentGen == transitionGeneration.get()) {
                             val now = SystemClock.uptimeMillis()
                             val elapsedHold = now - holdStartTime
                             if (elapsedHold >= holdDuration) break
@@ -477,6 +479,7 @@ class ZoomTransitionController(
                         }
                         logDiag("HOLD_END", "hold complete at cropped UW")
                     }
+                    if (currentGen != transitionGeneration.get() || !isActive) return@launch
 
                     // Smoothly transition digital zoom on Ultra-Wide from 1.0x down to 0.5x
                     updateState(ZoomTransitionState.ZOOMING_UW_OUT_TO_TARGET)
@@ -621,6 +624,7 @@ class ZoomTransitionController(
      */
     fun cancelTransition() {
         logDiag("TRANSITION_CANCELLED", "activeJob=${activeTransitionJob != null}")
+        transitionGeneration.incrementAndGet()
         activeTransitionJob?.cancel()
         activeTransitionJob = null
         _isTransitionActive.value = false
