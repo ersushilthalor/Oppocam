@@ -61,10 +61,37 @@ fun FloatingVideoSettingsPanel(
 
     AnimatedVisibility(
         visible = isOpen,
-        enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(150)) +
-                slideInVertically(initialOffsetY = { -it / 2 }),
+        enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(170)) +
+                scaleIn(
+                    initialScale = 0.78f,
+                    animationSpec = androidx.compose.animation.core.spring(
+                        dampingRatio = 0.52f,
+                        stiffness = 430f
+                    )
+                ) +
+                expandVertically(
+                    expandFrom = Alignment.Top,
+                    animationSpec = androidx.compose.animation.core.spring(
+                        dampingRatio = 0.68f,
+                        stiffness = 380f
+                    )
+                ) +
+                slideInVertically(
+                    initialOffsetY = { -it / 5 },
+                    animationSpec = androidx.compose.animation.core.spring(
+                        dampingRatio = 0.68f,
+                        stiffness = 380f
+                    )
+                ),
         exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(120)) +
-                slideOutVertically(targetOffsetY = { -it / 2 }),
+                scaleOut(
+                    targetScale = 0.94f,
+                    animationSpec = androidx.compose.animation.core.tween(120)
+                ) +
+                shrinkVertically(
+                    shrinkTowards = Alignment.Top,
+                    animationSpec = androidx.compose.animation.core.tween(130)
+                ),
         modifier = modifier
     ) {
         HorizontalFloatingSelectorCard(
