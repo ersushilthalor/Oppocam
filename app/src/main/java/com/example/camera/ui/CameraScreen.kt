@@ -197,7 +197,6 @@ fun CameraScreen(
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     val isEvControlOpen by viewModel.isEvControlOpen.collectAsStateWithLifecycle()
-    val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(cameraMode) {
@@ -267,7 +266,6 @@ fun CameraScreen(
     val proSharpness by viewModel.proSharpness.collectAsStateWithLifecycle()
     val proNoiseReduction by viewModel.proNoiseReduction.collectAsStateWithLifecycle()
 
-    val hybridStabilizationConfig by viewModel.hybridStabilizationConfig.collectAsStateWithLifecycle()
     val videoStabilizationMode by viewModel.videoStabilizationMode.collectAsStateWithLifecycle()
     val isOisEnabled by viewModel.isOisEnabled.collectAsStateWithLifecycle()
     val uiCustomizationState by viewModel.uiCustomizationState.collectAsStateWithLifecycle()
@@ -566,9 +564,6 @@ fun CameraScreen(
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
             isAudioEnabled = isAudioEnabled,
             onAudioToggle = onAudioToggleRequested,
-            isVideoStabilizationEnabled = isVideoStabilizationEnabled,
-            isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-            onStabilizationClick = { viewModel.toggleVideoStabilization() },
             isQuickOptionsOpen = isQuickOptionsOpen,
             onQuickOptionsToggle = { isQuickOptionsOpen = !isQuickOptionsOpen },
             layoutConfig = activeLayoutConfig,
@@ -628,7 +623,6 @@ fun CameraScreen(
                 isQuickOptionsOpen = false
                 viewModel.setPhotoFilterBarOpen(true)
             },
-            onStabilizationClick = { viewModel.cycleStabilizationMode() },
             onVideoSettingsClick = {
                 isQuickOptionsOpen = false
                 viewModel.setVideoSettingsPanelOpen(true)
@@ -724,9 +718,6 @@ fun CameraScreen(
                     if (cameraMode == CameraMode.CINEMA) {
                         viewModel.updateCinemaConfig(cinemaConfig.copy(videoFps = fps))
                     }
-                },
-                onUltraStabilizationToggle = {
-                    viewModel.toggleUltraStabilization()
                 },
                 onDismiss = { viewModel.setVideoSettingsPanelOpen(false) },
                 modifier = Modifier
