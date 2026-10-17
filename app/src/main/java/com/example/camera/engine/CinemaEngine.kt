@@ -426,7 +426,6 @@ class CinemaEngine(private val context: Context) {
                     CinemaColorProfile.S_LOG -> 1.62f
                     CinemaColorProfile.N_LOG -> 1.68f
                     CinemaColorProfile.HLG10 -> 2.2f
-                    CinemaColorProfile.HLG_2 -> 2.2f
                     CinemaColorProfile.APPLE_LOG_2 -> 1.60f
                     CinemaColorProfile.D_LOG_2 -> 1.62f
                     CinemaColorProfile.SAMSUNG_APV_LOG -> 1.65f
@@ -794,23 +793,6 @@ class CinemaEngine(private val context: Context) {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR OETF Transfer Function:
                 Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
             }
-            CinemaColorProfile.HLG_2 -> {
-                // Enhanced HLG 2 profile: Based on HLG, but less flat, more depth, natural contrast, and close to Rec.709
-                if (inVal <= 0.001f) {
-                    0.0f
-                } else if (inVal >= 0.999f) {
-                    1.0f
-                } else if (inVal < 0.018f) {
-                    // Inky black toe transition anchored at 0.0
-                    (4.5f * inVal).coerceIn(0f, 1f)
-                } else {
-                    val hlgBase = Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
-                    val rec709Base = (1.099f * inVal.pow(0.45f) - 0.099f).coerceIn(0f, 1f)
-                    // Natural contrast close to Rec.709 with HLG highlight roll-off
-                    val blended = (0.85f * rec709Base + 0.15f * (hlgBase * 0.65f + rec709Base * 0.35f)).coerceIn(0f, 1f)
-                    blended
-                }
-            }
             CinemaColorProfile.APPLE_LOG_2 -> {
                 // Official Apple Log 2 transfer function specification:
                 if (inVal >= 0.999f) {
@@ -924,7 +906,6 @@ class CinemaEngine(private val context: Context) {
             CinemaColorProfile.PROCESSED_JPEG -> 1.16f // Rich natural saturation for smartphone photo rendering
             CinemaColorProfile.NATIVE -> 1.0f
             CinemaColorProfile.HLG10 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
-            CinemaColorProfile.HLG_2 -> 1.10f // Enhanced vibrant Rec.709 color balance
             CinemaColorProfile.S_LOG -> 0.90f // Authentic Sony S-Log wide-gamut baseline
             CinemaColorProfile.N_LOG -> 0.92f // Authentic Nikon N-Log baseline
             CinemaColorProfile.APPLE_LOG_2 -> 0.88f // Flat wide-gamut baseline for grading headroom
