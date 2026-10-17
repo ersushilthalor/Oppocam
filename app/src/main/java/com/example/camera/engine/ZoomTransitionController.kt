@@ -291,17 +291,19 @@ class ZoomTransitionController(
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 }
 
-                if (isOverlapAnimationEnabled && holdDuration > 0L) {
-                    // Activate physical Main lens stream concurrently under Ultra-Wide layer at effectiveSwitchZoom.
+                if (isOverlapAnimationEnabled && (holdDuration > 0L || isDirectTelephotoTarget)) {
+                    // Prepare the main lens while the Ultra-Wide layer remains visible. For direct
+                    // telephoto taps use a short crossfade instead of a dead stop at the handoff.
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
+                    val blendDurationMs = if (holdDuration > 0L) holdDuration else 140L
                     val blendStartTime = SystemClock.uptimeMillis()
                     while (isActive) {
                         val now = SystemClock.uptimeMillis()
                         val blendElapsed = now - blendStartTime
-                        if (blendElapsed >= holdDuration) break
+                        if (blendElapsed >= blendDurationMs) break
 
-                        val progress = (blendElapsed.toFloat() / holdDuration.toFloat()).coerceIn(0f, 1f)
+                        val progress = (blendElapsed.toFloat() / blendDurationMs.toFloat()).coerceIn(0f, 1f)
                         val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
                         val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
                         val mainAlpha = 1.0f
@@ -315,7 +317,7 @@ class ZoomTransitionController(
                             topSource = PreviewStreamSource.ULTRAWIDE
                         )
 
-                        val nextTick = minOf(blendStartTime + holdDuration, now + 16L)
+                        val nextTick = minOf(blendStartTime + blendDurationMs, now + 16L)
                         val waitMs = nextTick - SystemClock.uptimeMillis()
                         if (waitMs > 0) {
                             delay(waitMs)
