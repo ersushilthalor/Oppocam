@@ -80,6 +80,35 @@ class ZoomTransitionController(
         fun isTelephotoPresetToHalfXTransition(fromZoom: Float, targetZoom: Float): Boolean =
             isTelephotoPresetZoom(fromZoom) && isHalfXZoom(targetZoom)
 
+        /**
+         * Calculates alpha progress from real incoming frames, with an FOV-aware escape for the
+         * reverse transition. Once zoom drops below 1x, Main cannot widen further, so keeping
+         * both layers blended for all 16 frames would show increasingly different FOVs. We still
+         * require incoming frames, but accelerate the fade only as the zoom leaves the range where
+         * Main and Ultra-Wide can be kept geometrically close.
+         */
+        internal fun calculateFrameHandoffProgress(
+            incomingFrameCount: Int,
+            targetSource: PreviewStreamSource,
+            currentZoom: Float,
+            previousProgress: Float = 0f
+        ): Float {
+            val frameProgress = incomingFrameCount.coerceIn(0, FRAME_HANDOFF_REQUIRED_FRAMES).toFloat() /
+                FRAME_HANDOFF_REQUIRED_FRAMES.toFloat()
+            val frameEased = (0.5 * (1.0 - cos(PI * frameProgress.toDouble()))).toFloat()
+            val zoomEased = if (targetSource == PreviewStreamSource.ULTRAWIDE) {
+                val zoomProgress = ((1.0f - currentZoom) / (1.0f - 0.5f)).coerceIn(0f, 1f)
+                val acceleratedZoomProgress = 1f - (1f - zoomProgress) * (1f - zoomProgress) * (1f - zoomProgress)
+                (0.5 * (1.0 - cos(PI * acceleratedZoomProgress.toDouble()))).toFloat()
+            } else {
+                0f
+            }
+            val previous = previousProgress.coerceIn(0f, 1f)
+            val desired = maxOf(frameEased, zoomEased)
+            // Avoid a one-frame opacity jump if zoom reaches the incompatible FOV range abruptly.
+            return minOf(desired, previous + 0.45f).coerceIn(previous, 1f)
+        }
+
         /** Frame-based preview handoff is intentionally limited to 0.5x <-> 2x/3x. */
         fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean =
             isHalfXToTelephotoPresetTransition(fromZoom, targetZoom) ||
@@ -212,12 +241,15 @@ class ZoomTransitionController(
         if (source != targetSource) return
 
         frameHandoffFrameCount = (frameHandoffFrameCount + 1).coerceAtMost(FRAME_HANDOFF_REQUIRED_FRAMES)
-        val frameProgress = frameHandoffFrameCount.toFloat() / FRAME_HANDOFF_REQUIRED_FRAMES.toFloat()
-        // Ease in/out across more real incoming frames. Cosine easing avoids a visible fade
-        // jump on the first frame while finishing cleanly on the final frame.
-        val progress = (0.5 * (1.0 - cos(PI * frameProgress.toDouble())))
-            .toFloat()
-            .coerceIn(0f, 1f)
+        // Progress is tied to real target buffers and zoom trajectory. For reverse handoff,
+        // retire the Main layer quickly once the target Ultra-Wide FOV becomes wider than Main.
+        val previousProgress = _previewOverlapState.value.overlapProgress
+        val progress = calculateFrameHandoffProgress(
+            incomingFrameCount = frameHandoffFrameCount,
+            targetSource = targetSource,
+            currentZoom = _currentInterpolatedZoom.value,
+            previousProgress = previousProgress
+        )
         // Keep the outgoing layer fully opaque underneath. Only the incoming top layer
         // animates its alpha, producing a true old*(1-p) + new*p visual blend without dark gaps.
         val mainAlpha = if (targetSource == PreviewStreamSource.MAIN) progress else 1f
