@@ -5224,7 +5224,7 @@ class Camera2Engine(private val context: Context) {
         // Let Camera2/HAL report whether EIS can actually be active for this stream configuration.
         val mode = when {
             !requested -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-            ultra && supportsPreviewStabilization ->
+            supportsPreviewStabilization ->
                 CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
             supportsEis -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
             else -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
