@@ -607,7 +607,7 @@ class Camera2Engine(private val context: Context) {
      * Ultra-Wide: Switch Point ÷ 16mm (e.g. 1.44x at 23mm, 2.50x at 40mm)
      * Main: Switch Point ÷ 23mm (e.g. 1.00x at 23mm, 1.74x at 40mm)
      */
-    internal fun calculateStandbyCropRatio(standbyLens: LensInfo): Float {
+    internal fun calculateStandbyCropRatio(standbyLens: LensInfo, uiZoomOverride: Float? = null): Float {
         val sameFacingLenses = _availableLenses.value.filter { it.facing == standbyLens.facing }
         val mainLens = sameFacingLenses.firstOrNull { it.isPrimaryMain }
             ?: sameFacingLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
@@ -616,10 +616,25 @@ class Camera2Engine(private val context: Context) {
             ?.takeIf { it.isFinite() && it > 0f }
             ?: CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
 
+        val uwEqFocalMm = sameFacingLenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+            ?.equivalent35mmFocalMm
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?: CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+        if (uiZoomOverride != null && uiZoomOverride.isFinite()) {
+            // While blending, keep the standby stream on the same effective zoom as the active
+            // stream. Otherwise a 16-frame fade outlasts the 300ms zoom animation and blends
+            // a fixed switch-point view with a target that has already reached 2x/3x (or 0.5x).
+            return CameraOpticalCalibration.calculateRequiredDigitalCrop(
+                uiZoom = uiZoomOverride.coerceAtLeast(0.5f),
+                lensBaseRatio = standbyLens.baseZoomRatio,
+                lensType = standbyLens.lensType,
+                uwEquivalentFocalMm = uwEqFocalMm,
+                mainEquivalentFocalMm = mainEqFocalMm,
+                switchPointMm = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM
+            )
+        }
+
         return if (standbyLens.lensType == LensType.ULTRAWIDE) {
-            val uwEqFocalMm = standbyLens.equivalent35mmFocalMm
-                .takeIf { it.isFinite() && it > 0f }
-                ?: CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
             CameraOpticalCalibration.calculateFovMatchedUltraWideCrop(
                 switchPointMm = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
                 mainEquivalentFocalMm = mainEqFocalMm,
@@ -693,7 +708,13 @@ class Camera2Engine(private val context: Context) {
             // (e.g. 1.44x crop factor for Ultra-Wide at 23mm, or 1.74x crop factor for Main at 40mm)
             // so switching between Main and Ultra-Wide is instant with zero FOV pop or jump.
             val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
-            val targetStandbyRatio = calculateStandbyCropRatio(standbyLens)
+            val handoffState = zoomTransitionController.previewOverlapState.value
+            val handoffZoom = if (handoffState.isOverlapping) {
+                zoomTransitionController.currentInterpolatedZoom.value
+            } else {
+                null
+            }
+            val targetStandbyRatio = calculateStandbyCropRatio(standbyLens, handoffZoom)
             val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && chars != null) {
                 chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             } else {
@@ -729,8 +750,9 @@ class Camera2Engine(private val context: Context) {
     /**
      * Synchronizes the background standby session's repeating request whenever active settings change.
      */
-    private fun syncStandbyStreamSettings() {
-        if (!_isKeepUltraWideReady.value || isClosingCamera) return
+    private fun syncStandbyStreamSettings(forceDuringFrameHandoff: Boolean = false) {
+        val handoffActive = zoomTransitionController.previewOverlapState.value.isOverlapping
+        if ((!_isKeepUltraWideReady.value && !(forceDuringFrameHandoff && handoffActive)) || isClosingCamera) return
         val session = ultraWideStandbyCaptureSession ?: return
         val builder = ultraWideStandbyRequestBuilder ?: return
         val standbyCam = ultraWideStandbyCameraDevice ?: return
@@ -5672,6 +5694,14 @@ class Camera2Engine(private val context: Context) {
     @Volatile
     private var isZoomUpdateScheduled = false
 
+    private fun syncStandbyIfFrameHandoffActive() {
+        if (zoomTransitionController.previewOverlapState.value.isOverlapping) {
+            // The camera callback already runs on the background handler, so update the standby
+            // repeating request on the same serialized path as the active preview request.
+            syncStandbyStreamSettings(forceDuringFrameHandoff = true)
+        }
+    }
+
     private fun scheduleZoomPreviewUpdate(immediate: Boolean = false, explicitZoom: Float? = null) {
         val handler = backgroundHandler
         val now = android.os.SystemClock.uptimeMillis()
@@ -5686,6 +5716,7 @@ class Camera2Engine(private val context: Context) {
                         pendingZoomRunnable = null
                         lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
                         updatePreviewSettings(zoomToApply)
+                        syncStandbyIfFrameHandoffActive()
                     }
                     pendingZoomRunnable = runnable
                     handler?.postDelayed(runnable, delayMs)
@@ -5696,6 +5727,7 @@ class Camera2Engine(private val context: Context) {
             pendingZoomRunnable = null
             lastZoomPreviewUpdateTime = now
             updatePreviewSettings(zoomToApply)
+                        syncStandbyIfFrameHandoffActive()
             return
         }
 
@@ -5710,6 +5742,7 @@ class Camera2Engine(private val context: Context) {
                 val z = pendingZoomUpdateTarget
                 lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
                 updatePreviewSettings(z)
+                syncStandbyIfFrameHandoffActive()
             }
             return
         }
@@ -5725,6 +5758,7 @@ class Camera2Engine(private val context: Context) {
                 val z = pendingZoomUpdateTarget
                 lastZoomPreviewUpdateTime = android.os.SystemClock.uptimeMillis()
                 updatePreviewSettings(z)
+                syncStandbyIfFrameHandoffActive()
             }
             pendingZoomRunnable = runnable
             if (delayMs > 0L) {
