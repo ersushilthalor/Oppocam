@@ -14,7 +14,7 @@ enum class UiTemplateType(
     OPPO("OPPO Camera", "Screenshot-matched OPPO layout with an orange shutter, dark selected-mode pill and only supported modes", "#FF8A00"),
     STOCK_PIXEL("Arnova GCam 8.7", "Google Camera 8.7-inspired layout with a clean mode strip, minimal controls and zoom selector", "#FFFFFF"),
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
-    IPHONE("iPhone (iOS)", "Clean, minimal Apple iPhone layout with yellow accents & top pill indicators", "#FFD54F"),
+    IPHONE("iPhone (iOS)", "Screenshot-matched iPhone Camera layout with a silver-ring shutter and liquid-glass mode pill", "#FFD54F"),
     VIVO("Vivo OriginOS", "Screenshot-matched Vivo camera layout with yellow selected mode, focal-length labels and concentric shutter rings", "#FFD54F"),
     CUSTOM("Custom UI", "Completely personalized layout, spacing, typography & controls", "#64B5F6")
 }
@@ -22,6 +22,7 @@ enum class UiTemplateType(
 enum class ShutterStyle(val label: String, val description: String) {
     CLASSIC_WHITE("Classic Ring", "Double ring with solid white center"),
     APPLE_DOT("Apple Minimal", "Thin silver ring with crisp inner circle"),
+    IPHONE_RING("iPhone Shutter Ring", "White camera shutter with a thick soft-grey outer ring"),
     OPPO_ORANGE("OPPO Orange", "Orange filled shutter with a subtle dark outer ring"),
     SAMSUNG_CAPSULE("Samsung OneUI", "Thick outer border with solid round core"),
     VIVO_GIMBAL("Vivo Origin", "Accent colored outer ring with responsive gimbal core"),
@@ -41,6 +42,7 @@ enum class ModeSelectorStyle(val label: String) {
     CLASSIC_DOT("Yellow Indicator Dot"),
     CAPSULE_PILL("OneUI Capsule Pill"),
     OPPO_PILL("OPPO Selected Capsule"),
+    IPHONE_LIQUID_GLASS("iPhone Liquid Glass Pill"),
     UNDERLINE("Vivo Accent Underline"),
     MINIMAL_TEXT("Minimal Typography"),
     PIXEL_PILL("Pixel Dark Pill"),
@@ -692,9 +694,11 @@ object CameraUiTemplates {
                 iconStrokeWidthDp = 1.6f
             )
             UiTemplateType.IPHONE -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.CLASSIC_DOT,
-                shutterStyle = ShutterStyle.APPLE_DOT,
+                // Match the reference order: Video, Photo, then the app's existing More/active mode.
+                visibleModes = listOf(CameraMode.VIDEO, CameraMode.PHOTO, CameraMode.MORE),
+                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
+                modeSelectorStyle = ModeSelectorStyle.IPHONE_LIQUID_GLASS,
+                shutterStyle = ShutterStyle.IPHONE_RING,
                 shutterSizeDp = 78,
                 shutterHorizontalOffsetDp = 0,
                 flipButtonSizeDp = 52,
@@ -707,6 +711,14 @@ object CameraUiTemplates {
                 modeFontFamily = FontFamilyOption.DEFAULT,
                 topPaddingDp = 10,
                 bottomPaddingDp = 12,
+                textColorHex = "#FFFFFF",
+                fontWeightOption = FontWeightOption.SEMI_BOLD,
+                textCaseOption = TextCaseOption.UPPERCASE,
+                letterSpacingSp = 0.0f,
+                textShadowOption = TextShadowOption.NONE,
+                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
+                iconColorHex = "#FFFFFF",
+                iconContainerOpacity = 0.0f,
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE
             )
             UiTemplateType.SAMSUNG -> ModeLayoutConfig(
