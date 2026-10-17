@@ -1146,6 +1146,11 @@ object CinemaColorPipeline {
                         )
                     }
                 }
+                // RuntimeShader child shaders default to NEAREST sampling, unlike the GL recording
+                // path (GL_LINEAR). Force bilinear filtering so red/green LUT coordinates are
+                // interpolated smoothly; otherwise tiny camera-noise variations produce harsh
+                // false-colour speckling and preview/recording colour mismatch.
+                lutShader.setFilterMode(android.graphics.BitmapShader.FILTER_MODE_LINEAR)
                 shader.setInputShader("uLutStrip", lutShader)
                 shader.setFloatUniform("uUse3DLut", use3DLut)
                 shader.setFloatUniform("uLutSize", lutSize)
