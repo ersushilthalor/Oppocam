@@ -523,6 +523,7 @@ data class UiCustomizationState(
                 // Upgrade an untouched Vivo preset saved before the focal-length layout was introduced.
                 // Only migrate an exact legacy preset match, preserving any user-customized configuration.
                 val legacyVivoDefault = CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO).copy(
+                    visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
                     useFocalLengthZoomLabels = false,
                     modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
                     modeSelectorStyle = ModeSelectorStyle.UNDERLINE,
@@ -727,7 +728,7 @@ object CameraUiTemplates {
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE
             )
             UiTemplateType.VIVO -> ModeLayoutConfig(
-                visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
+                visibleModes = listOf(CameraMode.VIDEO, CameraMode.PHOTO, CameraMode.MORE),
                 useFocalLengthZoomLabels = true,
                 modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
                 modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
