@@ -214,7 +214,7 @@ fun CustomUiStudioDialog(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Quick Base Template Bar (Pixel, One UI, iPhone, Vivo, Leica, Glass, DSLR, Immersive)
+                    // Quick Base Template Bar (Pixel, One UI, iPhone, Vivo)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -234,10 +234,6 @@ fun CustomUiStudioDialog(
                                 UiTemplateType.SAMSUNG to "One UI",
                                 UiTemplateType.IPHONE to "iPhone",
                                 UiTemplateType.VIVO to "Vivo",
-                                UiTemplateType.MINIMAL_PRO to "Leica",
-                                UiTemplateType.FUTURISTIC_GLASS to "Glass",
-                                UiTemplateType.DSLR_PRO to "DSLR",
-                                UiTemplateType.IMMERSIVE_EDGE to "Edge"
                             )
                         }
                         studioQuickTemplates.chunked(4).forEach { rowTemplates ->
@@ -2072,10 +2068,6 @@ private fun SavedPresetsTabContent(
                 UiTemplateType.SAMSUNG,
                 UiTemplateType.IPHONE,
                 UiTemplateType.VIVO,
-                UiTemplateType.MINIMAL_PRO,
-                UiTemplateType.FUTURISTIC_GLASS,
-                UiTemplateType.DSLR_PRO,
-                UiTemplateType.IMMERSIVE_EDGE
             )
 
             baseTemplates.chunked(2).forEach { rowItems ->
