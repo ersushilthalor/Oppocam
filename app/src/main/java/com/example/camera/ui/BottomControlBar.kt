@@ -3,7 +3,9 @@ package com.example.camera.ui
 import android.hardware.camera2.CameraCharacteristics
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -896,21 +899,73 @@ fun BottomControlBar(
                                                 }
                                             }
                                             ModeSelectorStyle.OPPO_PILL -> {
+                                                val animatedPillColor by animateColorAsState(
+                                                    targetValue = if (isSelected) Color(0xFF272326) else Color.Transparent,
+                                                    animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+                                                    label = "oppoLiquidPillColor"
+                                                )
+                                                val liquidTransition = rememberInfiniteTransition(label = "oppoLiquidPill")
+                                                val liquidSweep by liquidTransition.animateFloat(
+                                                    initialValue = -0.85f,
+                                                    targetValue = 1.55f,
+                                                    animationSpec = infiniteRepeatable(
+                                                        animation = tween(durationMillis = 1650, easing = LinearEasing),
+                                                        repeatMode = RepeatMode.Restart
+                                                    ),
+                                                    label = "oppoLiquidPillSweep"
+                                                )
+                                                val pillShape = RoundedCornerShape(22.dp)
                                                 Surface(
-                                                    shape = RoundedCornerShape(22.dp),
-                                                    color = if (isSelected) Color(0xFF272326) else Color.Transparent
-                                                ) {
-                                                    Text(
-                                                        text = if (isSelected) "$displayText ▴" else displayText,
-                                                        color = if (isSelected) Color(0xFFD9A49B) else customTextColor.copy(alpha = 0.68f),
-                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
-                                                        fontWeight = modeFontWeight,
-                                                        fontFamily = fontFamily,
-                                                        letterSpacing = modeLetterSpacing,
-                                                        maxLines = 1,
-                                                        softWrap = false,
-                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                                                    shape = pillShape,
+                                                    color = animatedPillColor,
+                                                    border = if (isSelected) BorderStroke(
+                                                        0.75.dp,
+                                                        Brush.horizontalGradient(
+                                                            listOf(
+                                                                Color.White.copy(alpha = 0.10f),
+                                                                Color(0xFFFF8A00).copy(alpha = 0.48f),
+                                                                Color.White.copy(alpha = 0.16f)
+                                                            )
+                                                        )
+                                                    ) else null,
+                                                    modifier = Modifier.animateContentSize(
+                                                        animationSpec = spring(dampingRatio = 0.72f, stiffness = 520f)
                                                     )
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .then(
+                                                                if (isSelected) {
+                                                                    Modifier.background(
+                                                                        brush = Brush.linearGradient(
+                                                                            colors = listOf(
+                                                                                Color.Transparent,
+                                                                                Color.White.copy(alpha = 0.14f),
+                                                                                Color(0x33FF8A00),
+                                                                                Color.Transparent
+                                                                            ),
+                                                                            start = Offset(x = liquidSweep * 120f, y = 0f),
+                                                                            end = Offset(x = (liquidSweep + 0.8f) * 120f, y = 56f)
+                                                                        ),
+                                                                        shape = pillShape
+                                                                    )
+                                                                } else {
+                                                                    Modifier
+                                                                }
+                                                            )
+                                                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = if (isSelected) "$displayText ▴" else displayText,
+                                                            color = if (isSelected) Color(0xFFD9A49B) else customTextColor.copy(alpha = 0.68f),
+                                                            fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                            fontWeight = modeFontWeight,
+                                                            fontFamily = fontFamily,
+                                                            letterSpacing = modeLetterSpacing,
+                                                            maxLines = 1,
+                                                            softWrap = false
+                                                        )
+                                                    }
                                                 }
                                             }
                                             ModeSelectorStyle.MONO_TICKER -> {
