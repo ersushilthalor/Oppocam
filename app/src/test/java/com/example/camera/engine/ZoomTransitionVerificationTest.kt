@@ -699,14 +699,14 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testAllSixHoldDurationsApplyAtFortyMmSwitchPoint() = runBlocking {
+    fun testAllSevenHoldDurationsApplyAtFortyMmSwitchPoint() = runBlocking {
         val lenses = viewModel.engine.availableLenses.value
         val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
 
         if (uwLens != null && mainLens != null) {
-            val testValues = listOf(0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
-            val expectedMs = listOf(50L, 100L, 150L, 200L, 250L, 300L)
+            val testValues = listOf(0.0f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+            val expectedMs = listOf(0L, 50L, 100L, 150L, 200L, 250L, 300L)
             val switchPointMm = 40.0f
             val switchZoom = CameraOpticalCalibration.switchPointToZoom(switchPointMm)
 
