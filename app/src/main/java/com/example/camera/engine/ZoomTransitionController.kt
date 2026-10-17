@@ -330,7 +330,7 @@ class ZoomTransitionController(
 
                 val isTargetNearSwitch = abs(endZ - effectiveSwitchZoom) <= 0.08f || endZ <= effectiveSwitchZoom + 0.05f
 
-                if (!isTargetNearSwitch && endZ >= 1.5f) {
+                if (!isTargetNearSwitch && skipHoldAtSwitchPoint) {
                     // Keep a single easing curve across the physical lens boundary. The previous
                     // two-phase path eased to zero velocity at 1x, then restarted easing on Main,
                     // which looked like a zoom pause even when the preview crossfade was working.
@@ -483,8 +483,8 @@ class ZoomTransitionController(
                 // Keep the configured hold unchanged for 1x taps and all other transitions.
                 // Direct 2x/3x telephoto preset taps must never pause at the lens handoff,
                 // even if the caller forgets the skip flag. A deliberate 1x tap keeps its hold.
-                val isDirectTelephotoTarget = endZ >= 1.5f
-                val holdDuration = if (skipHoldAtSwitchPoint || isDirectTelephotoTarget) {
+                val isDirectTelephotoTarget = skipHoldAtSwitchPoint
+                val holdDuration = if (skipHoldAtSwitchPoint) {
                     0L
                 } else {
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
