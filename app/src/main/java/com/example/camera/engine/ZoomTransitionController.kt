@@ -56,8 +56,8 @@ class ZoomTransitionController(
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
         const val TOTAL_TRANSITION_DURATION_MS = 300L // Fixed duration of exactly 300ms (0.30s), never less
-        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 100L // 0.10 second default hold at exact 1x FOV before physical switch
-        const val HOLD_AT_ONE_X_DURATION_MS = 100L // Preserved for backwards compatibility
+        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 20L // 0.02 second default hold at exact 1x FOV before physical switch
+        const val HOLD_AT_ONE_X_DURATION_MS = 20L // Preserved for backwards compatibility
         const val MIN_HOLD_AT_ONE_X_DURATION_MS = 0L
         const val MAX_HOLD_AT_ONE_X_DURATION_MS = 300L
         const val DEFAULT_OVERLAP_DURATION_MS = 300L
@@ -66,6 +66,24 @@ class ZoomTransitionController(
         const val MAX_OVERLAP_DURATION_MS = 1000L
         private const val FRAME_HANDOFF_REQUIRED_FRAMES = 16
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
+
+        private fun isHalfXZoom(zoom: Float): Boolean = abs(zoom - 0.5f) < 0.025f
+
+        private fun isTelephotoPresetZoom(zoom: Float): Boolean =
+            abs(zoom - 2.0f) < 0.05f || abs(zoom - 3.0f) < 0.05f
+
+        /** True only for direct 0.5x -> 2x/3x preset-endpoint transitions. */
+        fun isHalfXToTelephotoPresetTransition(fromZoom: Float, targetZoom: Float): Boolean =
+            isHalfXZoom(fromZoom) && isTelephotoPresetZoom(targetZoom)
+
+        /** True only for direct 2x/3x -> 0.5x preset-endpoint transitions. */
+        fun isTelephotoPresetToHalfXTransition(fromZoom: Float, targetZoom: Float): Boolean =
+            isTelephotoPresetZoom(fromZoom) && isHalfXZoom(targetZoom)
+
+        /** Frame-based preview handoff is intentionally limited to 0.5x <-> 2x/3x. */
+        fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean =
+            isHalfXToTelephotoPresetTransition(fromZoom, targetZoom) ||
+                isTelephotoPresetToHalfXTransition(fromZoom, targetZoom)
     }
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
@@ -320,6 +338,7 @@ class ZoomTransitionController(
                 isCrossingOrAtSwitchPoint &&
                 ultraWideLens != null && mainWideLens != null &&
                 (targetLens == null || targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE || targetLens.lensType == LensType.TELEPHOTO || targetLens.lensType == LensType.TELEPHOTO_3X)
+            val isDirectHalfXToTelephotoPreset = isHalfXToTelephotoPresetTransition(startZ, endZ)
 
             if (isUltraWideToMainSwitch) {
                 // 1. Keep view on Ultra-Wide lens; digitally crop Ultra-Wide to the selected focal length (effectiveSwitchZoom)
@@ -330,7 +349,7 @@ class ZoomTransitionController(
 
                 val isTargetNearSwitch = abs(endZ - effectiveSwitchZoom) <= 0.08f || endZ <= effectiveSwitchZoom + 0.05f
 
-                if (!isTargetNearSwitch && skipHoldAtSwitchPoint) {
+                if (!isTargetNearSwitch && (skipHoldAtSwitchPoint || isDirectHalfXToTelephotoPreset)) {
                     // Keep a single easing curve across the physical lens boundary. The previous
                     // two-phase path eased to zero velocity at 1x, then restarted easing on Main,
                     // which looked like a zoom pause even when the preview crossfade was working.
@@ -338,7 +357,8 @@ class ZoomTransitionController(
                     var lastDispatchedZoom = startZ
                     var lastDispatchedTime = 0L
                     var mainLensSelected = false
-                    val useFrameBasedHandoff = isOverlapAnimationEnabled
+                    val useFrameBasedHandoff = isOverlapAnimationEnabled &&
+                        isFrameBasedHandoffEligible(startZ, endZ)
 
                     while (isActive) {
                         val now = SystemClock.uptimeMillis()
@@ -483,8 +503,8 @@ class ZoomTransitionController(
                 // Keep the configured hold unchanged for 1x taps and all other transitions.
                 // Direct 2x/3x telephoto preset taps must never pause at the lens handoff,
                 // even if the caller forgets the skip flag. A deliberate 1x tap keeps its hold.
-                val isDirectTelephotoTarget = skipHoldAtSwitchPoint
-                val holdDuration = if (skipHoldAtSwitchPoint) {
+                val isDirectTelephotoTarget = isDirectHalfXToTelephotoPreset
+                val holdDuration = if (skipHoldAtSwitchPoint || isDirectHalfXToTelephotoPreset) {
                     0L
                 } else {
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
@@ -607,6 +627,9 @@ class ZoomTransitionController(
             val startTime = SystemClock.uptimeMillis()
             var lastDispatchedZoom = startZ
             var lastDispatchedTime = 0L
+            val useReverseFrameBasedHandoff = isOverlapAnimationEnabled &&
+                isTelephotoPresetToHalfXTransition(startZ, endZ)
+            var reverseFrameBasedHandoffStarted = false
 
             // Move the slider in the background from startNorm to targetNorm over exactly 300ms (0.30s)
             while (isActive) {
@@ -622,6 +645,17 @@ class ZoomTransitionController(
                 // Calculate actual zoom level using the exact zoom slider logic
                 val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                 val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
+
+                // Arm the reverse handoff before the zoom update triggers the physical switch to Ultra-Wide.
+                // Only direct 2x/3x -> 0.5x transitions use frame-driven blending; 1x -> 0.5x stays untouched.
+                if (useReverseFrameBasedHandoff && !reverseFrameBasedHandoffStarted && currentZ < switchZoom - 0.005f) {
+                    beginFrameBasedHandoff(
+                        fromSource = PreviewStreamSource.MAIN,
+                        targetSource = PreviewStreamSource.ULTRAWIDE,
+                        scope = scope
+                    )
+                    reverseFrameBasedHandoffStarted = true
+                }
 
                 // Apply zoom through the camera controller slider handler (at ~60fps pacing)
                 if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
