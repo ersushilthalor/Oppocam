@@ -190,10 +190,6 @@ fun TopControlBar(
     isLogWindowOpen: Boolean = false,
     onLutClick: () -> Unit = {},
     isLutWindowOpen: Boolean = false,
-    stabilizationMode: VideoStabilizationMode = VideoStabilizationMode.EIS,
-    onStabilizationClick: () -> Unit = {},
-    isUltraStabilizationEnabled: Boolean = false,
-    isVideoStabilizationEnabled: Boolean = true,
     isQuickOptionsOpen: Boolean = false,
     onQuickOptionsToggle: () -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
@@ -727,26 +723,6 @@ fun TopControlBar(
             }
         }
 
-        val stabilizationButton = @Composable {
-            val isSteadyActive = isUltraStabilizationEnabled || isVideoStabilizationEnabled
-            IconButton(
-                onClick = onStabilizationClick,
-                modifier = Modifier
-                    .size(buttonSize)
-                    .topControlStyle(
-                        layoutConfig,
-                        activeColor = if (isSteadyActive) accentColor else null
-                    )
-                    .testTag("video_top_bar_stabilization_button")
-            ) {
-                Icon(
-                    imageVector = if (isUltraStabilizationEnabled) Icons.Filled.DirectionsRun else Icons.Outlined.Shield,
-                    contentDescription = if (isUltraStabilizationEnabled) "Ultra Action Steady: ON" else if (isSteadyActive) "Stabilization: EIS" else "Stabilization: OFF",
-                    tint = if (isSteadyActive) accentColor else Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.size(iconSize)
-                )
-            }
-        }
 
         @Composable
         fun RenderItem(item: TopControlItem) {
@@ -768,7 +744,6 @@ fun TopControlBar(
                     TopControlItem.LOG -> logButton()
                     TopControlItem.LUT -> lutButton()
                     TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
-                    TopControlItem.STABILIZATION -> { /* Removed: stabilization controls completely removed */ }
                     TopControlItem.EV -> evButton()
                     TopControlItem.PIPELINE -> pipelineButton()
                     TopControlItem.SIX_DOT_MENU -> sixDotMenuButton()
