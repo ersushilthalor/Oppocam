@@ -4786,6 +4786,8 @@ class Camera2Engine(private val context: Context) {
     private var lastCaptureResult: TotalCaptureResult? = null
 
     private var lastOisForceOffTimeMs = 0L
+    private var lastOisForceOnTimeMs = 0L
+    private var lastOisIgnoredWarningTimeMs = 0L
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -4797,16 +4799,52 @@ class Camera2Engine(private val context: Context) {
             lastCaptureResult = result
             CameraPerformanceMonitor.onPreviewFrame()
 
-            // Verify actual hardware OIS and EIS states directly from CaptureResult
+            // Verify OIS using the HAL's CaptureResult, not just the preference toggle.
             val actualOisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)
+            val requestedOisMode = request.get(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE)
             val isActualOisHwActive = (actualOisMode == CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_ON)
             if (_actualOisHardwareActive.value != isActualOisHwActive) {
                 _actualOisHardwareActive.value = isActualOisHwActive
                 Log.i(
                     TAG,
-                    "OIS HAL state changed: requested=${isOisAllowed}, actualMode=$actualOisMode, " +
+                    "OIS HAL state changed: preference=${isOisAllowed}, requestMode=$requestedOisMode, actualMode=$actualOisMode, " +
                         "activeCamera=${cameraDevice?.id}, physicalCamera=${activeSessionPhysicalCameraId ?: activeSessionLens?.physicalCameraId}, " +
                         "lens=${activeSessionLens?.cameraId ?: _selectedLens.value?.cameraId}"
+                )
+            }
+
+            val nowMs = android.os.SystemClock.uptimeMillis()
+            // A legacy request builder or a session transition can leave OIS OFF even after the
+            // user enables it. Repair the live repeating request once, without reopening camera.
+            if (isOisAllowed &&
+                requestedOisMode != CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON &&
+                isOisSupportedForActiveLens() &&
+                nowMs - lastOisForceOnTimeMs >= 500L
+            ) {
+                lastOisForceOnTimeMs = nowMs
+                try {
+                    synchronized(previewRequestLock) {
+                        previewRequestBuilder?.let { builder ->
+                            applyCommonSettings(builder)
+                            applyHardwareOisRequest(builder, oisAllowed = true)
+                            captureSession?.setRepeatingRequest(builder.build(), this, backgroundHandler)
+                        }
+                    }
+                    Log.w(TAG, "OIS self-heal: repeating request was not ON; re-applied native OIS ON")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "OIS self-heal request failed", t)
+                }
+            } else if (
+                isOisAllowed &&
+                requestedOisMode == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON &&
+                actualOisMode != CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_ON &&
+                nowMs - lastOisIgnoredWarningTimeMs >= 2000L
+            ) {
+                lastOisIgnoredWarningTimeMs = nowMs
+                Log.w(
+                    TAG,
+                    "OIS was requested ON but HAL reports actualMode=$actualOisMode; " +
+                        "check camera/lens OIS capability metadata and vendor HAL behavior"
                 )
             }
 
