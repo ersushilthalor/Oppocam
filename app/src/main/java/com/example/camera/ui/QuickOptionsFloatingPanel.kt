@@ -2,6 +2,7 @@ package com.example.camera.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -97,14 +98,24 @@ fun QuickOptionsFloatingPanel(
 
     AnimatedVisibility(
         visible = isOpen,
-        enter = fadeIn(animationSpec = tween(180)) + expandVertically(
-            expandFrom = Alignment.Top,
-            animationSpec = tween(220)
-        ),
-        exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(
-            shrinkTowards = Alignment.Top,
-            animationSpec = tween(180)
-        ),
+        enter = fadeIn(animationSpec = tween(170)) +
+            scaleIn(
+                initialScale = 0.80f,
+                animationSpec = spring(dampingRatio = 0.50f, stiffness = 420f)
+            ) +
+            expandVertically(
+                expandFrom = Alignment.Top,
+                animationSpec = spring(dampingRatio = 0.66f, stiffness = 360f)
+            ),
+        exit = fadeOut(animationSpec = tween(130)) +
+            scaleOut(
+                targetScale = 0.94f,
+                animationSpec = tween(130)
+            ) +
+            shrinkVertically(
+                shrinkTowards = Alignment.Top,
+                animationSpec = tween(160)
+            ),
         modifier = modifier
     ) {
         Box(
