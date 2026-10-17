@@ -664,24 +664,36 @@ fun BottomControlBar(
                             }
                         } else {
                             // Non-Pixel UI Templates: preserve original mode carousel behavior
-                            val modesToDisplay = remember(layoutConfig.visibleModes) {
-                                val filtered = layoutConfig.visibleModes.filter {
-                                    it == CameraMode.PHOTO || it == CameraMode.VIDEO || it == CameraMode.MORE
-                                }
-                                if (filtered.isEmpty()) {
-                                    listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE)
+                            val isOppoModeRail = layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL
+                            val modesToDisplay = remember(layoutConfig.visibleModes, isOppoModeRail) {
+                                if (isOppoModeRail) {
+                                    // Oppo's primary mode rail exposes Pro Video directly; More remains a separate mode.
+                                    listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.CINEMA, CameraMode.MORE)
                                 } else {
-                                    filtered
+                                    val filtered = layoutConfig.visibleModes.filter {
+                                        it == CameraMode.PHOTO || it == CameraMode.VIDEO || it == CameraMode.MORE
+                                    }
+                                    if (filtered.isEmpty()) {
+                                        listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE)
+                                    } else filtered
                                 }
                             }
 
-                            val isMoreModeActive = (cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.VIDEO)
+                            val isMoreModeActive = if (isOppoModeRail) {
+                                cameraMode == CameraMode.MORE
+                            } else {
+                                cameraMode != CameraMode.PHOTO && cameraMode != CameraMode.VIDEO
+                            }
 
-                            LaunchedEffect(cameraMode) {
-                                val targetMode = if (isMoreModeActive) CameraMode.MORE else cameraMode
+                            LaunchedEffect(cameraMode, isOppoModeRail) {
+                                val targetMode = when {
+                                    isOppoModeRail && cameraMode == CameraMode.CINEMA -> CameraMode.CINEMA
+                                    isMoreModeActive -> CameraMode.MORE
+                                    else -> cameraMode
+                                }
                                 val index = modesToDisplay.indexOf(targetMode)
                                 if (index >= 0) {
-                                    val itemEstimatedWidthPx = if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) 140 else 180
+                                    val itemEstimatedWidthPx = if (isOppoModeRail) 330 else if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) 140 else 180
                                     val targetScroll = (index * itemEstimatedWidthPx - 140).coerceAtLeast(0)
                                     modeScrollState.animateScrollTo(targetScroll)
                                 }
@@ -743,15 +755,12 @@ fun BottomControlBar(
                                         label = "modeTextColor"
                                     )
 
-                                    val rawName = if (
-                                        mode == CameraMode.MORE &&
-                                        isMoreModeActive &&
-                                        cameraMode != CameraMode.MORE &&
-                                        layoutConfig.modeSelectorStyle != ModeSelectorStyle.OPPO_PILL
-                                    ) {
-                                        cameraMode.name
-                                    } else {
-                                        mode.name
+                                    val rawName = when {
+                                        isOppoModeRail && mode == CameraMode.CINEMA -> "Pro Video"
+                                        mode == CameraMode.MORE && isMoreModeActive &&
+                                            cameraMode != CameraMode.MORE &&
+                                            layoutConfig.modeSelectorStyle != ModeSelectorStyle.OPPO_PILL -> cameraMode.name
+                                        else -> mode.name
                                     }
                                     val displayText = layoutConfig.formatModeText(rawName)
                                     val modeFontWeight = if (isSelected) layoutConfig.fontWeightOption.weight else FontWeight.Normal
@@ -766,6 +775,7 @@ fun BottomControlBar(
                                                     onModeSelected(mode)
                                                 }
                                             }
+                                            .then(if (isOppoModeRail) Modifier.width(90.dp) else Modifier)
                                             .padding(vertical = 4.dp, horizontal = 6.dp)
                                             .testTag("mode_${mode.name.lowercase()}"),
                                         horizontalAlignment = Alignment.CenterHorizontally
@@ -971,7 +981,7 @@ fun BottomControlBar(
                 }
 
                 // Render in accordance with modeSelectorPosition
-                if (layoutConfig.modeSelectorPosition == ModeSelectorPosition.ABOVE_SHUTTER) {
+                if (layoutConfig.modeSelectorPosition == ModeSelectorPosition.ABOVE_SHUTTER && layoutConfig.modeSelectorStyle != ModeSelectorStyle.OPPO_PILL) {
                     modeCarouselContent()
                     Spacer(modifier = Modifier.height(14.dp))
                     shutterRowContent()
