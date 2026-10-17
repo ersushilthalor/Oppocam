@@ -607,8 +607,6 @@ fun CameraScreen(
             videoResolution = selectedVideoResolution,
             videoFps = videoFps,
             isAudioEnabled = isAudioEnabled,
-            isVideoStabilizationEnabled = isVideoStabilizationEnabled,
-            isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             cinemaConfig = cinemaConfig,
             isEvOpen = isEvControlOpen,
@@ -705,8 +703,7 @@ fun CameraScreen(
                 isOpen = isVideoSettingsPanelOpen,
                 currentResolution = if (cameraMode == CameraMode.CINEMA) cinemaConfig.selectedResolution ?: selectedVideoResolution else selectedVideoResolution,
                 currentFps = if (cameraMode == CameraMode.CINEMA) cinemaConfig.videoFps else videoFps,
-                isUltraStabilizationEnabled = hybridStabilizationConfig.isUltraStabilizationEnabled,
-                supportedFpsProvider = { res -> viewModel.getSupportedFpsForResolution(res) },
+                    supportedFpsProvider = { res -> viewModel.getSupportedFpsForResolution(res) },
                 onResolutionSelected = { res ->
                     viewModel.selectVideoResolution(res)
                     if (cameraMode == CameraMode.CINEMA) {
