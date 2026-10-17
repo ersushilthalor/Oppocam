@@ -24,7 +24,7 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Preview layer state preserved for compatibility without overlap crossfade animation.
+ * Preview layer state for legacy overlap and frame-based lens handoff.
  */
 data class PreviewOverlapState(
     val isOverlapping: Boolean = false,
@@ -64,6 +64,8 @@ class ZoomTransitionController(
         const val PREVIEW_OVERLAP_DURATION_MS = 100L
         const val MIN_OVERLAP_DURATION_MS = 100L
         const val MAX_OVERLAP_DURATION_MS = 1000L
+        private const val FRAME_HANDOFF_REQUIRED_FRAMES = 4
+        private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
     }
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
@@ -79,6 +81,12 @@ class ZoomTransitionController(
     private val _previewOverlapState = MutableStateFlow(PreviewOverlapState())
     val previewOverlapState: StateFlow<PreviewOverlapState> = _previewOverlapState.asStateFlow()
 
+    // Keep the outgoing live preview visible until the incoming TextureView produces real frames.
+    // This handoff is independent of zoom interpolation, so crossing 1x never pauses zoom.
+    private var pendingFrameHandoffTarget: PreviewStreamSource? = null
+    private var frameHandoffFromSource: PreviewStreamSource? = null
+    private var frameHandoffFrameCount: Int = 0
+    private var frameHandoffTimeoutJob: Job? = null
     private var activeTransitionJob: Job? = null
 
     /**
@@ -134,6 +142,99 @@ class ZoomTransitionController(
             overlapProgress = 0.0f,
             topSource = if (isUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
         )
+    }
+
+    /**
+     * Keeps the outgoing live source visible while the target stream warms up, then blends
+     * when the target TextureView reports actual new buffers. Progress is frame-count based,
+     * rather than a timer that can fade to a camera which has not produced an image yet.
+     *
+     * The timeout is a fail-safe for devices that cannot produce a target frame callback.
+     */
+    fun beginFrameBasedHandoff(
+        fromSource: PreviewStreamSource,
+        targetSource: PreviewStreamSource,
+        scope: CoroutineScope
+    ) {
+        frameHandoffTimeoutJob?.cancel()
+        if (fromSource == targetSource) {
+            pendingFrameHandoffTarget = null
+            frameHandoffFromSource = null
+            setSteadyStatePreview(targetSource == PreviewStreamSource.ULTRAWIDE)
+            return
+        }
+
+        frameHandoffFromSource = fromSource
+        pendingFrameHandoffTarget = targetSource
+        frameHandoffFrameCount = 0
+        _previewOverlapState.value = PreviewOverlapState(
+            isOverlapping = true,
+            mainAlpha = if (fromSource == PreviewStreamSource.MAIN) 1f else 0f,
+            ultraWideAlpha = if (fromSource == PreviewStreamSource.ULTRAWIDE) 1f else 0f,
+            activeSource = targetSource,
+            overlapProgress = 0f,
+            topSource = fromSource
+        )
+
+        frameHandoffTimeoutJob = scope.launch {
+            delay(FRAME_HANDOFF_TIMEOUT_MS)
+            if (pendingFrameHandoffTarget == targetSource) {
+                // Prevent a permanently stale outgoing frame if the target stream fails.
+                pendingFrameHandoffTarget = null
+                frameHandoffFromSource = null
+                frameHandoffTimeoutJob = null
+                setSteadyStatePreview(targetSource == PreviewStreamSource.ULTRAWIDE)
+            }
+        }
+    }
+
+    /** Called when a preview TextureView receives a new buffer. */
+    fun onPreviewFrameAvailable(source: PreviewStreamSource) {
+        val targetSource = pendingFrameHandoffTarget ?: return
+        if (source != targetSource) return
+
+        frameHandoffFrameCount = (frameHandoffFrameCount + 1).coerceAtMost(FRAME_HANDOFF_REQUIRED_FRAMES)
+        val progress = frameHandoffFrameCount.toFloat() / FRAME_HANDOFF_REQUIRED_FRAMES.toFloat()
+        val mainAlpha = when (targetSource) {
+            PreviewStreamSource.MAIN -> progress
+            PreviewStreamSource.ULTRAWIDE -> 1f - progress
+        }.coerceIn(0f, 1f)
+        val ultraWideAlpha = when (targetSource) {
+            PreviewStreamSource.ULTRAWIDE -> progress
+            PreviewStreamSource.MAIN -> 1f - progress
+        }.coerceIn(0f, 1f)
+
+        _previewOverlapState.value = PreviewOverlapState(
+            isOverlapping = true,
+            mainAlpha = mainAlpha,
+            ultraWideAlpha = ultraWideAlpha,
+            activeSource = targetSource,
+            overlapProgress = progress,
+            topSource = targetSource
+        )
+
+        if (frameHandoffFrameCount >= FRAME_HANDOFF_REQUIRED_FRAMES) {
+            frameHandoffTimeoutJob?.cancel()
+            frameHandoffTimeoutJob = null
+            pendingFrameHandoffTarget = null
+            frameHandoffFromSource = null
+            setSteadyStatePreview(targetSource == PreviewStreamSource.ULTRAWIDE)
+        }
+    }
+
+    private fun cancelFrameBasedHandoff() {
+        val state = _previewOverlapState.value
+        val keepUltraWide = if (state.isOverlapping) {
+            state.ultraWideAlpha >= state.mainAlpha
+        } else {
+            state.activeSource == PreviewStreamSource.ULTRAWIDE
+        }
+        frameHandoffTimeoutJob?.cancel()
+        frameHandoffTimeoutJob = null
+        pendingFrameHandoffTarget = null
+        frameHandoffFromSource = null
+        frameHandoffFrameCount = 0
+        setSteadyStatePreview(keepUltraWide)
     }
 
     fun startPreviewOverlap(
@@ -292,51 +393,60 @@ class ZoomTransitionController(
                 }
 
                 val mainLensPreparedInOverlap = isOverlapAnimationEnabled && (holdDuration > 0L || isDirectTelephotoTarget)
+                var frameBasedHandoffStarted = false
                 if (mainLensPreparedInOverlap) {
-                    // Prepare the main lens while the Ultra-Wide layer remains visible. For direct
-                    // telephoto taps use a short crossfade instead of a dead stop at the handoff.
-                    onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
+                    if (isDirectTelephotoTarget) {
+                        // Start handoff before switching sources. The old UW frame stays visible;
+                        // new Main frames drive the crossfade while zoom interpolation continues.
+                        beginFrameBasedHandoff(
+                            fromSource = PreviewStreamSource.ULTRAWIDE,
+                            targetSource = PreviewStreamSource.MAIN,
+                            scope = scope
+                        )
+                        frameBasedHandoffStarted = true
+                        onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
+                    } else {
+                        // Keep the deliberately configured hold behavior for an explicit 1x tap.
+                        onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
-                    if (holdDuration > 0L) {
-                        val blendDurationMs = holdDuration
-                        val blendStartTime = SystemClock.uptimeMillis()
-                        while (isActive) {
-                            val now = SystemClock.uptimeMillis()
-                            val blendElapsed = now - blendStartTime
-                            if (blendElapsed >= blendDurationMs) break
-    
-                            val progress = (blendElapsed.toFloat() / blendDurationMs.toFloat()).coerceIn(0f, 1f)
-                            val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
-                            val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
-                            val mainAlpha = 1.0f
-    
-                            _previewOverlapState.value = PreviewOverlapState(
-                                isOverlapping = true,
-                                mainAlpha = mainAlpha,
-                                ultraWideAlpha = uwAlpha,
-                                activeSource = PreviewStreamSource.MAIN,
-                                overlapProgress = progress,
-                                topSource = PreviewStreamSource.ULTRAWIDE
-                            )
-    
-                            val nextTick = minOf(blendStartTime + blendDurationMs, now + 16L)
-                            val waitMs = nextTick - SystemClock.uptimeMillis()
-                            if (waitMs > 0) {
-                                delay(waitMs)
+                        if (holdDuration > 0L) {
+                            val blendDurationMs = holdDuration
+                            val blendStartTime = SystemClock.uptimeMillis()
+                            while (isActive) {
+                                val now = SystemClock.uptimeMillis()
+                                val blendElapsed = now - blendStartTime
+                                if (blendElapsed >= blendDurationMs) break
+
+                                val progress = (blendElapsed.toFloat() / blendDurationMs.toFloat()).coerceIn(0f, 1f)
+                                val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
+                                val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
+                                val mainAlpha = 1.0f
+
+                                _previewOverlapState.value = PreviewOverlapState(
+                                    isOverlapping = true,
+                                    mainAlpha = mainAlpha,
+                                    ultraWideAlpha = uwAlpha,
+                                    activeSource = PreviewStreamSource.MAIN,
+                                    overlapProgress = progress,
+                                    topSource = PreviewStreamSource.ULTRAWIDE
+                                )
+
+                                val nextTick = minOf(blendStartTime + blendDurationMs, now + 16L)
+                                val waitMs = nextTick - SystemClock.uptimeMillis()
+                                if (waitMs > 0) delay(waitMs)
                             }
                         }
                     }
                 } else {
-                    // Exact hold duration applied at selected switch point FOV
+                    // Exact hold duration applied at selected switch point FOV.
                     delay(holdDuration)
                 }
 
-                // 3. Finish the handoff. If overlap already activated the main lens, do not
-                // activate it a second time (that duplicate request causes the brief freeze).
+                // Avoid resetting the frame-driven overlap before target frames arrive.
                 if (!mainLensPreparedInOverlap) {
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, false)
                 }
-                setSteadyStatePreview(false)
+                if (!frameBasedHandoffStarted) setSteadyStatePreview(false)
 
                 if (isTargetNearSwitch) {
                     _currentInterpolatedZoom.value = endZ
@@ -443,7 +553,9 @@ class ZoomTransitionController(
             onZoomUpdate(endZ)
             onApplyZoomToEngine(endZ, true)
 
-            setSteadyStatePreview(!isFrontCamera && endZ < switchZoom)
+            if (pendingFrameHandoffTarget == null) {
+                setSteadyStatePreview(!isFrontCamera && endZ < switchZoom)
+            }
             _isTransitionActive.value = false
             activeTransitionJob = null
 
@@ -461,5 +573,6 @@ class ZoomTransitionController(
         activeTransitionJob?.cancel()
         activeTransitionJob = null
         _isTransitionActive.value = false
+        if (pendingFrameHandoffTarget != null) cancelFrameBasedHandoff()
     }
 }

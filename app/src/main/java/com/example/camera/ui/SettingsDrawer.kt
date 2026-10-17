@@ -2269,8 +2269,8 @@ private fun CameraLensSettingsPage(
 
         item {
             SettingsSwitchCard(
-                title = "Lens Switch Overlap Animation",
-                description = "Smoothly blend the cropped Ultra-Wide 1x preview into the native Main 1x preview using the selected hold duration, eliminating abrupt hold steps.",
+                title = "Frame-Based Lens Handoff",
+                description = "Keep the old preview visible while zoom continues. Blend into the target camera over its first four valid preview frames. OFF keeps the existing switch behavior.",
                 isChecked = isLensSwitchOverlapAnimationEnabled,
                 onCheckedChange = onLensSwitchOverlapAnimationToggle,
                 tag = "toggle_lens_switch_overlap_animation"
@@ -2370,9 +2370,9 @@ private fun LensSwitchHoldDurationSettingCard(
     val isDefault = kotlin.math.abs(roundedDuration - 0.10f) < 0.001f
     val displayValue = if (isOverlapAnimationEnabled) {
         if (isDefault) {
-            String.format(java.util.Locale.US, "%.2f sec (Default • Overlap Blend)", roundedDuration)
+            String.format(java.util.Locale.US, "%.2f sec (Default • Fallback)", roundedDuration)
         } else {
-            String.format(java.util.Locale.US, "%.2f sec (Overlap Blend)", roundedDuration)
+            String.format(java.util.Locale.US, "%.2f sec (Fallback)", roundedDuration)
         }
     } else {
         if (isDefault) {
@@ -2437,7 +2437,7 @@ private fun LensSwitchHoldDurationSettingCard(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (isOverlapAnimationEnabled) {
-                                "Duration used for the Overlap Animation. Smoothly blends cropped Ultra-Wide into native Main lens over this exact duration."
+                                "Fallback hold time. When Frame-Based Lens Handoff is on, the blend follows the target camera's first four valid frames."
                             } else {
                                 "Hold duration at the selected switch point field of view on the Ultra-Wide lens before switching to the Main lens."
                             },
@@ -2464,7 +2464,7 @@ private fun LensSwitchHoldDurationSettingCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (isOverlapAnimationEnabled) "Animation Duration" else "Current Hold Time",
+                        text = if (isOverlapAnimationEnabled) "Fallback Hold Time" else "Current Hold Time",
                         color = Color.White.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )

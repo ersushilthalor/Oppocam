@@ -203,6 +203,11 @@ class Camera2Engine(private val context: Context) {
         preferences.isLensSwitchOverlapAnimationEnabled = enabled
     }
 
+    /** Route actual TextureView buffer updates to the frame-based lens handoff controller. */
+    fun onPreviewFrameAvailable(source: PreviewStreamSource) {
+        zoomTransitionController.onPreviewFrameAvailable(source)
+    }
+
     @Volatile
     private var ultraWideViewfinderSurfaceTexture: SurfaceTexture? = null
     @Volatile

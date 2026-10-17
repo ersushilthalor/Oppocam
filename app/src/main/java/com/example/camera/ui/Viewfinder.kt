@@ -114,6 +114,7 @@ fun Viewfinder(
     ),
     onUltraWideSurfaceTextureAvailable: ((SurfaceTexture?, Int, Int) -> Unit)? = null,
     onUltraWideSurfaceTextureSizeChanged: ((SurfaceTexture, Int, Int) -> Unit)? = null,
+    onPreviewFrameAvailable: ((com.example.camera.engine.PreviewStreamSource) -> Unit)? = null,
     onTapToFocus: (Offset, Float, Float) -> Unit,
     onZoomChange: (Float) -> Unit,
     currentZoom: Float = 1.0f,
@@ -407,6 +408,7 @@ fun Viewfinder(
                                     return true
                                 }
                                 override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+                                    onPreviewFrameAvailable?.invoke(com.example.camera.engine.PreviewStreamSource.MAIN)
                                     if (currentIsUsingUltraWideSurface) return
 
                                     val modeNow = currentCameraMode
@@ -549,6 +551,7 @@ fun Viewfinder(
                                     }
 
                                     override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+                                        onPreviewFrameAvailable?.invoke(com.example.camera.engine.PreviewStreamSource.ULTRAWIDE)
                                         if (!currentIsUsingUltraWideSurface) return
 
                                         val modeNow = currentCameraMode
