@@ -16,10 +16,6 @@ enum class UiTemplateType(
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
     IPHONE("iPhone (iOS)", "Clean, minimal Apple iPhone layout with yellow accents & top pill indicators", "#FFD54F"),
     VIVO("Vivo OriginOS", "Vivo OriginOS/Funtouch camera layout with circular icons, gimbal cues & vivid shutter ring", "#FF7043"),
-    MINIMAL_PRO("Minimal Pro / Leica", "Monochrome precision layout with live EV telemetry, exposure dial & red dot trigger", "#E53935"),
-    FUTURISTIC_GLASS("Cyber Glass HUD", "Frosted glowing glass pods, cyber brackets, digital gyro & holographic ring", "#00E5FF"),
-    DSLR_PRO("DSLR Mirrorless", "Pro camera OLED info band, tactical ISO/WB micro-dials & knurled metal shutter", "#FFB300"),
-    IMMERSIVE_EDGE("Immersive Edge-Control", "Ultra-clean full-screen preview with dual edge sliders & floating thumb shutter", "#69F0AE"),
     CUSTOM("Custom UI", "Completely personalized layout, spacing, typography & controls", "#64B5F6")
 }
 
@@ -668,90 +664,6 @@ object CameraUiTemplates {
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
                 iconContainerOpacity = 0.0f,
                 iconStrokeWidthDp = 1.6f
-            )
-            UiTemplateType.MINIMAL_PRO -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.MONO_TICKER,
-                shutterStyle = ShutterStyle.LEICA_RED_DOT,
-                shutterSizeDp = 76,
-                shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 48,
-                galleryThumbSizeDp = 48,
-                topControlsIconSizeDp = 18,
-                topControlsSpacingDp = 16,
-                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#E53935",
-                modeTextSizeSp = 12.0f,
-                modeFontFamily = FontFamilyOption.MONOSPACE,
-                topPaddingDp = 8,
-                bottomPaddingDp = 12,
-                showZoomCapsule = true,
-                zoomCapsuleScale = 0.92f,
-                zoomCapsuleVerticalOffsetDp = 4,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
-            )
-            UiTemplateType.FUTURISTIC_GLASS -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.CYBER_GLOW,
-                shutterStyle = ShutterStyle.CYBER_HOLO,
-                shutterSizeDp = 86,
-                shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 56,
-                galleryThumbSizeDp = 56,
-                topControlsIconSizeDp = 20,
-                topControlsSpacingDp = 20,
-                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#00E5FF",
-                modeTextSizeSp = 13.5f,
-                modeFontFamily = FontFamilyOption.MONOSPACE,
-                topPaddingDp = 12,
-                bottomPaddingDp = 14,
-                showZoomCapsule = true,
-                zoomCapsuleScale = 1.05f,
-                zoomCapsuleVerticalOffsetDp = -2,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
-            )
-            UiTemplateType.DSLR_PRO -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.DSLR_DIAL,
-                shutterStyle = ShutterStyle.DSLR_KNURLED,
-                shutterSizeDp = 88,
-                shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 54,
-                galleryThumbSizeDp = 54,
-                topControlsIconSizeDp = 18,
-                topControlsSpacingDp = 14,
-                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#FFB300",
-                modeTextSizeSp = 12.5f,
-                modeFontFamily = FontFamilyOption.MONOSPACE,
-                topPaddingDp = 8,
-                bottomPaddingDp = 16,
-                showZoomCapsule = true,
-                zoomCapsuleScale = 0.95f,
-                zoomCapsuleVerticalOffsetDp = 0,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
-            )
-            UiTemplateType.IMMERSIVE_EDGE -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
-                shutterStyle = ShutterStyle.MINIMAL_ACCENT,
-                shutterSizeDp = 78,
-                shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 48,
-                galleryThumbSizeDp = 48,
-                topControlsIconSizeDp = 18,
-                topControlsSpacingDp = 16,
-                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#69F0AE",
-                modeTextSizeSp = 12.5f,
-                modeFontFamily = FontFamilyOption.ROUNDED,
-                topPaddingDp = 6,
-                bottomPaddingDp = 8,
-                showZoomCapsule = false,
-                zoomCapsuleScale = 1.0f,
-                zoomCapsuleVerticalOffsetDp = 0,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
             )
             UiTemplateType.IPHONE -> ModeLayoutConfig(
                 modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
