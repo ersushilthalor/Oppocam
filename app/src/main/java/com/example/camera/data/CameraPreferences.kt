@@ -56,10 +56,10 @@ class CameraPreferences(context: Context) {
         const val MAX_LENS_SWITCH_OVERLAP_DURATION_SEC = 1.0f
         const val STEP_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.1f
         private const val KEY_LENS_SWITCH_HOLD_DURATION_SEC = "pref_lens_switch_hold_duration_sec"
-        const val DEFAULT_LENS_SWITCH_HOLD_DURATION_SEC = 0.10f
+        const val DEFAULT_LENS_SWITCH_HOLD_DURATION_SEC = 0.02f
         const val MIN_LENS_SWITCH_HOLD_DURATION_SEC = 0.0f
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
-        const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
+        const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.01f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
         private const val KEY_EIS_REMOVED_MIGRATION = "pref_eis_removed_migration_v2"
     }
@@ -90,11 +90,11 @@ class CameraPreferences(context: Context) {
                 DEFAULT_LENS_SWITCH_HOLD_DURATION_SEC
             )
             val clamped = raw.coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
-            return (Math.round(clamped * 20f) / 20f).coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
+            return (Math.round(clamped * 100f) / 100f).coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
         }
         set(value) {
             val clamped = value.coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
-            val rounded = (Math.round(clamped * 20f) / 20f).coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
+            val rounded = (Math.round(clamped * 100f) / 100f).coerceIn(MIN_LENS_SWITCH_HOLD_DURATION_SEC, MAX_LENS_SWITCH_HOLD_DURATION_SEC)
             prefs.edit().putFloat(KEY_LENS_SWITCH_HOLD_DURATION_SEC, rounded).apply()
         }
 
