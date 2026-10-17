@@ -3517,13 +3517,6 @@ private fun UiLayoutSettingsPage(
                         }
                     )
                     FloatingContentToggleRow(
-                        label = "Video Stabilization Mode",
-                        checked = floatingWindowAppearance.showVideoStabilization,
-                        onCheckedChange = {
-                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showVideoStabilization = it))
-                        }
-                    )
-                    FloatingContentToggleRow(
                         label = "Video Color & Tone Sliders",
                         checked = floatingWindowAppearance.showVideoAdjustmentsColorTone,
                         onCheckedChange = {
@@ -3571,13 +3564,6 @@ private fun UiLayoutSettingsPage(
                         checked = floatingWindowAppearance.showCinemaResolutionFps,
                         onCheckedChange = {
                             onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaResolutionFps = it))
-                        }
-                    )
-                    FloatingContentToggleRow(
-                        label = "Pro Video Gimbal & Stabilization",
-                        checked = floatingWindowAppearance.showCinemaStabilization,
-                        onCheckedChange = {
-                            onFloatingWindowAppearanceChange(floatingWindowAppearance.copy(showCinemaStabilization = it))
                         }
                     )
                     FloatingContentToggleRow(
