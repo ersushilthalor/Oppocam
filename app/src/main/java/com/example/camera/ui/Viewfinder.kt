@@ -66,6 +66,7 @@ import com.example.camera.model.CinematicLut
 import com.example.camera.model.GridType
 import com.example.camera.model.LogBitDepth
 import com.example.camera.model.PhotoFilter
+import com.example.camera.model.UiTemplateType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -73,6 +74,16 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+/**
+ * Video mode in OPPO and One UI uses a full-screen preview viewport, as native camera apps do.
+ * The recording stream's 9:16 output ratio is independent of this on-screen viewport.
+ */
+internal fun shouldUseFullScreenVideoViewfinder(
+    templateType: UiTemplateType,
+    cameraMode: CameraMode
+): Boolean = cameraMode == CameraMode.VIDEO &&
+    (templateType == UiTemplateType.OPPO || templateType == UiTemplateType.SAMSUNG)
 
 @Composable
 fun Viewfinder(
@@ -83,6 +94,7 @@ fun Viewfinder(
     isAfLocked: Boolean,
     isFrontCamera: Boolean = false,
     cameraMode: CameraMode = CameraMode.PHOTO,
+    uiTemplateType: UiTemplateType = UiTemplateType.CUSTOM,
     previewBufferSize: CameraSize? = null,
     /** Buffer geometry for the main/front TextureView stream. */
     mainPreviewBufferSize: CameraSize? = null,
@@ -184,10 +196,15 @@ fun Viewfinder(
         } else {
             mainPreviewBufferSize ?: previewBufferSize
         }
+        // OPPO and One UI video previews fill the screen like the native camera UI.
+        // Crop to the actual on-screen viewport ratio (never stretch); recording remains 9:16.
+        val transformTargetRatio = if (shouldUseFullScreenVideoViewfinder(uiTemplateType, cameraMode)) {
+            viewH.toFloat() / viewW.toFloat()
+        } else targetRatioCalc
         updateTextureViewTransform(
             textureView = tv,
             previewBufferSize = transformBufferSize,
-            targetRatio = targetRatioCalc,
+            targetRatio = transformTargetRatio,
             sensorOrientation = sensorOrientation,
             viewWidth = viewW,
             viewHeight = viewH,
@@ -205,6 +222,8 @@ fun Viewfinder(
         ultraWidePreviewBufferSize,
         targetRatioCalc,
         cameraMode,
+        uiTemplateType,
+        shouldUseFullScreenVideoViewfinder(uiTemplateType, cameraMode),
         sensorOrientation,
         isUsingUltraWideSurface
     ) {
@@ -283,14 +302,21 @@ fun Viewfinder(
         // In portrait orientation, viewfinder always spans 100% full screen width (no side black bars),
         // matching native Google Pixel and Samsung Camera layouts.
         val isLandscapeContainer = containerWidth > containerHeight
-        val (targetWidth, targetHeight) = if (isLandscapeContainer) {
-            val h = containerHeight
-            val w = (h * targetRatio).coerceAtMost(containerWidth)
-            w to h
-        } else {
-            val w = containerWidth
-            val h = w * targetRatio
-            w to h
+        val fillsVideoViewport = shouldUseFullScreenVideoViewfinder(uiTemplateType, cameraMode)
+        val (targetWidth, targetHeight) = when {
+            // The device-native OPPO/One UI video preview fills the entire screen; the camera
+            // transform center-crops it to the viewport while the recording output stays 9:16.
+            fillsVideoViewport -> containerWidth to containerHeight
+            isLandscapeContainer -> {
+                val h = containerHeight
+                val w = (h * targetRatio).coerceAtMost(containerWidth)
+                w to h
+            }
+            else -> {
+                val w = containerWidth
+                val h = w * targetRatio
+                w to h
+            }
         }
 
         Box(
