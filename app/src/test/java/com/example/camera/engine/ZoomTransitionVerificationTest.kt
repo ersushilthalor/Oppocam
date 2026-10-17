@@ -763,4 +763,145 @@ class ZoomTransitionVerificationTest {
             }
         }
     }
+
+    @Test
+    fun testDirectTelephotoTargetTwoXPassesThroughOneXWithoutPause() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val appliedZooms = mutableListOf<Float>()
+            var switchedLens: LensInfo? = null
+            var switchTime = -1L
+            val startTime = android.os.SystemClock.uptimeMillis()
+
+            val controller = ZoomTransitionController(
+                onApplyZoomToEngine = { zoom, _ ->
+                    appliedZooms.add(zoom)
+                },
+                onSelectLensOnEngine = { lens, _, _ ->
+                    switchedLens = lens
+                    switchTime = android.os.SystemClock.uptimeMillis()
+                }
+            )
+
+            // Configure hold duration to 200ms
+            controller.holdAtOneXDurationMs = 200L
+
+            val job = controller.startTransition(
+                fromZoom = 0.5f,
+                targetZoom = 2.0f,
+                targetLens = mainLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = uwLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 60L,
+                skipHoldAtSwitchPoint = true,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+
+            job.join()
+            val totalTime = android.os.SystemClock.uptimeMillis() - startTime
+
+            // Must reach target 2.0x
+            assertEquals(2.0f, controller.currentInterpolatedZoom.value, 0.01f)
+            assertNotNull("Main lens must be switched", switchedLens)
+            assertEquals("Switched lens must be Main lens", mainLens.id, switchedLens?.id)
+
+            // The total time must NOT include the 200ms hold at 1x
+            assertTrue(
+                "Transition to 2x must pass through without 200ms hold (total took ${totalTime}ms)",
+                totalTime < 180L
+            )
+        }
+    }
+
+    @Test
+    fun testDirectTelephotoTargetThreeXPassesThroughOneXWithoutPause() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val appliedZooms = mutableListOf<Float>()
+            var switchedLens: LensInfo? = null
+            val startTime = android.os.SystemClock.uptimeMillis()
+
+            val controller = ZoomTransitionController(
+                onApplyZoomToEngine = { zoom, _ ->
+                    appliedZooms.add(zoom)
+                },
+                onSelectLensOnEngine = { lens, _, _ ->
+                    switchedLens = lens
+                }
+            )
+
+            controller.holdAtOneXDurationMs = 250L
+
+            val job = controller.startTransition(
+                fromZoom = 0.5f,
+                targetZoom = 3.0f,
+                targetLens = mainLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = uwLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 60L,
+                skipHoldAtSwitchPoint = true,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+
+            job.join()
+            val totalTime = android.os.SystemClock.uptimeMillis() - startTime
+
+            assertEquals(3.0f, controller.currentInterpolatedZoom.value, 0.01f)
+            assertEquals("Switched lens must be Main lens", mainLens.id, switchedLens?.id)
+            assertTrue("Total time must not include 250ms hold (took ${totalTime}ms)", totalTime < 200L)
+        }
+    }
+
+    @Test
+    fun testNoDuplicateZoomDispatchAtSwitchBoundary() = runBlocking {
+        val lenses = viewModel.engine.availableLenses.value
+        val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
+        val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
+
+        if (uwLens != null && mainLens != null) {
+            val dispatches = mutableListOf<Float>()
+
+            val controller = ZoomTransitionController(
+                onApplyZoomToEngine = { zoom, _ ->
+                    dispatches.add(zoom)
+                },
+                onSelectLensOnEngine = { _, _, _ -> }
+            )
+
+            val job = controller.startTransition(
+                fromZoom = 0.5f,
+                targetZoom = 2.0f,
+                targetLens = mainLens,
+                availableLenses = listOf(uwLens, mainLens),
+                currentLens = uwLens,
+                switchPointMm = 23.0f,
+                scope = this,
+                durationMs = 60L,
+                skipHoldAtSwitchPoint = true,
+                onZoomUpdate = {},
+                onComplete = { _, _ -> }
+            )
+
+            job.join()
+
+            // Verify that consecutive identical dispatches do not occur
+            for (i in 0 until dispatches.size - 1) {
+                val z1 = dispatches[i]
+                val z2 = dispatches[i + 1]
+                assertFalse("Duplicate dispatch of $z1 at index $i", z1 == z2)
+            }
+        }
+    }
 }

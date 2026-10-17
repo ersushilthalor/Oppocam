@@ -412,6 +412,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         showToast("Custom Zoom Presets Updated")
     }
 
+    val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
+
+    fun setLensSwitchPointMm(pointMm: Float) {
+        engine.setLensSwitchPointMm(pointMm)
+        refreshActiveZoomPresets()
+    }
+
+    private val _includeLensSwitchPointsInPresets = MutableStateFlow(preferences.isIncludeLensSwitchPointsInPresets)
+    val includeLensSwitchPointsInPresets: StateFlow<Boolean> = _includeLensSwitchPointsInPresets.asStateFlow()
+
+    fun setIncludeLensSwitchPointsInPresets(include: Boolean) {
+        _includeLensSwitchPointsInPresets.value = include
+        preferences.isIncludeLensSwitchPointsInPresets = include
+        refreshActiveZoomPresets()
+    }
+
     fun refreshActiveZoomPresets() {
         val currentLens = engine.selectedLens.value ?: engine.availableLenses.value.firstOrNull()
         val isFront = currentLens?.facing == CameraCharacteristics.LENS_FACING_FRONT ||
@@ -423,7 +439,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val lenses = engine.availableLenses.value
         val hasUW = lenses.any { it.lensType == LensType.ULTRAWIDE }
-        _activeZoomPresets.value = preferences.getEffectiveZoomPresets(hasUltraWide = hasUW)
+        _activeZoomPresets.value = preferences.getEffectiveZoomPresets(
+            hasUltraWide = hasUW,
+            includeSwitchPoint = _includeLensSwitchPointsInPresets.value,
+            switchPointMm = engine.lensSwitchPointMm.value
+        )
     }
 
     fun setRefocusPhotoEnabled(enabled: Boolean) {

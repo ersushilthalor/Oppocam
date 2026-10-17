@@ -309,6 +309,7 @@ class CinemaEngine(private val context: Context) {
             CinemaColorProfile.S_LOG,
             CinemaColorProfile.N_LOG,
             CinemaColorProfile.HLG10,
+            CinemaColorProfile.HLG_2,
             CinemaColorProfile.APPLE_LOG_2,
             CinemaColorProfile.D_LOG_2,
             CinemaColorProfile.SAMSUNG_APV_LOG,
@@ -425,7 +426,7 @@ class CinemaEngine(private val context: Context) {
                     CinemaColorProfile.NATIVE -> 2.2f
                     CinemaColorProfile.S_LOG -> 1.62f
                     CinemaColorProfile.N_LOG -> 1.68f
-                    CinemaColorProfile.HLG10 -> 2.2f
+                    CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> 2.2f
                     CinemaColorProfile.APPLE_LOG_2 -> 1.60f
                     CinemaColorProfile.D_LOG_2 -> 1.62f
                     CinemaColorProfile.SAMSUNG_APV_LOG -> 1.65f
@@ -793,6 +794,20 @@ class CinemaEngine(private val context: Context) {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR OETF Transfer Function:
                 Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
             }
+            CinemaColorProfile.HLG_2 -> {
+                // ARIB STD-B67 Hybrid Log-Gamma 2 profile with Rec.709-like natural midtones and extended highlight latitude:
+                if (inVal < 0.018f) {
+                    (4.5f * inVal).coerceIn(0f, 1f)
+                } else if (inVal < 0.18f) {
+                    (1.099f * inVal.pow(0.45f) - 0.099f).coerceIn(0f, 1f)
+                } else {
+                    val recAt018 = 1.099f * 0.18f.pow(0.45f) - 0.099f
+                    val hlgVal = Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
+                    val hlgAt018 = Hlg10AutoExposureEngine.evaluateAribOetf(0.18f)
+                    val hlgNormalized = (hlgVal - hlgAt018) / (1.0f - hlgAt018)
+                    (recAt018 + (1.0f - recAt018) * hlgNormalized).coerceIn(0f, 1f)
+                }
+            }
             CinemaColorProfile.APPLE_LOG_2 -> {
                 // Official Apple Log 2 transfer function specification:
                 if (inVal >= 0.999f) {
@@ -905,7 +920,7 @@ class CinemaEngine(private val context: Context) {
         val profileSatMultiplier = when (profile) {
             CinemaColorProfile.PROCESSED_JPEG -> 1.16f // Rich natural saturation for smartphone photo rendering
             CinemaColorProfile.NATIVE -> 1.0f
-            CinemaColorProfile.HLG10 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
+            CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
             CinemaColorProfile.S_LOG -> 0.90f // Authentic Sony S-Log wide-gamut baseline
             CinemaColorProfile.N_LOG -> 0.92f // Authentic Nikon N-Log baseline
             CinemaColorProfile.APPLE_LOG_2 -> 0.88f // Flat wide-gamut baseline for grading headroom

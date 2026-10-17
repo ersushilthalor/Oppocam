@@ -70,6 +70,7 @@ enum class CinemaColorProfile(
     S_LOG("S-Log", "Original authentic Sony S-Log wide dynamic range logarithmic transfer curve", "S-Log"),
     N_LOG("N-Log", "Original authentic Nikon N-Log 12-stop transfer curve with balanced shadow-to-highlight roll-off", "N-Log"),
     HLG10("HLG10", "ARIB STD-B67 / ITU-R BT.2100 10-bit Hybrid Log-Gamma HDR profile with Rec.2020 wide color gamut", "HLG10"),
+    HLG_2("HLG 2", "ARIB STD-B67 Hybrid Log-Gamma 2 profile with extended highlight latitude", "HLG 2"),
     APPLE_LOG_2("Apple Log 2", "Apple Log 2 wide-gamut log transfer curve with extended highlight latitude and parabolic shadow retention", "Apple Log 2"),
     D_LOG_2("D-Log 2", "DJI D-Log 2 wide dynamic range logarithmic transfer curve with balanced exposure, preserved highlight/shadow latitude, neutral colorimetry, and flat grading profile", "D-Log 2"),
     SAMSUNG_APV_LOG("Samsung APV Log", "Samsung Advanced Professional Video (APV) Log profile with high-efficiency mastering curve, wide dynamic range, and clean shadow-to-highlight roll-off", "Samsung APV Log"),
@@ -219,7 +220,14 @@ data class CinemaHardwareCapabilities(
     val supportedCodecs: List<CinemaCodec> = listOf(CinemaCodec.H265, CinemaCodec.H264),
     val supportedColorProfiles: List<CinemaColorProfile> = listOf(
         CinemaColorProfile.NATIVE,
-        CinemaColorProfile.HLG10
+        CinemaColorProfile.S_LOG,
+        CinemaColorProfile.N_LOG,
+        CinemaColorProfile.HLG10,
+        CinemaColorProfile.HLG_2,
+        CinemaColorProfile.APPLE_LOG_2,
+        CinemaColorProfile.D_LOG_2,
+        CinemaColorProfile.SAMSUNG_APV_LOG,
+        CinemaColorProfile.PROCESSED_JPEG
     )
 ) {
     /**

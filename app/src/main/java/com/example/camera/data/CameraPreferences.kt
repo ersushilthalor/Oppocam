@@ -130,10 +130,24 @@ class CameraPreferences(context: Context) {
         get() = prefs.getString(KEY_CUSTOM_ZOOM_PRESETS, "1x, 2x, 4x, 8x") ?: "1x, 2x, 4x, 8x"
         set(value) = prefs.edit().putString(KEY_CUSTOM_ZOOM_PRESETS, value).apply()
 
+    var isIncludeLensSwitchPointsInPresets: Boolean
+        get() = prefs.getBoolean("include_lens_switch_points_in_presets", false)
+        set(value) = prefs.edit().putBoolean("include_lens_switch_points_in_presets", value).apply()
+
+    var lensSwitchPointMm: Float
+        get() = prefs.getFloat("lens_switch_point_mm", com.example.camera.engine.CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM)
+            .coerceIn(com.example.camera.engine.CameraOpticalCalibration.MIN_SWITCH_POINT_MM, com.example.camera.engine.CameraOpticalCalibration.MAX_SWITCH_POINT_MM)
+        set(value) {
+            val clamped = value.coerceIn(com.example.camera.engine.CameraOpticalCalibration.MIN_SWITCH_POINT_MM, com.example.camera.engine.CameraOpticalCalibration.MAX_SWITCH_POINT_MM)
+            prefs.edit().putFloat("lens_switch_point_mm", clamped).apply()
+        }
+
     fun getEffectiveZoomPresets(
-        hasUltraWide: Boolean
+        hasUltraWide: Boolean,
+        includeSwitchPoint: Boolean = isIncludeLensSwitchPointsInPresets,
+        switchPointMm: Float = lensSwitchPointMm
     ): List<Float> {
-        return when (zoomPresetsMode) {
+        val base = when (zoomPresetsMode) {
             "POWERS_OF_TWO" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 4.0f, 8.0f) else listOf(1.0f, 2.0f, 4.0f, 8.0f)
             "CINEMATIC" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 6.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 6.0f, 10.0f)
             "CUSTOM" -> {
@@ -147,6 +161,13 @@ class CameraPreferences(context: Context) {
             }
             else -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f) else listOf(1.0f, 2.0f, 3.0f)
         }
+        if (includeSwitchPoint && switchPointMm > 23.0f) {
+            val switchZoom = (kotlin.math.round((switchPointMm / 23.0f) * 10f) / 10f)
+            if (!base.contains(switchZoom)) {
+                return (base + switchZoom).distinct().sorted()
+            }
+        }
+        return base
     }
 
     var preferredGalleryPackage: String?
