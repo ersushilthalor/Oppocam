@@ -91,7 +91,7 @@ fun CameraUiCustomizationView(
         )
 
         // Ready-made Templates Cards
-        UiTemplateType.entries.forEach { template ->
+        listOf(UiTemplateType.OPPO, UiTemplateType.SAMSUNG, UiTemplateType.CUSTOM).forEach { template ->
             val isSelected = uiState.selectedTemplate == template
             val accentColor = try {
                 Color(android.graphics.Color.parseColor(template.accentHex))
@@ -1980,14 +1980,6 @@ fun ResetAndRestoreEditor(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Button(
-                onClick = { onResetAllToTemplate(UiTemplateType.IPHONE) },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222838)),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("iPhone Style", fontSize = 12.sp, color = Color.White)
-            }
-            Button(
                 onClick = { onResetAllToTemplate(UiTemplateType.SAMSUNG) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222838)),
                 shape = RoundedCornerShape(10.dp),
@@ -1995,15 +1987,6 @@ fun ResetAndRestoreEditor(
             ) {
                 Text("Samsung Style", fontSize = 12.sp, color = Color.White)
             }
-        }
-
-        Button(
-            onClick = { onResetAllToTemplate(UiTemplateType.VIVO) },
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222838)),
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Vivo Style", fontSize = 12.sp, color = Color.White)
         }
 
         Button(
