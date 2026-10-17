@@ -61,24 +61,24 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testSinusoidalEaseInOutTimingProfile300ms() {
+    fun testSinusoidalEaseInOutTimingProfile400ms() {
         val stepCount = 50
         val durationMs = ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS.toDouble()
-        assertEquals(300.0, durationMs, 0.001)
+        assertEquals(400.0, durationMs, 0.001)
 
         val controller = ZoomTransitionController()
-        val targetElapsedMs = controller.calculateSinusoidalElapsedTimestamps(stepCount, 300L)
+        val targetElapsedMs = controller.calculateSinusoidalElapsedTimestamps(stepCount, 400L)
 
-        // Verify start and finish timing: exactly 0ms and 300ms
+        // Verify start and finish timing: exactly 0ms and 400ms
         assertEquals(0L, targetElapsedMs[0])
-        assertEquals(300L, targetElapsedMs[stepCount])
+        assertEquals(400L, targetElapsedMs[stepCount])
 
-        // Verify middle timing (at 50% progress, exactly 150ms)
-        assertEquals(150L, targetElapsedMs[25])
+        // Verify middle timing (at 50% progress, exactly 200ms)
+        assertEquals(200L, targetElapsedMs[25])
 
         // Verify slow start (ease-in)
         val firstStepDuration = targetElapsedMs[1] - targetElapsedMs[0]
-        assertTrue("Start should be slow (~25-30ms), was $firstStepDuration", firstStepDuration in 20..35)
+        assertTrue("Start should be slow (~35-40ms), was $firstStepDuration", firstStepDuration in 30..45)
 
         // Verify faster middle
         val middleStepDuration = targetElapsedMs[25] - targetElapsedMs[24]
@@ -86,7 +86,7 @@ class ZoomTransitionVerificationTest {
 
         // Verify slow finish (ease-out)
         val lastStepDuration = targetElapsedMs[50] - targetElapsedMs[49]
-        assertTrue("Finish should be slow (~25-30ms), was $lastStepDuration", lastStepDuration in 20..35)
+        assertTrue("Finish should be slow (~35-40ms), was $lastStepDuration", lastStepDuration in 30..45)
 
         // Verify strictly monotonic timestamps across all 50 intervals
         for (i in 0 until stepCount) {
@@ -259,23 +259,23 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testFixed300msDurationAcrossArbitraryZoomValues() {
-        // Duration must be strictly 300ms (0.30 seconds), never less
-        assertEquals(300L, ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS)
+    fun testFixed400msDurationAcrossArbitraryZoomValues() {
+        // Duration must be strictly 400ms (0.40 seconds), never less
+        assertEquals(400L, ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS)
 
         val controller = ZoomTransitionController()
-        val timestamps1xTo2x = controller.calculateSinusoidalElapsedTimestamps(100, 300L)
-        assertEquals(300L, timestamps1xTo2x.last())
+        val timestamps1xTo2x = controller.calculateSinusoidalElapsedTimestamps(100, 400L)
+        assertEquals(400L, timestamps1xTo2x.last())
 
-        val timestamps1xTo10x = controller.calculateSinusoidalElapsedTimestamps(900, 300L)
-        assertEquals(300L, timestamps1xTo10x.last())
+        val timestamps1xTo10x = controller.calculateSinusoidalElapsedTimestamps(900, 400L)
+        assertEquals(400L, timestamps1xTo10x.last())
 
-        val timestampsHalfXToOneX = controller.calculateSinusoidalElapsedTimestamps(50, 300L)
-        assertEquals(300L, timestampsHalfXToOneX.last())
+        val timestampsHalfXToOneX = controller.calculateSinusoidalElapsedTimestamps(50, 400L)
+        assertEquals(400L, timestampsHalfXToOneX.last())
     }
 
     @Test
-    fun testSymmetric300msDurationUltraWideToMainAndMainToUltraWide() {
+    fun testSymmetric400msDurationUltraWideToMainAndMainToUltraWide() {
         val controller = ZoomTransitionController()
         val stepsUwToMain = controller.generateContinuousZoomSteps(0.50f, 1.00f)
         val stepsMainToUw = controller.generateContinuousZoomSteps(1.00f, 0.50f)
@@ -283,16 +283,16 @@ class ZoomTransitionVerificationTest {
         assertEquals(stepsUwToMain.size, stepsMainToUw.size)
         assertEquals(51, stepsUwToMain.size)
 
-        val timeProfileUwToMain = controller.calculateSinusoidalElapsedTimestamps(stepsUwToMain.size - 1, 300L)
-        val timeProfileMainToUw = controller.calculateSinusoidalElapsedTimestamps(stepsMainToUw.size - 1, 300L)
+        val timeProfileUwToMain = controller.calculateSinusoidalElapsedTimestamps(stepsUwToMain.size - 1, 400L)
+        val timeProfileMainToUw = controller.calculateSinusoidalElapsedTimestamps(stepsMainToUw.size - 1, 400L)
 
-        // Both directions must have identical 300ms completion (never less)
-        assertEquals(300L, timeProfileUwToMain.last())
-        assertEquals(300L, timeProfileMainToUw.last())
+        // Both directions must have identical 400ms completion (never less)
+        assertEquals(400L, timeProfileUwToMain.last())
+        assertEquals(400L, timeProfileMainToUw.last())
 
-        // Symmetrical middle transition point at exactly 150ms
-        assertEquals(150L, timeProfileUwToMain[25])
-        assertEquals(150L, timeProfileMainToUw[25])
+        // Symmetrical middle transition point at exactly 200ms
+        assertEquals(200L, timeProfileUwToMain[25])
+        assertEquals(200L, timeProfileMainToUw[25])
     }
 
     @Test
