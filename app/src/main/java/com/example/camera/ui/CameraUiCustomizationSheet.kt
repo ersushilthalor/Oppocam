@@ -789,6 +789,23 @@ fun PreviewShutterButton(config: ModeLayoutConfig, accentColor: Color) {
                 )
             }
         }
+        ShutterStyle.IPHONE_RING -> {
+            Box(
+                modifier = Modifier
+                    .size(sizeDp)
+                    .clip(CircleShape)
+                    .border(4.dp, Color(0xFF8D8D8D), CircleShape)
+                    .padding(3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(sizeDp * 0.80f)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                )
+            }
+        }
         ShutterStyle.SAMSUNG_CAPSULE -> {
             Box(
                 modifier = Modifier
@@ -926,10 +943,20 @@ fun PreviewModeCarousel(
     fontFamily: androidx.compose.ui.text.font.FontFamily
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+        modifier = if (config.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) {
+            Modifier
+                .widthIn(max = 280.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .background(Color(0x28FFFFFF))
+                .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(28.dp))
+                .padding(horizontal = 5.dp, vertical = 3.dp)
+        } else {
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+        },
+        horizontalArrangement = Arrangement.spacedBy(
+            if (config.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) 5.dp else 16.dp,
+            Alignment.CenterHorizontally
+        ),
         verticalAlignment = Alignment.CenterVertically
     ) {
         config.visibleModes.take(5).forEach { mode ->
@@ -1011,6 +1038,26 @@ fun PreviewModeCarousel(
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                 fontFamily = fontFamily,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    ModeSelectorStyle.IPHONE_LIQUID_GLASS -> {
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = if (isSelected) Color(0x3DFFFFFF) else Color.Transparent,
+                            border = if (isSelected) androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                Color.White.copy(alpha = 0.28f)
+                            ) else null,
+                            shadowElevation = if (isSelected) 2.dp else 0.dp
+                        ) {
+                            Text(
+                                text = mode.name,
+                                color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.72f),
+                                fontSize = config.modeTextSizeSp.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                fontFamily = fontFamily,
+                                modifier = Modifier.padding(horizontal = 13.dp, vertical = 5.dp)
                             )
                         }
                     }
