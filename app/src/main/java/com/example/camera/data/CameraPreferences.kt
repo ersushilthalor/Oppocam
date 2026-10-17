@@ -57,7 +57,7 @@ class CameraPreferences(context: Context) {
         const val STEP_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.1f
         private const val KEY_LENS_SWITCH_HOLD_DURATION_SEC = "pref_lens_switch_hold_duration_sec"
         const val DEFAULT_LENS_SWITCH_HOLD_DURATION_SEC = 0.10f
-        const val MIN_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
+        const val MIN_LENS_SWITCH_HOLD_DURATION_SEC = 0.0f
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
