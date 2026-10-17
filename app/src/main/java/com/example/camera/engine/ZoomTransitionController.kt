@@ -288,8 +288,8 @@ class ZoomTransitionController(
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 }
 
-                if (isOverlapAnimationEnabled) {
-                    // Activate physical Main lens stream concurrently under Ultra-Wide layer at effectiveSwitchZoom
+                if (isOverlapAnimationEnabled && holdDuration > 0L) {
+                    // Activate physical Main lens stream concurrently under Ultra-Wide layer at effectiveSwitchZoom.
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
                     val blendStartTime = SystemClock.uptimeMillis()
