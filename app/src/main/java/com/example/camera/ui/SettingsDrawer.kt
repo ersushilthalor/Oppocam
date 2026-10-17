@@ -89,8 +89,11 @@ fun SettingsDrawer(
     onCustomZoomPresetsChange: (String) -> Unit = {},
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
-    isVideoStabilizationEnabled: Boolean = true,
+    // Legacy EIS values are retained only for source compatibility; the UI never exposes EIS.
+    isVideoStabilizationEnabled: Boolean = false,
     isHardwareEisActive: Boolean = false,
+    isOisEnabled: Boolean = true,
+    isOisHardwareActive: Boolean = false,
     isHorizontalLockSettingEnabled: Boolean = true,
     onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isDollyZoomSettingEnabled: Boolean = false,
@@ -299,7 +302,7 @@ fun SettingsDrawer(
                         onAntibandingModeSelected = onAntibandingModeSelected,
                         isVideoStabilizationEnabled = isVideoStabilizationEnabled,
                         onStabilizationToggle = onStabilizationToggle,
-                        isOisEnabled = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
+                        isOisEnabled = isOisEnabled,
                         onOisToggle = onOisToggle,
                         isAudioEnabled = isAudioEnabled,
                         onAudioToggle = onAudioToggle,
@@ -359,7 +362,7 @@ fun SettingsDrawer(
                             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
                             onStabilizationToggle = onStabilizationToggle,
                             isHardwareEisActive = isHardwareEisActive,
-                            isOisPreferred = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
+                            isOisPreferred = isOisEnabled,
                             onOisToggle = onOisToggle,
                             isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
                             onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
@@ -610,7 +613,13 @@ private fun SettingsOverviewPage(
                 )
                 ReferenceToggleRow(
                     title = "Optical stabilization (OIS)",
-                    description = "Use hardware lens stabilization when supported.",
+                    description = if (!isOisEnabled) {
+                        "Hardware OIS is disabled."
+                    } else if (isOisHardwareActive) {
+                        "Hardware OIS is active on the current camera."
+                    } else {
+                        "OIS is enabled; waiting for hardware confirmation from the camera."
+                    },
                     checked = isOisEnabled,
                     onCheckedChange = onOisToggle,
                     showDivider = true
@@ -4264,6 +4273,8 @@ fun CameraSettingsScreen(
     val videoBitrate by viewModel.videoBitrateOption.collectAsStateWithLifecycle()
     val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
     val actualEisHardwareActive by viewModel.actualEisHardwareActive.collectAsStateWithLifecycle()
+    val isOisEnabled by viewModel.isOisEnabled.collectAsStateWithLifecycle()
+    val actualOisHardwareActive by viewModel.actualOisHardwareActive.collectAsStateWithLifecycle()
     val isAudioEnabled by viewModel.isAudioEnabled.collectAsStateWithLifecycle()
     val isRawEnabled by viewModel.isRawCaptureEnabled.collectAsStateWithLifecycle()
     val saveSelfieAsPreviewed by viewModel.saveSelfieAsPreviewed.collectAsStateWithLifecycle()
@@ -4300,17 +4311,9 @@ fun CameraSettingsScreen(
     val floatingWindowAppearance by viewModel.floatingWindowAppearance.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
 
-    val mainCameraStabilizationMode = remember(isVideoStabilizationEnabled, hybridStabilizationConfig) {
-        val oisEffective = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred
-        when {
-            !isVideoStabilizationEnabled -> MainCameraStabilizationMode.OFF
-            hybridStabilizationConfig.isUltraStabilizationEnabled -> MainCameraStabilizationMode.ULTRA
-            hybridStabilizationConfig.isEisOnly || (!oisEffective && hybridStabilizationConfig.isEisPreferred) -> MainCameraStabilizationMode.EIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled && oisEffective -> MainCameraStabilizationMode.HYBRID_OIS_EIS
-            oisEffective && !hybridStabilizationConfig.isEisPreferred -> MainCameraStabilizationMode.OIS_ONLY
-            hybridStabilizationConfig.isHybridEnabled -> MainCameraStabilizationMode.EIS_ONLY
-            else -> MainCameraStabilizationMode.OFF
-        }
+    // With EIS removed, the only supported stabilization mode is hardware OIS or Off.
+    val mainCameraStabilizationMode = remember(isOisEnabled) {
+        if (isOisEnabled) MainCameraStabilizationMode.OIS_ONLY else MainCameraStabilizationMode.OFF
     }
 
     SettingsDrawer(
@@ -4334,8 +4337,10 @@ fun CameraSettingsScreen(
         onCustomZoomPresetsChange = { viewModel.setCustomZoomPresets(it) },
         videoFps = videoFps,
         videoBitrate = videoBitrate,
-        isVideoStabilizationEnabled = isVideoStabilizationEnabled,
-        isHardwareEisActive = actualEisHardwareActive,
+        isVideoStabilizationEnabled = false,
+        isHardwareEisActive = false,
+        isOisEnabled = isOisEnabled,
+        isOisHardwareActive = actualOisHardwareActive,
         isAudioEnabled = isAudioEnabled,
         isRawEnabled = isRawEnabled,
         saveSelfieAsPreviewed = saveSelfieAsPreviewed,
