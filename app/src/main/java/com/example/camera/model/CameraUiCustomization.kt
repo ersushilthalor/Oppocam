@@ -180,6 +180,7 @@ data class ModeLayoutConfig(
     val topPaddingDp: Int = 12,
     val bottomPaddingDp: Int = 14,
     val showZoomCapsule: Boolean = true,
+    val useFocalLengthZoomLabels: Boolean = false,
     val zoomCapsuleScale: Float = 1.0f,
     val zoomCapsuleVerticalOffsetDp: Int = 0,
     val accentColorHex: String = "#FFD54F",
@@ -292,6 +293,7 @@ data class ModeLayoutConfig(
         json.put("topPaddingDp", topPaddingDp)
         json.put("bottomPaddingDp", bottomPaddingDp)
         json.put("showZoomCapsule", showZoomCapsule)
+        json.put("useFocalLengthZoomLabels", useFocalLengthZoomLabels)
         json.put("zoomCapsuleScale", zoomCapsuleScale.toDouble())
         json.put("zoomCapsuleVerticalOffsetDp", zoomCapsuleVerticalOffsetDp)
         json.put("accentColorHex", accentColorHex)
@@ -398,6 +400,7 @@ data class ModeLayoutConfig(
                 topPaddingDp = json.optInt("topPaddingDp", 12),
                 bottomPaddingDp = json.optInt("bottomPaddingDp", 14),
                 showZoomCapsule = json.optBoolean("showZoomCapsule", true),
+                useFocalLengthZoomLabels = json.optBoolean("useFocalLengthZoomLabels", false),
                 zoomCapsuleScale = json.optDouble("zoomCapsuleScale", 1.0).toFloat(),
                 zoomCapsuleVerticalOffsetDp = json.optInt("zoomCapsuleVerticalOffsetDp", 0),
                 accentColorHex = json.optString("accentColorHex", "#FFD54F"),
@@ -516,11 +519,33 @@ data class UiCustomizationState(
                     modeMap.isEmpty() &&
                     gConfig.toJson().toString() ==
                         CameraUiTemplates.getTemplateConfig(UiTemplateType.SAMSUNG).toJson().toString()
+
+                // Upgrade an untouched Vivo preset saved before the focal-length layout was introduced.
+                // Only migrate an exact legacy preset match, preserving any user-customized configuration.
+                val legacyVivoDefault = CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO).copy(
+                    useFocalLengthZoomLabels = false,
+                    modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
+                    modeSelectorStyle = ModeSelectorStyle.UNDERLINE,
+                    accentColorHex = "#FF7043",
+                    modeTextSizeSp = 14.0f,
+                    bottomPaddingDp = 14,
+                    textCaseOption = TextCaseOption.UPPERCASE,
+                    letterSpacingSp = 0.5f,
+                    textShadowOption = TextShadowOption.SUBTLE_SHADOW,
+                    iconStyleOption = IconStyleOption.ROUNDED_MATERIAL,
+                    iconContainerOpacity = 0.35f,
+                    iconStrokeWidthDp = 1.8f
+                )
+                val isUnmodifiedLegacyVivoDefault =
+                    template == UiTemplateType.VIVO &&
+                    modeMap.isEmpty() &&
+                    gConfig.toJson().toString() == legacyVivoDefault.toJson().toString()
+
                 val resolvedTemplate = if (isUnmodifiedLegacySamsungDefault) UiTemplateType.OPPO else template
-                val resolvedConfig = if (isUnmodifiedLegacySamsungDefault) {
-                    CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
-                } else {
-                    gConfig
+                val resolvedConfig = when {
+                    isUnmodifiedLegacySamsungDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
+                    isUnmodifiedLegacyVivoDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO)
+                    else -> gConfig
                 }
 
                 UiCustomizationState(
@@ -703,6 +728,7 @@ object CameraUiTemplates {
             )
             UiTemplateType.VIVO -> ModeLayoutConfig(
                 visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
+                useFocalLengthZoomLabels = true,
                 modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
                 modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
                 shutterStyle = ShutterStyle.VIVO_GIMBAL,
