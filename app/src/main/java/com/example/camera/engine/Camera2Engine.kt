@@ -664,8 +664,8 @@ class Camera2Engine(private val context: Context) {
                     vendorCameraIdOverride = standbyLens.cameraId
                 )
 
-                // Match EIS on the standby camera to the active lens so instant lens handoffs
-                // do not jump to an unstabilized stream.
+                // Explicitly keep hardware EIS OFF on standby streams too. OIS is applied
+                // independently above for the standby lens when that lens supports it.
                 applyHardwareEisRequest(builder, lensOverride = standbyLens)
             }
 
@@ -1510,7 +1510,6 @@ class Camera2Engine(private val context: Context) {
         set(@Suppress("UNUSED_PARAMETER") value) {
             field = false
             gyroStabilizationEngine.stop()
-            lastStabilizedCrop = null
             updatePreviewSettings()
         }
     var videoBitrateOption: VideoBitrateOption = VideoBitrateOption.AUTO
@@ -1651,14 +1650,8 @@ class Camera2Engine(private val context: Context) {
             isEisOnly = false
         )
         gyroStabilizationEngine.stop()
-        lastStabilizedCrop = null
         updatePreviewSettings()
     }
-
-    private fun shouldUseGyroEis(
-        @Suppress("UNUSED_PARAMETER") mode: CameraMode = currentMode,
-        @Suppress("UNUSED_PARAMETER") config: HybridStabilizationConfig = _hybridStabilizationConfig.value
-    ): Boolean = false
 
     // Camera Session Concurrency & State Guard
     private val cameraLifecycleLock = Any()
@@ -3640,13 +3633,8 @@ class Camera2Engine(private val context: Context) {
         val cameraH = min(optimalSize.width, optimalSize.height)
         syncPreviewBufferSizes(cameraW, cameraH)
 
-        val hybridConfig = _hybridStabilizationConfig.value
-        if (shouldUseGyroEis(mode = mode, config = hybridConfig)) {
-            gyroStabilizationEngine.start()
-        } else {
-            gyroStabilizationEngine.stop()
-            lastStabilizedCrop = null
-        }
+        // Software gyro EIS is intentionally not started in any mode.
+        gyroStabilizationEngine.stop()
 
 
 
@@ -4797,8 +4785,6 @@ class Camera2Engine(private val context: Context) {
 
     private var lastCaptureResult: TotalCaptureResult? = null
 
-    private var lastStabilizedCropTime = 0L
-    private var lastStabilizedCrop: Rect? = null
     private var lastOisForceOffTimeMs = 0L
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -4853,61 +4839,9 @@ class Camera2Engine(private val context: Context) {
 
 
 
-            // Apply gyro-assisted digital EIS for normal Video and Pro Video too.
-            // The crop region is sent on the same Camera2 repeating request that targets both
-            // the viewfinder and encoder, so framing/stabilization stay aligned in the saved file.
-            val activeGyroEis = shouldUseGyroEis() && !isSwitchingLens.get()
-            val ultraEis = _hybridStabilizationConfig.value.isUltraStabilizationEnabled
-            if (activeGyroEis) {
-                val lens = _selectedLens.value
-                if (lens != null) {
-                    try {
-                        // The request's SCALER_CROP_REGION is in the openable/logical
-                        // camera's coordinate space; use that same active array for the crop.
-                        val chars = getCharacteristics(lens.cameraId)
-                        val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                        val focalLength = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                            ?.firstOrNull() ?: 4.38f
-                        val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                            ?: SizeF(6.4f, 4.8f)
-                        if (activeArray != null) {
-                            val stabilizationMargin = if (ultraEis) {
-                                GyroStabilizationEngine.ULTRA_STABILIZATION_MARGIN
-                            } else {
-                                GyroStabilizationEngine.STANDARD_EIS_CROP_MARGIN
-                            }
-                            // Derive user zoom from the active Camera2 result, not the app's
-                            // displayed zoom value: Ultra-Wide zoom values are FOV-calibrated.
-                            // Once our crop is applied, remove its margin from the reported crop
-                            // scale so each frame does not progressively zoom in further.
-                            val resultCrop = result.get(CaptureResult.SCALER_CROP_REGION) ?: activeArray
-                            val cropScale = activeArray.width().toFloat() /
-                                resultCrop.width().coerceAtLeast(1).toFloat()
-                            val zoomRatio = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                result.get(CaptureResult.CONTROL_ZOOM_RATIO) ?: 1.0f
-                            } else {
-                                1.0f
-                            }
-                            val priorSoftwareMargin = if (lastStabilizedCrop != null) stabilizationMargin else 1.0f
-                            val effectiveBaseZoom = (cropScale * zoomRatio / priorSoftwareMargin).coerceAtLeast(1.0f)
-
-                            val crop = gyroStabilizationEngine.computeStabilizedCrop(
-                                result = result,
-                                activeArray = activeArray,
-                                baseZoom = effectiveBaseZoom,
-                                focalLengthMm = focalLength,
-                                sensorPhysicalSizeMm = sensorSize,
-                                stabilizationMargin = stabilizationMargin
-                            )
-                            if (crop != null) applyStabilizedCrop(crop)
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Gyro-assisted EIS crop calculation failed", e)
-                    }
-                }
-            } else {
-                lastStabilizedCrop = null
-            }
+            // EIS has been removed: never run gyro crop compensation or mutate the repeating
+            // request crop region from capture callbacks. Camera2 OIS remains independently
+            // controlled through LENS_OPTICAL_STABILIZATION_MODE.
 
             // The imported engine uses Camera2 crop-region compensation, not the GPU relay's
             // offset path; keeping those offsets neutral prevents applying stabilization twice.
@@ -5079,34 +5013,6 @@ class Camera2Engine(private val context: Context) {
         }
     }
 
-    private fun applyStabilizedCrop(crop: Rect) {
-        val now = System.currentTimeMillis()
-        if (now - lastStabilizedCropTime < 33) return // 30fps throttle
-        val last = lastStabilizedCrop
-        if (last != null &&
-            kotlin.math.abs(crop.left - last.left) < 3 &&
-            kotlin.math.abs(crop.top - last.top) < 3 &&
-            kotlin.math.abs(crop.right - last.right) < 3 &&
-            kotlin.math.abs(crop.bottom - last.bottom) < 3
-        ) return
-
-        lastStabilizedCropTime = now
-        lastStabilizedCrop = crop
-
-        val session = captureSession ?: return
-        synchronized(previewRequestLock) {
-            val builder = previewRequestBuilder ?: return
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1.0f)
-                }
-                builder.set(CaptureRequest.SCALER_CROP_REGION, crop)
-                session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error applying stabilized crop", e)
-            }
-        }
-    }
 
 
 
@@ -5146,6 +5052,23 @@ class Camera2Engine(private val context: Context) {
                 Log.d(TAG, "OIS supported by logical camera $logicalCameraId; physicalId=$physicalId")
                 return true
             }
+        }
+
+        // Some vendor HALs report OIS on the logical camera but omit it on the active
+        // physical-sensor metadata. Prefer the selected camera's capability snapshot before
+        // treating a physical mode list as authoritative.
+        val selectedLensId = _selectedLens.value?.cameraId
+        if (logicalCameraId != null &&
+            logicalCameraId == selectedLensId &&
+            _capabilities.value.supportsOis
+        ) {
+            Log.w(
+                TAG,
+                "OIS capability fallback: logical=" + logicalCameraId +
+                    " physical=" + physicalId +
+                    " selectedCameraSupportsOis=true; using selected-camera capability snapshot"
+            )
+            return true
         }
 
         val checkedChars = (physicalId?.let { getCharacteristics(it) })
