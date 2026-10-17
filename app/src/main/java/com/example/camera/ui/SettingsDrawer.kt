@@ -2743,10 +2743,6 @@ private fun UiLayoutSettingsPage(
             UiTemplateType.SAMSUNG to "One UI",
             UiTemplateType.IPHONE to "iPhone",
             UiTemplateType.VIVO to "Vivo",
-            UiTemplateType.MINIMAL_PRO to "Pro Clean",
-            UiTemplateType.FUTURISTIC_GLASS to "Glass",
-            UiTemplateType.DSLR_PRO to "DSLR",
-            UiTemplateType.IMMERSIVE_EDGE to "Immersive",
             UiTemplateType.CUSTOM to "Custom UI"
         )
     }
