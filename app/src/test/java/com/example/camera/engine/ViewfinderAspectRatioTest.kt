@@ -6,6 +6,7 @@ import android.util.Size
 import android.view.TextureView
 import androidx.test.core.app.ApplicationProvider
 import com.example.camera.model.CameraMode
+import com.example.camera.ui.getViewfinderTargetHeightOverWidth
 import com.example.camera.ui.configureTransform
 import com.example.camera.ui.updateTextureViewTransform
 import org.junit.Assert.*
@@ -255,4 +256,12 @@ class ViewfinderAspectRatioTest {
         tv.getTransform(matrixRevTransition)
         assertTrue("Open Camera Video to Photo transition must prevent false scaling on stale dimensions", matrixRevTransition.isIdentity)
     }
+    @Test
+    fun testVideoAndProVideoUsePortraitNineBySixteenPreviewFrame() {
+        // target ratio is height/width, so 16:9 here produces a 9:16 portrait viewport.
+        assertEquals(16f / 9f, getViewfinderTargetHeightOverWidth(CameraMode.VIDEO, 4f / 3f), 0.001f)
+        // The cinema recording ratio must not reshape the Pro Video preview frame.
+        assertEquals(16f / 9f, getViewfinderTargetHeightOverWidth(CameraMode.CINEMA, 2.39f), 0.001f)
+    }
+
 }
