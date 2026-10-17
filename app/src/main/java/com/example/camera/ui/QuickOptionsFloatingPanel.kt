@@ -58,8 +58,6 @@ fun QuickOptionsFloatingPanel(
     videoResolution: CameraResolution?,
     videoFps: Int,
     isAudioEnabled: Boolean,
-    isVideoStabilizationEnabled: Boolean,
-    isUltraStabilizationEnabled: Boolean,
     hasActiveVideoAdjustments: Boolean,
     // Cinema properties
     cinemaConfig: CinemaConfig = CinemaConfig(),
@@ -73,7 +71,6 @@ fun QuickOptionsFloatingPanel(
     onToggleMegapixelMode: () -> Unit,
     onRawClick: () -> Unit,
     onPhotoFilterClick: () -> Unit,
-    onStabilizationClick: () -> Unit,
     onVideoSettingsClick: () -> Unit,
     onAudioToggle: () -> Unit,
     onVideoAdjustmentsClick: () -> Unit,
