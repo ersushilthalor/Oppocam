@@ -2741,8 +2741,6 @@ private fun UiLayoutSettingsPage(
             UiTemplateType.OPPO to "OPPO",
             UiTemplateType.STOCK_PIXEL to "Pixel",
             UiTemplateType.SAMSUNG to "One UI",
-            UiTemplateType.IPHONE to "iPhone",
-            UiTemplateType.VIVO to "Vivo",
             UiTemplateType.CUSTOM to "Custom UI"
         )
     }
@@ -2762,7 +2760,7 @@ private fun UiLayoutSettingsPage(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = 28.dp)
     ) {
-        // 1. UI Template Style Selector (Multi-row grid with all templates visible: Pixel, One UI, iPhone, Vivo, etc.)
+        // 1. UI Template Style Selector (Oppo, Pixel, Samsung One UI, and Custom UI).
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
@@ -2779,7 +2777,7 @@ private fun UiLayoutSettingsPage(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Choose primary camera layout aesthetic (OPPO, Pixel, Samsung One UI, iPhone iOS, Vivo OriginOS, Leica, Cyber Glass, DSLR).",
+                        text = "Choose primary camera layout aesthetic (OPPO, Pixel, Samsung One UI, or Custom UI).",
                         color = Color.White.copy(alpha = 0.6f),
                         fontSize = 12.sp,
                         lineHeight = 16.sp
