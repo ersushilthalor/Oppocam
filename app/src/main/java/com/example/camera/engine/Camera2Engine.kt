@@ -603,9 +603,10 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Calculates the exact digital crop ratio required for the standby lens at the configured lens-switch point.
-     * Ultra-Wide: Switch Point ÷ 16mm (e.g. 1.44x at 23mm, 2.50x at 40mm)
-     * Main: Switch Point ÷ 23mm (e.g. 1.00x at 23mm, 1.74x at 40mm)
+     * Calculates the standby lens crop using discovered equivalent focal lengths.
+     * While idle, the standby stream is framed to match Main's native/switch-point FOV.
+     * During a frame-based handoff, it follows the live UI zoom so the two preview streams
+     * stay close in FOV while the transition animation continues.
      */
     internal fun calculateStandbyCropRatio(standbyLens: LensInfo, uiZoomOverride: Float? = null): Float {
         val sameFacingLenses = _availableLenses.value.filter { it.facing == standbyLens.facing }
@@ -704,9 +705,9 @@ class Camera2Engine(private val context: Context) {
                 applyHardwareEisRequest(builder, lensOverride = standbyLens)
             }
 
-            // Keep standby lens FOV-matched to the configured lens switch point
-            // (e.g. 1.44x crop factor for Ultra-Wide at 23mm, or 1.74x crop factor for Main at 40mm)
-            // so switching between Main and Ultra-Wide is instant with zero FOV pop or jump.
+            // Park the standby stream at the FOV-matched switch point while idle.
+            // During overlap, track the controller's current zoom so the old and new views do
+            // not diverge merely because the 16-frame crossfade outlasts the zoom animation.
             val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
             val handoffState = zoomTransitionController.previewOverlapState.value
             val handoffZoom = if (handoffState.isOverlapping) {
