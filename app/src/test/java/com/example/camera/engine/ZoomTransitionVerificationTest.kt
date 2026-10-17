@@ -428,17 +428,17 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testVerifyAllSixHoldDurationValuesAndPersistence() {
+    fun testVerifyAllSevenHoldDurationValuesAndPersistence() {
         val app = ApplicationProvider.getApplicationContext<android.app.Application>()
-        val testValues = listOf(0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
-        val expectedMs = listOf(50L, 100L, 150L, 200L, 250L, 300L)
+        val testValues = listOf(0.0f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+        val expectedMs = listOf(0L, 50L, 100L, 150L, 200L, 250L, 300L)
 
         // 1. Verify default value is 0.10 sec (100 ms)
         val defaultVm = CameraViewModel(app)
         assertEquals(0.10f, defaultVm.lensSwitchHoldDurationSec.value, 0.001f)
         assertEquals(100L, defaultVm.engine.zoomTransitionController.holdAtOneXDurationMs)
 
-        // 2. Separately verify each of the six values
+        // 2. Separately verify each of the seven values
         for (i in testValues.indices) {
             val value = testValues[i]
             val ms = expectedMs[i]
@@ -469,14 +469,14 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testPhysicalMainLensSwitchesOnlyAfterSelectedHoldForAllSixValues() = runBlocking {
+    fun testPhysicalMainLensSwitchesOnlyAfterSelectedHoldForAllSevenValues() = runBlocking {
         val lenses = viewModel.engine.availableLenses.value
         val uwLens = lenses.firstOrNull { it.lensType == LensType.ULTRAWIDE }
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
 
         if (uwLens != null && mainLens != null) {
-            val testValues = listOf(0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
-            val expectedMs = listOf(50L, 100L, 150L, 200L, 250L, 300L)
+            val testValues = listOf(0.0f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+            val expectedMs = listOf(0L, 50L, 100L, 150L, 200L, 250L, 300L)
 
             for (i in testValues.indices) {
                 val value = testValues[i]
