@@ -40,7 +40,7 @@ data class PreviewOverlapState(
  *
  * Replaces the custom zoom transition and separate animation systems with the actual
  * zoom slider logic running programmatically in the background:
- * 1. Fixed duration of EXACTLY 300ms (0.30 seconds) for all continuous background slider movements.
+ * 1. Fixed duration of EXACTLY 400ms (0.40 seconds) for all continuous background slider movements.
  * 2. Uses the actual zoom slider logarithmic mapping (from HorizontalRulerZoomSlider) to smoothly
  *    interpolate from startZoom to targetZoom.
  * 3. Reuses the existing camera slider functionality (via onApplyZoomToEngine) which directly applies
@@ -55,15 +55,16 @@ class ZoomTransitionController(
 ) {
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
-        const val TOTAL_TRANSITION_DURATION_MS = 300L // Fixed duration of exactly 300ms (0.30s), never less
+        const val TOTAL_TRANSITION_DURATION_MS = 400L // Fixed duration of exactly 400ms (0.40s), never less
         const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 20L // 0.02 second default hold at exact 1x FOV before physical switch
         const val HOLD_AT_ONE_X_DURATION_MS = 20L // Preserved for backwards compatibility
         const val MIN_HOLD_AT_ONE_X_DURATION_MS = 0L
         const val MAX_HOLD_AT_ONE_X_DURATION_MS = 300L
-        const val DEFAULT_OVERLAP_DURATION_MS = 300L
+        const val DEFAULT_OVERLAP_DURATION_MS = 400L
         const val PREVIEW_OVERLAP_DURATION_MS = 100L
         const val MIN_OVERLAP_DURATION_MS = 100L
         const val MAX_OVERLAP_DURATION_MS = 1000L
+        private const val FRAME_HANDOFF_WARMUP_FRAMES = 2
         private const val FRAME_HANDOFF_REQUIRED_FRAMES = 16
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
 
@@ -240,12 +241,32 @@ class ZoomTransitionController(
         val targetSource = pendingFrameHandoffTarget ?: return
         if (source != targetSource) return
 
-        frameHandoffFrameCount = (frameHandoffFrameCount + 1).coerceAtMost(FRAME_HANDOFF_REQUIRED_FRAMES)
+        frameHandoffFrameCount = (frameHandoffFrameCount + 1).coerceAtMost(
+            FRAME_HANDOFF_WARMUP_FRAMES + FRAME_HANDOFF_REQUIRED_FRAMES
+        )
+        val fromSource = frameHandoffFromSource ?: return
+
+        // Let two real target frames arrive before blending. Camera2 applies crop/zoom changes
+        // asynchronously; these warm-up frames let the new stream catch up to the continuously
+        // moving zoom value while the outgoing stream remains fully visible.
+        if (frameHandoffFrameCount <= FRAME_HANDOFF_WARMUP_FRAMES) {
+            _previewOverlapState.value = PreviewOverlapState(
+                isOverlapping = true,
+                mainAlpha = if (fromSource == PreviewStreamSource.MAIN) 1f else 0f,
+                ultraWideAlpha = if (fromSource == PreviewStreamSource.ULTRAWIDE) 1f else 0f,
+                activeSource = targetSource,
+                overlapProgress = 0f,
+                topSource = fromSource
+            )
+            return
+        }
+
+        val blendFrameCount = frameHandoffFrameCount - FRAME_HANDOFF_WARMUP_FRAMES
         // Progress is tied to real target buffers and zoom trajectory. For reverse handoff,
         // retire the Main layer quickly once the target Ultra-Wide FOV becomes wider than Main.
         val previousProgress = _previewOverlapState.value.overlapProgress
         val progress = calculateFrameHandoffProgress(
-            incomingFrameCount = frameHandoffFrameCount,
+            incomingFrameCount = blendFrameCount,
             targetSource = targetSource,
             currentZoom = _currentInterpolatedZoom.value,
             previousProgress = previousProgress
@@ -264,7 +285,7 @@ class ZoomTransitionController(
             topSource = targetSource
         )
 
-        if (frameHandoffFrameCount >= FRAME_HANDOFF_REQUIRED_FRAMES) {
+        if (blendFrameCount >= FRAME_HANDOFF_REQUIRED_FRAMES) {
             frameHandoffTimeoutJob?.cancel()
             frameHandoffTimeoutJob = null
             pendingFrameHandoffTarget = null
@@ -302,7 +323,7 @@ class ZoomTransitionController(
 
     /**
      * Executes the zoom transition by running the actual zoom slider logic in the background:
-     * - Runs over exactly 0.3 seconds (300ms), never less.
+     * - Runs over exactly 0.4 seconds (400ms), never less.
      * - Uses the zoom slider's normalized logarithmic scale from [HorizontalRulerZoomSlider].
      * - Reuses the existing camera slider functionality without requiring user interaction or visibly
      *   moving the UI slider.
@@ -324,7 +345,7 @@ class ZoomTransitionController(
     ): Job {
         cancelTransition()
 
-        // Fixed duration: must take exactly 300ms (0.30 seconds), never less
+        // Fixed duration: must take exactly 400ms (0.40 seconds), never less
         val transitionDurationMs = maxOf(TOTAL_TRANSITION_DURATION_MS, durationMs)
 
         val job = scope.launch(Dispatchers.Main.immediate) {
@@ -401,7 +422,7 @@ class ZoomTransitionController(
                         val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
                         val currentNorm = (startNorm + (endNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                        val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
+                        val currentZ = rawZoom.coerceIn(minZoom, maxZoom)
                         val reachedSwitchPoint = currentNorm >= switchNorm || currentZ >= effectiveSwitchZoom
 
                         if (!mainLensSelected && reachedSwitchPoint) {
@@ -503,7 +524,7 @@ class ZoomTransitionController(
                     val currentNorm = (startNorm + (switchNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
                     val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                    val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, effectiveSwitchZoom)
+                    val currentZ = rawZoom.coerceIn(minZoom, effectiveSwitchZoom)
 
                     if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
                         lastDispatchedZoom = currentZ
@@ -624,7 +645,7 @@ class ZoomTransitionController(
                         val currentNorm = (switchNorm + (endNorm - switchNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                        val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(effectiveSwitchZoom, maxZoom)
+                        val currentZ = rawZoom.coerceIn(effectiveSwitchZoom, maxZoom)
 
                         if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
                             lastDispatchedZoom = currentZ
@@ -663,7 +684,7 @@ class ZoomTransitionController(
                 isTelephotoPresetToHalfXTransition(startZ, endZ)
             var reverseFrameBasedHandoffStarted = false
 
-            // Move the slider in the background from startNorm to targetNorm over exactly 300ms (0.30s)
+            // Move the slider in the background from startNorm to targetNorm over exactly 400ms (0.40s)
             while (isActive) {
                 val now = SystemClock.uptimeMillis()
                 val elapsed = now - startTime
@@ -676,7 +697,7 @@ class ZoomTransitionController(
 
                 // Calculate actual zoom level using the exact zoom slider logic
                 val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
+                val currentZ = rawZoom.coerceIn(minZoom, maxZoom)
 
                 // Arm the reverse handoff before the zoom update triggers the physical switch to Ultra-Wide.
                 // Only direct 2x/3x -> 0.5x transitions use frame-driven blending; 1x -> 0.5x stays untouched.
