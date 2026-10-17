@@ -358,26 +358,6 @@ object CinemaColorPipeline {
                 mat
             }
 
-            CinemaColorProfile.HLG_2 -> {
-                // HLG 2 Technical Transform:
-                // - Anchored black pedestal (0.0f)
-                // - Rich natural contrast (1.14x)
-                // - Rec.709 color space with vibrant, faithful chroma (1.10x)
-                val c = 1.14f
-                val pivot = 128f
-                val t = (1.0f - c) * pivot
-                val mat = ColorMatrix(floatArrayOf(
-                    c, 0f, 0f, 0f, t,
-                    0f, c, 0f, 0f, t,
-                    0f, 0f, c, 0f, t,
-                    0f, 0f, 0f, 1f, 0f
-                ))
-                val chroma = ColorMatrix()
-                chroma.setSaturation(1.10f)
-                mat.postConcat(chroma)
-                mat
-            }
-
             CinemaColorProfile.PROCESSED_JPEG -> {
                 // Smartphone JPEG Photo Technical Transform:
                 // - Stronger but natural contrast (1.18x around 18% middle-grey pivot 128)
