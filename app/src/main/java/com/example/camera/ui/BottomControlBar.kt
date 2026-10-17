@@ -225,7 +225,7 @@ fun BottomControlBar(
                     onShutterAreaHeightMeasured(heightDp)
                 }
                 .then(
-                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL) {
+                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL || layoutConfig.useFocalLengthZoomLabels) {
                         Modifier.background(Color.Black)
                     } else {
                         Modifier.background(
