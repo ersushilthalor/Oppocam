@@ -282,7 +282,10 @@ class ZoomTransitionController(
                 // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
                 // Direct 2x/3x preset taps should cross the lens switch without pausing at 1x.
                 // Keep the configured hold unchanged for 1x taps and all other transitions.
-                val holdDuration = if (skipHoldAtSwitchPoint) {
+                // Direct 2x/3x telephoto preset taps must never pause at the lens handoff,
+                // even if the caller forgets the skip flag. A deliberate 1x tap keeps its hold.
+                val isDirectTelephotoTarget = endZ >= 1.5f
+                val holdDuration = if (skipHoldAtSwitchPoint || isDirectTelephotoTarget) {
                     0L
                 } else {
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
