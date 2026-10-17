@@ -608,11 +608,26 @@ class Camera2Engine(private val context: Context) {
      * Main: Switch Point ÷ 23mm (e.g. 1.00x at 23mm, 1.74x at 40mm)
      */
     internal fun calculateStandbyCropRatio(standbyLens: LensInfo): Float {
+        val sameFacingLenses = _availableLenses.value.filter { it.facing == standbyLens.facing }
+        val mainLens = sameFacingLenses.firstOrNull { it.isPrimaryMain }
+            ?: sameFacingLenses.firstOrNull { it.lensType == LensType.WIDE && !it.isZoomPreset }
+            ?: sameFacingLenses.firstOrNull { it.lensType == LensType.WIDE }
+        val mainEqFocalMm = mainLens?.equivalent35mmFocalMm
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?: CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+
         return if (standbyLens.lensType == LensType.ULTRAWIDE) {
-            val uwEqFocal = if (standbyLens.equivalent35mmFocalMm > 0f) standbyLens.equivalent35mmFocalMm else CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
-            CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, uwEqFocal)
+            val uwEqFocalMm = standbyLens.equivalent35mmFocalMm
+                .takeIf { it.isFinite() && it > 0f }
+                ?: CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+            CameraOpticalCalibration.calculateFovMatchedUltraWideCrop(
+                switchPointMm = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
+                mainEquivalentFocalMm = mainEqFocalMm,
+                uwEquivalentFocalMm = uwEqFocalMm
+            )
         } else {
-            CameraOpticalCalibration.calculateMainCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+            val matchedTargetFocalMm = maxOf(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, mainEqFocalMm)
+            CameraOpticalCalibration.calculateMainCropForSwitchPoint(matchedTargetFocalMm, mainEqFocalMm)
         }
     }
 
@@ -679,19 +694,33 @@ class Camera2Engine(private val context: Context) {
             // so switching between Main and Ultra-Wide is instant with zero FOV pop or jump.
             val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
             val targetStandbyRatio = calculateStandbyCropRatio(standbyLens)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && chars != null) {
-                val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
-                if (zoomRange != null) {
-                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, targetStandbyRatio.coerceIn(zoomRange.lower, zoomRange.upper))
-                }
+            val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && chars != null) {
+                chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            } else {
+                null
             }
-            val extraScale = targetStandbyRatio.coerceAtLeast(1.0f)
-            val cropW = (sensorRect.width() / extraScale).toInt().coerceIn(1, sensorRect.width())
-            val cropH = (sensorRect.height() / extraScale).toInt().coerceIn(1, sensorRect.height())
-            val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
-            val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
-            val cropRegion = Rect(cropX, cropY, cropX + cropW, cropY + cropH)
-            builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
+
+            if (zoomRange != null) {
+                // On API 30+, express the standby crop with CONTROL_ZOOM_RATIO only.
+                // Android overrides a windowboxed SCALER_CROP_REGION when zoom ratio != 1,
+                // so setting both a digital zoom ratio and a smaller crop rectangle is ambiguous.
+                builder.set(
+                    CaptureRequest.CONTROL_ZOOM_RATIO,
+                    targetStandbyRatio.coerceIn(zoomRange.lower, zoomRange.upper)
+                )
+                builder.set(CaptureRequest.SCALER_CROP_REGION, sensorRect)
+            } else {
+                // Legacy fallback: apply the crop rectangle only when native zoom ratio is unavailable.
+                val extraScale = targetStandbyRatio.coerceAtLeast(1.0f)
+                val cropW = (sensorRect.width() / extraScale).toInt().coerceIn(1, sensorRect.width())
+                val cropH = (sensorRect.height() / extraScale).toInt().coerceIn(1, sensorRect.height())
+                val cropX = sensorRect.left + (sensorRect.width() - cropW) / 2
+                val cropY = sensorRect.top + (sensorRect.height() - cropH) / 2
+                builder.set(
+                    CaptureRequest.SCALER_CROP_REGION,
+                    Rect(cropX, cropY, cropX + cropW, cropY + cropH)
+                )
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Error applying synchronized standby settings", e)
         }
