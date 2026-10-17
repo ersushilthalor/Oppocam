@@ -2738,6 +2738,7 @@ private fun UiLayoutSettingsPage(
 ) {
     val allTemplates = remember {
         listOf(
+            UiTemplateType.OPPO to "OPPO",
             UiTemplateType.STOCK_PIXEL to "Pixel",
             UiTemplateType.SAMSUNG to "One UI",
             UiTemplateType.IPHONE to "iPhone",
@@ -2782,7 +2783,7 @@ private fun UiLayoutSettingsPage(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Choose primary camera layout aesthetic (Pixel, Samsung One UI, iPhone iOS, Vivo OriginOS, Leica, Cyber Glass, DSLR).",
+                        text = "Choose primary camera layout aesthetic (OPPO, Pixel, Samsung One UI, iPhone iOS, Vivo OriginOS, Leica, Cyber Glass, DSLR).",
                         color = Color.White.copy(alpha = 0.6f),
                         fontSize = 12.sp,
                         lineHeight = 16.sp

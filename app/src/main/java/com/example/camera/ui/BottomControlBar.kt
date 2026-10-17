@@ -223,14 +223,20 @@ fun BottomControlBar(
                     val heightDp = with(density) { coordinates.size.height.toDp() }
                     onShutterAreaHeightMeasured(heightDp)
                 }
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            Color(0xD90E1017),
-                            Color(0xF5080A0E)
+                .then(
+                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL) {
+                        Modifier.background(Color.Black)
+                    } else {
+                        Modifier.background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color(0xD90E1017),
+                                    Color(0xF5080A0E)
+                                )
+                            )
                         )
-                    )
+                    }
                 )
         ) {
             Column(
@@ -382,6 +388,7 @@ fun BottomControlBar(
                                     when (layoutConfig.shutterStyle) {
                                         ShutterStyle.CLASSIC_WHITE -> Modifier.border(3.5.dp, Color.White, CircleShape)
                                         ShutterStyle.APPLE_DOT -> Modifier.border(2.dp, Color.White.copy(alpha = 0.9f), CircleShape)
+                                        ShutterStyle.OPPO_ORANGE -> Modifier.border(5.dp, Color(0xFF5A3928), CircleShape).padding(3.dp)
                                         ShutterStyle.SAMSUNG_CAPSULE -> Modifier.border(4.dp, Color.White, CircleShape).padding(4.dp)
                                         ShutterStyle.VIVO_GIMBAL -> Modifier.border(3.dp, accentColor, CircleShape)
                                         ShutterStyle.MINIMAL_ACCENT -> Modifier
@@ -437,6 +444,7 @@ fun BottomControlBar(
                                 CameraMode.PHOTO, CameraMode.MORE, CameraMode.AI_SUBJECT_TRACKING -> {
                                     val shutterColor = when (layoutConfig.shutterStyle) {
                                         ShutterStyle.MINIMAL_ACCENT -> accentColor
+                                        ShutterStyle.OPPO_ORANGE -> Color(0xFFFF8A00)
                                         ShutterStyle.LEICA_RED_DOT -> Color(0xFFE53935)
                                         ShutterStyle.CYBER_HOLO -> Color(0xFF00E5FF)
                                         ShutterStyle.DSLR_KNURLED -> Color(0xFFDDDDDD)
@@ -667,7 +675,10 @@ fun BottomControlBar(
                                     .fillMaxWidth()
                                     .horizontalScroll(modeScrollState)
                                     .padding(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterHorizontally),
+                                horizontalArrangement = Arrangement.spacedBy(
+                                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL) 12.dp else 22.dp,
+                                    Alignment.CenterHorizontally
+                                ),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 modesToDisplay.forEach { mode ->
@@ -684,7 +695,12 @@ fun BottomControlBar(
                                         label = "modeTextColor"
                                     )
 
-                                    val rawName = if (mode == CameraMode.MORE && isMoreModeActive && cameraMode != CameraMode.MORE) {
+                                    val rawName = if (
+                                        mode == CameraMode.MORE &&
+                                        isMoreModeActive &&
+                                        cameraMode != CameraMode.MORE &&
+                                        layoutConfig.modeSelectorStyle != ModeSelectorStyle.OPPO_PILL
+                                    ) {
                                         cameraMode.name
                                     } else {
                                         mode.name
@@ -800,6 +816,24 @@ fun BottomControlBar(
                                                         maxLines = 1,
                                                         softWrap = false,
                                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                                    )
+                                                }
+                                            }
+                                            ModeSelectorStyle.OPPO_PILL -> {
+                                                Surface(
+                                                    shape = RoundedCornerShape(22.dp),
+                                                    color = if (isSelected) Color(0xFF272326) else Color.Transparent
+                                                ) {
+                                                    Text(
+                                                        text = if (isSelected) "$displayText ▴" else displayText,
+                                                        color = if (isSelected) Color(0xFFD9A49B) else customTextColor.copy(alpha = 0.68f),
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = modeFontWeight,
+                                                        fontFamily = fontFamily,
+                                                        letterSpacing = modeLetterSpacing,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                                                     )
                                                 }
                                             }

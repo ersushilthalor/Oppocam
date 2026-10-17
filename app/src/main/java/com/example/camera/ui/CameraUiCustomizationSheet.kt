@@ -123,6 +123,7 @@ fun CameraUiCustomizationView(
                         contentAlignment = Alignment.Center
                     ) {
                         val icon = when (template) {
+                            UiTemplateType.OPPO -> Icons.Outlined.CameraAlt
                             UiTemplateType.STOCK_PIXEL -> Icons.Outlined.CameraAlt
                             UiTemplateType.MINIMAL_PRO -> Icons.Outlined.CenterFocusStrong
                             UiTemplateType.FUTURISTIC_GLASS -> Icons.Outlined.AutoAwesome
@@ -825,6 +826,23 @@ fun PreviewShutterButton(config: ModeLayoutConfig, accentColor: Color) {
                 )
             }
         }
+        ShutterStyle.OPPO_ORANGE -> {
+            Box(
+                modifier = Modifier
+                    .size(sizeDp)
+                    .clip(CircleShape)
+                    .border(5.dp, Color(0xFF5A3928), CircleShape)
+                    .padding(3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .background(Color(0xFFFF8A00))
+                )
+            }
+        }
         ShutterStyle.MINIMAL_ACCENT -> {
             Box(
                 modifier = Modifier
@@ -997,6 +1015,21 @@ fun PreviewModeCarousel(
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                 fontFamily = fontFamily,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    ModeSelectorStyle.OPPO_PILL -> {
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = if (isSelected) Color(0xFF272326) else Color.Transparent
+                        ) {
+                            Text(
+                                text = if (isSelected) "${mode.name} ▴" else mode.name,
+                                color = if (isSelected) Color(0xFFD9A49B) else Color.White.copy(alpha = 0.68f),
+                                fontSize = config.modeTextSizeSp.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                fontFamily = fontFamily,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                             )
                         }
                     }
@@ -1928,6 +1961,15 @@ fun ResetAndRestoreEditor(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Vivo Style", fontSize = 12.sp, color = Color.White)
+        }
+
+        Button(
+            onClick = { onResetAllToTemplate(UiTemplateType.OPPO) },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF8A00)),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("OPPO Camera Default", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
         }
     }
 }

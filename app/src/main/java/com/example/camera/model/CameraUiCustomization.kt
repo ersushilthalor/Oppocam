@@ -11,6 +11,7 @@ enum class UiTemplateType(
     val subtitle: String,
     val accentHex: String
 ) {
+    OPPO("OPPO Camera", "Screenshot-matched OPPO layout with an orange shutter, dark selected-mode pill and only supported modes", "#FF8A00"),
     STOCK_PIXEL("Arnova GCam 8.7", "Google Camera 8.7-inspired layout with a clean mode strip, minimal controls and zoom selector", "#FFFFFF"),
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
     IPHONE("iPhone (iOS)", "Clean, minimal Apple iPhone layout with yellow accents & top pill indicators", "#FFD54F"),
@@ -25,6 +26,7 @@ enum class UiTemplateType(
 enum class ShutterStyle(val label: String, val description: String) {
     CLASSIC_WHITE("Classic Ring", "Double ring with solid white center"),
     APPLE_DOT("Apple Minimal", "Thin silver ring with crisp inner circle"),
+    OPPO_ORANGE("OPPO Orange", "Orange filled shutter with a subtle dark outer ring"),
     SAMSUNG_CAPSULE("Samsung OneUI", "Thick outer border with solid round core"),
     VIVO_GIMBAL("Vivo Origin", "Accent colored outer ring with responsive gimbal core"),
     MINIMAL_ACCENT("Minimalist Accent", "Flat borderless tactile trigger"),
@@ -42,6 +44,7 @@ enum class ModeSelectorPosition(val label: String) {
 enum class ModeSelectorStyle(val label: String) {
     CLASSIC_DOT("Yellow Indicator Dot"),
     CAPSULE_PILL("OneUI Capsule Pill"),
+    OPPO_PILL("OPPO Selected Capsule"),
     UNDERLINE("Vivo Accent Underline"),
     MINIMAL_TEXT("Minimal Typography"),
     PIXEL_PILL("Pixel Dark Pill"),
@@ -431,8 +434,8 @@ data class ModeLayoutConfig(
 }
 
 data class UiCustomizationState(
-    val selectedTemplate: UiTemplateType = UiTemplateType.SAMSUNG,
-    val globalConfig: ModeLayoutConfig = CameraUiTemplates.getTemplateConfig(UiTemplateType.SAMSUNG),
+    val selectedTemplate: UiTemplateType = UiTemplateType.OPPO,
+    val globalConfig: ModeLayoutConfig = CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO),
     val modeSpecificConfigs: Map<CameraMode, ModeLayoutConfig> = emptyMap(),
     val customPresets: List<CustomUiPreset> = emptyList()
 ) {
@@ -474,8 +477,8 @@ data class UiCustomizationState(
             return try {
                 val root = JSONObject(jsonStr)
                 val template = try {
-                    UiTemplateType.valueOf(root.optString("selectedTemplate", UiTemplateType.SAMSUNG.name))
-                } catch (e: Exception) { UiTemplateType.SAMSUNG }
+                    UiTemplateType.valueOf(root.optString("selectedTemplate", UiTemplateType.OPPO.name))
+                } catch (e: Exception) { UiTemplateType.OPPO }
 
                 val gConfig = root.optJSONObject("globalConfig")?.let { ModeLayoutConfig.fromJson(it) }
                     ?: CameraUiTemplates.getTemplateConfig(template)
@@ -510,9 +513,23 @@ data class UiCustomizationState(
                     }
                 }
 
+                // Migrate an untouched legacy Samsung default to OPPO. Preserve explicit
+                // per-mode layouts and any globally customized template configuration.
+                val isUnmodifiedLegacySamsungDefault =
+                    template == UiTemplateType.SAMSUNG &&
+                    modeMap.isEmpty() &&
+                    gConfig.toJson().toString() ==
+                        CameraUiTemplates.getTemplateConfig(UiTemplateType.SAMSUNG).toJson().toString()
+                val resolvedTemplate = if (isUnmodifiedLegacySamsungDefault) UiTemplateType.OPPO else template
+                val resolvedConfig = if (isUnmodifiedLegacySamsungDefault) {
+                    CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
+                } else {
+                    gConfig
+                }
+
                 UiCustomizationState(
-                    selectedTemplate = template,
-                    globalConfig = gConfig,
+                    selectedTemplate = resolvedTemplate,
+                    globalConfig = resolvedConfig,
                     modeSpecificConfigs = modeMap,
                     customPresets = presetsList
                 )
@@ -586,6 +603,36 @@ object CameraUiTemplates {
 
     fun getTemplateConfig(type: UiTemplateType): ModeLayoutConfig {
         return when (type) {
+            UiTemplateType.OPPO -> ModeLayoutConfig(
+                visibleModes = listOf(CameraMode.VIDEO, CameraMode.PHOTO, CameraMode.MORE),
+                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
+                modeSelectorStyle = ModeSelectorStyle.OPPO_PILL,
+                shutterStyle = ShutterStyle.OPPO_ORANGE,
+                shutterSizeDp = 82,
+                flipButtonSizeDp = 54,
+                galleryThumbSizeDp = 54,
+                topControlsIconSizeDp = 20,
+                topControlsSpacingDp = 18,
+                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
+                accentColorHex = "#FF8A00",
+                modeTextSizeSp = 13.5f,
+                modeFontFamily = FontFamilyOption.DEFAULT,
+                topPaddingDp = 12,
+                bottomPaddingDp = 16,
+                showZoomCapsule = true,
+                zoomCapsuleScale = 1.0f,
+                zoomCapsuleVerticalOffsetDp = 0,
+                textColorHex = "#FFFFFF",
+                fontWeightOption = FontWeightOption.SEMI_BOLD,
+                textCaseOption = TextCaseOption.UPPERCASE,
+                letterSpacingSp = 0.2f,
+                textShadowOption = TextShadowOption.NONE,
+                iconStyleOption = IconStyleOption.ROUNDED_MATERIAL,
+                iconColorHex = "#FFFFFF",
+                iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
+                iconContainerOpacity = 0.35f,
+                iconStrokeWidthDp = 1.8f
+            )
             UiTemplateType.STOCK_PIXEL -> ModeLayoutConfig(
                 visibleModes = listOf(
                     CameraMode.PHOTO,
