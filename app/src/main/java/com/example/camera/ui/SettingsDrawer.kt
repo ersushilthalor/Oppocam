@@ -204,7 +204,7 @@ fun SettingsDrawer(
     onViewfinderCornerRadiusChange: (Int) -> Unit = {},
     lensSwitchOverlapDurationSec: Float = 0.3f,
     onLensSwitchOverlapDurationChange: (Float) -> Unit = {},
-    lensSwitchHoldDurationSec: Float = 0.10f,
+    lensSwitchHoldDurationSec: Float = 0.02f,
     onLensSwitchHoldDurationChange: (Float) -> Unit = {},
     isLensSwitchOverlapAnimationEnabled: Boolean = false,
     onLensSwitchOverlapAnimationToggle: (Boolean) -> Unit = {},
@@ -2366,24 +2366,26 @@ private fun LensSwitchHoldDurationSettingCard(
     onHoldDurationChange: (Float) -> Unit,
     isOverlapAnimationEnabled: Boolean = false
 ) {
-    val roundedDuration = ((holdDurationSec.coerceIn(0.0f, 0.30f) * 20f).roundToInt() / 20f).coerceIn(0.0f, 0.30f)
-    val isDefault = kotlin.math.abs(roundedDuration - 0.10f) < 0.001f
+    val roundedDuration = ((holdDurationSec.coerceIn(0.0f, 0.30f) * 100f).roundToInt() / 100f).coerceIn(0.0f, 0.30f)
+    val isDefault = kotlin.math.abs(roundedDuration - 0.02f) < 0.001f
+    val holdMillis = (roundedDuration * 1000f).roundToInt()
     val displayValue = when {
-        roundedDuration <= 0.0001f -> "0 ms"
-        isOverlapAnimationEnabled && isDefault -> String.format(java.util.Locale.US, "%.2f sec (Default • Fallback)", roundedDuration)
-        isOverlapAnimationEnabled -> String.format(java.util.Locale.US, "%.2f sec (Fallback)", roundedDuration)
-        isDefault -> String.format(java.util.Locale.US, "%.2f sec (Default)", roundedDuration)
-        else -> String.format(java.util.Locale.US, "%.2f sec", roundedDuration)
+        holdMillis == 0 -> "0 ms"
+        isOverlapAnimationEnabled && isDefault -> "$holdMillis ms (Default • Fallback)"
+        isOverlapAnimationEnabled -> "$holdMillis ms (Fallback)"
+        isDefault -> "$holdMillis ms (Default)"
+        else -> "$holdMillis ms"
     }
 
     val options = listOf(
         0.0f to "0 ms",
-        0.05f to "0.05 sec",
-        0.10f to "0.10 sec",
-        0.15f to "0.15 sec",
-        0.20f to "0.20 sec",
-        0.25f to "0.25 sec",
-        0.30f to "0.30 sec"
+        0.02f to "20 ms (Default)",
+        0.05f to "50 ms",
+        0.10f to "100 ms",
+        0.15f to "150 ms",
+        0.20f to "200 ms",
+        0.25f to "250 ms",
+        0.30f to "300 ms"
     )
 
     Card(
@@ -2432,9 +2434,9 @@ private fun LensSwitchHoldDurationSettingCard(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (isOverlapAnimationEnabled) {
-                                "Fallback hold time. Frame-Based Lens Handoff blends over sixteen incoming preview frames; 0 ms disables the intentional hold."
+                                "Sixteen-frame handoff is used only for 0.5x ↔ 2x/3x. The 0.5x ↔ 1x switch keeps this selected hold time."
                             } else {
-                                "0 ms skips the intentional hold; higher values hold the Ultra-Wide view at the selected switch point before switching to Main."
+                                "0.5x ↔ 2x/3x skips the hold. The 0.5x ↔ 1x switch uses this selected duration."
                             },
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
@@ -2482,7 +2484,7 @@ private fun LensSwitchHoldDurationSettingCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 options.forEach { (value, label) ->
-                    val isSelected = kotlin.math.abs(roundedDuration - value) < 0.01f
+                    val isSelected = kotlin.math.abs(roundedDuration - value) < 0.005f
                     val tagValue = String.format(java.util.Locale.US, "%.2f", value)
                     FilterChip(
                         selected = isSelected,
