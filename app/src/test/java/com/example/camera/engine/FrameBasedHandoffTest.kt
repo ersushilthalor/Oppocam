@@ -39,6 +39,18 @@ class FrameBasedHandoffTest {
         assertTrue(controller.previewOverlapState.value.isOverlapping)
         assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
 
+        // Two fresh target frames warm up the Camera2 crop/zoom request while the outgoing
+        // preview remains visible; do not blend frames that may still have mismatched FOV.
+        repeat(2) {
+            controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
+            controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
+            val warmup = controller.previewOverlapState.value
+            assertTrue(warmup.isOverlapping)
+            assertEquals(0f, warmup.overlapProgress, 0.0001f)
+            assertEquals(1f, warmup.mainAlpha, 0.0001f)
+            assertEquals(0f, warmup.ultraWideAlpha, 0.0001f)
+        }
+
         var previousProgress = 0f
         repeat(15) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
@@ -88,7 +100,7 @@ class FrameBasedHandoffTest {
     }
 
     @Test
-    fun handoffUsesSixteenIncomingFramesAndIgnoresOutgoingFrames() {
+    fun handoffUsesTwoWarmupFramesThenSixteenBlendFramesAndIgnoresOutgoingFrames() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
 
@@ -104,6 +116,18 @@ class FrameBasedHandoffTest {
         // The outgoing stream must not advance the incoming-frame crossfade.
         controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
         assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
+
+        // Wait for two fresh Main frames before starting the actual 16-frame blend.
+        repeat(2) {
+            controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
+            controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
+            val warmup = controller.previewOverlapState.value
+            assertTrue(warmup.isOverlapping)
+            assertEquals(0f, warmup.overlapProgress, 0.0001f)
+            assertEquals(0f, warmup.mainAlpha, 0.0001f)
+            assertEquals(1f, warmup.ultraWideAlpha, 0.0001f)
+            assertEquals(PreviewStreamSource.ULTRAWIDE, warmup.topSource)
+        }
 
         var previousProgress = 0f
         repeat(15) {
