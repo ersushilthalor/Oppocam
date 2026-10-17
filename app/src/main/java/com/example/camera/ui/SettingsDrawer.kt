@@ -2434,7 +2434,7 @@ private fun LensSwitchHoldDurationSettingCard(
                             text = if (isOverlapAnimationEnabled) {
                                 "Fallback hold time. Frame-Based Lens Handoff blends over sixteen incoming preview frames; 0 ms disables the intentional hold."
                             } else {
-                                "Hold duration at the selected switch point field of view on the Ultra-Wide lens before switching to the Main lens."
+                                "0 ms skips the intentional hold; higher values hold the Ultra-Wide view at the selected switch point before switching to Main."
                             },
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 12.sp,
