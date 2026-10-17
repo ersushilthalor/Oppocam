@@ -4869,8 +4869,9 @@ class Camera2Engine(private val context: Context) {
                 val lens = _selectedLens.value
                 if (lens != null) {
                     try {
-                        val chars = lens.physicalCameraId?.let { getCharacteristics(it) }
-                            ?: getCharacteristics(lens.cameraId)
+                        // The request's SCALER_CROP_REGION is in the openable/logical
+                        // camera's coordinate space; use that same active array for the crop.
+                        val chars = getCharacteristics(lens.cameraId)
                         val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
                         val focalLength = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                             ?.firstOrNull() ?: 4.38f
@@ -5232,10 +5233,13 @@ class Camera2Engine(private val context: Context) {
         val ultra = config.isUltraStabilizationEnabled
         val requested = isVideoStabilizationEnabled && isVideoMode &&
             (ultra || config.isEisOnly || (config.isHybridEnabled && config.isEisPreferred))
-        // Do not silently disable EIS just because the selected recording mode is 4K/60.
-        // Let Camera2/HAL report whether EIS can actually be active for this stream configuration.
+        // Keep the native EIS request compatible with cameras that cannot combine EIS with 4K/60.
+        // The software gyro crop path still runs when EIS is enabled, even when this HW path is skipped.
+        val isHighFps4k = (_selectedVideoResolution.value?.let { maxOf(it.width, it.height) >= 3840 } == true) &&
+            videoFps >= 60
+        val adaptiveAllowed = ultra || !config.isAdaptiveFpsLens || !isHighFps4k
         val mode = when {
-            !requested -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+            !requested || !adaptiveAllowed -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
             supportsPreviewStabilization ->
                 CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
             supportsEis -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
