@@ -64,7 +64,7 @@ class ZoomTransitionController(
         const val PREVIEW_OVERLAP_DURATION_MS = 100L
         const val MIN_OVERLAP_DURATION_MS = 100L
         const val MAX_OVERLAP_DURATION_MS = 1000L
-        private const val FRAME_HANDOFF_REQUIRED_FRAMES = 4
+        private const val FRAME_HANDOFF_REQUIRED_FRAMES = 8
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
     }
 
@@ -194,7 +194,12 @@ class ZoomTransitionController(
         if (source != targetSource) return
 
         frameHandoffFrameCount = (frameHandoffFrameCount + 1).coerceAtMost(FRAME_HANDOFF_REQUIRED_FRAMES)
-        val progress = frameHandoffFrameCount.toFloat() / FRAME_HANDOFF_REQUIRED_FRAMES.toFloat()
+        val frameProgress = frameHandoffFrameCount.toFloat() / FRAME_HANDOFF_REQUIRED_FRAMES.toFloat()
+        // Ease in/out across more real incoming frames. Cosine easing avoids a visible fade
+        // jump on the first frame while finishing cleanly on the final frame.
+        val progress = (0.5 * (1.0 - cos(PI * frameProgress.toDouble())))
+            .toFloat()
+            .coerceIn(0f, 1f)
         // Keep the outgoing layer fully opaque underneath. Only the incoming top layer
         // animates its alpha, producing a true old*(1-p) + new*p visual blend without dark gaps.
         val mainAlpha = if (targetSource == PreviewStreamSource.MAIN) progress else 1f
