@@ -1196,7 +1196,7 @@ fun MasterZoomCapsule(
                 },
                 isExternalDragging = isCapsuleDragging
             )
-        } else if (layoutConfig.shutterStyle == ShutterStyle.VIVO_GIMBAL) {
+        } else if (layoutConfig.useFocalLengthZoomLabels) {
             // Vivo-style focal length scale: 14 / 35 mm / 85 / 170 / 230.
             // Keep the existing horizontal ruler slider and zoom callback behavior.
             val focalLengthSteps = listOf(
