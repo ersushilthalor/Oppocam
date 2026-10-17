@@ -357,6 +357,19 @@ fun CameraScreen(
                     .maxOfOrNull { it.maxZoomRatio } ?: 20.0f
             }
             val maxViewfinderZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
+            // OPPO video preview uses a dedicated portrait frame below the top controls.
+            // Keep other templates and all non-video modes on their existing full-screen layout.
+            val isOppoVideoTemplate = cameraMode == CameraMode.VIDEO &&
+                    uiCustomizationState.selectedTemplate.name.contains("OPPO", ignoreCase = true)
+            val viewfinderLayoutModifier = if (isOppoVideoTemplate) {
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 72.dp)
+                    .aspectRatio(9f / 16f)
+                    .align(Alignment.TopCenter)
+            } else {
+                Modifier.fillMaxSize()
+            }
 
             // 1. Viewfinder layer preserving exact aspect ratio without distortion
             Viewfinder(
@@ -422,7 +435,7 @@ fun CameraScreen(
                 onFrameLuminanceStats = { stats ->
                     viewModel.engine.onFrameLuminanceStats(stats)
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = viewfinderLayoutModifier
             )
         // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
         if (cameraMode == CameraMode.VIDEO) {
