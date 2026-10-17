@@ -372,6 +372,43 @@ class CameraOpticalCalibrationTest {
     }
 
     @Test
+    fun standbyUltraWideCropMatchesActualMainFovWhenConfiguredSwitchPointIsBelowNativeFocalLength() {
+        // Main native FOV is 26mm equivalent; a 23mm switch-point must not leave
+        // standby Ultra-Wide 13% wider during the 0.5x <-> Main frame crossfade.
+        val crop = CameraOpticalCalibration.calculateFovMatchedUltraWideCrop(
+            switchPointMm = 23f,
+            mainEquivalentFocalMm = 26f,
+            uwEquivalentFocalMm = 13f
+        )
+        assertEquals(2.0f, crop, 0.001f)
+    }
+
+    @Test
+    fun standbyUltraWideCropHonorsSwitchPointWhenItRequiresMoreMagnificationThanMainNativeFov() {
+        val crop = CameraOpticalCalibration.calculateFovMatchedUltraWideCrop(
+            switchPointMm = 40f,
+            mainEquivalentFocalMm = 26f,
+            uwEquivalentFocalMm = 13f
+        )
+        assertEquals(40f / 13f, crop, 0.001f)
+    }
+
+    @Test
+    fun standbyUltraWideCropFallsBackSafelyForInvalidFocalLengths() {
+        val crop = CameraOpticalCalibration.calculateFovMatchedUltraWideCrop(
+            switchPointMm = Float.NaN,
+            mainEquivalentFocalMm = 0f,
+            uwEquivalentFocalMm = Float.NaN
+        )
+        assertEquals(
+            CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM /
+                CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM,
+            crop,
+            0.001f
+        )
+    }
+
+    @Test
     fun testFrontCameraNativeUncroppedFieldOfView() {
         // Front camera uses native uncropped sensor field of view by default (1.0f digital crop)
         val cropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.FRONT)
