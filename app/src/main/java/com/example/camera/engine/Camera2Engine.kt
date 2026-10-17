@@ -1642,13 +1642,17 @@ class Camera2Engine(private val context: Context) {
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         // Preserve the user's OIS preference while sanitizing all legacy EIS/hybrid flags.
+        val oisEnabled = preferences.isOisEnabled
         _hybridStabilizationConfig.value = config.copy(
             isHybridEnabled = false,
+            isOisPreferred = oisEnabled,
+            isOisEnabled = oisEnabled,
             isEisPreferred = false,
             isAdaptiveFpsLens = false,
             isUltraStabilizationEnabled = false,
             isEisOnly = false
         )
+        preferences.isUltraStabilizationEnabled = false
         gyroStabilizationEngine.stop()
         updatePreviewSettings()
     }
