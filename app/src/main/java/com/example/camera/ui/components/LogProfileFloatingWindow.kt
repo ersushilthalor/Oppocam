@@ -43,7 +43,7 @@ fun LogProfileFloatingWindow(
     val profiles = remember {
         listOf(
             CinemaColorProfile.NATIVE to "Natural",
-            CinemaColorProfile.HLG_2 to "HLG 2"
+            CinemaColorProfile.HLG10 to "HLG10"
         )
     }
 

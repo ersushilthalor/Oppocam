@@ -297,31 +297,33 @@ class ZoomTransitionController(
                     // telephoto taps use a short crossfade instead of a dead stop at the handoff.
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
-                    val blendDurationMs = if (holdDuration > 0L) holdDuration else 140L
-                    val blendStartTime = SystemClock.uptimeMillis()
-                    while (isActive) {
-                        val now = SystemClock.uptimeMillis()
-                        val blendElapsed = now - blendStartTime
-                        if (blendElapsed >= blendDurationMs) break
-
-                        val progress = (blendElapsed.toFloat() / blendDurationMs.toFloat()).coerceIn(0f, 1f)
-                        val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
-                        val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
-                        val mainAlpha = 1.0f
-
-                        _previewOverlapState.value = PreviewOverlapState(
-                            isOverlapping = true,
-                            mainAlpha = mainAlpha,
-                            ultraWideAlpha = uwAlpha,
-                            activeSource = PreviewStreamSource.MAIN,
-                            overlapProgress = progress,
-                            topSource = PreviewStreamSource.ULTRAWIDE
-                        )
-
-                        val nextTick = minOf(blendStartTime + blendDurationMs, now + 16L)
-                        val waitMs = nextTick - SystemClock.uptimeMillis()
-                        if (waitMs > 0) {
-                            delay(waitMs)
+                    if (holdDuration > 0L) {
+                        val blendDurationMs = holdDuration
+                        val blendStartTime = SystemClock.uptimeMillis()
+                        while (isActive) {
+                            val now = SystemClock.uptimeMillis()
+                            val blendElapsed = now - blendStartTime
+                            if (blendElapsed >= blendDurationMs) break
+    
+                            val progress = (blendElapsed.toFloat() / blendDurationMs.toFloat()).coerceIn(0f, 1f)
+                            val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
+                            val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
+                            val mainAlpha = 1.0f
+    
+                            _previewOverlapState.value = PreviewOverlapState(
+                                isOverlapping = true,
+                                mainAlpha = mainAlpha,
+                                ultraWideAlpha = uwAlpha,
+                                activeSource = PreviewStreamSource.MAIN,
+                                overlapProgress = progress,
+                                topSource = PreviewStreamSource.ULTRAWIDE
+                            )
+    
+                            val nextTick = minOf(blendStartTime + blendDurationMs, now + 16L)
+                            val waitMs = nextTick - SystemClock.uptimeMillis()
+                            if (waitMs > 0) {
+                                delay(waitMs)
+                            }
                         }
                     }
                 } else {
