@@ -1689,7 +1689,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         fromZoom: Float,
         targetZoom: Float,
         targetLens: LensInfo? = null,
-        durationMs: Long = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
+        durationMs: Long = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS,
+        skipHoldAtSwitchPoint: Boolean = false
     ) {
         val currentFacing = engine.selectedLens.value?.facing
         val lensesForFacing = engine.availableLenses.value.filter { currentFacing == null || it.facing == currentFacing }
@@ -1726,6 +1727,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             switchPointMm = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
             scope = viewModelScope,
             durationMs = durationMs,
+            skipHoldAtSwitchPoint = skipHoldAtSwitchPoint,
             onZoomUpdate = { interpolatedZoom ->
                 _currentZoom.value = interpolatedZoom
             },
@@ -1828,11 +1830,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     else -> mainWideLens
                 }
             }
+            // Skip the switch-point hold only for direct 2x/3x preset taps from the zoom controls.
+            // A 1x tap deliberately keeps the user's configured hold duration.
+            val skipHoldForTelephotoPreset = isPresetTap &&
+                (kotlin.math.abs(clamped - 2.0f) < 0.05f || kotlin.math.abs(clamped - 3.0f) < 0.05f)
             startContinuousZoomTransition(
                 fromZoom = currentZ,
                 targetZoom = clamped,
                 targetLens = targetLens,
-                durationMs = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS
+                durationMs = com.example.camera.engine.ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS,
+                skipHoldAtSwitchPoint = skipHoldForTelephotoPreset
             )
             return
         }
