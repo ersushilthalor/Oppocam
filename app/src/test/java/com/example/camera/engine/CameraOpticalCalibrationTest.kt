@@ -409,6 +409,30 @@ class CameraOpticalCalibrationTest {
     }
 
     @Test
+    fun handoffDynamicCropTracksTheActiveMainFovThroughTheZoomAnimation() {
+        // With actual focal equivalents (Main 26mm, Ultra-Wide 13mm), standby must track
+        // the same effective focal length rather than staying fixed at the 1x switch-point crop.
+        val atOneX = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+            uiZoom = 1f,
+            lensBaseRatio = 0.5f,
+            lensType = LensType.ULTRAWIDE,
+            uwEquivalentFocalMm = 13f,
+            mainEquivalentFocalMm = 26f,
+            switchPointMm = 23f
+        )
+        val atTwoX = CameraOpticalCalibration.calculateRequiredDigitalCrop(
+            uiZoom = 2f,
+            lensBaseRatio = 0.5f,
+            lensType = LensType.ULTRAWIDE,
+            uwEquivalentFocalMm = 13f,
+            mainEquivalentFocalMm = 26f,
+            switchPointMm = 23f
+        )
+        assertEquals("1x Main should match a 2x crop on a 13mm-equivalent Ultra-Wide", 2f, atOneX, 0.001f)
+        assertEquals("2x Main should match a 4x crop on a 13mm-equivalent Ultra-Wide", 4f, atTwoX, 0.001f)
+    }
+
+    @Test
     fun testFrontCameraNativeUncroppedFieldOfView() {
         // Front camera uses native uncropped sensor field of view by default (1.0f digital crop)
         val cropAt10 = CameraOpticalCalibration.calculateRequiredDigitalCrop(1.0f, 1.0f, LensType.FRONT)
