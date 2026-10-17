@@ -231,7 +231,7 @@ fun SettingsDrawer(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 6.dp)
         ) {
             // Reference-style Settings header
             Row(
@@ -242,7 +242,7 @@ fun SettingsDrawer(
                     onClick = {
                         if (currentPage != null) currentPage = null else onDismiss()
                     },
-                    modifier = Modifier.size(48.dp).testTag("settings_back_button")
+                    modifier = Modifier.size(40.dp).testTag("settings_back_button")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -256,7 +256,7 @@ fun SettingsDrawer(
                     color = Color.White,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 12.dp)
+                    modifier = Modifier.padding(start = 8.dp)
                 )
             }
 
@@ -763,17 +763,9 @@ private fun ReferenceToggleRow(
                     )
                 }
             }
-            Switch(
+            ReferenceSwitch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = Color(0xFFFF8A32),
-                    checkedBorderColor = Color(0xFFFF8A32),
-                    uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = Color(0xFF5A5A5A),
-                    uncheckedBorderColor = Color(0xFF5A5A5A)
-                ),
                 modifier = Modifier.testTag("reference_switch_" + title.lowercase().replace(' ', '_'))
             )
         }
@@ -784,6 +776,30 @@ private fun ReferenceToggleRow(
                 color = Color(0xFF303030)
             )
         }
+    }
+}
+
+@Composable
+private fun ReferenceSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .width(48.dp)
+            .height(28.dp)
+            .clip(CircleShape)
+            .background(if (checked) Color(0xFFFF8A32) else Color(0xFF5A5A5A))
+            .clickable { onCheckedChange(!checked) },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(start = if (checked) 23.dp else 3.dp)
+                .size(22.dp)
+                .background(Color.White, CircleShape)
+        )
     }
 }
 
