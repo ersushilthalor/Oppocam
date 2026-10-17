@@ -15,7 +15,7 @@ enum class UiTemplateType(
     STOCK_PIXEL("Arnova GCam 8.7", "Google Camera 8.7-inspired layout with a clean mode strip, minimal controls and zoom selector", "#FFFFFF"),
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
     IPHONE("iPhone (iOS)", "Clean, minimal Apple iPhone layout with yellow accents & top pill indicators", "#FFD54F"),
-    VIVO("Vivo OriginOS", "Vivo OriginOS/Funtouch camera layout with circular icons, gimbal cues & vivid shutter ring", "#FF7043"),
+    VIVO("Vivo OriginOS", "Screenshot-matched Vivo camera layout with yellow selected mode, focal-length labels and concentric shutter rings", "#FFD54F"),
     CUSTOM("Custom UI", "Completely personalized layout, spacing, typography & controls", "#64B5F6")
 }
 
@@ -180,6 +180,7 @@ data class ModeLayoutConfig(
     val topPaddingDp: Int = 12,
     val bottomPaddingDp: Int = 14,
     val showZoomCapsule: Boolean = true,
+    val useFocalLengthZoomLabels: Boolean = false,
     val zoomCapsuleScale: Float = 1.0f,
     val zoomCapsuleVerticalOffsetDp: Int = 0,
     val accentColorHex: String = "#FFD54F",
@@ -292,6 +293,7 @@ data class ModeLayoutConfig(
         json.put("topPaddingDp", topPaddingDp)
         json.put("bottomPaddingDp", bottomPaddingDp)
         json.put("showZoomCapsule", showZoomCapsule)
+        json.put("useFocalLengthZoomLabels", useFocalLengthZoomLabels)
         json.put("zoomCapsuleScale", zoomCapsuleScale.toDouble())
         json.put("zoomCapsuleVerticalOffsetDp", zoomCapsuleVerticalOffsetDp)
         json.put("accentColorHex", accentColorHex)
@@ -398,6 +400,7 @@ data class ModeLayoutConfig(
                 topPaddingDp = json.optInt("topPaddingDp", 12),
                 bottomPaddingDp = json.optInt("bottomPaddingDp", 14),
                 showZoomCapsule = json.optBoolean("showZoomCapsule", true),
+                useFocalLengthZoomLabels = json.optBoolean("useFocalLengthZoomLabels", false),
                 zoomCapsuleScale = json.optDouble("zoomCapsuleScale", 1.0).toFloat(),
                 zoomCapsuleVerticalOffsetDp = json.optInt("zoomCapsuleVerticalOffsetDp", 0),
                 accentColorHex = json.optString("accentColorHex", "#FFD54F"),
@@ -516,11 +519,34 @@ data class UiCustomizationState(
                     modeMap.isEmpty() &&
                     gConfig.toJson().toString() ==
                         CameraUiTemplates.getTemplateConfig(UiTemplateType.SAMSUNG).toJson().toString()
+
+                // Upgrade an untouched Vivo preset saved before the focal-length layout was introduced.
+                // Only migrate an exact legacy preset match, preserving any user-customized configuration.
+                val legacyVivoDefault = CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO).copy(
+                    visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
+                    useFocalLengthZoomLabels = false,
+                    modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
+                    modeSelectorStyle = ModeSelectorStyle.UNDERLINE,
+                    accentColorHex = "#FF7043",
+                    modeTextSizeSp = 14.0f,
+                    bottomPaddingDp = 14,
+                    textCaseOption = TextCaseOption.UPPERCASE,
+                    letterSpacingSp = 0.5f,
+                    textShadowOption = TextShadowOption.SUBTLE_SHADOW,
+                    iconStyleOption = IconStyleOption.ROUNDED_MATERIAL,
+                    iconContainerOpacity = 0.35f,
+                    iconStrokeWidthDp = 1.8f
+                )
+                val isUnmodifiedLegacyVivoDefault =
+                    template == UiTemplateType.VIVO &&
+                    modeMap.isEmpty() &&
+                    gConfig.toJson().toString() == legacyVivoDefault.toJson().toString()
+
                 val resolvedTemplate = if (isUnmodifiedLegacySamsungDefault) UiTemplateType.OPPO else template
-                val resolvedConfig = if (isUnmodifiedLegacySamsungDefault) {
-                    CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
-                } else {
-                    gConfig
+                val resolvedConfig = when {
+                    isUnmodifiedLegacySamsungDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
+                    isUnmodifiedLegacyVivoDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO)
+                    else -> gConfig
                 }
 
                 UiCustomizationState(
@@ -702,8 +728,10 @@ object CameraUiTemplates {
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE
             )
             UiTemplateType.VIVO -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.UNDERLINE,
+                visibleModes = listOf(CameraMode.VIDEO, CameraMode.PHOTO, CameraMode.MORE),
+                useFocalLengthZoomLabels = true,
+                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
+                modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
                 shutterStyle = ShutterStyle.VIVO_GIMBAL,
                 shutterSizeDp = 84,
                 shutterHorizontalOffsetDp = 0,
@@ -712,12 +740,21 @@ object CameraUiTemplates {
                 topControlsIconSizeDp = 20,
                 topControlsSpacingDp = 16,
                 topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#FF7043",
-                modeTextSizeSp = 14.0f,
+                accentColorHex = "#FFD54F",
+                modeTextSizeSp = 14.5f,
                 modeFontFamily = FontFamilyOption.DEFAULT,
                 topPaddingDp = 12,
-                bottomPaddingDp = 14,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
+                bottomPaddingDp = 12,
+                textColorHex = "#FFFFFF",
+                fontWeightOption = FontWeightOption.SEMI_BOLD,
+                textCaseOption = TextCaseOption.TITLE_CASE,
+                letterSpacingSp = 0.0f,
+                textShadowOption = TextShadowOption.NONE,
+                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
+                iconColorHex = "#FFFFFF",
+                iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
+                iconContainerOpacity = 0.0f,
+                iconStrokeWidthDp = 1.6f
             )
             UiTemplateType.CUSTOM -> ModeLayoutConfig(
                 modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,

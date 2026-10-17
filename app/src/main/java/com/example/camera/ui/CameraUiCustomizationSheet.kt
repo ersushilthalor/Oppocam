@@ -125,10 +125,6 @@ fun CameraUiCustomizationView(
                         val icon = when (template) {
                             UiTemplateType.OPPO -> Icons.Outlined.CameraAlt
                             UiTemplateType.STOCK_PIXEL -> Icons.Outlined.CameraAlt
-                            UiTemplateType.MINIMAL_PRO -> Icons.Outlined.CenterFocusStrong
-                            UiTemplateType.FUTURISTIC_GLASS -> Icons.Outlined.AutoAwesome
-                            UiTemplateType.DSLR_PRO -> Icons.Outlined.CameraAlt
-                            UiTemplateType.IMMERSIVE_EDGE -> Icons.Outlined.Fullscreen
                             UiTemplateType.IPHONE -> Icons.Outlined.PhoneIphone
                             UiTemplateType.SAMSUNG -> Icons.Outlined.PhoneAndroid
                             UiTemplateType.VIVO -> Icons.Outlined.Camera

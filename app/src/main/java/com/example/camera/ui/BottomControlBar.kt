@@ -131,6 +131,7 @@ fun BottomControlBar(
                         onLensSelected = onLensSelected,
                         onZoomChange = onZoomChange,
                         onZoomPresetTap = onZoomPresetTap,
+                        layoutConfig = layoutConfig,
                         modifier = Modifier
                             .scale(layoutConfig.zoomCapsuleScale)
                             .testTag("master_zoom_capsule")
@@ -224,7 +225,7 @@ fun BottomControlBar(
                     onShutterAreaHeightMeasured(heightDp)
                 }
                 .then(
-                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL) {
+                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL || layoutConfig.useFocalLengthZoomLabels) {
                         Modifier.background(Color.Black)
                     } else {
                         Modifier.background(
@@ -390,7 +391,7 @@ fun BottomControlBar(
                                         ShutterStyle.APPLE_DOT -> Modifier.border(2.dp, Color.White.copy(alpha = 0.9f), CircleShape)
                                         ShutterStyle.OPPO_ORANGE -> Modifier.border(5.dp, Color(0xFF5A3928), CircleShape).padding(3.dp)
                                         ShutterStyle.SAMSUNG_CAPSULE -> Modifier.border(4.dp, Color.White, CircleShape).padding(4.dp)
-                                        ShutterStyle.VIVO_GIMBAL -> Modifier.border(3.dp, accentColor, CircleShape)
+                                        ShutterStyle.VIVO_GIMBAL -> Modifier.border(3.5.dp, Color.White, CircleShape).padding(3.dp)
                                         ShutterStyle.MINIMAL_ACCENT -> Modifier
                                         ShutterStyle.PIXEL_SOLID -> Modifier.border(4.dp, Color.White, CircleShape).padding(3.dp)
                                         ShutterStyle.LEICA_RED_DOT -> Modifier.border(3.dp, Color(0xFFE0E0E0), CircleShape).padding(3.dp)
@@ -450,13 +451,25 @@ fun BottomControlBar(
                                         ShutterStyle.DSLR_KNURLED -> Color(0xFFDDDDDD)
                                         else -> Color.White
                                     }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(shutterSize * 0.8f)
-                                            .scale(buttonScale)
-                                            .clip(CircleShape)
-                                            .background(shutterColor)
-                                    )
+                                    if (layoutConfig.shutterStyle == ShutterStyle.VIVO_GIMBAL) {
+                                        // Vivo reference: white outer ring, pale-gold inner ring, dark open center.
+                                        Box(
+                                            modifier = Modifier
+                                                .size(shutterSize * 0.72f)
+                                                .scale(buttonScale)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF080808))
+                                                .border(2.dp, Color(0xFFFFE9A8), CircleShape)
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(shutterSize * 0.8f)
+                                                .scale(buttonScale)
+                                                .clip(CircleShape)
+                                                .background(shutterColor)
+                                        )
+                                    }
                                 }
 
                                 CameraMode.VIDEO, CameraMode.CINEMA -> {
@@ -686,6 +699,7 @@ fun BottomControlBar(
                                     val targetTextColor = if (isSelected) {
                                         if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.MONO_TICKER) Color(0xFFE53935)
                                         else if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.CYBER_GLOW) Color(0xFF00E5FF)
+                                        else if (layoutConfig.shutterStyle == ShutterStyle.VIVO_GIMBAL) accentColor
                                         else customTextColor
                                     } else {
                                         customTextColor.copy(alpha = 0.65f)
@@ -1026,8 +1040,10 @@ fun MasterZoomCapsule(
     onLensSelected: (LensInfo) -> Unit,
     onZoomChange: (Float) -> Unit,
     onZoomPresetTap: (Float) -> Unit,
+    layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
 ) {
+    val fontFamily = layoutConfig.modeFontFamily.toComposeFontFamily()
     val isFrontCamera = selectedLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
     if (isFrontCamera) {
         return
@@ -1181,6 +1197,77 @@ fun MasterZoomCapsule(
                 },
                 isExternalDragging = isCapsuleDragging
             )
+        } else if (layoutConfig.useFocalLengthZoomLabels) {
+            // Vivo-style focal length scale: 14 / 35 mm / 85 / 170 / 230.
+            // Keep the existing horizontal ruler slider and zoom callback behavior.
+            val focalLengthSteps = listOf(
+                14 to 0.5f,
+                35 to 1.0f,
+                85 to (85f / 35f),
+                170 to (170f / 35f),
+                230 to (230f / 35f)
+            )
+            val selectedFocalLength = focalLengthSteps.minByOrNull { (_, ratio) ->
+                (ratio - liveZoom).absoluteValue
+            }?.first ?: 35
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 22.dp, vertical = 1.dp)
+                    .testTag("vivo_focal_length_bar"),
+                horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.Top
+            ) {
+                focalLengthSteps.forEach { (focalLength, preset) ->
+                    val isActive = focalLength == selectedFocalLength
+                    Column(
+                        modifier = Modifier
+                            .width(if (focalLength == 35) 34.dp else 28.dp)
+                            .clickable {
+                                when {
+                                    focalLength == 14 && !hasRealUltraWide -> {
+                                        onShowToast("Ultra-Wide lens is not available on this device")
+                                    }
+                                    preset > maxZoom -> {
+                                        onShowToast("${focalLength}mm zoom is not supported on this device")
+                                    }
+                                    (liveZoom - preset).absoluteValue < 0.15f -> {
+                                        isSliderOpen = true
+                                    }
+                                    else -> {
+                                        liveZoom = preset
+                                        onZoomPresetTap(preset)
+                                    }
+                                }
+                            }
+                            .testTag("vivo_focal_${focalLength}mm"),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = focalLength.toString(),
+                            color = if (isActive) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.92f),
+                            fontSize = 13.5.sp,
+                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
+                            fontFamily = fontFamily,
+                            letterSpacing = (-0.2).sp,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        if (focalLength == 35) {
+                            Text(
+                                text = "mm",
+                                color = if (isActive) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.88f),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontFamily = fontFamily,
+                                lineHeight = 9.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+                }
+            }
         } else {
             Box(
                 modifier = Modifier
