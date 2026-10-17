@@ -61,25 +61,25 @@ class CameraPreferences(context: Context) {
         const val MAX_LENS_SWITCH_HOLD_DURATION_SEC = 0.30f
         const val STEP_LENS_SWITCH_HOLD_DURATION_SEC = 0.05f
         private const val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = "pref_lens_switch_overlap_animation_enabled"
-        private const val KEY_KAMERA_GYRO_EIS_MIGRATION = "pref_kamera_gyro_eis_migration_v1"
+        private const val KEY_EIS_REMOVED_MIGRATION = "pref_eis_removed_migration_v2"
     }
 
     init {
-        // Earlier builds forced EIS to OFF. Re-enable the ZIP behavior once without changing OIS.
-        if (!prefs.getBoolean(KEY_KAMERA_GYRO_EIS_MIGRATION, false)) {
-            prefs.edit()
-                .putBoolean(KEY_VIDEO_STABILIZATION, true)
-                .putBoolean("pref_hybrid_stabilization", true)
-                .putBoolean("pref_eis_preferred", true)
+        // Remove legacy EIS state saved by older builds. OIS is deliberately preserved.
+        if (!prefs.getBoolean(KEY_EIS_REMOVED_MIGRATION, false)) {
+            val edit = prefs.edit()
+                .putBoolean(KEY_VIDEO_STABILIZATION, false)
+                .putString("key_video_stabilization_mode", VideoStabilizationMode.OFF.name)
+                .putBoolean("pref_hybrid_stabilization", false)
+                .putBoolean("pref_eis_preferred", false)
                 .putBoolean("pref_eis_only", false)
                 .putBoolean("pref_ultra_stabilization", false)
-                .putString("key_video_stabilization_mode", VideoStabilizationMode.EIS.name)
-                .putBoolean(modeKey(CameraMode.VIDEO, "video_stab"), true)
-                .putBoolean(modeKey(CameraMode.CINEMA, "video_stab"), true)
-                .putString(modeKey(CameraMode.VIDEO, "video_stab_mode"), VideoStabilizationMode.EIS.name)
-                .putString(modeKey(CameraMode.CINEMA, "video_stab_mode"), VideoStabilizationMode.EIS.name)
-                .putBoolean(KEY_KAMERA_GYRO_EIS_MIGRATION, true)
-                .apply()
+                .putBoolean(KEY_EIS_REMOVED_MIGRATION, true)
+            CameraMode.entries.forEach { mode ->
+                edit.putBoolean(modeKey(mode, "video_stab"), false)
+                edit.putString(modeKey(mode, "video_stab_mode"), VideoStabilizationMode.OFF.name)
+            }
+            edit.apply()
         }
     }
 
@@ -324,23 +324,20 @@ class CameraPreferences(context: Context) {
         }
         set(value) = prefs.edit().putString(KEY_VIDEO_BITRATE, value.name).apply()
 
+    // EIS is removed from this app. Legacy setters persist OFF so old values cannot revive it.
     var isVideoStabilizationEnabled: Boolean
-        get() = prefs.getBoolean(KEY_VIDEO_STABILIZATION, true)
-        set(value) = prefs.edit().putBoolean(KEY_VIDEO_STABILIZATION, value).apply()
+        get() = false
+        set(@Suppress("UNUSED_PARAMETER") value) {
+            prefs.edit().putBoolean(KEY_VIDEO_STABILIZATION, false).apply()
+        }
 
     var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode
-        get() {
-            val name = prefs.getString(
-                "key_video_stabilization_mode",
-                com.example.camera.model.VideoStabilizationMode.EIS.name
-            ) ?: com.example.camera.model.VideoStabilizationMode.EIS.name
-            return try {
-                com.example.camera.model.VideoStabilizationMode.valueOf(name)
-            } catch (_: IllegalArgumentException) {
-                com.example.camera.model.VideoStabilizationMode.EIS
-            }
+        get() = com.example.camera.model.VideoStabilizationMode.OFF
+        set(@Suppress("UNUSED_PARAMETER") value) {
+            prefs.edit()
+                .putString("key_video_stabilization_mode", com.example.camera.model.VideoStabilizationMode.OFF.name)
+                .apply()
         }
-        set(value) = prefs.edit().putString("key_video_stabilization_mode", value.name).apply()
 
     var isAudioEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUDIO_ENABLED, true)
@@ -777,10 +774,12 @@ class CameraPreferences(context: Context) {
         cinemaOutputGamma = config.outputGamma
     }
 
-    // Hybrid Stabilization Preferences
+    // Legacy hybrid/EIS values are hard-disabled; only the separate OIS preference remains active.
     var isHybridStabilizationEnabled: Boolean
-        get() = prefs.getBoolean("pref_hybrid_stabilization", true)
-        set(value) = prefs.edit().putBoolean("pref_hybrid_stabilization", value).apply()
+        get() = false
+        set(@Suppress("UNUSED_PARAMETER") value) {
+            prefs.edit().putBoolean("pref_hybrid_stabilization", false).apply()
+        }
 
     var isOisEnabled: Boolean
         get() = prefs.getBoolean("pref_ois_enabled", prefs.getBoolean("pref_ois_preferred", true))
@@ -798,20 +797,20 @@ class CameraPreferences(context: Context) {
         }
 
     var isEisPreferred: Boolean
-        get() = prefs.getBoolean("pref_eis_preferred", true)
-        set(value) = prefs.edit().putBoolean("pref_eis_preferred", value).apply()
+        get() = false
+        set(@Suppress("UNUSED_PARAMETER") value) { prefs.edit().putBoolean("pref_eis_preferred", false).apply() }
 
     var isAdaptiveFpsLensStabilization: Boolean
-        get() = prefs.getBoolean("pref_adaptive_stabilization", true)
-        set(value) = prefs.edit().putBoolean("pref_adaptive_stabilization", value).apply()
+        get() = false
+        set(@Suppress("UNUSED_PARAMETER") value) { prefs.edit().putBoolean("pref_adaptive_stabilization", false).apply() }
 
     var isUltraStabilizationEnabled: Boolean
-        get() = prefs.getBoolean("pref_ultra_stabilization", false)
-        set(value) = prefs.edit().putBoolean("pref_ultra_stabilization", value).apply()
+        get() = false
+        set(@Suppress("UNUSED_PARAMETER") value) { prefs.edit().putBoolean("pref_ultra_stabilization", false).apply() }
 
     var isEisOnly: Boolean
-        get() = prefs.getBoolean("pref_eis_only", false)
-        set(value) = prefs.edit().putBoolean("pref_eis_only", value).apply()
+        get() = false
+        set(@Suppress("UNUSED_PARAMETER") value) { prefs.edit().putBoolean("pref_eis_only", false).apply() }
 
     // Tap to Focus & Exposure Preferences
     var isTapToFocusExposureEnabled: Boolean
@@ -842,21 +841,21 @@ class CameraPreferences(context: Context) {
 
     var hybridStabilizationConfig: HybridStabilizationConfig
         get() = HybridStabilizationConfig(
-            isHybridEnabled = isHybridStabilizationEnabled,
+            isHybridEnabled = false,
             isOisPreferred = isOisEnabled,
             isOisEnabled = isOisEnabled,
-            isEisPreferred = isEisPreferred,
-            isAdaptiveFpsLens = isAdaptiveFpsLensStabilization,
-            isUltraStabilizationEnabled = isUltraStabilizationEnabled,
-            isEisOnly = isEisOnly
+            isEisPreferred = false,
+            isAdaptiveFpsLens = false,
+            isUltraStabilizationEnabled = false,
+            isEisOnly = false
         )
         set(value) {
-            isHybridStabilizationEnabled = value.isHybridEnabled
+            isHybridStabilizationEnabled = false
             isOisEnabled = value.isOisEnabled && value.isOisPreferred
-            isEisPreferred = value.isEisPreferred
-            isAdaptiveFpsLensStabilization = value.isAdaptiveFpsLens
-            isUltraStabilizationEnabled = value.isUltraStabilizationEnabled
-            isEisOnly = value.isEisOnly
+            isEisPreferred = false
+            isAdaptiveFpsLensStabilization = false
+            isUltraStabilizationEnabled = false
+            isEisOnly = false
         }
 
     var uiCustomizationState: UiCustomizationState
@@ -1244,35 +1243,23 @@ class CameraPreferences(context: Context) {
         return prefs.getFloat(modeKey(mode, "focus_dist"), manualFocusDistance)
     }
 
-    fun setModeVideoStabilization(mode: CameraMode, enabled: Boolean) {
-        isVideoStabilizationEnabled = enabled
-        prefs.edit().putBoolean(modeKey(mode, "video_stab"), enabled).apply()
+    fun setModeVideoStabilization(mode: CameraMode, @Suppress("UNUSED_PARAMETER") enabled: Boolean) {
+        isVideoStabilizationEnabled = false
+        prefs.edit().putBoolean(modeKey(mode, "video_stab"), false).apply()
     }
 
-    fun getModeVideoStabilization(mode: CameraMode): Boolean {
-        return if (prefs.contains(modeKey(mode, "video_stab"))) {
-            prefs.getBoolean(modeKey(mode, "video_stab"), true)
-        } else {
-            isVideoStabilizationEnabled
-        }
+    fun getModeVideoStabilization(@Suppress("UNUSED_PARAMETER") mode: CameraMode): Boolean = false
+
+    fun setModeVideoStabilizationMode(
+        mode: CameraMode,
+        @Suppress("UNUSED_PARAMETER") stabMode: com.example.camera.model.VideoStabilizationMode
+    ) {
+        videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.OFF
+        prefs.edit().putString(modeKey(mode, "video_stab_mode"), com.example.camera.model.VideoStabilizationMode.OFF.name).apply()
     }
 
-    fun setModeVideoStabilizationMode(mode: CameraMode, stabMode: com.example.camera.model.VideoStabilizationMode) {
-        videoStabilizationMode = stabMode
-        prefs.edit().putString(modeKey(mode, "video_stab_mode"), stabMode.name).apply()
-    }
-
-    fun getModeVideoStabilizationMode(mode: CameraMode): com.example.camera.model.VideoStabilizationMode {
-        val stored = prefs.getString(modeKey(mode, "video_stab_mode"), null)
-        if (stored != null) {
-            return try {
-                com.example.camera.model.VideoStabilizationMode.valueOf(stored)
-            } catch (_: IllegalArgumentException) {
-                videoStabilizationMode
-            }
-        }
-        return videoStabilizationMode
-    }
+    fun getModeVideoStabilizationMode(@Suppress("UNUSED_PARAMETER") mode: CameraMode): com.example.camera.model.VideoStabilizationMode =
+        com.example.camera.model.VideoStabilizationMode.OFF
 
     fun setModeVideoFps(mode: CameraMode, fps: Int) {
         videoFps = fps
