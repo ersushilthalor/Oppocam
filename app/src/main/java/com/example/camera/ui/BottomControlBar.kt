@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -225,7 +226,9 @@ fun BottomControlBar(
                     onShutterAreaHeightMeasured(heightDp)
                 }
                 .then(
-                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL || layoutConfig.useFocalLengthZoomLabels) {
+                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL ||
+                        layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS ||
+                        layoutConfig.useFocalLengthZoomLabels) {
                         Modifier.background(Color.Black)
                     } else {
                         Modifier.background(
@@ -389,6 +392,7 @@ fun BottomControlBar(
                                     when (layoutConfig.shutterStyle) {
                                         ShutterStyle.CLASSIC_WHITE -> Modifier.border(3.5.dp, Color.White, CircleShape)
                                         ShutterStyle.APPLE_DOT -> Modifier.border(2.dp, Color.White.copy(alpha = 0.9f), CircleShape)
+                                        ShutterStyle.IPHONE_RING -> Modifier.border(4.dp, Color(0xFF8D8D8D), CircleShape).padding(3.dp)
                                         ShutterStyle.OPPO_ORANGE -> Modifier.border(5.dp, Color(0xFF5A3928), CircleShape).padding(3.dp)
                                         ShutterStyle.SAMSUNG_CAPSULE -> Modifier.border(4.dp, Color.White, CircleShape).padding(4.dp)
                                         ShutterStyle.VIVO_GIMBAL -> Modifier.border(3.5.dp, Color.White, CircleShape).padding(3.dp)
@@ -677,19 +681,48 @@ fun BottomControlBar(
                                 val targetMode = if (isMoreModeActive) CameraMode.MORE else cameraMode
                                 val index = modesToDisplay.indexOf(targetMode)
                                 if (index >= 0) {
-                                    val itemEstimatedWidthPx = 180
+                                    val itemEstimatedWidthPx = if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) 140 else 180
                                     val targetScroll = (index * itemEstimatedWidthPx - 140).coerceAtLeast(0)
                                     modeScrollState.animateScrollTo(targetScroll)
                                 }
                             }
 
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(modeScrollState)
-                                    .padding(horizontal = 16.dp),
+                                modifier = if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) {
+                                    // The iPhone mode rail is a compact horizontally-scrollable glass capsule.
+                                    Modifier
+                                        .widthIn(max = 280.dp)
+                                        .clip(RoundedCornerShape(28.dp))
+                                        .background(
+                                            Brush.verticalGradient(
+                                                colors = listOf(Color(0x32FFFFFF), Color(0x18FFFFFF))
+                                            ),
+                                            RoundedCornerShape(28.dp)
+                                        )
+                                        .border(
+                                            1.dp,
+                                            Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color.White.copy(alpha = 0.22f),
+                                                    Color.White.copy(alpha = 0.08f)
+                                                )
+                                            ),
+                                            RoundedCornerShape(28.dp)
+                                        )
+                                        .horizontalScroll(modeScrollState)
+                                        .padding(horizontal = 5.dp, vertical = 3.dp)
+                                } else {
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(modeScrollState)
+                                        .padding(horizontal = 16.dp)
+                                },
                                 horizontalArrangement = Arrangement.spacedBy(
-                                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL) 12.dp else 22.dp,
+                                    when (layoutConfig.modeSelectorStyle) {
+                                        ModeSelectorStyle.OPPO_PILL -> 12.dp
+                                        ModeSelectorStyle.IPHONE_LIQUID_GLASS -> 5.dp
+                                        else -> 22.dp
+                                    },
                                     Alignment.CenterHorizontally
                                 ),
                                 verticalAlignment = Alignment.CenterVertically
@@ -699,7 +732,8 @@ fun BottomControlBar(
                                     val targetTextColor = if (isSelected) {
                                         if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.MONO_TICKER) Color(0xFFE53935)
                                         else if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.CYBER_GLOW) Color(0xFF00E5FF)
-                                        else if (layoutConfig.shutterStyle == ShutterStyle.VIVO_GIMBAL) accentColor
+                                        else if (layoutConfig.shutterStyle == ShutterStyle.VIVO_GIMBAL ||
+                                            layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) accentColor
                                         else customTextColor
                                     } else {
                                         customTextColor.copy(alpha = 0.65f)
@@ -830,6 +864,34 @@ fun BottomControlBar(
                                                         maxLines = 1,
                                                         softWrap = false,
                                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                                    )
+                                                }
+                                            }
+                                            ModeSelectorStyle.IPHONE_LIQUID_GLASS -> {
+                                                Surface(
+                                                    shape = RoundedCornerShape(22.dp),
+                                                    color = if (isSelected) Color(0x3DFFFFFF) else Color.Transparent,
+                                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(
+                                                        1.dp,
+                                                        Brush.verticalGradient(
+                                                            colors = listOf(
+                                                                Color.White.copy(alpha = 0.44f),
+                                                                Color.White.copy(alpha = 0.12f)
+                                                            )
+                                                        )
+                                                    ) else null,
+                                                    shadowElevation = if (isSelected) 2.dp else 0.dp
+                                                ) {
+                                                    Text(
+                                                        text = displayText,
+                                                        color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.72f),
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                                        fontFamily = fontFamily,
+                                                        letterSpacing = 0.0.sp,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 13.dp, vertical = 5.dp)
                                                     )
                                                 }
                                             }
