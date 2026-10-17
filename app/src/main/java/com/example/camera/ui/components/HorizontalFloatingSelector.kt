@@ -3,7 +3,7 @@ package com.example.camera.ui.components
 import androidx.compose.animation.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
-import androidx.compose.ui.draw.graphicsLayer
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
