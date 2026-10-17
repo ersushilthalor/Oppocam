@@ -477,12 +477,22 @@ data class UiCustomizationState(
             if (jsonStr.isBlank()) return UiCustomizationState()
             return try {
                 val root = JSONObject(jsonStr)
+                val storedTemplateName = root.optString("selectedTemplate", UiTemplateType.OPPO.name)
+                // iPhone and Vivo are retired as full UI templates. Migrate existing selections to
+                // the default Oppo layout instead of leaving a hidden template active.
+                val isRemovedCameraTemplate =
+                    storedTemplateName == UiTemplateType.IPHONE.name ||
+                    storedTemplateName == UiTemplateType.VIVO.name
                 val template = try {
-                    UiTemplateType.valueOf(root.optString("selectedTemplate", UiTemplateType.OPPO.name))
+                    UiTemplateType.valueOf(storedTemplateName)
                 } catch (e: Exception) { UiTemplateType.OPPO }
 
-                val gConfig = root.optJSONObject("globalConfig")?.let { ModeLayoutConfig.fromJson(it) }
-                    ?: CameraUiTemplates.getTemplateConfig(template)
+                val gConfig = if (isRemovedCameraTemplate) {
+                    CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
+                } else {
+                    root.optJSONObject("globalConfig")?.let { ModeLayoutConfig.fromJson(it) }
+                        ?: CameraUiTemplates.getTemplateConfig(template)
+                }
 
                 val modeMap = mutableMapOf<CameraMode, ModeLayoutConfig>()
                 val modeObj = root.optJSONObject("modeSpecificConfigs")
@@ -522,33 +532,12 @@ data class UiCustomizationState(
                     gConfig.toJson().toString() ==
                         CameraUiTemplates.getTemplateConfig(UiTemplateType.SAMSUNG).toJson().toString()
 
-                // Upgrade an untouched Vivo preset saved before the focal-length layout was introduced.
-                // Only migrate an exact legacy preset match, preserving any user-customized configuration.
-                val legacyVivoDefault = CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO).copy(
-                    visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
-                    useFocalLengthZoomLabels = false,
-                    modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
-                    modeSelectorStyle = ModeSelectorStyle.UNDERLINE,
-                    accentColorHex = "#FF7043",
-                    modeTextSizeSp = 14.0f,
-                    bottomPaddingDp = 14,
-                    textCaseOption = TextCaseOption.UPPERCASE,
-                    letterSpacingSp = 0.5f,
-                    textShadowOption = TextShadowOption.SUBTLE_SHADOW,
-                    iconStyleOption = IconStyleOption.ROUNDED_MATERIAL,
-                    iconContainerOpacity = 0.35f,
-                    iconStrokeWidthDp = 1.8f
-                )
-                val isUnmodifiedLegacyVivoDefault =
-                    template == UiTemplateType.VIVO &&
-                    modeMap.isEmpty() &&
-                    gConfig.toJson().toString() == legacyVivoDefault.toJson().toString()
-
-                val resolvedTemplate = if (isUnmodifiedLegacySamsungDefault) UiTemplateType.OPPO else template
-                val resolvedConfig = when {
-                    isUnmodifiedLegacySamsungDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
-                    isUnmodifiedLegacyVivoDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO)
-                    else -> gConfig
+                val shouldResolveToOppo = isUnmodifiedLegacySamsungDefault || isRemovedCameraTemplate
+                val resolvedTemplate = if (shouldResolveToOppo) UiTemplateType.OPPO else template
+                val resolvedConfig = if (shouldResolveToOppo) {
+                    CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
+                } else {
+                    gConfig
                 }
 
                 UiCustomizationState(
