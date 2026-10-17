@@ -15,7 +15,7 @@ enum class UiTemplateType(
     STOCK_PIXEL("Arnova GCam 8.7", "Google Camera 8.7-inspired layout with a clean mode strip, minimal controls and zoom selector", "#FFFFFF"),
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
     IPHONE("iPhone (iOS)", "Clean, minimal Apple iPhone layout with yellow accents & top pill indicators", "#FFD54F"),
-    VIVO("Vivo OriginOS", "Vivo OriginOS/Funtouch camera layout with circular icons, gimbal cues & vivid shutter ring", "#FF7043"),
+    VIVO("Vivo OriginOS", "Screenshot-matched Vivo camera layout with yellow selected mode, focal-length labels and concentric shutter rings", "#FFD54F"),
     CUSTOM("Custom UI", "Completely personalized layout, spacing, typography & controls", "#64B5F6")
 }
 
@@ -702,8 +702,9 @@ object CameraUiTemplates {
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE
             )
             UiTemplateType.VIVO -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.UNDERLINE,
+                visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
+                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
+                modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
                 shutterStyle = ShutterStyle.VIVO_GIMBAL,
                 shutterSizeDp = 84,
                 shutterHorizontalOffsetDp = 0,
@@ -712,12 +713,21 @@ object CameraUiTemplates {
                 topControlsIconSizeDp = 20,
                 topControlsSpacingDp = 16,
                 topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#FF7043",
-                modeTextSizeSp = 14.0f,
+                accentColorHex = "#FFD54F",
+                modeTextSizeSp = 14.5f,
                 modeFontFamily = FontFamilyOption.DEFAULT,
                 topPaddingDp = 12,
-                bottomPaddingDp = 14,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
+                bottomPaddingDp = 12,
+                textColorHex = "#FFFFFF",
+                fontWeightOption = FontWeightOption.SEMI_BOLD,
+                textCaseOption = TextCaseOption.TITLE_CASE,
+                letterSpacingSp = 0.0f,
+                textShadowOption = TextShadowOption.NONE,
+                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
+                iconColorHex = "#FFFFFF",
+                iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
+                iconContainerOpacity = 0.0f,
+                iconStrokeWidthDp = 1.6f
             )
             UiTemplateType.CUSTOM -> ModeLayoutConfig(
                 modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
