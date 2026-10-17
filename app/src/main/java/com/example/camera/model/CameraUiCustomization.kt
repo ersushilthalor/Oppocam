@@ -722,13 +722,16 @@ object CameraUiTemplates {
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE
             )
             UiTemplateType.SAMSUNG -> ModeLayoutConfig(
-                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.CAPSULE_PILL,
-                shutterStyle = ShutterStyle.SAMSUNG_CAPSULE,
-                shutterSizeDp = 82,
+                // Samsung template tuned to the supplied reference. Keep the app's existing
+                // top-control configuration/order untouched; only the lower camera controls change.
+                visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
+                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
+                modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
+                shutterStyle = ShutterStyle.CLASSIC_WHITE,
+                shutterSizeDp = 80,
                 shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 56,
-                galleryThumbSizeDp = 56,
+                flipButtonSizeDp = 54,
+                galleryThumbSizeDp = 54,
                 topControlsIconSizeDp = 20,
                 topControlsSpacingDp = 18,
                 topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
@@ -737,6 +740,11 @@ object CameraUiTemplates {
                 modeFontFamily = FontFamilyOption.ROUNDED,
                 topPaddingDp = 12,
                 bottomPaddingDp = 16,
+                textColorHex = "#FFFFFF",
+                fontWeightOption = FontWeightOption.SEMI_BOLD,
+                textCaseOption = TextCaseOption.UPPERCASE,
+                letterSpacingSp = 0.2f,
+                textShadowOption = TextShadowOption.NONE,
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE
             )
             UiTemplateType.VIVO -> ModeLayoutConfig(
