@@ -62,6 +62,32 @@ class FrameBasedHandoffTest {
     }
 
     @Test
+    fun reverseHandoffAcceleratesFadeWhenUltraWideFovMovesWiderThanMain() {
+        val atOneX = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 1,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 1.0f,
+            previousProgress = 0f
+        )
+        val atPointEightX = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 1,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 0.8f,
+            previousProgress = 0f
+        )
+        assertTrue("Reverse handoff should fade faster once Main cannot match the wider FOV", atPointEightX > atOneX)
+
+        val nextFrame = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 2,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 0.7f,
+            previousProgress = atPointEightX
+        )
+        assertTrue("Reverse handoff alpha must remain monotonic", nextFrame >= atPointEightX)
+        assertTrue("Fade must finish before a large FOV mismatch remains visible", nextFrame > 0.8f)
+    }
+
+    @Test
     fun handoffUsesSixteenIncomingFramesAndIgnoresOutgoingFrames() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
