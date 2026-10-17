@@ -205,7 +205,16 @@ class Camera2Engine(private val context: Context) {
 
     /** Route actual TextureView buffer updates to the frame-based lens handoff controller. */
     fun onPreviewFrameAvailable(source: PreviewStreamSource) {
+        val wasOverlapping = zoomTransitionController.previewOverlapState.value.isOverlapping
         zoomTransitionController.onPreviewFrameAvailable(source)
+        val handoffCompleted = wasOverlapping &&
+            !zoomTransitionController.previewOverlapState.value.isOverlapping
+        if (handoffCompleted) {
+            // Restore the low-cost idle FOV match once the final blended frame has arrived.
+            // Without this reset, the outgoing standby sensor can remain digitally zoomed to
+            // 2x/3x and give the next instant lens switch the wrong starting framing.
+            backgroundHandler?.post { syncStandbyStreamSettings() }
+        }
     }
 
     @Volatile
