@@ -220,138 +220,13 @@ class ZoomTransitionController(
                 (targetLens == null || targetLens.isPrimaryMain || targetLens.lensType == LensType.WIDE || targetLens.lensType == LensType.TELEPHOTO || targetLens.lensType == LensType.TELEPHOTO_3X)
 
             if (isUltraWideToMainSwitch) {
+                // 1. Keep view on Ultra-Wide lens; digitally crop Ultra-Wide to the selected focal length (effectiveSwitchZoom)
+                setSteadyStatePreview(true)
                 val startNorm = zoomToNormalizedLog(startZ, minZoom, maxZoom)
                 val switchNorm = zoomToNormalizedLog(effectiveSwitchZoom, minZoom, maxZoom)
                 val endNorm = zoomToNormalizedLog(endZ, minZoom, maxZoom)
 
                 val isTargetNearSwitch = abs(endZ - effectiveSwitchZoom) <= 0.08f || endZ <= effectiveSwitchZoom + 0.05f
-                val isDirectTelephotoTarget = endZ >= 1.5f
-                val isZeroHoldSwitch = skipHoldAtSwitchPoint || isDirectTelephotoTarget
-                val holdDuration = if (isZeroHoldSwitch) {
-                    0L
-                } else {
-                    holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
-                }
-
-                // BRANCH A: Direct telephoto preset tap or zero-hold transition (0.5x -> 2x/3x).
-                // Uses a single uninterrupted sinusoidal logarithmic glide across the entire 0.5x -> 2x/3x span:
-                // - Zero artificial pause or velocity drop at 1.0x.
-                // - Zero duplicate 1.0x dispatch at handoff.
-                // - Handoff switches lens continuously while zoom glides smoothly through 1.0x.
-                // - Concurrent preview crossfade if overlap animation is enabled without stalling zoom.
-                if (isZeroHoldSwitch && !isTargetNearSwitch) {
-                    setSteadyStatePreview(true)
-                    val startTime = SystemClock.uptimeMillis()
-                    var lastDispatchedZoom = startZ
-                    var lastDispatchedTime = startTime
-                    var mainLensActivated = false
-                    var crossfadeStartTime = 0L
-                    var isCrossfading = false
-
-                    android.util.Log.i(
-                        TAG,
-                        "[TRANSITION_START_ZERO_HOLD] fromZoom=$startZ -> targetZoom=$endZ over ${transitionDurationMs}ms (switchZoom=$effectiveSwitchZoom)"
-                    )
-
-                    while (isActive) {
-                        val now = SystemClock.uptimeMillis()
-                        val elapsed = now - startTime
-                        if (elapsed >= transitionDurationMs) break
-
-                        val linearProgress = (elapsed.toDouble() / transitionDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                        val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                        val currentNorm = (startNorm + (endNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
-
-                        val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                        val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, maxZoom)
-
-                        // Seamless handoff to Main lens when crossing switchZoom
-                        if (currentZ >= effectiveSwitchZoom && !mainLensActivated) {
-                            mainLensActivated = true
-                            android.util.Log.i(
-                                TAG,
-                                "[HANDOFF_ZERO_HOLD] Reached switchZoom=$effectiveSwitchZoom at ${now - startTime}ms; activating ${mainWideLens.lensType} (continuous=true, no-pause)"
-                            )
-                            onSelectLensOnEngine(mainWideLens, currentZ, true)
-
-                            if (isOverlapAnimationEnabled) {
-                                crossfadeStartTime = now
-                                isCrossfading = true
-                            } else {
-                                setSteadyStatePreview(false)
-                            }
-                        }
-
-                        // Concurrently update overlap crossfade if enabled without pausing zoom
-                        if (isCrossfading) {
-                            val crossElapsed = now - crossfadeStartTime
-                            val crossDurationMs = 80L
-                            if (crossElapsed < crossDurationMs) {
-                                val blendProg = (crossElapsed.toFloat() / crossDurationMs.toFloat()).coerceIn(0f, 1f)
-                                val smoothBlend = (0.5f * (1.0f - cos(PI * blendProg.toDouble()))).toFloat().coerceIn(0f, 1f)
-                                val uwAlpha = (1.0f - smoothBlend).coerceIn(0f, 1f)
-                                val mainAlpha = 1.0f
-                                _previewOverlapState.value = PreviewOverlapState(
-                                    isOverlapping = true,
-                                    mainAlpha = mainAlpha,
-                                    ultraWideAlpha = uwAlpha,
-                                    activeSource = PreviewStreamSource.MAIN,
-                                    overlapProgress = blendProg,
-                                    topSource = PreviewStreamSource.ULTRAWIDE
-                                )
-                            } else {
-                                isCrossfading = false
-                                setSteadyStatePreview(false)
-                            }
-                        }
-
-                        // Paced dispatch avoiding duplicate dispatches of identical zoom values
-                        val isZoomChanged = abs(currentZ - lastDispatchedZoom) >= 0.005f
-                        val isTimePaced = (now - lastDispatchedTime) >= 16L
-                        if (isZoomChanged && isTimePaced) {
-                            lastDispatchedZoom = currentZ
-                            lastDispatchedTime = now
-                            _currentInterpolatedZoom.value = currentZ
-                            onZoomUpdate(currentZ)
-                            onApplyZoomToEngine(currentZ, true)
-                        }
-
-                        val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
-                        val waitMs = nextTick - SystemClock.uptimeMillis()
-                        if (waitMs > 0) {
-                            delay(waitMs)
-                        }
-                    }
-
-                    val totalElapsed = SystemClock.uptimeMillis() - startTime
-                    if (totalElapsed < transitionDurationMs) {
-                        delay(transitionDurationMs - totalElapsed)
-                    }
-
-                    if (!mainLensActivated) {
-                        mainLensActivated = true
-                        onSelectLensOnEngine(mainWideLens, endZ, true)
-                    }
-
-                    setSteadyStatePreview(false)
-                    _currentInterpolatedZoom.value = endZ
-                    onZoomUpdate(endZ)
-                    onApplyZoomToEngine(endZ, false)
-                    _isTransitionActive.value = false
-                    activeTransitionJob = null
-
-                    android.util.Log.i(
-                        TAG,
-                        "[TRANSITION_COMPLETE_ZERO_HOLD] Finished at $endZ in ${SystemClock.uptimeMillis() - startTime}ms"
-                    )
-
-                    onComplete(endZ, targetLens ?: mainWideLens)
-                    return@launch
-                }
-
-                // BRANCH B: Deliberate 1x tap or transitions with configured switch-point hold.
-                // Preserves the user's configured hold duration (50ms..300ms) at exact switch point FOV.
-                setSteadyStatePreview(true)
 
                 // Allocate duration proportionally if transitioning further beyond switch point
                 val uwPhaseDurationMs = if (isTargetNearSwitch) {
@@ -364,12 +239,7 @@ class ZoomTransitionController(
 
                 val startTime = SystemClock.uptimeMillis()
                 var lastDispatchedZoom = startZ
-                var lastDispatchedTime = startTime
-
-                android.util.Log.i(
-                    TAG,
-                    "[TRANSITION_START_HOLD] fromZoom=$startZ -> targetZoom=$endZ (holdDuration=${holdDuration}ms, switchZoom=$effectiveSwitchZoom)"
-                )
+                var lastDispatchedTime = 0L
 
                 // Smoothly apply digital cropping on Ultra-Wide lens up to the exact switch point
                 while (isActive) {
@@ -384,9 +254,7 @@ class ZoomTransitionController(
                     val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                     val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(minZoom, effectiveSwitchZoom)
 
-                    val isZoomChanged = abs(currentZ - lastDispatchedZoom) >= 0.005f
-                    val isTimePaced = (now - lastDispatchedTime) >= 16L
-                    if (isZoomChanged && isTimePaced) {
+                    if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
                         lastDispatchedZoom = currentZ
                         lastDispatchedTime = now
                         _currentInterpolatedZoom.value = currentZ
@@ -411,41 +279,51 @@ class ZoomTransitionController(
                 onZoomUpdate(effectiveSwitchZoom)
                 onApplyZoomToEngine(effectiveSwitchZoom, true)
 
-                android.util.Log.i(
-                    TAG,
-                    "[SWITCH_POINT_REACHED] Reached switchZoom=$effectiveSwitchZoom; holding for ${holdDuration}ms"
-                )
+                // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
+                // Direct 2x/3x preset taps should cross the lens switch without pausing at 1x.
+                // Keep the configured hold unchanged for 1x taps and all other transitions.
+                // Direct 2x/3x telephoto preset taps must never pause at the lens handoff,
+                // even if the caller forgets the skip flag. A deliberate 1x tap keeps its hold.
+                val isDirectTelephotoTarget = endZ >= 1.5f
+                val holdDuration = if (skipHoldAtSwitchPoint || isDirectTelephotoTarget) {
+                    0L
+                } else {
+                    holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
+                }
 
-                // 2. Hold that exact FOV for the configured hold duration
-                val mainLensPreparedInOverlap = isOverlapAnimationEnabled && holdDuration > 0L
+                val mainLensPreparedInOverlap = isOverlapAnimationEnabled && (holdDuration > 0L || isDirectTelephotoTarget)
                 if (mainLensPreparedInOverlap) {
+                    // Prepare the main lens while the Ultra-Wide layer remains visible. For direct
+                    // telephoto taps use a short crossfade instead of a dead stop at the handoff.
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
-                    val blendDurationMs = holdDuration
-                    val blendStartTime = SystemClock.uptimeMillis()
-                    while (isActive) {
-                        val now = SystemClock.uptimeMillis()
-                        val blendElapsed = now - blendStartTime
-                        if (blendElapsed >= blendDurationMs) break
-
-                        val progress = (blendElapsed.toFloat() / blendDurationMs.toFloat()).coerceIn(0f, 1f)
-                        val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
-                        val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
-                        val mainAlpha = 1.0f
-
-                        _previewOverlapState.value = PreviewOverlapState(
-                            isOverlapping = true,
-                            mainAlpha = mainAlpha,
-                            ultraWideAlpha = uwAlpha,
-                            activeSource = PreviewStreamSource.MAIN,
-                            overlapProgress = progress,
-                            topSource = PreviewStreamSource.ULTRAWIDE
-                        )
-
-                        val nextTick = minOf(blendStartTime + blendDurationMs, now + 16L)
-                        val waitMs = nextTick - SystemClock.uptimeMillis()
-                        if (waitMs > 0) {
-                            delay(waitMs)
+                    if (holdDuration > 0L) {
+                        val blendDurationMs = holdDuration
+                        val blendStartTime = SystemClock.uptimeMillis()
+                        while (isActive) {
+                            val now = SystemClock.uptimeMillis()
+                            val blendElapsed = now - blendStartTime
+                            if (blendElapsed >= blendDurationMs) break
+    
+                            val progress = (blendElapsed.toFloat() / blendDurationMs.toFloat()).coerceIn(0f, 1f)
+                            val smoothProgress = (0.5f * (1.0f - cos(PI * progress.toDouble()))).toFloat().coerceIn(0f, 1f)
+                            val uwAlpha = (1.0f - smoothProgress).coerceIn(0f, 1f)
+                            val mainAlpha = 1.0f
+    
+                            _previewOverlapState.value = PreviewOverlapState(
+                                isOverlapping = true,
+                                mainAlpha = mainAlpha,
+                                ultraWideAlpha = uwAlpha,
+                                activeSource = PreviewStreamSource.MAIN,
+                                overlapProgress = progress,
+                                topSource = PreviewStreamSource.ULTRAWIDE
+                            )
+    
+                            val nextTick = minOf(blendStartTime + blendDurationMs, now + 16L)
+                            val waitMs = nextTick - SystemClock.uptimeMillis()
+                            if (waitMs > 0) {
+                                delay(waitMs)
+                            }
                         }
                     }
                 } else {
@@ -453,7 +331,8 @@ class ZoomTransitionController(
                     delay(holdDuration)
                 }
 
-                // 3. Finish the handoff.
+                // 3. Finish the handoff. If overlap already activated the main lens, do not
+                // activate it a second time (that duplicate request causes the brief freeze).
                 if (!mainLensPreparedInOverlap) {
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, false)
                 }
@@ -466,11 +345,6 @@ class ZoomTransitionController(
                     _isTransitionActive.value = false
                     activeTransitionJob = null
 
-                    android.util.Log.i(
-                        TAG,
-                        "[TRANSITION_COMPLETE_HOLD] Finished at $endZ in ${SystemClock.uptimeMillis() - startTime}ms"
-                    )
-
                     onComplete(endZ, mainWideLens)
                     return@launch
                 } else {
@@ -478,7 +352,7 @@ class ZoomTransitionController(
                     val mainPhaseDurationMs = (transitionDurationMs - uwPhaseDurationMs).coerceAtLeast(60L)
                     val mainStartTime = SystemClock.uptimeMillis()
                     lastDispatchedZoom = effectiveSwitchZoom
-                    lastDispatchedTime = mainStartTime // Initialized to mainStartTime to avoid duplicate dispatch
+                    lastDispatchedTime = 0L
 
                     while (isActive) {
                         val now = SystemClock.uptimeMillis()
@@ -492,9 +366,7 @@ class ZoomTransitionController(
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                         val currentZ = ((rawZoom * 100f).roundToInt() / 100f).coerceIn(effectiveSwitchZoom, maxZoom)
 
-                        val isZoomChanged = abs(currentZ - lastDispatchedZoom) >= 0.005f
-                        val isTimePaced = (now - lastDispatchedTime) >= 16L
-                        if (isZoomChanged && isTimePaced) {
+                        if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
                             lastDispatchedZoom = currentZ
                             lastDispatchedTime = now
                             _currentInterpolatedZoom.value = currentZ
@@ -514,11 +386,6 @@ class ZoomTransitionController(
                     onApplyZoomToEngine(endZ, false)
                     _isTransitionActive.value = false
                     activeTransitionJob = null
-
-                    android.util.Log.i(
-                        TAG,
-                        "[TRANSITION_COMPLETE_HOLD] Finished at $endZ in ${SystemClock.uptimeMillis() - startTime}ms"
-                    )
 
                     onComplete(endZ, targetLens ?: mainWideLens)
                     return@launch

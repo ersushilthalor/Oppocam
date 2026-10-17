@@ -203,15 +203,6 @@ class Camera2Engine(private val context: Context) {
         preferences.isLensSwitchOverlapAnimationEnabled = enabled
     }
 
-    private val _lensSwitchPointMm = MutableStateFlow(preferences.lensSwitchPointMm)
-    val lensSwitchPointMm: StateFlow<Float> = _lensSwitchPointMm.asStateFlow()
-
-    fun setLensSwitchPointMm(pointMm: Float) {
-        val clamped = pointMm.coerceIn(CameraOpticalCalibration.MIN_SWITCH_POINT_MM, CameraOpticalCalibration.MAX_SWITCH_POINT_MM)
-        _lensSwitchPointMm.value = clamped
-        preferences.lensSwitchPointMm = clamped
-    }
-
     @Volatile
     private var ultraWideViewfinderSurfaceTexture: SurfaceTexture? = null
     @Volatile
@@ -612,12 +603,11 @@ class Camera2Engine(private val context: Context) {
      * Main: Switch Point ÷ 23mm (e.g. 1.00x at 23mm, 1.74x at 40mm)
      */
     internal fun calculateStandbyCropRatio(standbyLens: LensInfo): Float {
-        val switchPoint = _lensSwitchPointMm.value
         return if (standbyLens.lensType == LensType.ULTRAWIDE) {
             val uwEqFocal = if (standbyLens.equivalent35mmFocalMm > 0f) standbyLens.equivalent35mmFocalMm else CameraOpticalCalibration.DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
-            CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(switchPoint, uwEqFocal)
+            CameraOpticalCalibration.calculateUltraWideCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, uwEqFocal)
         } else {
-            CameraOpticalCalibration.calculateMainCropForSwitchPoint(switchPoint, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
+            CameraOpticalCalibration.calculateMainCropForSwitchPoint(CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM, CameraOpticalCalibration.DEFAULT_MAIN_EQUIVALENT_FOCAL_MM)
         }
     }
 
@@ -2506,7 +2496,7 @@ class Camera2Engine(private val context: Context) {
 
                 // Case D: Standby camera device is not opened yet or switch between separate camera devices requested:
                 // Switch camera devices seamlessly without tearing down the active preview stream (ZERO black screen)
-                if (cameraDevice != null && !_isRecordingVideo.value && lens.cameraId != cameraDevice?.id) {
+                if (cameraDevice != null && !_isRecordingVideo.value) {
                     Log.i(TAG, "[LENS_SWITCH] Switching camera device to ${lens.cameraId} (${lens.lensType}) seamlessly")
                     switchCameraDevice(lens, switchGen, isContinuousTransition = isContinuousTransition)
                     return
@@ -5817,8 +5807,11 @@ class Camera2Engine(private val context: Context) {
 
         val activeLens = activeSessionLens ?: currentLens
         val isContinuous = isContinuousTransition || isContinuousZoomTransitionActive
-        val effectiveTargetLens = if ((isContinuousZoomTransitionActive || isContinuous) && activeLens.lensType == LensType.ULTRAWIDE && pZoom < switchZoom) {
-            // Keep on Ultra-Wide during continuous transition while below switch point so it smoothly crops digitally
+        val effectiveTargetLens = if (isContinuousZoomTransitionActive && activeLens.lensType == LensType.ULTRAWIDE) {
+            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally up to switch point FOV
+            ultraWideLens ?: targetLens
+        } else if (isContinuous && activeLens.lensType == LensType.ULTRAWIDE && pZoom < switchZoom) {
+            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally all the way to switchZoom FOV
             ultraWideLens ?: targetLens
         } else {
             targetLens
