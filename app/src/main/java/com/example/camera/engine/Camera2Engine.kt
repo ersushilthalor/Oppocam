@@ -1504,16 +1504,13 @@ class Camera2Engine(private val context: Context) {
         }
     var isAfLocked: Boolean = false
     var isRawCaptureEnabled: Boolean = false
-    // Electronic stabilization is independent from the user's physical OIS preference.
-    var isVideoStabilizationEnabled: Boolean = preferences.isVideoStabilizationEnabled
+    // EIS has been removed. Keep the legacy property for API compatibility only.
+    // OIS is controlled independently by isOisEnabled/applyHardwareOisRequest().
+    var isVideoStabilizationEnabled: Boolean = false
         set(value) {
-            field = value
-            if (shouldUseGyroEis()) {
-                gyroStabilizationEngine.start()
-            } else {
-                gyroStabilizationEngine.stop()
-                lastStabilizedCrop = null
-            }
+            field = false
+            gyroStabilizationEngine.stop()
+            lastStabilizedCrop = null
             updatePreviewSettings()
         }
     var videoBitrateOption: VideoBitrateOption = VideoBitrateOption.AUTO
@@ -1664,13 +1661,7 @@ class Camera2Engine(private val context: Context) {
     private fun shouldUseGyroEis(
         mode: CameraMode = currentMode,
         config: HybridStabilizationConfig = _hybridStabilizationConfig.value
-    ): Boolean {
-        val isVideoMode = mode == CameraMode.VIDEO || mode == CameraMode.CINEMA
-        val configRequestsEis = config.isUltraStabilizationEnabled ||
-            config.isEisOnly ||
-            (config.isHybridEnabled && config.isEisPreferred)
-        return isVideoMode && isVideoStabilizationEnabled && configRequestsEis
-    }
+    ): Boolean = false
 
     // Camera Session Concurrency & State Guard
     private val cameraLifecycleLock = Any()
@@ -5230,54 +5221,21 @@ class Camera2Engine(private val context: Context) {
      * camera, while others expose it on the physical sensor; check both before disabling EIS.
      * OIS remains independently controlled by applyHardwareOisRequest().
      */
+    /**
+     * EIS is intentionally disabled. Explicitly request OFF for every preview and
+     * recording session; hardware OIS remains controlled separately.
+     */
     private fun applyHardwareEisRequest(
         builder: CaptureRequest.Builder,
         lensOverride: LensInfo? = null
     ) {
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        val config = _hybridStabilizationConfig.value
-        val lens = lensOverride ?: activeSessionLens ?: _selectedLens.value
-        val logicalChars = lens?.cameraId?.let { getCharacteristics(it) }
-        val physicalChars = lens?.physicalCameraId?.let { getCharacteristics(it) }
-        val candidateCharacteristics = listOfNotNull(logicalChars, physicalChars)
-        val stabilizationModes = candidateCharacteristics.mapNotNull { characteristics ->
-            characteristics.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
-        }
-        val supportsEis = stabilizationModes.any { modes ->
-            modes.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON)
-        }
-        val supportsPreviewStabilization = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            stabilizationModes.any { modes ->
-                modes.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION)
-            }
-
-        val ultra = config.isUltraStabilizationEnabled
-        val requested = isVideoStabilizationEnabled && isVideoMode &&
-            (ultra || config.isEisOnly || (config.isHybridEnabled && config.isEisPreferred))
-        // Keep the native EIS request compatible with cameras that cannot combine EIS with 4K/60.
-        // The software gyro crop path still runs when EIS is enabled, even when this HW path is skipped.
-        val isHighFps4k = (_selectedVideoResolution.value?.let { maxOf(it.width, it.height) >= 3840 } == true) &&
-            videoFps >= 60
-        val adaptiveAllowed = ultra || !config.isAdaptiveFpsLens || !isHighFps4k
-        val mode = when {
-            !requested || !adaptiveAllowed -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-            supportsPreviewStabilization ->
-                CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
-            supportsEis -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-            else -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-        }
         try {
-            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, mode)
-            if (requested && mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF) {
-                Log.w(
-                    TAG,
-                    "EIS requested but unavailable for active camera/stream; " +
-                        "logical=${lens?.cameraId}, physical=${lens?.physicalCameraId}, " +
-                        "logicalOrPhysicalSupport=$supportsEis"
-                )
-            }
+            builder.set(
+                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+            )
         } catch (t: Throwable) {
-            Log.w(TAG, "Unable to apply Camera2 EIS mode=$mode", t)
+            Log.w(TAG, "Unable to disable Camera2 EIS", t)
         }
     }
 
