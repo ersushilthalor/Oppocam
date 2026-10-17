@@ -367,6 +367,7 @@ fun CameraScreen(
                 isAfLocked = isAfLocked,
                 isFrontCamera = selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT,
                 cameraMode = cameraMode,
+                uiTemplateType = uiCustomizationState.selectedTemplate,
                 previewBufferSize = previewBufferSize,
                 mainPreviewBufferSize = mainPreviewBufferSize,
                 ultraWidePreviewBufferSize = ultraWidePreviewBufferSize,
@@ -942,9 +943,8 @@ fun CameraScreen(
             )
         }
 
-        // 3e. Dedicated More Modes Drawer (Excluded from Pixel UI Template)
-        val isPixelTemplate = uiCustomizationState.selectedTemplate == UiTemplateType.STOCK_PIXEL ||
-                activeLayoutConfig.modeSelectorStyle == ModeSelectorStyle.PIXEL_PILL
+        // 3e. More Modes Drawer is available for all remaining UI layouts.
+        val isPixelTemplate = false
         LaunchedEffect(isPixelTemplate, cameraMode, isMoreModesOpen) {
             if (isPixelTemplate) {
                 if (isMoreModesOpen) viewModel.setMoreModesOpen(false)
