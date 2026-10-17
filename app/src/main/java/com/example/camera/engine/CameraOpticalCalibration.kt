@@ -123,15 +123,6 @@ object CameraOpticalCalibration {
     }
 
     /**
-     * Main crop = Switch Point ÷ 23mm
-     * Automatically calculates the required digital crop factor on Main at the switch point:
-     * - 23mm -> 23 / 23 = 1.00x
-     * - 32mm -> 32 / 23 = 1.3913x (1.39x)
-     * - 40mm -> 40 / 23 = 1.7391x (1.74x)
-     * - 50mm -> 50 / 23 = 2.1739x (2.17x)
-     * - 85mm -> 85 / 23 = 3.6957x (3.70x)
-     */
-    /**
      * Calculates the Ultra-Wide crop needed to match the active Main camera at a lens handoff.
      *
      * The switch-point UI focal length is not always the Main camera's true native equivalent
@@ -161,6 +152,11 @@ object CameraOpticalCalibration {
         return (targetEquivalentFocalMm / safeUwFocalMm).coerceAtLeast(1f)
     }
 
+    /**
+     * Calculates the Main camera crop at the configured switch-point focal length.
+     * The crop factor is the target equivalent focal length divided by the detected Main
+     * equivalent focal length, so device-specific FOV calibration is preserved.
+     */
     fun calculateMainCropForSwitchPoint(
         switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
         mainFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
