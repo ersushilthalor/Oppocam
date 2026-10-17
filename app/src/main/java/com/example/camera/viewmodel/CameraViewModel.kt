@@ -952,10 +952,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val initialOis = preferences.isOisEnabled
         _isOisEnabled.value = initialOis
         engine.isOisEnabled = initialOis
-        val initialStabMode = preferences.getModeVideoStabilizationMode(initialMode)
-        _videoStabilizationMode.value = initialStabMode
-        engine.videoStabilizationMode = initialStabMode
-        engine.isVideoStabilizationEnabled = preferences.getModeVideoStabilization(initialMode)
+        // EIS was removed from the app. Clear legacy saved values at startup so a previous
+        // install cannot resurrect an EIS toggle/state when the user switches camera modes.
+        _videoStabilizationMode.value = VideoStabilizationMode.OFF
+        _isVideoStabilizationEnabled.value = false
+        preferences.videoStabilizationMode = VideoStabilizationMode.OFF
+        preferences.isVideoStabilizationEnabled = false
+        preferences.setModeVideoStabilizationMode(initialMode, VideoStabilizationMode.OFF)
+        preferences.setModeVideoStabilization(initialMode, false)
+        preferences.isUltraStabilizationEnabled = false
+        engine.videoStabilizationMode = VideoStabilizationMode.OFF
+        engine.isVideoStabilizationEnabled = false
         engine.videoBitrateOption = preferences.getModeVideoBitrate(initialMode)
         engine.videoFps = preferences.getModeVideoFps(initialMode)
         engine.colorProfile = preferences.getModeColorProfile(initialMode)
@@ -1174,14 +1181,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _ultraFastShutterFps.value = mFastFps
         engine.ultraFastShutterFps = mFastFps
 
-        val mStabMode = preferences.getModeVideoStabilizationMode(mode)
-        _videoStabilizationMode.value = mStabMode
-        engine.videoStabilizationMode = mStabMode
+        // Never restore EIS state from legacy per-mode preferences.
+        _videoStabilizationMode.value = VideoStabilizationMode.OFF
+        _isVideoStabilizationEnabled.value = false
+        preferences.videoStabilizationMode = VideoStabilizationMode.OFF
+        preferences.isVideoStabilizationEnabled = false
+        preferences.setModeVideoStabilizationMode(mode, VideoStabilizationMode.OFF)
+        preferences.setModeVideoStabilization(mode, false)
+        preferences.isUltraStabilizationEnabled = false
+        engine.videoStabilizationMode = VideoStabilizationMode.OFF
+        engine.isVideoStabilizationEnabled = false
         _isStabilizationWindowOpen.value = false
-
-        val mVideoStab = preferences.getModeVideoStabilization(mode)
-        _isVideoStabilizationEnabled.value = mVideoStab
-        engine.isVideoStabilizationEnabled = mVideoStab
 
         val mVideoFps = preferences.getModeVideoFps(mode)
         _videoFps.value = mVideoFps
