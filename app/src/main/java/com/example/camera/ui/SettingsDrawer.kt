@@ -2366,23 +2366,18 @@ private fun LensSwitchHoldDurationSettingCard(
     onHoldDurationChange: (Float) -> Unit,
     isOverlapAnimationEnabled: Boolean = false
 ) {
-    val roundedDuration = ((holdDurationSec.coerceIn(0.05f, 0.30f) * 20f).roundToInt() / 20f).coerceIn(0.05f, 0.30f)
+    val roundedDuration = ((holdDurationSec.coerceIn(0.0f, 0.30f) * 20f).roundToInt() / 20f).coerceIn(0.0f, 0.30f)
     val isDefault = kotlin.math.abs(roundedDuration - 0.10f) < 0.001f
-    val displayValue = if (isOverlapAnimationEnabled) {
-        if (isDefault) {
-            String.format(java.util.Locale.US, "%.2f sec (Default • Fallback)", roundedDuration)
-        } else {
-            String.format(java.util.Locale.US, "%.2f sec (Fallback)", roundedDuration)
-        }
-    } else {
-        if (isDefault) {
-            String.format(java.util.Locale.US, "%.2f sec (Default)", roundedDuration)
-        } else {
-            String.format(java.util.Locale.US, "%.2f sec", roundedDuration)
-        }
+    val displayValue = when {
+        roundedDuration <= 0.0001f -> "0 ms"
+        isOverlapAnimationEnabled && isDefault -> String.format(java.util.Locale.US, "%.2f sec (Default • Fallback)", roundedDuration)
+        isOverlapAnimationEnabled -> String.format(java.util.Locale.US, "%.2f sec (Fallback)", roundedDuration)
+        isDefault -> String.format(java.util.Locale.US, "%.2f sec (Default)", roundedDuration)
+        else -> String.format(java.util.Locale.US, "%.2f sec", roundedDuration)
     }
 
     val options = listOf(
+        0.0f to "0 ms",
         0.05f to "0.05 sec",
         0.10f to "0.10 sec",
         0.15f to "0.15 sec",
@@ -2437,7 +2432,7 @@ private fun LensSwitchHoldDurationSettingCard(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = if (isOverlapAnimationEnabled) {
-                                "Fallback hold time. When Frame-Based Lens Handoff is on, the blend follows the target camera's first four valid frames."
+                                "Fallback hold time. Frame-Based Lens Handoff blends over sixteen incoming preview frames; 0 ms disables the intentional hold."
                             } else {
                                 "Hold duration at the selected switch point field of view on the Ultra-Wide lens before switching to the Main lens."
                             },
