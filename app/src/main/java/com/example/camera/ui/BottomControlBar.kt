@@ -1043,6 +1043,7 @@ fun MasterZoomCapsule(
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
     modifier: Modifier = Modifier
 ) {
+    val fontFamily = layoutConfig.modeFontFamily.toComposeFontFamily()
     val isFrontCamera = selectedLens?.facing == CameraCharacteristics.LENS_FACING_FRONT
     if (isFrontCamera) {
         return
