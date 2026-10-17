@@ -291,7 +291,8 @@ class ZoomTransitionController(
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 }
 
-                if (isOverlapAnimationEnabled && (holdDuration > 0L || isDirectTelephotoTarget)) {
+                val mainLensPreparedInOverlap = isOverlapAnimationEnabled && (holdDuration > 0L || isDirectTelephotoTarget)
+                if (mainLensPreparedInOverlap) {
                     // Prepare the main lens while the Ultra-Wide layer remains visible. For direct
                     // telephoto taps use a short crossfade instead of a dead stop at the handoff.
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
@@ -328,8 +329,11 @@ class ZoomTransitionController(
                     delay(holdDuration)
                 }
 
-                // 3. Switch to the main lens with matching digital crop, maintaining identical FOV throughout
-                onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, false)
+                // 3. Finish the handoff. If overlap already activated the main lens, do not
+                // activate it a second time (that duplicate request causes the brief freeze).
+                if (!mainLensPreparedInOverlap) {
+                    onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, false)
+                }
                 setSteadyStatePreview(false)
 
                 if (isTargetNearSwitch) {
