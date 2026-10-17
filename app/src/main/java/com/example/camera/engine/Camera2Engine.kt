@@ -5727,7 +5727,7 @@ class Camera2Engine(private val context: Context) {
             pendingZoomRunnable = null
             lastZoomPreviewUpdateTime = now
             updatePreviewSettings(zoomToApply)
-                        syncStandbyIfFrameHandoffActive()
+            syncStandbyIfFrameHandoffActive()
             return
         }
 
