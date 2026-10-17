@@ -544,10 +544,14 @@ data class UiCustomizationState(
                     modeMap.isEmpty() &&
                     gConfig.toJson().toString() == legacyVivoDefault.toJson().toString()
 
-                val resolvedTemplate = if (isUnmodifiedLegacySamsungDefault) UiTemplateType.OPPO else template
+                val isRemovedTemplate = template == UiTemplateType.STOCK_PIXEL ||
+                    template == UiTemplateType.IPHONE || template == UiTemplateType.VIVO
+                val resolvedTemplate = if (isUnmodifiedLegacySamsungDefault || isRemovedTemplate) {
+                    UiTemplateType.OPPO
+                } else template
                 val resolvedConfig = when {
-                    isUnmodifiedLegacySamsungDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
-                    isUnmodifiedLegacyVivoDefault -> CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO)
+                    isUnmodifiedLegacySamsungDefault || isRemovedTemplate ->
+                        CameraUiTemplates.getTemplateConfig(UiTemplateType.OPPO)
                     else -> gConfig
                 }
 
