@@ -1508,12 +1508,11 @@ class Camera2Engine(private val context: Context) {
     var isVideoStabilizationEnabled: Boolean = preferences.isVideoStabilizationEnabled
         set(value) {
             field = value
-            if (!value) {
+            if (shouldUseGyroEis()) {
+                gyroStabilizationEngine.start()
+            } else {
                 gyroStabilizationEngine.stop()
                 lastStabilizedCrop = null
-            } else if (_hybridStabilizationConfig.value.isUltraStabilizationEnabled &&
-                (currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA)) {
-                gyroStabilizationEngine.start()
             }
             updatePreviewSettings()
         }
@@ -1648,14 +1647,24 @@ class Camera2Engine(private val context: Context) {
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
         _hybridStabilizationConfig.value = config
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        if (isVideoStabilizationEnabled && config.isUltraStabilizationEnabled && isVideoMode) {
+        if (shouldUseGyroEis(config = config)) {
             gyroStabilizationEngine.start()
         } else {
             gyroStabilizationEngine.stop()
             lastStabilizedCrop = null
         }
         updatePreviewSettings()
+    }
+
+    private fun shouldUseGyroEis(
+        mode: CameraMode = currentMode,
+        config: HybridStabilizationConfig = _hybridStabilizationConfig.value
+    ): Boolean {
+        val isVideoMode = mode == CameraMode.VIDEO || mode == CameraMode.CINEMA
+        val configRequestsEis = config.isUltraStabilizationEnabled ||
+            config.isEisOnly ||
+            (config.isHybridEnabled && config.isEisPreferred)
+        return isVideoMode && isVideoStabilizationEnabled && configRequestsEis
     }
 
     // Camera Session Concurrency & State Guard
@@ -3638,11 +3647,8 @@ class Camera2Engine(private val context: Context) {
         val cameraH = min(optimalSize.width, optimalSize.height)
         syncPreviewBufferSizes(cameraW, cameraH)
 
-        val isVideoMode = mode == CameraMode.VIDEO || mode == CameraMode.CINEMA
         val hybridConfig = _hybridStabilizationConfig.value
-        val shouldRunGyroEis = isVideoStabilizationEnabled &&
-            hybridConfig.isUltraStabilizationEnabled && isVideoMode
-        if (shouldRunGyroEis) {
+        if (shouldUseGyroEis(mode = mode, config = hybridConfig)) {
             gyroStabilizationEngine.start()
         } else {
             gyroStabilizationEngine.stop()
@@ -4854,16 +4860,17 @@ class Camera2Engine(private val context: Context) {
 
 
 
-            // Ported from Kamera ZIP: its gyro EIS computes a per-frame sensor crop in Ultra mode.
-            val videoModeForEis = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-            val ultraEisActive = isVideoStabilizationEnabled &&
-                _hybridStabilizationConfig.value.isUltraStabilizationEnabled &&
-                videoModeForEis && !isSwitchingLens.get()
-            if (ultraEisActive) {
+            // Apply gyro-assisted digital EIS for normal Video and Pro Video too.
+            // The crop region is sent on the same Camera2 repeating request that targets both
+            // the viewfinder and encoder, so framing/stabilization stay aligned in the saved file.
+            val activeGyroEis = shouldUseGyroEis() && !isSwitchingLens.get()
+            val ultraEis = _hybridStabilizationConfig.value.isUltraStabilizationEnabled
+            if (activeGyroEis) {
                 val lens = _selectedLens.value
                 if (lens != null) {
                     try {
-                        val chars = getCharacteristics(lens.cameraId)
+                        val chars = lens.physicalCameraId?.let { getCharacteristics(it) }
+                            ?: getCharacteristics(lens.cameraId)
                         val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
                         val focalLength = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                             ?.firstOrNull() ?: 4.38f
@@ -4875,12 +4882,17 @@ class Camera2Engine(private val context: Context) {
                                 activeArray = activeArray,
                                 baseZoom = currentZoom,
                                 focalLengthMm = focalLength,
-                                sensorPhysicalSizeMm = sensorSize
+                                sensorPhysicalSizeMm = sensorSize,
+                                stabilizationMargin = if (ultraEis) {
+                                    GyroStabilizationEngine.ULTRA_STABILIZATION_MARGIN
+                                } else {
+                                    GyroStabilizationEngine.STANDARD_EIS_CROP_MARGIN
+                                }
                             )
                             if (crop != null) applyStabilizedCrop(crop)
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Kamera ZIP gyro EIS frame calculation failed", e)
+                        Log.w(TAG, "Gyro-assisted EIS crop calculation failed", e)
                     }
                 }
             } else {
@@ -5557,8 +5569,7 @@ class Camera2Engine(private val context: Context) {
         val lens = activeSessionLens ?: _selectedLens.value ?: return
 
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        val isStabActive = isVideoStabilizationEnabled &&
-            _hybridStabilizationConfig.value.isUltraStabilizationEnabled
+        val isStabActive = shouldUseGyroEis()
 
         if (isStabActive && isVideoMode && lastStabilizedCrop != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

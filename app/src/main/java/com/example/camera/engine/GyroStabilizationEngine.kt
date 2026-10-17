@@ -30,7 +30,8 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
         private const val TAG = "GyroStabilization"
         private const val MAX_RING_BUFFER_SIZE = 1024
         private const val PAN_SMOOTHING_ALPHA = 0.045f // Differentiates smooth camera pan from shake
-        private const val ULTRA_STABILIZATION_MARGIN = 1.15f // 15% crop margin for wide correction
+        const val STANDARD_EIS_CROP_MARGIN = 1.06f // ~6% extra field-of-view crop for normal EIS
+        const val ULTRA_STABILIZATION_MARGIN = 1.15f // 15% crop margin for wider correction
     }
 
     data class GyroSample(
@@ -161,7 +162,8 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
         activeArray: Rect,
         baseZoom: Float = 1.0f,
         focalLengthMm: Float = 4.38f,
-        sensorPhysicalSizeMm: SizeF = SizeF(6.4f, 4.8f)
+        sensorPhysicalSizeMm: SizeF = SizeF(6.4f, 4.8f),
+        stabilizationMargin: Float = ULTRA_STABILIZATION_MARGIN
     ): Rect? {
         if (!isSensorRunning.get()) return null
 
@@ -241,24 +243,27 @@ class GyroStabilizationEngine(private val context: Context) : SensorEventListene
         currentOffsetDx = currentOffsetDx * 0.70f + targetShiftX * 0.30f
         currentOffsetDy = currentOffsetDy * 0.70f + targetShiftY * 0.30f
 
-        // Base Ultra Stabilization crop dimensions
-        val effectiveScale = (baseZoom * ULTRA_STABILIZATION_MARGIN).coerceAtLeast(1.0f)
-        val ultraCropW = (activeArray.width() / effectiveScale).toInt().coerceIn(100, activeArray.width())
-        val ultraCropH = (activeArray.height() / effectiveScale).toInt().coerceIn(100, activeArray.height())
+        // A little overscan is needed so moving the sensor crop can counter-steer motion
+        // without exposing black borders. Normal EIS uses a modest margin; Ultra uses more.
+        val effectiveScale = (
+            baseZoom.coerceAtLeast(1.0f) *
+                stabilizationMargin.coerceIn(1.0f, ULTRA_STABILIZATION_MARGIN)
+            ).coerceAtLeast(1.0f)
+        val cropW = (activeArray.width() / effectiveScale).toInt().coerceIn(100, activeArray.width())
+        val cropH = (activeArray.height() / effectiveScale).toInt().coerceIn(100, activeArray.height())
 
-        // Compute safe boundary shift limits so black borders never appear
-        val maxShiftX = ((activeArray.width() - ultraCropW) / 2).coerceAtLeast(0)
-        val maxShiftY = ((activeArray.height() - ultraCropH) / 2).coerceAtLeast(0)
-
+        // Compute safe boundary shift limits so black borders never appear.
+        val maxShiftX = ((activeArray.width() - cropW) / 2).coerceAtLeast(0)
+        val maxShiftY = ((activeArray.height() - cropH) / 2).coerceAtLeast(0)
         val clampedShiftX = currentOffsetDx.toInt().coerceIn(-maxShiftX, maxShiftX)
         val clampedShiftY = currentOffsetDy.toInt().coerceIn(-maxShiftY, maxShiftY)
 
-        val centerX = (activeArray.width() / 2) + clampedShiftX
-        val centerY = (activeArray.height() / 2) + clampedShiftY
+        // SENSOR_INFO_ACTIVE_ARRAY_SIZE may have a non-zero origin on some devices.
+        val centerX = activeArray.left + activeArray.width() / 2 + clampedShiftX
+        val centerY = activeArray.top + activeArray.height() / 2 + clampedShiftY
+        val left = (centerX - cropW / 2).coerceIn(activeArray.left, activeArray.right - cropW)
+        val top = (centerY - cropH / 2).coerceIn(activeArray.top, activeArray.bottom - cropH)
 
-        val left = (centerX - ultraCropW / 2).coerceIn(0, activeArray.width() - ultraCropW)
-        val top = (centerY - ultraCropH / 2).coerceIn(0, activeArray.height() - ultraCropH)
-
-        return Rect(left, top, left + ultraCropW, top + ultraCropH)
+        return Rect(left, top, left + cropW, top + cropH)
     }
 }

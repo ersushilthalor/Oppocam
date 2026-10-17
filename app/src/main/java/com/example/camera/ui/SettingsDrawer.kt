@@ -749,9 +749,9 @@ private fun VideoSettingsPage(
                     !isVideoStabilizationEnabled ->
                         "OFF: Electronic stabilization is disabled for live preview and saved video."
                     isHardwareEisActive ->
-                        "ON: Camera2 reports EIS active. Stabilization is requested for both live preview and recording."
+                        "ON: Camera2 hardware EIS is active, with gyro-assisted crop correction for live preview and recording."
                     else ->
-                        "ON: EIS is requested for preview and recording. If the camera does not report it active, try a supported resolution and frame rate."
+                        "ON: Gyroscope-assisted dynamic crop correction is active; hardware EIS is added when the camera supports it."
                 },
                 isChecked = isVideoStabilizationEnabled,
                 onCheckedChange = onStabilizationToggle,
@@ -942,9 +942,9 @@ private fun CinemaSettingsPage(
                     !isVideoStabilizationEnabled ->
                         "OFF: Electronic stabilization is disabled for live preview and saved video."
                     isHardwareEisActive ->
-                        "ON: Camera2 reports EIS active. Stabilization is requested for both live preview and recording."
+                        "ON: Camera2 hardware EIS is active, with gyro-assisted crop correction for live preview and recording."
                     else ->
-                        "ON: EIS is requested for preview and recording. If the camera does not report it active, try a supported resolution and frame rate."
+                        "ON: Gyroscope-assisted dynamic crop correction is active; hardware EIS is added when the camera supports it."
                 },
                 isChecked = isVideoStabilizationEnabled,
                 onCheckedChange = onStabilizationToggle,
