@@ -942,9 +942,8 @@ fun CameraScreen(
             )
         }
 
-        // 3e. Dedicated More Modes Drawer (Excluded from Pixel UI Template)
-        val isPixelTemplate = uiCustomizationState.selectedTemplate == UiTemplateType.STOCK_PIXEL ||
-                activeLayoutConfig.modeSelectorStyle == ModeSelectorStyle.PIXEL_PILL
+        // 3e. More Modes Drawer is available for all remaining UI layouts.
+        val isPixelTemplate = false
         LaunchedEffect(isPixelTemplate, cameraMode, isMoreModesOpen) {
             if (isPixelTemplate) {
                 if (isMoreModesOpen) viewModel.setMoreModesOpen(false)
