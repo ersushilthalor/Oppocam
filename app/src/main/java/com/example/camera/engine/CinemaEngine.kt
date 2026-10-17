@@ -309,7 +309,6 @@ class CinemaEngine(private val context: Context) {
             CinemaColorProfile.S_LOG,
             CinemaColorProfile.N_LOG,
             CinemaColorProfile.HLG10,
-            CinemaColorProfile.HLG_2,
             CinemaColorProfile.APPLE_LOG_2,
             CinemaColorProfile.D_LOG_2,
             CinemaColorProfile.SAMSUNG_APV_LOG,
