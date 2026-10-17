@@ -367,6 +367,7 @@ fun CameraScreen(
                 isAfLocked = isAfLocked,
                 isFrontCamera = selectedLens?.facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT,
                 cameraMode = cameraMode,
+                uiTemplateType = uiCustomizationState.selectedTemplate,
                 previewBufferSize = previewBufferSize,
                 mainPreviewBufferSize = mainPreviewBufferSize,
                 ultraWidePreviewBufferSize = ultraWidePreviewBufferSize,
