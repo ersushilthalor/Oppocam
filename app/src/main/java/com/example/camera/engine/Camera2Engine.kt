@@ -5461,23 +5461,6 @@ class Camera2Engine(private val context: Context) {
     private fun applyZoom(builder: CaptureRequest.Builder, explicitZoom: Float? = null) {
         val lens = activeSessionLens ?: _selectedLens.value ?: return
 
-        val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
-        val isStabActive = shouldUseGyroEis()
-
-        // Let explicit zoom gestures update the calibrated Camera2 zoom first. The gyro callback
-        // then recomputes its crop against that returned zoom, rather than pinning an old crop.
-        if (isStabActive && isVideoMode && explicitZoom != null) {
-            lastStabilizedCrop = null
-        }
-
-        if (isStabActive && isVideoMode && lastStabilizedCrop != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1.0f)
-            }
-            builder.set(CaptureRequest.SCALER_CROP_REGION, lastStabilizedCrop)
-            return
-        }
-
         try {
             val chars = getCharacteristics(lens.cameraId) ?: return
             val isLogicalMulti = lens.isLogicalMultiCamera ||
@@ -9558,7 +9541,6 @@ class Camera2Engine(private val context: Context) {
         gyroStabilizationEngine.stop()
 
         ultraFastShutterEngine.reset()
-        lastStabilizedCrop = null
         closeCameraCaptureSession()
         releaseUltraWideStandby()
         activeRecordingStreamConfig = null
