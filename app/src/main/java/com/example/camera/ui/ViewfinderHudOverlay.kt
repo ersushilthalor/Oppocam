@@ -64,57 +64,6 @@ fun ViewfinderHudOverlay(
                 // Exposure slider removed per user request; auto exposure operates internally
             }
 
-            UiTemplateType.MINIMAL_PRO -> {
-                // Minimalist Leica-inspired Telemetry Strip at Top of Viewfinder
-                MinimalProTelemetryStrip(
-                    exposureCompensation = exposureCompensation,
-                    manualIso = manualIso,
-                    manualShutterSpeedNs = manualShutterSpeedNs,
-                    storageStats = storageStats,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 64.dp)
-                )
-
-                // Precision Corner Framing Marks & Center Crosshair
-                MinimalProFramingHud(
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            UiTemplateType.FUTURISTIC_GLASS -> {
-                // Cyberpunk Neon Brackets & Digital Gyro Leveler
-                CyberGlassHud(
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            UiTemplateType.DSLR_PRO -> {
-                // Top OLED Info Ribbon (Shutter, Aperture, ISO, EV Meter, Remaining shots)
-                DslrOledInfoRibbon(
-                    exposureCompensation = exposureCompensation,
-                    manualIso = manualIso,
-                    manualShutterSpeedNs = manualShutterSpeedNs,
-                    storageStats = storageStats,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 60.dp)
-                )
-            }
-
-            UiTemplateType.IMMERSIVE_EDGE -> {
-                // Edge gesture indicators: Right for Zoom, exposure slider removed
-                ImmersiveEdgeControls(
-                    exposureCompensation = exposureCompensation,
-                    onExposureChange = onExposureChange,
-                    currentZoom = currentZoom,
-                    onZoomChange = onZoomChange,
-                    maxZoom = maxOf(capabilities.maxZoom, 20.0f),
-                    enableExposure = false,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
             else -> {
                 // Exposure slider removed; auto exposure operates internally
             }
