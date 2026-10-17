@@ -727,7 +727,7 @@ class ZoomTransitionController(
                 }
             }
 
-            // Guarantee exact duration of 300ms (0.30s), never less
+            // Guarantee exact duration of 400ms (0.40s), never less
             val totalElapsed = SystemClock.uptimeMillis() - startTime
             if (totalElapsed < transitionDurationMs) {
                 delay(transitionDurationMs - totalElapsed)
