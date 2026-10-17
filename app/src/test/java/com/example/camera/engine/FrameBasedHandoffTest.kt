@@ -147,4 +147,47 @@ class FrameBasedHandoffTest {
         assertEquals(1f, completed.mainAlpha, 0.0001f)
         assertEquals(0f, completed.ultraWideAlpha, 0.0001f)
     }
+
+    @Test
+    fun prewarmedIncomingFramesStartBlendImmediatelyAfterSwitchPoint() {
+        val controller = ZoomTransitionController()
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+
+        controller.prepareFrameBasedHandoff(
+            fromSource = PreviewStreamSource.ULTRAWIDE,
+            targetSource = PreviewStreamSource.MAIN
+        )
+
+        // The target stream can be running while the visible lens is still Ultra-Wide.
+        repeat(4) {
+            controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
+        }
+        assertFalse("Pre-warming must not start visible overlap before the switch point",
+            controller.previewOverlapState.value.isOverlapping)
+
+        controller.beginFrameBasedHandoff(
+            fromSource = PreviewStreamSource.ULTRAWIDE,
+            targetSource = PreviewStreamSource.MAIN,
+            scope = scope
+        )
+        assertTrue(controller.previewOverlapState.value.isOverlapping)
+        assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
+
+        // Fresh standby frames satisfy warm-up. The first post-switch target frame starts the
+        // 16-frame blend rather than spending two more frames waiting.
+        controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
+        assertTrue(controller.previewOverlapState.value.overlapProgress > 0f)
+        assertTrue(controller.previewOverlapState.value.isOverlapping)
+
+        repeat(14) {
+            controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
+            assertTrue(controller.previewOverlapState.value.isOverlapping)
+        }
+        controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
+        val completed = controller.previewOverlapState.value
+        assertFalse(completed.isOverlapping)
+        assertEquals(PreviewStreamSource.MAIN, completed.activeSource)
+        assertEquals(1f, completed.mainAlpha, 0.0001f)
+        assertEquals(0f, completed.ultraWideAlpha, 0.0001f)
+    }
 }

@@ -67,6 +67,8 @@ class ZoomTransitionController(
         private const val FRAME_HANDOFF_WARMUP_FRAMES = 2
         private const val FRAME_HANDOFF_REQUIRED_FRAMES = 16
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
+        // Pre-warmed frames are reusable only if the target stream is still actively updating.
+        private const val FRAME_HANDOFF_PREWARM_MAX_AGE_MS = 120L
 
         private fun isHalfXZoom(zoom: Float): Boolean = abs(zoom - 0.5f) < 0.025f
 
@@ -135,6 +137,13 @@ class ZoomTransitionController(
     private var frameHandoffFromSource: PreviewStreamSource? = null
     private var frameHandoffFrameCount: Int = 0
     private var frameHandoffTimeoutJob: Job? = null
+
+    // The standby camera can already be producing valid frames before the 1x switch point.
+    // Count them silently so the visible crossfade does not waste two more warm-up frames.
+    private var preparedFrameHandoffFromSource: PreviewStreamSource? = null
+    private var preparedFrameHandoffTargetSource: PreviewStreamSource? = null
+    private var preparedTargetFrameCount: Int = 0
+    private var preparedTargetLastFrameAtMs: Long = 0L
     private var activeTransitionJob: Job? = null
 
     /**
@@ -199,12 +208,47 @@ class ZoomTransitionController(
      *
      * The timeout is a fail-safe for devices that cannot produce a target frame callback.
      */
+    /**
+     * Pre-warms the target stream without changing preview alpha. For a .5x -> 2x/3x move,
+     * the standby Main preview is parked at the calibrated switch FOV while idle, so fresh
+     * frames can be counted before the switch point is crossed.
+     */
+    fun prepareFrameBasedHandoff(
+        fromSource: PreviewStreamSource,
+        targetSource: PreviewStreamSource
+    ) {
+        if (fromSource == targetSource) {
+            clearPreparedFrameHandoff()
+            return
+        }
+        preparedFrameHandoffFromSource = fromSource
+        preparedFrameHandoffTargetSource = targetSource
+        preparedTargetFrameCount = 0
+        preparedTargetLastFrameAtMs = 0L
+    }
+
+    private fun clearPreparedFrameHandoff() {
+        preparedFrameHandoffFromSource = null
+        preparedFrameHandoffTargetSource = null
+        preparedTargetFrameCount = 0
+        preparedTargetLastFrameAtMs = 0L
+    }
+
     fun beginFrameBasedHandoff(
         fromSource: PreviewStreamSource,
         targetSource: PreviewStreamSource,
         scope: CoroutineScope
     ) {
         frameHandoffTimeoutJob?.cancel()
+        val nowMs = SystemClock.uptimeMillis()
+        val hasFreshPreparedTargetFrames =
+            preparedFrameHandoffFromSource == fromSource &&
+                preparedFrameHandoffTargetSource == targetSource &&
+                preparedTargetFrameCount >= FRAME_HANDOFF_WARMUP_FRAMES &&
+                preparedTargetLastFrameAtMs > 0L &&
+                nowMs - preparedTargetLastFrameAtMs <= FRAME_HANDOFF_PREWARM_MAX_AGE_MS
+        clearPreparedFrameHandoff()
+
         if (fromSource == targetSource) {
             pendingFrameHandoffTarget = null
             frameHandoffFromSource = null
@@ -214,7 +258,9 @@ class ZoomTransitionController(
 
         frameHandoffFromSource = fromSource
         pendingFrameHandoffTarget = targetSource
-        frameHandoffFrameCount = 0
+        // Fresh pre-warmed buffers already satisfied camera/crop warm-up. If not, use the
+        // normal two-frame warm-up path after switching; never blend stale target frames.
+        frameHandoffFrameCount = if (hasFreshPreparedTargetFrames) FRAME_HANDOFF_WARMUP_FRAMES else 0
         _previewOverlapState.value = PreviewOverlapState(
             isOverlapping = true,
             mainAlpha = if (fromSource == PreviewStreamSource.MAIN) 1f else 0f,
@@ -238,7 +284,17 @@ class ZoomTransitionController(
 
     /** Called when a preview TextureView receives a new buffer. */
     fun onPreviewFrameAvailable(source: PreviewStreamSource) {
-        val targetSource = pendingFrameHandoffTarget ?: return
+        val targetSource = pendingFrameHandoffTarget
+        if (targetSource == null) {
+            // While pre-warming, observe only the target stream. This never changes visible
+            // alpha and cannot complete the handoff before the 1x-equivalent switch point.
+            if (source == preparedFrameHandoffTargetSource) {
+                preparedTargetFrameCount =
+                    (preparedTargetFrameCount + 1).coerceAtMost(FRAME_HANDOFF_WARMUP_FRAMES)
+                preparedTargetLastFrameAtMs = SystemClock.uptimeMillis()
+            }
+            return
+        }
         if (source != targetSource) return
 
         frameHandoffFrameCount = (frameHandoffFrameCount + 1).coerceAtMost(
@@ -306,6 +362,7 @@ class ZoomTransitionController(
         pendingFrameHandoffTarget = null
         frameHandoffFromSource = null
         frameHandoffFrameCount = 0
+        clearPreparedFrameHandoff()
         setSteadyStatePreview(keepUltraWide)
     }
 
@@ -406,12 +463,21 @@ class ZoomTransitionController(
                     // Keep a single easing curve across the physical lens boundary. The previous
                     // two-phase path eased to zero velocity at 1x, then restarted easing on Main,
                     // which looked like a zoom pause even when the preview crossfade was working.
+                    val useFrameBasedHandoff = isOverlapAnimationEnabled &&
+                        isFrameBasedHandoffEligible(startZ, endZ)
+                    if (useFrameBasedHandoff) {
+                        // Start observing standby Main frames now. Visible blending remains
+                        // gated to the 1x-equivalent switch point, but does not spend two extra
+                        // frames waiting for a stream that was already ready.
+                        prepareFrameBasedHandoff(
+                            fromSource = PreviewStreamSource.ULTRAWIDE,
+                            targetSource = PreviewStreamSource.MAIN
+                        )
+                    }
                     val startTime = SystemClock.uptimeMillis()
                     var lastDispatchedZoom = startZ
                     var lastDispatchedTime = 0L
                     var mainLensSelected = false
-                    val useFrameBasedHandoff = isOverlapAnimationEnabled &&
-                        isFrameBasedHandoffEligible(startZ, endZ)
 
                     while (isActive) {
                         val now = SystemClock.uptimeMillis()
@@ -758,6 +824,8 @@ class ZoomTransitionController(
         activeTransitionJob?.cancel()
         activeTransitionJob = null
         _isTransitionActive.value = false
-        if (pendingFrameHandoffTarget != null) cancelFrameBasedHandoff()
+        if (pendingFrameHandoffTarget != null || preparedFrameHandoffTargetSource != null) {
+            cancelFrameBasedHandoff()
+        }
     }
 }
