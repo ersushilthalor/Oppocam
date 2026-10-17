@@ -166,6 +166,7 @@ class ZoomTransitionController(
         switchPointMm: Float,
         scope: CoroutineScope,
         durationMs: Long = TOTAL_TRANSITION_DURATION_MS,
+        skipHoldAtSwitchPoint: Boolean = false,
         onZoomUpdate: (Float) -> Unit,
         onComplete: (Float, LensInfo?) -> Unit
     ): Job {
@@ -279,7 +280,13 @@ class ZoomTransitionController(
                 onApplyZoomToEngine(effectiveSwitchZoom, true)
 
                 // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
-                val holdDuration = holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
+                // Direct 2x/3x preset taps should cross the lens switch without pausing at 1x.
+                // Keep the configured hold unchanged for 1x taps and all other transitions.
+                val holdDuration = if (skipHoldAtSwitchPoint) {
+                    0L
+                } else {
+                    holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
+                }
 
                 if (isOverlapAnimationEnabled) {
                     // Activate physical Main lens stream concurrently under Ultra-Wide layer at effectiveSwitchZoom
