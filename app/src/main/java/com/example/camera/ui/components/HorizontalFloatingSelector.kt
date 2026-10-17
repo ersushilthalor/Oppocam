@@ -1,6 +1,13 @@
 package com.example.camera.ui.components
 
 import androidx.compose.animation.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import androidx.compose.ui.draw.graphicsLayer
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -53,8 +60,31 @@ fun FloatingWindowCard(
     baseTint: Color = FloatingSelectorDefaults.BaseTint,
     content: @Composable BoxScope.() -> Unit
 ) {
+    // UI-only spring entrance; this does not create another camera stream.
+    val scale = remember { Animatable(0.84f) }
+    val alpha = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        coroutineScope {
+            launch {
+                scale.animateTo(
+                    1f,
+                    animationSpec = spring(dampingRatio = 0.58f, stiffness = 520f)
+                )
+            }
+            launch {
+                alpha.animateTo(1f, animationSpec = tween(durationMillis = 170))
+            }
+        }
+    }
+
     FrostedGlassBox(
-        modifier = modifier,
+        modifier = modifier
+            .animateContentSize(animationSpec = spring(dampingRatio = 0.72f, stiffness = 420f))
+            .graphicsLayer {
+                scaleX = scale.value
+                scaleY = scale.value
+                this.alpha = alpha.value
+            },
         shape = shape,
         elevation = elevation,
         baseAlpha = baseAlpha,
