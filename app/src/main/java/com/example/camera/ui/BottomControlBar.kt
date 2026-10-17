@@ -1349,7 +1349,7 @@ fun MasterZoomCapsule(
                         val isActive = isExactMatch || isClosest
 
                         val label = when (preset) {
-                            0.5f -> "0.5"
+                            0.5f -> if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) ".5" else "0.5"
                             0.8f -> "0.8"
                             1.0f -> "1x"
                             2.0f -> "2"
@@ -1375,10 +1375,22 @@ fun MasterZoomCapsule(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(CircleShape)
-                                .background(if (isActive) Color(0xFF26210A) else Color.Transparent)
+                                .background(
+                                    if (isActive && layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS) {
+                                        Color(0xFF4B4A45)
+                                    } else if (isActive) {
+                                        Color(0xFF26210A)
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
                                 .border(
-                                    width = if (isActive) 1.5.dp else 0.dp,
-                                    color = if (isActive) Color(0xFFFFD54F) else Color.Transparent,
+                                    width = if (isActive && layoutConfig.modeSelectorStyle != ModeSelectorStyle.IPHONE_LIQUID_GLASS) 1.5.dp else 0.dp,
+                                    color = if (isActive && layoutConfig.modeSelectorStyle != ModeSelectorStyle.IPHONE_LIQUID_GLASS) {
+                                        Color(0xFFFFD54F)
+                                    } else {
+                                        Color.Transparent
+                                    },
                                     shape = CircleShape
                                 )
                                 .clickable {
