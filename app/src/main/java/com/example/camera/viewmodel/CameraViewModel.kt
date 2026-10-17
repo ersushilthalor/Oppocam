@@ -983,7 +983,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setMode(initialMode)
         engine.restoreInitialVideoResolution(CameraResolution(preferences.videoWidth, preferences.videoHeight))
         engine.setCinemaConfig(preferences.getCinemaConfig())
-        engine.updateHybridStabilizationConfig(preferences.hybridStabilizationConfig)
+        setHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
         engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
@@ -1250,7 +1250,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _tapFocusConfig.value = mTapFocus
 
         val mHybridStab = preferences.getModeHybridStabilizationConfig(mode)
-        engine.updateHybridStabilizationConfig(mHybridStab)
+        setHybridStabilizationConfig(mHybridStab)
 
         // 5. Switch engine mode to synchronize preview buffer and session with restored settings
         engine.setMode(mode)
@@ -2002,13 +2002,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setHybridStabilizationConfig(config: HybridStabilizationConfig) {
         // Sanitize saved/legacy configs: preserve OIS, remove every hybrid/EIS mode.
+        // The standalone OIS preference is the single source of truth. Do not let a
+        // stale per-mode hybrid/EIS config override the user's OIS switch.
+        val oisEnabled = preferences.isOisEnabled
         val oisOnlyConfig = config.copy(
             isHybridEnabled = false,
+            isOisPreferred = oisEnabled,
+            isOisEnabled = oisEnabled,
             isEisPreferred = false,
             isAdaptiveFpsLens = false,
             isUltraStabilizationEnabled = false,
             isEisOnly = false
         )
+        preferences.isUltraStabilizationEnabled = false
         engine.updateHybridStabilizationConfig(oisOnlyConfig)
         preferences.hybridStabilizationConfig = oisOnlyConfig
         preferences.setModeHybridStabilizationConfig(_cameraMode.value, oisOnlyConfig)
