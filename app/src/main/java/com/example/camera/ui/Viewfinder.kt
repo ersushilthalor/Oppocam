@@ -74,6 +74,18 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+/**
+ * Returns the portrait preview frame's height/width ratio.
+ * Video and Pro Video always use a 9:16 on-screen frame (height/width = 16:9),
+ * independent of UI template and cinema recording/output aspect-ratio settings.
+ */
+internal fun getViewfinderTargetHeightOverWidth(cameraMode: CameraMode, aspectRatio: Float): Float =
+    when (cameraMode) {
+        CameraMode.PHOTO -> 4f / 3f
+        CameraMode.VIDEO, CameraMode.CINEMA -> 16f / 9f
+        else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
+    }
+
 @Composable
 fun Viewfinder(
     aspectRatio: Float,
@@ -164,12 +176,7 @@ fun Viewfinder(
         currentScale = currentZoom
     }
 
-    val targetRatioCalc = when (cameraMode) {
-        CameraMode.PHOTO -> 4f / 3f
-        CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
-        CameraMode.VIDEO -> 16f / 9f
-        else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
-    }
+    val targetRatioCalc = getViewfinderTargetHeightOverWidth(cameraMode, aspectRatio)
 
     val applyTransformToView = rememberUpdatedState { tv: TextureView?, isUltraWide: Boolean, w: Int, h: Int ->
         if (tv == null) return@rememberUpdatedState
@@ -269,12 +276,7 @@ fun Viewfinder(
         // Native viewfinder uses 3:4 frame for Photo and Pro modes,
         // mode-specific aspect ratio for Cinema mode, and 9:16 frame for Video mode.
         val isFourThree = (cameraMode == CameraMode.PHOTO)
-        val targetRatio = when (cameraMode) {
-            CameraMode.PHOTO -> 4f / 3f
-            CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
-            CameraMode.VIDEO -> 16f / 9f
-            else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
-        }
+        val targetRatio = getViewfinderTargetHeightOverWidth(cameraMode, aspectRatio)
         val currentTargetRatio by rememberUpdatedState(targetRatio)
         val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
         val currentSensorOrientation by rememberUpdatedState(sensorOrientation)

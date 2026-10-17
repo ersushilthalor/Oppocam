@@ -214,7 +214,7 @@ fun CustomUiStudioDialog(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Quick Base Template Bar (Pixel, One UI, iPhone, Vivo)
+                    // Quick Base Template Bar (Pixel and One UI).
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -232,8 +232,6 @@ fun CustomUiStudioDialog(
                             listOf(
                                 UiTemplateType.STOCK_PIXEL to "Pixel",
                                 UiTemplateType.SAMSUNG to "One UI",
-                                UiTemplateType.IPHONE to "iPhone",
-                                UiTemplateType.VIVO to "Vivo",
                             )
                         }
                         studioQuickTemplates.chunked(4).forEach { rowTemplates ->
@@ -2066,8 +2064,6 @@ private fun SavedPresetsTabContent(
             val baseTemplates = listOf(
                 UiTemplateType.STOCK_PIXEL,
                 UiTemplateType.SAMSUNG,
-                UiTemplateType.IPHONE,
-                UiTemplateType.VIVO,
             )
 
             baseTemplates.chunked(2).forEach { rowItems ->
