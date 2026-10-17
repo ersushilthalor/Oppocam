@@ -684,7 +684,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clamped = (Math.round(seconds.coerceIn(
             CameraPreferences.MIN_LENS_SWITCH_HOLD_DURATION_SEC,
             CameraPreferences.MAX_LENS_SWITCH_HOLD_DURATION_SEC
-        ) * 20f) / 20f).coerceIn(
+        ) * 100f) / 100f).coerceIn(
             CameraPreferences.MIN_LENS_SWITCH_HOLD_DURATION_SEC,
             CameraPreferences.MAX_LENS_SWITCH_HOLD_DURATION_SEC
         )

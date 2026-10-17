@@ -392,7 +392,7 @@ class ZoomTransitionVerificationTest {
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE }
 
         if (uwLens != null && mainLens != null) {
-            assertEquals(100L, ZoomTransitionController.HOLD_AT_ONE_X_DURATION_MS)
+            assertEquals(20L, ZoomTransitionController.HOLD_AT_ONE_X_DURATION_MS)
 
             viewModel.selectLens(uwLens, instant = true)
             viewModel.setZoom(0.5f, isPresetTap = false)
@@ -428,17 +428,17 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
-    fun testVerifyAllSevenHoldDurationValuesAndPersistence() {
+    fun testHoldDurationValuesAndPersistenceIncludingTwentyMilliseconds() {
         val app = ApplicationProvider.getApplicationContext<android.app.Application>()
-        val testValues = listOf(0.0f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
-        val expectedMs = listOf(0L, 50L, 100L, 150L, 200L, 250L, 300L)
+        val testValues = listOf(0.0f, 0.02f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+        val expectedMs = listOf(0L, 20L, 50L, 100L, 150L, 200L, 250L, 300L)
 
-        // 1. Verify default value is 0.10 sec (100 ms)
+        // 1. Verify default value is 0.02 sec (20 ms)
         val defaultVm = CameraViewModel(app)
-        assertEquals(0.10f, defaultVm.lensSwitchHoldDurationSec.value, 0.001f)
-        assertEquals(100L, defaultVm.engine.zoomTransitionController.holdAtOneXDurationMs)
+        assertEquals(0.02f, defaultVm.lensSwitchHoldDurationSec.value, 0.001f)
+        assertEquals(20L, defaultVm.engine.zoomTransitionController.holdAtOneXDurationMs)
 
-        // 2. Separately verify each of the seven values
+        // 2. Separately verify each of the eight values
         for (i in testValues.indices) {
             val value = testValues[i]
             val ms = expectedMs[i]
@@ -463,9 +463,9 @@ class ZoomTransitionVerificationTest {
         }
 
         // Restore default for subsequent tests
-        viewModel.setLensSwitchHoldDuration(0.10f)
-        assertEquals(0.10f, viewModel.lensSwitchHoldDurationSec.value, 0.001f)
-        assertEquals(100L, viewModel.engine.zoomTransitionController.holdAtOneXDurationMs)
+        viewModel.setLensSwitchHoldDuration(0.02f)
+        assertEquals(0.02f, viewModel.lensSwitchHoldDurationSec.value, 0.001f)
+        assertEquals(20L, viewModel.engine.zoomTransitionController.holdAtOneXDurationMs)
     }
 
     @Test
@@ -475,8 +475,8 @@ class ZoomTransitionVerificationTest {
         val mainLens = lenses.firstOrNull { it.isPrimaryMain } ?: lenses.firstOrNull { it.lensType == LensType.WIDE } ?: lenses.firstOrNull()
 
         if (uwLens != null && mainLens != null) {
-            val testValues = listOf(0.0f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
-            val expectedMs = listOf(0L, 50L, 100L, 150L, 200L, 250L, 300L)
+            val testValues = listOf(0.0f, 0.02f, 0.05f, 0.10f, 0.15f, 0.20f, 0.25f, 0.30f)
+            val expectedMs = listOf(0L, 20L, 50L, 100L, 150L, 200L, 250L, 300L)
 
             for (i in testValues.indices) {
                 val value = testValues[i]

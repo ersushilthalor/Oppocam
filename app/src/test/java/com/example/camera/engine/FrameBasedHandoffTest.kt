@@ -10,6 +10,84 @@ import org.junit.Test
 class FrameBasedHandoffTest {
 
     @Test
+    fun frameBasedHandoffIsRestrictedToHalfXAndTwoOrThreeXEndpoints() {
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 2.0f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 3.0f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(2.0f, 0.5f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(3.0f, 0.5f))
+
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 1.0f))
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(1.0f, 0.5f))
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(0.7f, 2.0f))
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(2.0f, 1.0f))
+
+        assertTrue(ZoomTransitionController.isHalfXToTelephotoPresetTransition(0.5f, 2.0f))
+        assertFalse(ZoomTransitionController.isHalfXToTelephotoPresetTransition(0.5f, 1.0f))
+    }
+
+    @Test
+    fun reverseHandoffBlendsOnlyIncomingUltraWideFrames() {
+        val controller = ZoomTransitionController()
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+
+        controller.beginFrameBasedHandoff(
+            fromSource = PreviewStreamSource.MAIN,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            scope = scope
+        )
+
+        assertTrue(controller.previewOverlapState.value.isOverlapping)
+        assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
+
+        var previousProgress = 0f
+        repeat(15) {
+            controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
+            assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
+
+            controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
+            val state = controller.previewOverlapState.value
+            assertTrue(state.isOverlapping)
+            assertTrue("Reverse handoff must progress on new Ultra-Wide frames", state.overlapProgress > previousProgress)
+            assertTrue(state.overlapProgress < 1f)
+            assertEquals(1f, state.mainAlpha, 0.0001f)
+            previousProgress = state.overlapProgress
+        }
+
+        controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
+        val completed = controller.previewOverlapState.value
+        assertFalse(completed.isOverlapping)
+        assertEquals(PreviewStreamSource.ULTRAWIDE, completed.activeSource)
+        assertEquals(0f, completed.mainAlpha, 0.0001f)
+        assertEquals(1f, completed.ultraWideAlpha, 0.0001f)
+    }
+
+    @Test
+    fun reverseHandoffAcceleratesFadeWhenUltraWideFovMovesWiderThanMain() {
+        val atOneX = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 1,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 1.0f,
+            previousProgress = 0f
+        )
+        val atPointEightX = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 1,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 0.8f,
+            previousProgress = 0f
+        )
+        assertTrue("Reverse handoff should fade faster once Main cannot match the wider FOV", atPointEightX > atOneX)
+
+        val nextFrame = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 2,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 0.7f,
+            previousProgress = atPointEightX
+        )
+        assertTrue("Reverse handoff alpha must remain monotonic", nextFrame >= atPointEightX)
+        assertTrue("Fade must finish before a large FOV mismatch remains visible", nextFrame > 0.8f)
+    }
+
+    @Test
     fun handoffUsesSixteenIncomingFramesAndIgnoresOutgoingFrames() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
