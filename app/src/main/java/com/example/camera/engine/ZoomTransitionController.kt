@@ -195,14 +195,10 @@ class ZoomTransitionController(
 
         frameHandoffFrameCount = (frameHandoffFrameCount + 1).coerceAtMost(FRAME_HANDOFF_REQUIRED_FRAMES)
         val progress = frameHandoffFrameCount.toFloat() / FRAME_HANDOFF_REQUIRED_FRAMES.toFloat()
-        val mainAlpha = when (targetSource) {
-            PreviewStreamSource.MAIN -> progress
-            PreviewStreamSource.ULTRAWIDE -> 1f - progress
-        }.coerceIn(0f, 1f)
-        val ultraWideAlpha = when (targetSource) {
-            PreviewStreamSource.ULTRAWIDE -> progress
-            PreviewStreamSource.MAIN -> 1f - progress
-        }.coerceIn(0f, 1f)
+        // Keep the outgoing layer fully opaque underneath. Only the incoming top layer
+        // animates its alpha, producing a true old*(1-p) + new*p visual blend without dark gaps.
+        val mainAlpha = if (targetSource == PreviewStreamSource.MAIN) progress else 1f
+        val ultraWideAlpha = if (targetSource == PreviewStreamSource.ULTRAWIDE) progress else 1f
 
         _previewOverlapState.value = PreviewOverlapState(
             isOverlapping = true,
