@@ -1646,7 +1646,12 @@ class Camera2Engine(private val context: Context) {
         }
 
     fun updateHybridStabilizationConfig(config: HybridStabilizationConfig) {
+        val previousUltraMode = _hybridStabilizationConfig.value.isUltraStabilizationEnabled
         _hybridStabilizationConfig.value = config
+        if (previousUltraMode != config.isUltraStabilizationEnabled) {
+            // Rebuild the sensor crop with the new overscan margin after changing EIS strength.
+            lastStabilizedCrop = null
+        }
         if (shouldUseGyroEis(config = config)) {
             gyroStabilizationEngine.start()
         } else {
@@ -4878,17 +4883,33 @@ class Camera2Engine(private val context: Context) {
                         val sensorSize = chars?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
                             ?: SizeF(6.4f, 4.8f)
                         if (activeArray != null) {
+                            val stabilizationMargin = if (ultraEis) {
+                                GyroStabilizationEngine.ULTRA_STABILIZATION_MARGIN
+                            } else {
+                                GyroStabilizationEngine.STANDARD_EIS_CROP_MARGIN
+                            }
+                            // Derive user zoom from the active Camera2 result, not the app's
+                            // displayed zoom value: Ultra-Wide zoom values are FOV-calibrated.
+                            // Once our crop is applied, remove its margin from the reported crop
+                            // scale so each frame does not progressively zoom in further.
+                            val resultCrop = result.get(CaptureResult.SCALER_CROP_REGION) ?: activeArray
+                            val cropScale = activeArray.width().toFloat() /
+                                resultCrop.width().coerceAtLeast(1).toFloat()
+                            val zoomRatio = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                result.get(CaptureResult.CONTROL_ZOOM_RATIO) ?: 1.0f
+                            } else {
+                                1.0f
+                            }
+                            val priorSoftwareMargin = if (lastStabilizedCrop != null) stabilizationMargin else 1.0f
+                            val effectiveBaseZoom = (cropScale * zoomRatio / priorSoftwareMargin).coerceAtLeast(1.0f)
+
                             val crop = gyroStabilizationEngine.computeStabilizedCrop(
                                 result = result,
                                 activeArray = activeArray,
-                                baseZoom = currentZoom,
+                                baseZoom = effectiveBaseZoom,
                                 focalLengthMm = focalLength,
                                 sensorPhysicalSizeMm = sensorSize,
-                                stabilizationMargin = if (ultraEis) {
-                                    GyroStabilizationEngine.ULTRA_STABILIZATION_MARGIN
-                                } else {
-                                    GyroStabilizationEngine.STANDARD_EIS_CROP_MARGIN
-                                }
+                                stabilizationMargin = stabilizationMargin
                             )
                             if (crop != null) applyStabilizedCrop(crop)
                         }
@@ -5574,6 +5595,12 @@ class Camera2Engine(private val context: Context) {
 
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
         val isStabActive = shouldUseGyroEis()
+
+        // Let explicit zoom gestures update the calibrated Camera2 zoom first. The gyro callback
+        // then recomputes its crop against that returned zoom, rather than pinning an old crop.
+        if (isStabActive && isVideoMode && explicitZoom != null) {
+            lastStabilizedCrop = null
+        }
 
         if (isStabActive && isVideoMode && lastStabilizedCrop != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
