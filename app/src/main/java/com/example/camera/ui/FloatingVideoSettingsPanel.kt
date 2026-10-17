@@ -35,11 +35,9 @@ fun FloatingVideoSettingsPanel(
     isOpen: Boolean,
     currentResolution: CameraResolution?,
     currentFps: Int,
-    isUltraStabilizationEnabled: Boolean = false,
     supportedFpsProvider: ((CameraResolution) -> List<Int>)? = null,
     onResolutionSelected: (CameraResolution) -> Unit,
     onFpsSelected: (Int) -> Unit,
-    onUltraStabilizationToggle: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
