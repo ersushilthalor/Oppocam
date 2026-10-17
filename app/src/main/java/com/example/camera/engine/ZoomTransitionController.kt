@@ -64,7 +64,7 @@ class ZoomTransitionController(
         const val PREVIEW_OVERLAP_DURATION_MS = 100L
         const val MIN_OVERLAP_DURATION_MS = 100L
         const val MAX_OVERLAP_DURATION_MS = 1000L
-        private const val FRAME_HANDOFF_REQUIRED_FRAMES = 8
+        private const val FRAME_HANDOFF_REQUIRED_FRAMES = 16
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
     }
 
