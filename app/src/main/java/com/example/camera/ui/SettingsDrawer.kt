@@ -223,7 +223,7 @@ fun SettingsDrawer(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF090A0F))
+            .background(Color(0xFF000000))
             .statusBarsPadding()
             .navigationBarsPadding()
             .testTag("settings_screen")
@@ -266,11 +266,11 @@ fun SettingsDrawer(
 
                     Column {
                         Text(
-                            text = currentPage?.title ?: "CAMERA SETTINGS",
-                            color = Color(0xFFFFD54F),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
+                            text = currentPage?.title ?: "Settings",
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Medium,
+                            letterSpacing = 0.sp
                         )
                         if (currentPage != null) {
                             Text(
@@ -861,8 +861,8 @@ private fun CinemaSettingSliderRow(
             onValueChange = onValueChange,
             valueRange = valueRange,
             colors = SliderDefaults.colors(
-                thumbColor = Color(0xFFFFD54F),
-                activeTrackColor = Color(0xFFFFD54F),
+                thumbColor = Color(0xFFFF8A32),
+                activeTrackColor = Color(0xFFFF8A32),
                 inactiveTrackColor = Color.White.copy(alpha = 0.15f)
             ),
             modifier = Modifier
@@ -871,7 +871,7 @@ private fun CinemaSettingSliderRow(
         )
         Text(
             text = String.format(formatPattern, value * valueMultiplier) + unit,
-            color = Color(0xFFFFD54F),
+            color = Color(0xFFFF8A32),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.width(48.dp),
@@ -1105,7 +1105,7 @@ private fun CinemaSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1150,7 +1150,7 @@ private fun CinemaSettingsPage(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedContainerColor = Color(0xFFFF8A32),
                                     selectedLabelColor = Color.Black,
                                     containerColor = Color.White.copy(alpha = 0.08f),
                                     labelColor = Color.White
@@ -1183,7 +1183,7 @@ private fun CinemaSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1227,7 +1227,7 @@ private fun CinemaSettingsPage(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedContainerColor = Color(0xFFFF8A32),
                                     selectedLabelColor = Color.Black,
                                     containerColor = Color.White.copy(alpha = 0.08f),
                                     labelColor = Color.White
@@ -1260,7 +1260,7 @@ private fun CinemaSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1288,7 +1288,7 @@ private fun CinemaSettingsPage(
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = Color(0x26FFD54F),
-                            border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f))
+                            border = BorderStroke(1.dp, Color(0xFFFF8A32).copy(alpha = 0.4f))
                         ) {
                             Text(
                                 text = if (cinemaConfig.selectedLut == CinematicLut.CUSTOM && !cinemaConfig.customLutName.isNullOrBlank()) {
@@ -1296,7 +1296,7 @@ private fun CinemaSettingsPage(
                                 } else {
                                     cinemaConfig.selectedLut.label
                                 }.uppercase(),
-                                color = Color(0xFFFFD54F),
+                                color = Color(0xFFFF8A32),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1337,7 +1337,7 @@ private fun CinemaSettingsPage(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedContainerColor = Color(0xFFFF8A32),
                                     selectedLabelColor = Color.Black,
                                     containerColor = Color.White.copy(alpha = 0.08f),
                                     labelColor = Color.White
@@ -1369,7 +1369,7 @@ private fun CinemaSettingsPage(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedContainerColor = Color(0xFFFF8A32),
                                     selectedLabelColor = Color.Black,
                                     containerColor = Color.White.copy(alpha = 0.08f),
                                     labelColor = Color.White
@@ -1419,7 +1419,7 @@ private fun CinemaSettingsPage(
                                 onCheckedChange = { onCinemaConfigChange(cinemaConfig.copy(isBakeLutToOutput = it)) },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.Black,
-                                    checkedTrackColor = Color(0xFFFFD54F),
+                                    checkedTrackColor = Color(0xFFFF8A32),
                                     uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
                                     uncheckedTrackColor = Color.White.copy(alpha = 0.15f)
                                 )
@@ -1434,10 +1434,10 @@ private fun CinemaSettingsPage(
                         onClick = { lutFilePickerLauncher.launch(arrayOf("*/*")) },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color.White.copy(alpha = 0.08f),
-                            contentColor = Color(0xFFFFD54F)
+                            contentColor = Color(0xFFFF8A32)
                         ),
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.4f)),
+                        border = BorderStroke(1.dp, Color(0xFFFF8A32).copy(alpha = 0.4f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(
@@ -1530,7 +1530,7 @@ private fun CinemaSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1594,7 +1594,7 @@ private fun CinemaSettingsPage(
                             ) {
                                 Text(
                                     text = "RESET ALL",
-                                    color = Color(0xFFFFD54F),
+                                    color = Color(0xFFFF8A32),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1606,7 +1606,7 @@ private fun CinemaSettingsPage(
 
                     Text(
                         text = "1. EXPOSURE & TONE CURVE",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.8.sp
@@ -1664,7 +1664,7 @@ private fun CinemaSettingsPage(
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = "2. TONAL ZONES",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.8.sp
@@ -1722,7 +1722,7 @@ private fun CinemaSettingsPage(
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = "3. COLOR & WHITE BALANCE",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.8.sp
@@ -2038,13 +2038,13 @@ private fun LensSwitchHoldDurationSettingCard(
                         modifier = Modifier
                             .size(36.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
+                            .background(Color(0xFFFF8A32).copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Timer,
                             contentDescription = null,
-                            tint = Color(0xFFFFD54F),
+                            tint = Color(0xFFFF8A32),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -2091,7 +2091,7 @@ private fun LensSwitchHoldDurationSettingCard(
                     )
                     Text(
                         text = displayValue,
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -2122,7 +2122,7 @@ private fun LensSwitchHoldDurationSettingCard(
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFFD54F),
+                            selectedContainerColor = Color(0xFFFF8A32),
                             selectedLabelColor = Color.Black,
                             containerColor = Color.White.copy(alpha = 0.08f),
                             labelColor = Color.White
@@ -2182,13 +2182,13 @@ private fun SwitchPointSettingCard(
                         modifier = Modifier
                             .size(36.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFFFFD54F).copy(alpha = 0.15f)),
+                            .background(Color(0xFFFF8A32).copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Cameraswitch,
                             contentDescription = null,
-                            tint = Color(0xFFFFD54F),
+                            tint = Color(0xFFFF8A32),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -2210,12 +2210,12 @@ private fun SwitchPointSettingCard(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFFFFD54F).copy(alpha = 0.18f))
+                        .background(Color(0xFFFF8A32).copy(alpha = 0.18f))
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text(
                         text = displayValue,
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -2242,7 +2242,7 @@ private fun SwitchPointSettingCard(
                 )
                 Text(
                     text = "Main: ${String.format(java.util.Locale.US, "%.2f", mainCrop)}× crop",
-                    color = Color(0xFFFFD54F),
+                    color = Color(0xFFFF8A32),
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -2257,8 +2257,8 @@ private fun SwitchPointSettingCard(
                 valueRange = 23f..85f,
                 steps = 61,
                 colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFFFFD54F),
-                    activeTrackColor = Color(0xFFFFD54F),
+                    thumbColor = Color(0xFFFF8A32),
+                    activeTrackColor = Color(0xFFFF8A32),
                     inactiveTrackColor = Color.White.copy(alpha = 0.18f)
                 ),
                 modifier = Modifier
@@ -2286,7 +2286,7 @@ private fun SwitchPointSettingCard(
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFFD54F),
+                            selectedContainerColor = Color(0xFFFF8A32),
                             selectedLabelColor = Color.Black,
                             containerColor = Color.White.copy(alpha = 0.08f),
                             labelColor = Color.White
@@ -2295,7 +2295,7 @@ private fun SwitchPointSettingCard(
                             enabled = true,
                             selected = isSelected,
                             borderColor = Color.White.copy(alpha = 0.15f),
-                            selectedBorderColor = Color(0xFFFFD54F)
+                            selectedBorderColor = Color(0xFFFF8A32)
                         ),
                         modifier = Modifier.testTag("chip_switch_point_$presetFocal")
                     )
@@ -2393,7 +2393,7 @@ private fun UiLayoutSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -2425,10 +2425,10 @@ private fun UiLayoutSettingsPage(
                                 Surface(
                                     onClick = { onSelectTemplate(template) },
                                     shape = RoundedCornerShape(12.dp),
-                                    color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.08f),
+                                    color = if (isSelected) Color(0xFFFF8A32) else Color.White.copy(alpha = 0.08f),
                                     border = BorderStroke(
                                         1.dp,
-                                        if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f)
+                                        if (isSelected) Color(0xFFFF8A32) else Color.White.copy(alpha = 0.12f)
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -2455,7 +2455,7 @@ private fun UiLayoutSettingsPage(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Selected: ${uiCustomizationState.selectedTemplate.title} — ${uiCustomizationState.selectedTemplate.subtitle}",
-                        color = Color(0xFFFFD54F).copy(alpha = 0.9f),
+                        color = Color(0xFFFF8A32).copy(alpha = 0.9f),
                         fontSize = 11.5.sp,
                         lineHeight = 15.sp
                     )
@@ -2485,7 +2485,7 @@ private fun UiLayoutSettingsPage(
 
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.4f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -2797,7 +2797,7 @@ private fun UiLayoutSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -2828,7 +2828,7 @@ private fun UiLayoutSettingsPage(
                         ) {
                             Text(
                                 text = "${(floatingWindowAppearance.windowScale * 100).roundToInt()}%",
-                                color = Color(0xFFFFD54F),
+                                color = Color(0xFFFF8A32),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -2847,8 +2847,8 @@ private fun UiLayoutSettingsPage(
                         },
                         valueRange = 0.75f..1.25f,
                         colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFFFFD54F),
-                            activeTrackColor = Color(0xFFFFD54F),
+                            thumbColor = Color(0xFFFF8A32),
+                            activeTrackColor = Color(0xFFFF8A32),
                             inactiveTrackColor = Color.White.copy(alpha = 0.18f)
                         ),
                         modifier = Modifier
@@ -2879,7 +2879,7 @@ private fun UiLayoutSettingsPage(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedContainerColor = Color(0xFFFF8A32),
                                     selectedLabelColor = Color.Black,
                                     containerColor = Color.White.copy(alpha = 0.08f),
                                     labelColor = Color.White
@@ -2895,7 +2895,7 @@ private fun UiLayoutSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -2923,7 +2923,7 @@ private fun UiLayoutSettingsPage(
                         TextButton(onClick = onResetFloatingWindowAppearance) {
                             Text(
                                 text = "RESET",
-                                color = Color(0xFFFFD54F),
+                                color = Color(0xFFFF8A32),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -2968,7 +2968,7 @@ private fun UiLayoutSettingsPage(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFFFFD54F),
+                                    selectedContainerColor = Color(0xFFFF8A32),
                                     selectedLabelColor = Color.Black,
                                     containerColor = Color.White.copy(alpha = 0.08f),
                                     labelColor = Color.White
@@ -2992,7 +2992,7 @@ private fun UiLayoutSettingsPage(
                         )
                         Text(
                             text = "${floatingWindowAppearance.blurStrengthDp} dp",
-                            color = Color(0xFFFFD54F),
+                            color = Color(0xFFFF8A32),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -3002,8 +3002,8 @@ private fun UiLayoutSettingsPage(
                         onValueChange = onFloatingWindowBlurStrengthChange,
                         valueRange = 0f..50f,
                         colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFFFFD54F),
-                            activeTrackColor = Color(0xFFFFD54F),
+                            thumbColor = Color(0xFFFF8A32),
+                            activeTrackColor = Color(0xFFFF8A32),
                             inactiveTrackColor = Color.White.copy(alpha = 0.18f)
                         )
                     )
@@ -3021,7 +3021,7 @@ private fun UiLayoutSettingsPage(
                         )
                         Text(
                             text = "${floatingWindowAppearance.transparencyPercent}%",
-                            color = Color(0xFFFFD54F),
+                            color = Color(0xFFFF8A32),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -3031,8 +3031,8 @@ private fun UiLayoutSettingsPage(
                         onValueChange = onFloatingWindowTransparencyChange,
                         valueRange = 0f..1f,
                         colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFFFFD54F),
-                            activeTrackColor = Color(0xFFFFD54F),
+                            thumbColor = Color(0xFFFF8A32),
+                            activeTrackColor = Color(0xFFFF8A32),
                             inactiveTrackColor = Color.White.copy(alpha = 0.18f)
                         )
                     )
@@ -3042,7 +3042,7 @@ private fun UiLayoutSettingsPage(
                     // Real-time Live Floating Window Preview Box
                     Text(
                         text = "LIVE WINDOW PREVIEW",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.8.sp
@@ -3088,7 +3088,7 @@ private fun UiLayoutSettingsPage(
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = "Backdrop Blur: ${floatingWindowAppearance.blurStrengthDp} dp",
-                                    color = Color(0xFFFFD54F),
+                                    color = Color(0xFFFF8A32),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -3109,7 +3109,7 @@ private fun UiLayoutSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -3133,7 +3133,7 @@ private fun UiLayoutSettingsPage(
                     // Video Floating Window Section
                     Text(
                         text = "VIDEO FLOATING WINDOW",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.8.sp
@@ -3183,7 +3183,7 @@ private fun UiLayoutSettingsPage(
                     // Pro Video Floating Window Section
                     Text(
                         text = "PRO VIDEO FLOATING WINDOW",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.8.sp
@@ -3233,7 +3233,7 @@ private fun UiLayoutSettingsPage(
                     // Pro & Pipeline Floating Windows Section
                     Text(
                         text = "PRO MANUAL & PIPELINE FLOATING WINDOWS",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.8.sp
@@ -3298,7 +3298,7 @@ private fun FloatingContentToggleRow(
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.Black,
-                checkedTrackColor = Color(0xFFFFD54F),
+                checkedTrackColor = Color(0xFFFF8A32),
                 uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
                 uncheckedTrackColor = Color.White.copy(alpha = 0.15f)
             )
@@ -3422,14 +3422,14 @@ private fun AboutSettingsPage(
         item {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF131622),
+                color = Color(0xFF1B1B1B),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = "Camera Pro Engine",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -3485,9 +3485,8 @@ fun ViewfinderCornerRadiusCard(
     }
 
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF131622),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xFF1B1B1B),
         modifier = modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -3527,7 +3526,7 @@ fun ViewfinderCornerRadiusCard(
                             ) {
                                 Text(
                                     text = "ROUNDED",
-                                    color = Color(0xFFFFD54F),
+                                    color = Color(0xFFFF8A32),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -3550,7 +3549,7 @@ fun ViewfinderCornerRadiusCard(
                 ) {
                     Text(
                         text = "${cornerRadiusDp} dp",
-                        color = Color(0xFFFFD54F),
+                        color = Color(0xFFFF8A32),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
@@ -3585,7 +3584,7 @@ fun ViewfinderCornerRadiusCard(
                             )
                         )
                         .border(
-                            BorderStroke(1.5.dp, Color(0xFFFFD54F).copy(alpha = 0.85f)),
+                            BorderStroke(1.5.dp, Color(0xFFFF8A32).copy(alpha = 0.85f)),
                             RoundedCornerShape(cornerRadiusDp.dp)
                         ),
                     contentAlignment = Alignment.Center
@@ -3597,7 +3596,7 @@ fun ViewfinderCornerRadiusCard(
                         Icon(
                             imageVector = Icons.Outlined.CropFree,
                             contentDescription = null,
-                            tint = Color(0xFFFFD54F).copy(alpha = 0.85f),
+                            tint = Color(0xFFFF8A32).copy(alpha = 0.85f),
                             modifier = Modifier.size(15.dp)
                         )
                         Text(
@@ -3619,8 +3618,8 @@ fun ViewfinderCornerRadiusCard(
                 valueRange = 0f..48f,
                 steps = 47,
                 colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFFFFD54F),
-                    activeTrackColor = Color(0xFFFFD54F),
+                    thumbColor = Color(0xFFFF8A32),
+                    activeTrackColor = Color(0xFFFF8A32),
                     inactiveTrackColor = Color.White.copy(alpha = 0.18f)
                 ),
                 modifier = Modifier
@@ -3648,7 +3647,7 @@ fun ViewfinderCornerRadiusCard(
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFFD54F),
+                            selectedContainerColor = Color(0xFFFF8A32),
                             selectedLabelColor = Color.Black,
                             containerColor = Color.White.copy(alpha = 0.08f),
                             labelColor = Color.White
@@ -3669,9 +3668,8 @@ private fun CategoryCard(
     onClick: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF131622),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xFF1B1B1B),
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
@@ -3690,13 +3688,13 @@ private fun CategoryCard(
                     modifier = Modifier
                         .size(42.dp)
                         .clip(CircleShape)
-                        .background(Color(0x22FFD54F)),
+                        .background(Color(0x22FF8A32)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = Color(0xFFFFD54F),
+                        tint = Color(0xFFFF8A32),
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -3737,9 +3735,8 @@ private fun SettingsSwitchCard(
     tag: String
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF131622),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xFF1B1B1B),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -3751,15 +3748,15 @@ private fun SettingsSwitchCard(
                 Text(
                     text = title,
                     color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = description,
                     color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp
                 )
             }
 
@@ -3767,8 +3764,8 @@ private fun SettingsSwitchCard(
                 checked = isChecked,
                 onCheckedChange = onCheckedChange,
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.Black,
-                    checkedTrackColor = Color(0xFFFFD54F),
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Color(0xFFFF8A32),
                     uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
                     uncheckedTrackColor = Color.White.copy(alpha = 0.15f)
                 ),
@@ -3787,9 +3784,8 @@ private fun <T> SettingsSegmentedCard(
     onOptionSelected: (T) -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF131622),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xFF1B1B1B),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -3828,7 +3824,7 @@ private fun <T> SettingsSegmentedCard(
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFFD54F),
+                            selectedContainerColor = Color(0xFFFF8A32),
                             selectedLabelColor = Color.Black,
                             containerColor = Color.White.copy(alpha = 0.08f),
                             labelColor = Color.White
@@ -3848,9 +3844,8 @@ private fun SettingsActionCard(
     onClick: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF131622),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xFF1B1B1B),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -3862,22 +3857,22 @@ private fun SettingsActionCard(
                 Text(
                     text = title,
                     color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = description,
                     color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp
                 )
             }
 
             Button(
                 onClick = onClick,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFFD54F),
+                    containerColor = Color(0xFFFF8A32),
                     contentColor = Color.Black
                 ),
                 shape = RoundedCornerShape(12.dp),
