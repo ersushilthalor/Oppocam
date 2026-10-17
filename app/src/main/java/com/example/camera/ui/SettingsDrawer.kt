@@ -590,6 +590,12 @@ private fun SettingsOverviewPage(
                     onClick = { onSelectPage(SettingsPage.VIDEO) },
                     showDivider = true
                 )
+                ReferenceNavigationRow(
+                    title = "Pro Video settings",
+                    value = "Log, HDR, LUTs",
+                    onClick = { onSelectPage(SettingsPage.CINEMA) },
+                    showDivider = true
+                )
                 ReferenceChoiceRow(
                     title = "Bitrate",
                     selectedOption = videoBitrate,
@@ -669,6 +675,35 @@ private fun SettingsOverviewPage(
                     description = "Manage camera workload when the phone gets hot.",
                     checked = thermalProtection,
                     onCheckedChange = onThermalProtectionToggle,
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            ReferenceSettingsGroup("More settings") {
+                ReferenceNavigationRow(
+                    title = "Pro / Manual settings",
+                    value = "ISO, shutter, focus",
+                    onClick = { onSelectPage(SettingsPage.PRO_MANUAL) },
+                    showDivider = true
+                )
+                ReferenceNavigationRow(
+                    title = "UI & Layout settings",
+                    value = "Templates, controls, floating window",
+                    onClick = { onSelectPage(SettingsPage.UI_LAYOUT) },
+                    showDivider = true
+                )
+                ReferenceNavigationRow(
+                    title = "Camera & Lens settings",
+                    value = "Lens switching, preview, grid",
+                    onClick = { onSelectPage(SettingsPage.CAMERA_LENS) },
+                    showDivider = true
+                )
+                ReferenceNavigationRow(
+                    title = "General settings",
+                    value = "Controls, feedback, thermal",
+                    onClick = { onSelectPage(SettingsPage.GENERAL) },
                     showDivider = false
                 )
             }
