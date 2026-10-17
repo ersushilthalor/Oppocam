@@ -233,84 +233,34 @@ fun SettingsDrawer(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp)
         ) {
-            // Top Navigation Bar
+            // Reference-style Settings header
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    if (currentPage != null) {
-                        IconButton(
-                            onClick = { currentPage = null },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.1f))
-                                .testTag("settings_back_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to categories",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    Column {
-                        Text(
-                            text = currentPage?.title ?: "Settings",
-                            color = Color.White,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 0.sp
-                        )
-                        if (currentPage != null) {
-                            Text(
-                                text = currentPage!!.subtitle,
-                                color = Color.White.copy(alpha = 0.65f),
-                                fontSize = 12.sp,
-                                maxLines = 1
-                            )
-                        } else {
-                            Text(
-                                text = "Preferences, hardware lenses & processing pipelines",
-                                color = Color.White.copy(alpha = 0.55f),
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-
                 IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.12f))
-                        .testTag("close_settings_button")
+                    onClick = {
+                        if (currentPage != null) currentPage = null else onDismiss()
+                    },
+                    modifier = Modifier.size(48.dp).testTag("settings_back_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close Settings",
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
                         tint = Color.White,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
+                Text(
+                    text = "Settings",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 12.dp)
+                )
             }
 
-            HorizontalDivider(
-                color = Color.White.copy(alpha = 0.08f),
-                thickness = 1.dp,
-                modifier = Modifier.padding(vertical = 8.dp)
-            )
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Content Area: Either Categories Overview or Dedicated Page
             AnimatedContent(
@@ -329,7 +279,38 @@ fun SettingsDrawer(
                     // 1. Categories Overview
                     SettingsOverviewPage(
                         onSelectPage = { currentPage = it },
-                        onResetAll = onResetAllSettings
+                        onResetAll = onResetAllSettings,
+                        isAutoHdrEnabled = isAutoHdrEnabled,
+                        onAutoHdrToggle = onAutoHdrToggle,
+                        photoMegapixelMode = photoMegapixelMode,
+                        isRawEnabled = isRawEnabled,
+                        onRawToggle = onRawToggle,
+                        saveSelfieAsPreviewed = saveSelfieAsPreviewed,
+                        onSaveSelfieAsPreviewedToggle = onSaveSelfieAsPreviewedToggle,
+                        isUltraFastShutterEnabled = isUltraFastShutterEnabled,
+                        onUltraFastShutterToggle = onUltraFastShutterToggle,
+                        volumeKeyAction = volumeKeyAction,
+                        onVolumeKeyActionSelected = onVolumeKeyActionSelected,
+                        doubleTapAction = doubleTapAction,
+                        onDoubleTapActionSelected = onDoubleTapActionSelected,
+                        shutterFeedback = shutterFeedback,
+                        onShutterFeedbackSelected = onShutterFeedbackSelected,
+                        antibandingMode = antibandingMode,
+                        onAntibandingModeSelected = onAntibandingModeSelected,
+                        isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+                        onStabilizationToggle = onStabilizationToggle,
+                        isOisEnabled = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
+                        onOisToggle = onOisToggle,
+                        isAudioEnabled = isAudioEnabled,
+                        onAudioToggle = onAudioToggle,
+                        videoBitrate = videoBitrate,
+                        onVideoBitrateSelected = onVideoBitrateSelected,
+                        isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
+                        onHorizontalLockSettingToggle = onHorizontalLockSettingToggle,
+                        horizonLeveler = horizonLeveler,
+                        onHorizonLevelerToggle = onHorizonLevelerToggle,
+                        thermalProtection = thermalProtection,
+                        onThermalProtectionToggle = onThermalProtectionToggle
                     )
                 } else {
                     // 2. Dedicated Sub-Pages
@@ -491,57 +472,429 @@ fun SettingsDrawer(
 @Composable
 private fun SettingsOverviewPage(
     onSelectPage: (SettingsPage) -> Unit,
-    onResetAll: () -> Unit
+    onResetAll: () -> Unit,
+    isAutoHdrEnabled: Boolean,
+    onAutoHdrToggle: (Boolean) -> Unit,
+    photoMegapixelMode: PhotoMegapixelMode,
+    isRawEnabled: Boolean,
+    onRawToggle: () -> Unit,
+    saveSelfieAsPreviewed: Boolean,
+    onSaveSelfieAsPreviewedToggle: (Boolean) -> Unit,
+    isUltraFastShutterEnabled: Boolean,
+    onUltraFastShutterToggle: (Boolean) -> Unit,
+    volumeKeyAction: String,
+    onVolumeKeyActionSelected: (String) -> Unit,
+    doubleTapAction: String,
+    onDoubleTapActionSelected: (String) -> Unit,
+    shutterFeedback: String,
+    onShutterFeedbackSelected: (String) -> Unit,
+    antibandingMode: String,
+    onAntibandingModeSelected: (String) -> Unit,
+    isVideoStabilizationEnabled: Boolean,
+    onStabilizationToggle: (Boolean) -> Unit,
+    isOisEnabled: Boolean,
+    onOisToggle: (Boolean) -> Unit,
+    isAudioEnabled: Boolean,
+    onAudioToggle: () -> Unit,
+    videoBitrate: VideoBitrateOption,
+    onVideoBitrateSelected: (VideoBitrateOption) -> Unit,
+    isHorizontalLockSettingEnabled: Boolean,
+    onHorizontalLockSettingToggle: (Boolean) -> Unit,
+    horizonLeveler: Boolean,
+    onHorizonLevelerToggle: (Boolean) -> Unit,
+    thermalProtection: Boolean,
+    onThermalProtectionToggle: (Boolean) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(vertical = 8.dp)
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+        contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-
-        items(SettingsPage.entries.toTypedArray()) { page ->
-            CategoryCard(
-                title = page.title,
-                subtitle = page.subtitle,
-                icon = page.icon,
-                onClick = { onSelectPage(page) }
-            )
+        item {
+            ReferenceSettingsGroup("General") {
+                ReferenceChoiceRow(
+                    title = "Shutter feedback",
+                    selectedOption = shutterFeedback,
+                    options = listOf(
+                        "SOUND_AND_HAPTIC" to "Sound & haptic",
+                        "HAPTIC_ONLY" to "Haptic",
+                        "SOUND_ONLY" to "Sound",
+                        "MUTE" to "Mute"
+                    ),
+                    onOptionSelected = onShutterFeedbackSelected,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Mirror selfie",
+                    description = "Save front-camera photos as previewed.",
+                    checked = saveSelfieAsPreviewed,
+                    onCheckedChange = onSaveSelfieAsPreviewedToggle,
+                    showDivider = true
+                )
+                ReferenceNavigationRow(
+                    title = "Composition assistance",
+                    onClick = { onSelectPage(SettingsPage.CAMERA_LENS) },
+                    showDivider = true
+                )
+                ReferenceChoiceRow(
+                    title = "Anti-banding filter",
+                    selectedOption = antibandingMode,
+                    options = listOf(
+                        "AUTO" to "Auto",
+                        "50HZ" to "50 Hz",
+                        "60HZ" to "60 Hz",
+                        "OFF" to "Off"
+                    ),
+                    onOptionSelected = onAntibandingModeSelected,
+                    showDivider = false
+                )
+            }
         }
 
         item {
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = onResetAll,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = Color(0xFFFF5252)
-                ),
-                border = BorderStroke(1.dp, Color(0xFFFF5252).copy(alpha = 0.5f)),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-                    .testTag("reset_all_settings_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.RestartAlt,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
+            ReferenceSettingsGroup("Photo") {
+                ReferenceNavigationRow(
+                    title = "Photo resolution",
+                    value = if (photoMegapixelMode == PhotoMegapixelMode.M50) "50 MP" else "12 MP",
+                    onClick = { onSelectPage(SettingsPage.PHOTO) },
+                    showDivider = true
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                ReferenceToggleRow(
+                    title = "Auto HDR",
+                    description = "Automatically balances highlights and shadows.",
+                    checked = isAutoHdrEnabled,
+                    onCheckedChange = onAutoHdrToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "RAW capture (DNG)",
+                    description = "Save raw sensor data for editing.",
+                    checked = isRawEnabled,
+                    onCheckedChange = { onRawToggle() },
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Ultra-fast shutter burst",
+                    description = "Hold the shutter for continuous shooting.",
+                    checked = isUltraFastShutterEnabled,
+                    onCheckedChange = onUltraFastShutterToggle,
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            ReferenceSettingsGroup("Video") {
+                ReferenceNavigationRow(
+                    title = "Resolution and frame rate",
+                    onClick = { onSelectPage(SettingsPage.VIDEO) },
+                    showDivider = true
+                )
+                ReferenceChoiceRow(
+                    title = "Bitrate",
+                    selectedOption = videoBitrate,
+                    options = listOf(
+                        VideoBitrateOption.AUTO to "Auto",
+                        VideoBitrateOption.STANDARD to "Standard",
+                        VideoBitrateOption.HIGH to "High quality",
+                        VideoBitrateOption.MAX to "Maximum quality"
+                    ),
+                    onOptionSelected = onVideoBitrateSelected,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Electronic stabilization (EIS)",
+                    description = "Crop the frame to reduce camera shake in preview and recording.",
+                    checked = isVideoStabilizationEnabled,
+                    onCheckedChange = onStabilizationToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Optical stabilization (OIS)",
+                    description = "Use hardware lens stabilization when supported.",
+                    checked = isOisEnabled,
+                    onCheckedChange = onOisToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Record audio",
+                    description = "Capture audio with videos.",
+                    checked = isAudioEnabled,
+                    onCheckedChange = { onAudioToggle() },
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            ReferenceSettingsGroup("Handy features") {
+                ReferenceChoiceRow(
+                    title = "Volume button action",
+                    selectedOption = volumeKeyAction,
+                    options = listOf(
+                        "SHUTTER" to "Shutter",
+                        "ZOOM" to "Zoom",
+                        "VOLUME" to "System volume"
+                    ),
+                    onOptionSelected = onVolumeKeyActionSelected,
+                    showDivider = true
+                )
+                ReferenceChoiceRow(
+                    title = "Double tap viewfinder",
+                    selectedOption = doubleTapAction,
+                    options = listOf(
+                        "FLIP" to "Flip camera",
+                        "LOCK" to "Lock focus",
+                        "NONE" to "Off"
+                    ),
+                    onOptionSelected = onDoubleTapActionSelected,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Horizontal lock",
+                    description = "Keep the video horizon level while recording.",
+                    checked = isHorizontalLockSettingEnabled,
+                    onCheckedChange = onHorizontalLockSettingToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Horizon level",
+                    description = "Show a level guide in the viewfinder.",
+                    checked = horizonLeveler,
+                    onCheckedChange = onHorizonLevelerToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Adaptive thermal protection",
+                    description = "Manage camera workload when the phone gets hot.",
+                    checked = thermalProtection,
+                    onCheckedChange = onThermalProtectionToggle,
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(18.dp))
+            ReferenceSettingsGroup(null) {
+                ReferenceNavigationRow(
+                    title = "About Camera",
+                    onClick = { onSelectPage(SettingsPage.ABOUT) },
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(18.dp))
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = Color(0xFF1B1B1B),
+                modifier = Modifier.fillMaxWidth().clickable { onResetAll() }
+            ) {
                 Text(
-                    text = "RESET ALL CAMERA SETTINGS",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
+                    text = "Restore defaults",
+                    color = Color(0xFFE58A8A),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp)
                 )
             }
         }
     }
 }
 
-// -------------------------------------------------------------
-// DEDICATED SUB-PAGES
-// -------------------------------------------------------------
+@Composable
+private fun ReferenceSettingsGroup(
+    title: String?,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (title != null) {
+            Text(
+                text = title,
+                color = Color(0xFF9E9E9E),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 10.dp)
+            )
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            color = Color(0xFF1B1B1B)
+        ) {
+            Column(content = content)
+        }
+    }
+}
+
+@Composable
+private fun ReferenceToggleRow(
+    title: String,
+    description: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    showDivider: Boolean
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onCheckedChange(!checked) }
+                .padding(horizontal = 16.dp, vertical = if (description.isNullOrBlank()) 17.dp else 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Normal,
+                    lineHeight = 21.sp
+                )
+                if (!description.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = description,
+                        color = Color(0xFF9A9A9A),
+                        fontSize = 13.sp,
+                        lineHeight = 20.sp
+                    )
+                }
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Color(0xFFFF8A32),
+                    checkedBorderColor = Color(0xFFFF8A32),
+                    uncheckedThumbColor = Color.White,
+                    uncheckedTrackColor = Color(0xFF5A5A5A),
+                    uncheckedBorderColor = Color(0xFF5A5A5A)
+                ),
+                modifier = Modifier.testTag("reference_switch_" + title.lowercase().replace(' ', '_'))
+            )
+        }
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                thickness = 1.dp,
+                color = Color(0xFF303030)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReferenceNavigationRow(
+    title: String,
+    value: String? = null,
+    onClick: () -> Unit,
+    showDivider: Boolean
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal,
+                modifier = Modifier.weight(1f)
+            )
+            if (!value.isNullOrBlank()) {
+                Text(
+                    text = value,
+                    color = Color(0xFF9A9A9A),
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 8.dp, end = 8.dp)
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = Color(0xFF777777),
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                thickness = 1.dp,
+                color = Color(0xFF303030)
+            )
+        }
+    }
+}
+
+@Composable
+private fun <T> ReferenceChoiceRow(
+    title: String,
+    selectedOption: T,
+    options: List<Pair<T, String>>,
+    onOptionSelected: (T) -> Unit,
+    showDivider: Boolean
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.first == selectedOption }?.second ?: selectedOption.toString()
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true }
+                .padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Normal,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = selectedLabel,
+                color = Color(0xFF9A9A9A),
+                fontSize = 14.sp,
+                modifier = Modifier.padding(start = 8.dp, end = 4.dp)
+            )
+            Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = "Choose " + title,
+                tint = Color(0xFF777777),
+                modifier = Modifier.size(22.dp)
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                options.forEach { (option, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            onOptionSelected(option)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                thickness = 1.dp,
+                color = Color(0xFF303030)
+            )
+        }
+    }
+}
 
 @Composable
 private fun PhotoSettingsPage(
