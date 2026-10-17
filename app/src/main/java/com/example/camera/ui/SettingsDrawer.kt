@@ -854,14 +854,18 @@ private fun ReferenceNavigationRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
+                // Keep both text columns constrained. An unweighted value Text can claim
+                // the entire row width and force the title to wrap one character at a time.
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 text = title,
                 color = Color.White,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Normal,
+                lineHeight = 20.sp,
                 modifier = Modifier.weight(1f)
             )
             if (!value.isNullOrBlank()) {
@@ -869,7 +873,9 @@ private fun ReferenceNavigationRow(
                     text = value,
                     color = Color(0xFF9A9A9A),
                     fontSize = 14.sp,
-                    modifier = Modifier.padding(start = 8.dp, end = 8.dp)
+                    lineHeight = 18.sp,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.weight(1f)
                 )
             }
             Icon(
