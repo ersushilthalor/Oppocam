@@ -664,11 +664,9 @@ class Camera2Engine(private val context: Context) {
                     vendorCameraIdOverride = standbyLens.cameraId
                 )
 
-                // EIS completely removed: video uses normal camera output without electronic stabilization
-                builder.set(
-                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-                )
+                // Match EIS on the standby camera to the active lens so instant lens handoffs
+                // do not jump to an unstabilized stream.
+                applyHardwareEisRequest(builder, lensOverride = standbyLens)
             }
 
             // Keep standby lens FOV-matched to the configured lens switch point
@@ -5193,29 +5191,39 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Apply the native Camera2 EIS mode used by the ZIP implementation.
-     * OIS is handled separately by applyHardwareOisRequest().
+     * Apply native Camera2 EIS consistently to preview and recording requests.
+     * Some logical multi-camera devices expose stabilization support only on the logical
+     * camera, while others expose it on the physical sensor; check both before disabling EIS.
+     * OIS remains independently controlled by applyHardwareOisRequest().
      */
-    private fun applyHardwareEisRequest(builder: CaptureRequest.Builder) {
+    private fun applyHardwareEisRequest(
+        builder: CaptureRequest.Builder,
+        lensOverride: LensInfo? = null
+    ) {
         val isVideoMode = currentMode == CameraMode.VIDEO || currentMode == CameraMode.CINEMA
         val config = _hybridStabilizationConfig.value
-        val lens = activeSessionLens ?: _selectedLens.value
-        val chars = lens?.physicalCameraId?.let { getCharacteristics(it) }
-            ?: lens?.cameraId?.let { getCharacteristics(it) }
-        val modes = chars?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
-            ?: intArrayOf()
-        val supportsEis = modes.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON)
+        val lens = lensOverride ?: activeSessionLens ?: _selectedLens.value
+        val logicalChars = lens?.cameraId?.let { getCharacteristics(it) }
+        val physicalChars = lens?.physicalCameraId?.let { getCharacteristics(it) }
+        val candidateCharacteristics = listOfNotNull(logicalChars, physicalChars)
+        val stabilizationModes = candidateCharacteristics.mapNotNull { characteristics ->
+            characteristics.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+        }
+        val supportsEis = stabilizationModes.any { modes ->
+            modes.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON)
+        }
         val supportsPreviewStabilization = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            modes.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION)
+            stabilizationModes.any { modes ->
+                modes.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION)
+            }
 
         val ultra = config.isUltraStabilizationEnabled
         val requested = isVideoStabilizationEnabled && isVideoMode &&
             (ultra || config.isEisOnly || (config.isHybridEnabled && config.isEisPreferred))
-        val isHighFps4k = (_selectedVideoResolution.value?.let { maxOf(it.width, it.height) >= 3840 } == true) &&
-            videoFps >= 60
-        val adaptiveAllowed = ultra || !config.isAdaptiveFpsLens || !isHighFps4k
+        // Do not silently disable EIS just because the selected recording mode is 4K/60.
+        // Let Camera2/HAL report whether EIS can actually be active for this stream configuration.
         val mode = when {
-            !requested || !adaptiveAllowed -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+            !requested -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
             ultra && supportsPreviewStabilization ->
                 CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION
             supportsEis -> CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
@@ -5223,6 +5231,14 @@ class Camera2Engine(private val context: Context) {
         }
         try {
             builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, mode)
+            if (requested && mode == CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF) {
+                Log.w(
+                    TAG,
+                    "EIS requested but unavailable for active camera/stream; " +
+                        "logical=${lens?.cameraId}, physical=${lens?.physicalCameraId}, " +
+                        "logicalOrPhysicalSupport=$supportsEis"
+                )
+            }
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to apply Camera2 EIS mode=$mode", t)
         }

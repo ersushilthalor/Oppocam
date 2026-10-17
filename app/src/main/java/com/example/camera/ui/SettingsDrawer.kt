@@ -90,6 +90,7 @@ fun SettingsDrawer(
     videoFps: Int = 30,
     videoBitrate: VideoBitrateOption = VideoBitrateOption.AUTO,
     isVideoStabilizationEnabled: Boolean = true,
+    isHardwareEisActive: Boolean = false,
     isHorizontalLockSettingEnabled: Boolean = true,
     onHorizontalLockSettingToggle: (Boolean) -> Unit = {},
     isDollyZoomSettingEnabled: Boolean = false,
@@ -376,6 +377,7 @@ fun SettingsDrawer(
                             onAudioSourceSelected = onAudioSourceSelected,
                             isVideoStabilizationEnabled = isVideoStabilizationEnabled,
                             onStabilizationToggle = onStabilizationToggle,
+                            isHardwareEisActive = isHardwareEisActive,
                             isOisPreferred = hybridStabilizationConfig.isOisEnabled && hybridStabilizationConfig.isOisPreferred,
                             onOisToggle = onOisToggle,
                             isHorizontalLockSettingEnabled = isHorizontalLockSettingEnabled,
@@ -389,7 +391,10 @@ fun SettingsDrawer(
                             cinemaConfig = cinemaConfig,
                             onCinemaConfigChange = onCinemaConfigChange,
                             cinemaCapabilities = cinemaCapabilities,
-                            capabilities = capabilities
+                            capabilities = capabilities,
+                            isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+                            onStabilizationToggle = onStabilizationToggle,
+                            isHardwareEisActive = isHardwareEisActive
                         )
                         SettingsPage.PRO_MANUAL -> ProManualSettingsPage(
                             manualIso = manualIso,
@@ -689,6 +694,7 @@ private fun VideoSettingsPage(
     onAudioSourceSelected: (String) -> Unit,
     isVideoStabilizationEnabled: Boolean,
     onStabilizationToggle: (Boolean) -> Unit,
+    isHardwareEisActive: Boolean = false,
     isOisPreferred: Boolean = true,
     onOisToggle: (Boolean) -> Unit = {},
     isHorizontalLockSettingEnabled: Boolean = true,
@@ -733,6 +739,23 @@ private fun VideoSettingsPage(
                 options = listOf(24 to "24 fps", 30 to "30 fps", 60 to "60 fps"),
                 selectedOption = videoFps,
                 onOptionSelected = onVideoFpsSelected
+            )
+        }
+
+        item {
+            SettingsSwitchCard(
+                title = "Electronic Image Stabilization (EIS)",
+                description = when {
+                    !isVideoStabilizationEnabled ->
+                        "OFF: Electronic stabilization is disabled for live preview and saved video."
+                    isHardwareEisActive ->
+                        "ON: Camera2 reports EIS active. Stabilization is requested for both live preview and recording."
+                    else ->
+                        "ON: EIS is requested for preview and recording. If the camera does not report it active, try a supported resolution and frame rate."
+                },
+                isChecked = isVideoStabilizationEnabled,
+                onCheckedChange = onStabilizationToggle,
+                tag = "toggle_eis_video_settings"
             )
         }
 
@@ -862,7 +885,10 @@ private fun CinemaSettingsPage(
     cinemaConfig: CinemaConfig,
     onCinemaConfigChange: (CinemaConfig) -> Unit,
     cinemaCapabilities: CinemaHardwareCapabilities,
-    capabilities: HardwareCapabilities
+    capabilities: HardwareCapabilities,
+    isVideoStabilizationEnabled: Boolean,
+    onStabilizationToggle: (Boolean) -> Unit,
+    isHardwareEisActive: Boolean = false
 ) {
     val context = LocalContext.current
     val customLutRepo = remember(context) { CustomLutRepository(context) }
@@ -909,6 +935,23 @@ private fun CinemaSettingsPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        item {
+            SettingsSwitchCard(
+                title = "Electronic Image Stabilization (EIS)",
+                description = when {
+                    !isVideoStabilizationEnabled ->
+                        "OFF: Electronic stabilization is disabled for live preview and saved video."
+                    isHardwareEisActive ->
+                        "ON: Camera2 reports EIS active. Stabilization is requested for both live preview and recording."
+                    else ->
+                        "ON: EIS is requested for preview and recording. If the camera does not report it active, try a supported resolution and frame rate."
+                },
+                isChecked = isVideoStabilizationEnabled,
+                onCheckedChange = onStabilizationToggle,
+                tag = "toggle_eis_cinema_settings"
+            )
+        }
+
         // 1. Resolution
         item {
             val supportedResolutions = remember(cinemaCapabilities, capabilities) {
@@ -3876,6 +3919,7 @@ fun CameraSettingsScreen(
     val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
     val videoBitrate by viewModel.videoBitrateOption.collectAsStateWithLifecycle()
     val isVideoStabilizationEnabled by viewModel.isVideoStabilizationEnabled.collectAsStateWithLifecycle()
+    val actualEisHardwareActive by viewModel.actualEisHardwareActive.collectAsStateWithLifecycle()
     val isAudioEnabled by viewModel.isAudioEnabled.collectAsStateWithLifecycle()
     val isRawEnabled by viewModel.isRawCaptureEnabled.collectAsStateWithLifecycle()
     val saveSelfieAsPreviewed by viewModel.saveSelfieAsPreviewed.collectAsStateWithLifecycle()
@@ -3947,6 +3991,7 @@ fun CameraSettingsScreen(
         videoFps = videoFps,
         videoBitrate = videoBitrate,
         isVideoStabilizationEnabled = isVideoStabilizationEnabled,
+        isHardwareEisActive = actualEisHardwareActive,
         isAudioEnabled = isAudioEnabled,
         isRawEnabled = isRawEnabled,
         saveSelfieAsPreviewed = saveSelfieAsPreviewed,
