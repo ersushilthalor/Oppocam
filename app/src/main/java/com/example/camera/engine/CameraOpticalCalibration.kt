@@ -131,6 +131,36 @@ object CameraOpticalCalibration {
      * - 50mm -> 50 / 23 = 2.1739x (2.17x)
      * - 85mm -> 85 / 23 = 3.6957x (3.70x)
      */
+    /**
+     * Calculates the Ultra-Wide crop needed to match the active Main camera at a lens handoff.
+     *
+     * The switch-point UI focal length is not always the Main camera's true native equivalent
+     * focal length (many phones report ~24–27mm rather than exactly 23mm). When the configured
+     * switch point is below the Main camera's native FOV, match the Main camera's native FOV
+     * instead of under-cropping Ultra-Wide. This keeps both live streams at equivalent framing
+     * before a frame-based crossfade in either direction.
+     */
+    fun calculateFovMatchedUltraWideCrop(
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
+        mainEquivalentFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM,
+        uwEquivalentFocalMm: Float = DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+    ): Float {
+        val safeMainFocalMm = mainEquivalentFocalMm
+            .takeIf { it.isFinite() && it > 0f }
+            ?: DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
+        val safeUwFocalMm = uwEquivalentFocalMm
+            .takeIf { it.isFinite() && it > 0f }
+            ?: DEFAULT_ULTRAWIDE_EQUIVALENT_FOCAL_MM
+        val safeSwitchPointMm = switchPointMm
+            .takeIf { it.isFinite() }
+            ?.coerceIn(MIN_SWITCH_POINT_MM, MAX_SWITCH_POINT_MM)
+            ?: DEFAULT_SWITCH_POINT_MM
+
+        // UI zoom cannot go below the Main camera's native 1x FOV on the Main stream.
+        val targetEquivalentFocalMm = maxOf(safeSwitchPointMm, safeMainFocalMm)
+        return (targetEquivalentFocalMm / safeUwFocalMm).coerceAtLeast(1f)
+    }
+
     fun calculateMainCropForSwitchPoint(
         switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
         mainFocalMm: Float = DEFAULT_MAIN_EQUIVALENT_FOCAL_MM
