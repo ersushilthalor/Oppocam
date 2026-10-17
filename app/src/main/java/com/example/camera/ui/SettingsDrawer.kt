@@ -609,13 +609,6 @@ private fun SettingsOverviewPage(
                     showDivider = true
                 )
                 ReferenceToggleRow(
-                    title = "Electronic stabilization (EIS)",
-                    description = "Crop the frame to reduce camera shake in preview and recording.",
-                    checked = isVideoStabilizationEnabled,
-                    onCheckedChange = onStabilizationToggle,
-                    showDivider = true
-                )
-                ReferenceToggleRow(
                     title = "Optical stabilization (OIS)",
                     description = "Use hardware lens stabilization when supported.",
                     checked = isOisEnabled,
@@ -1148,23 +1141,6 @@ private fun VideoSettingsPage(
 
         item {
             SettingsSwitchCard(
-                title = "Electronic Image Stabilization (EIS)",
-                description = when {
-                    !isVideoStabilizationEnabled ->
-                        "OFF: Electronic stabilization is disabled for live preview and saved video."
-                    isHardwareEisActive ->
-                        "ON: Camera2 hardware EIS is active, with gyro-assisted crop correction for live preview and recording."
-                    else ->
-                        "ON: Gyroscope-assisted dynamic crop correction is active; hardware EIS is added when the camera supports it."
-                },
-                isChecked = isVideoStabilizationEnabled,
-                onCheckedChange = onStabilizationToggle,
-                tag = "toggle_eis_video_settings"
-            )
-        }
-
-        item {
-            SettingsSwitchCard(
                 title = "Hardware OIS (Optical Image Stabilization)",
                 description = if (isOisPreferred) {
                     "ON: Main camera uses physical hardware Optical Image Stabilization whenever supported."
@@ -1339,23 +1315,6 @@ private fun CinemaSettingsPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-        item {
-            SettingsSwitchCard(
-                title = "Electronic Image Stabilization (EIS)",
-                description = when {
-                    !isVideoStabilizationEnabled ->
-                        "OFF: Electronic stabilization is disabled for live preview and saved video."
-                    isHardwareEisActive ->
-                        "ON: Camera2 hardware EIS is active, with gyro-assisted crop correction for live preview and recording."
-                    else ->
-                        "ON: Gyroscope-assisted dynamic crop correction is active; hardware EIS is added when the camera supports it."
-                },
-                isChecked = isVideoStabilizationEnabled,
-                onCheckedChange = onStabilizationToggle,
-                tag = "toggle_eis_cinema_settings"
-            )
-        }
-
         // 1. Resolution
         item {
             val supportedResolutions = remember(cinemaCapabilities, capabilities) {
