@@ -65,7 +65,7 @@ class ZoomTransitionController(
         const val MIN_OVERLAP_DURATION_MS = 100L
         const val MAX_OVERLAP_DURATION_MS = 1000L
         private const val FRAME_HANDOFF_WARMUP_FRAMES = 2
-        private const val FRAME_HANDOFF_REQUIRED_FRAMES = 16
+        private const val FRAME_HANDOFF_REQUIRED_FRAMES = 32
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
         // Once the incoming lens moves away from the shared ~1x field of view, shorten the
         // overlap so differently cropped frames do not remain visibly doubled.
