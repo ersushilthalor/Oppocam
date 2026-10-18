@@ -102,6 +102,25 @@ class VideoAdjustmentsPipelineTest {
     }
 
     @Test
+    fun testUltraWideAndMainVideoTuningProfilesAreIndependent() {
+        val main = VideoAdjustments(saturation = 35f, exposure = 1.2f, sharpness = 10f)
+        val ultraWide = VideoAdjustments(saturation = -20f, exposure = -0.8f, sharpness = 45f)
+
+        preferences.saveVideoAdjustmentsForLens(main, "main")
+        preferences.saveVideoAdjustmentsForLens(ultraWide, "ultrawide")
+
+        val restoredMain = preferences.getVideoAdjustmentsForLens("main")
+        val restoredUltraWide = preferences.getVideoAdjustmentsForLens("ultrawide")
+
+        assertEquals(35f, restoredMain.saturation, 0.001f)
+        assertEquals(1.2f, restoredMain.exposure, 0.001f)
+        assertEquals(10f, restoredMain.sharpness, 0.001f)
+        assertEquals(-20f, restoredUltraWide.saturation, 0.001f)
+        assertEquals(-0.8f, restoredUltraWide.exposure, 0.001f)
+        assertEquals(45f, restoredUltraWide.sharpness, 0.001f)
+    }
+
+    @Test
     fun testGpuShaderApplication() {
         val textureView = android.view.TextureView(context)
         val custom = VideoAdjustments(shadows = 40f, highlights = -25f, vignette = 30f)
