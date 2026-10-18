@@ -69,7 +69,7 @@ class ZoomTransitionController(
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
         // Once the incoming lens moves away from the shared ~1x field of view, shorten the
         // overlap so differently cropped frames do not remain visibly doubled.
-        private const val MAIN_FOV_DIVERGENCE_FADE_RANGE = 0.35f
+        private const val MAIN_FOV_DIVERGENCE_FADE_RANGE = 0.20f
         private const val MAX_HANDOFF_ALPHA_STEP = 0.30f
         // Pre-warmed frames are reusable only if the target stream is still actively updating.
         private const val FRAME_HANDOFF_PREWARM_MAX_AGE_MS = 120L
@@ -120,10 +120,16 @@ class ZoomTransitionController(
             return minOf(desired, previous + MAX_HANDOFF_ALPHA_STEP).coerceIn(previous, 1f)
         }
 
-        /** Frame-based preview handoff is intentionally limited to 0.5x <-> 2x/3x. */
-        fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean =
-            isHalfXToTelephotoPresetTransition(fromZoom, targetZoom) ||
-                isTelephotoPresetToHalfXTransition(fromZoom, targetZoom)
+        /**
+         * Frame-based handoff is for crossing the Ultra-Wide/Main boundary around 1x,
+         * not for blending all the way to a telephoto endpoint. The fade then finishes
+         * as the live zoom moves through the 0.8x–1.2x neighborhood.
+         */
+        fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean {
+            val low = minOf(fromZoom, targetZoom)
+            val high = maxOf(fromZoom, targetZoom)
+            return low < 1.0f && high >= 1.0f
+        }
     }
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
@@ -675,12 +681,15 @@ class ZoomTransitionController(
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 }
 
-                val mainLensPreparedInOverlap = isOverlapAnimationEnabled && (holdDuration > 0L || isDirectTelephotoTarget)
+                val useFrameBasedHandoff = isOverlapAnimationEnabled &&
+                    isFrameBasedHandoffEligible(startZ, endZ)
+                val mainLensPreparedInOverlap = isOverlapAnimationEnabled &&
+                    (holdDuration > 0L || isDirectTelephotoTarget || useFrameBasedHandoff)
                 var frameBasedHandoffStarted = false
                 if (mainLensPreparedInOverlap) {
-                    if (isDirectTelephotoTarget) {
-                        // Start handoff before switching sources. The old UW frame stays visible;
-                        // new Main frames drive the crossfade while zoom interpolation continues.
+                    if (isDirectTelephotoTarget || useFrameBasedHandoff) {
+                        // Start handoff at the Ultra-Wide/Main boundary. The outgoing frame
+                        // stays visible until fresh Main buffers arrive; zoom keeps moving.
                         beginFrameBasedHandoff(
                             fromSource = PreviewStreamSource.ULTRAWIDE,
                             targetSource = PreviewStreamSource.MAIN,
@@ -793,7 +802,7 @@ class ZoomTransitionController(
             var lastDispatchedZoom = startZ
             var lastDispatchedTime = 0L
             val useReverseFrameBasedHandoff = isOverlapAnimationEnabled &&
-                isTelephotoPresetToHalfXTransition(startZ, endZ)
+                isFrameBasedHandoffEligible(startZ, endZ)
             var reverseFrameBasedHandoffStarted = false
 
             // Move the slider in the background from startNorm to targetNorm over exactly 400ms (0.40s)
