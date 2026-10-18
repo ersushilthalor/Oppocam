@@ -300,6 +300,8 @@ fun CameraScreen(
     var isCustomUiStudioOpen by remember { mutableStateOf(false) }
     var isManualProSliderOpen by remember { mutableStateOf(false) }
     var shutterAreaHeightDp by remember { mutableStateOf(216.dp) }
+    // Separate estimate for the preview boundary; the measured shutter panel replaces this after layout.
+    var viewfinderControlAreaHeightDp by remember { mutableStateOf(182.dp) }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
@@ -340,7 +342,7 @@ fun CameraScreen(
     CompositionLocalProvider(
         com.example.camera.ui.components.LocalFloatingWindowAppearance provides floatingWindowAppearance
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = modifier
                 .fillMaxSize()
                 .background(Color.Black)
@@ -361,11 +363,22 @@ fun CameraScreen(
             // Keep other templates and all non-video modes on their existing full-screen layout.
             val isOppoVideoTemplate = cameraMode == CameraMode.VIDEO &&
                     uiCustomizationState.selectedTemplate.name.contains("OPPO", ignoreCase = true)
+            val oppoVideoPreviewTopInset = 72.dp
+            // Match the preview's lower edge to the bottom of the shutter button, leaving
+            // a small gap before the mode selector. Include transient rows above the shutter.
+            val oppoVideoPreviewBottomOffset = 14.dp +
+                    (if (activeTimerCountdown != null) 62.dp else 0.dp) +
+                    (if (isRecordingVideo) 38.dp else 0.dp) +
+                    activeLayoutConfig.shutterSizeDp.dp + 4.dp
+            val oppoVideoPreviewHeight = (
+                    maxHeight - oppoVideoPreviewTopInset -
+                            viewfinderControlAreaHeightDp + oppoVideoPreviewBottomOffset
+                    ).coerceAtLeast(1.dp)
             val viewfinderLayoutModifier = if (isOppoVideoTemplate) {
                 Modifier
                     .fillMaxWidth()
-                    .padding(top = 72.dp)
-                    .aspectRatio(9f / 16f)
+                    .padding(top = oppoVideoPreviewTopInset)
+                    .height(oppoVideoPreviewHeight)
                     .align(Alignment.TopCenter)
             } else {
                 Modifier.fillMaxSize()
@@ -1029,6 +1042,7 @@ fun CameraScreen(
         // 5. Bottom Controls
         BottomControlBar(
             cameraMode = cameraMode,
+            isOppoVideoTemplate = isOppoVideoTemplate,
             currentZoom = currentZoom,
             displayedLenses = displayedLenses,
             selectedLens = selectedLens,
@@ -1071,7 +1085,10 @@ fun CameraScreen(
             onTimerClick = { viewModel.cycleTimerMode() },
             onToggleProClick = { viewModel.setManualProOpen(!isManualProOpen) },
             onSetManualProOpen = { viewModel.setManualProOpen(it) },
-            onShutterAreaHeightMeasured = { shutterAreaHeightDp = it },
+            onShutterAreaHeightMeasured = {
+                shutterAreaHeightDp = it
+                viewfinderControlAreaHeightDp = it
+            },
             selectedPhotoFilter = selectedPhotoFilter,
             onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
             isEvOpen = isEvControlOpen,
