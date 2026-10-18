@@ -173,6 +173,7 @@ object VideoAdjustmentsPipeline {
         precision highp float;
         varying vec2 vTextureCoord;
         uniform samplerExternalOES sTexture;
+        uniform float uFrameAlpha;
         uniform vec2 uResolution;
         uniform float uTime;
         uniform int uBypassAdjustments;
@@ -210,7 +211,7 @@ object VideoAdjustmentsPipeline {
         void main() {
             vec4 color = texture2D(sTexture, vTextureCoord);
             if (uBypassAdjustments == 1) {
-                gl_FragColor = color;
+                gl_FragColor = vec4(color.rgb, color.a * uFrameAlpha);
                 return;
             }
 
@@ -327,7 +328,7 @@ object VideoAdjustmentsPipeline {
                 rgb += vec3(0.6, 0.8, 1.0) * fStreak;
             }
 
-            gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);
+            gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a * uFrameAlpha);
         }
     """.trimIndent()
 
