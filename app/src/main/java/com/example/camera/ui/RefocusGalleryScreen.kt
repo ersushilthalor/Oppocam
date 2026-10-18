@@ -45,7 +45,10 @@ fun RefocusGalleryScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val repository = remember(context) { RefocusRepository(context) }
     val photos by repository.allRefocusPhotos.collectAsStateWithLifecycle(initialValue = emptyList())
-    LaunchedEffect(repository) { repository.discoverStoredRefocusPhotos() }
+    LaunchedEffect(repository) {
+        repository.discoverStoredRefocusPhotos()
+        repository.discoverDeviceRefocusPhotos()
+    }
     var selectedPhoto by remember { mutableStateOf<RefocusPhotoEntity?>(null) }
 
     Surface(
