@@ -56,7 +56,7 @@ class ZoomTransitionController(
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
         const val TOTAL_TRANSITION_DURATION_MS = 400L // Fixed duration of exactly 400ms (0.40s), never less
-        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 20L // 0.02 second default hold at exact 1x FOV before physical switch
+        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 200L // Default hold at exact 1x FOV before physical switch
         const val HOLD_AT_ONE_X_DURATION_MS = 20L // Preserved for backwards compatibility
         const val MIN_HOLD_AT_ONE_X_DURATION_MS = 0L
         const val MAX_HOLD_AT_ONE_X_DURATION_MS = 300L
@@ -121,15 +121,12 @@ class ZoomTransitionController(
         }
 
         /**
-         * Frame-based handoff is for crossing the Ultra-Wide/Main boundary around 1x,
-         * not for blending all the way to a telephoto endpoint. The fade then finishes
-         * as the live zoom moves through the 0.8x–1.2x neighborhood.
+         * Frame-based handoff is reserved for direct Ultra-Wide <-> 2x/3x preset taps.
+         * A direct 0.5x <-> 1x tap must use the normal hold-time behavior instead.
          */
-        fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean {
-            val low = minOf(fromZoom, targetZoom)
-            val high = maxOf(fromZoom, targetZoom)
-            return low < 1.0f && high >= 1.0f
-        }
+        fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean =
+            isHalfXToTelephotoPresetTransition(fromZoom, targetZoom) ||
+                isTelephotoPresetToHalfXTransition(fromZoom, targetZoom)
     }
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
