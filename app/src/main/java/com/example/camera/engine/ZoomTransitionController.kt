@@ -2,6 +2,7 @@ package com.example.camera.engine
 
 import android.hardware.camera2.CameraCharacteristics
 import android.os.SystemClock
+import android.util.Log
 import com.example.camera.model.LensInfo
 import com.example.camera.model.LensType
 import com.example.camera.ui.components.normalizedToZoomLog
@@ -249,12 +250,14 @@ class ZoomTransitionController(
     ) {
         frameHandoffTimeoutJob?.cancel()
         val nowMs = SystemClock.uptimeMillis()
+        val preparedFrameAgeMs = if (preparedTargetLastFrameAtMs > 0L) nowMs - preparedTargetLastFrameAtMs else -1L
         val hasFreshPreparedTargetFrames =
             preparedFrameHandoffFromSource == fromSource &&
                 preparedFrameHandoffTargetSource == targetSource &&
                 preparedTargetFrameCount >= FRAME_HANDOFF_WARMUP_FRAMES &&
                 preparedTargetLastFrameAtMs > 0L &&
-                nowMs - preparedTargetLastFrameAtMs <= FRAME_HANDOFF_PREWARM_MAX_AGE_MS
+                preparedFrameAgeMs in 0L..FRAME_HANDOFF_PREWARM_MAX_AGE_MS
+        Log.i(TAG, "[HANDOFF_BEGIN] from=$fromSource target=$targetSource zoom=${_currentInterpolatedZoom.value} preparedFrames=$preparedTargetFrameCount preparedFrameAgeMs=$preparedFrameAgeMs fresh=$hasFreshPreparedTargetFrames")
         clearPreparedFrameHandoff()
 
         if (fromSource == targetSource) {
@@ -300,6 +303,7 @@ class ZoomTransitionController(
                 preparedTargetFrameCount =
                     (preparedTargetFrameCount + 1).coerceAtMost(FRAME_HANDOFF_WARMUP_FRAMES)
                 preparedTargetLastFrameAtMs = SystemClock.uptimeMillis()
+                Log.v(TAG, "[HANDOFF_PREWARM_FRAME] source=$source count=$preparedTargetFrameCount zoom=${_currentInterpolatedZoom.value} ageMs=0")
             }
             return
         }
@@ -309,6 +313,7 @@ class ZoomTransitionController(
             FRAME_HANDOFF_WARMUP_FRAMES + FRAME_HANDOFF_REQUIRED_FRAMES
         )
         val fromSource = frameHandoffFromSource ?: return
+        Log.v(TAG, "[HANDOFF_FRAME] from=$fromSource target=$targetSource count=$frameHandoffFrameCount zoom=${_currentInterpolatedZoom.value} ageMs=0")
 
         // Let two real target frames arrive before blending. Camera2 applies crop/zoom changes
         // asynchronously; these warm-up frames let the new stream catch up to the continuously
@@ -500,6 +505,7 @@ class ZoomTransitionController(
                         val reachedSwitchPoint = currentNorm >= switchNorm || currentZ >= effectiveSwitchZoom
 
                         if (!mainLensSelected && reachedSwitchPoint) {
+                            Log.i(TAG, "[ZOOM_CROSSING] elapsedMs=$elapsed durationMs=$transitionDurationMs zoom=$currentZ switchZoom=$effectiveSwitchZoom target=$endZ")
                             // Pin the optical handoff to its calibrated FOV, select Main immediately,
                             // and then apply this frame's already-advanced zoom value without restarting
                             // the clock or easing curve.
