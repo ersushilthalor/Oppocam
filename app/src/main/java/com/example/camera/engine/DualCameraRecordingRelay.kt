@@ -147,6 +147,13 @@ class DualCameraRecordingRelay(
     private var ptAPositionHandle: Int = -1
     private var ptATextureCoordHandle: Int = -1
     private var ptSTextureHandle: Int = -1
+    private var ptFrameAlphaHandle: Int = -1
+    private var uFrameAlphaHandle: Int = -1
+    private val recordingFrameHandoff = RecordingFrameHandoff()
+    @Volatile private var hasMainFrameBuffer: Boolean = false
+    @Volatile private var hasUltraWideFrameBuffer: Boolean = false
+    private val mainStMatrix = FloatArray(16)
+    private val ultraWideStMatrix = FloatArray(16)
 
     private val mvpMatrix = FloatArray(16)
     private val stMatrix = FloatArray(16)
@@ -324,6 +331,12 @@ class DualCameraRecordingRelay(
         }
     }
 
+    /** Share the handoff state with the encoder compositor without stopping either camera. */
+    fun updateFrameHandoffState(state: PreviewOverlapState) {
+        recordingFrameHandoff.update(state)
+        cinemaRecorder?.updateFrameHandoffState(state)
+    }
+
     fun getRecorderSurfaceForLens(lens: LensInfo?): Surface {
         val isUw = lens?.lensType == LensType.ULTRAWIDE
         return if (isUw) {
@@ -478,8 +491,10 @@ class DualCameraRecordingRelay(
             precision mediump float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
+            uniform float uFrameAlpha;
             void main() {
-                gl_FragColor = texture2D(sTexture, vTextureCoord);
+                vec4 color = texture2D(sTexture, vTextureCoord);
+                gl_FragColor = vec4(color.rgb, color.a * uFrameAlpha);
             }
         """.trimIndent()
 
@@ -489,8 +504,26 @@ class DualCameraRecordingRelay(
         ptAPositionHandle = GLES20.glGetAttribLocation(passthroughProgramId, "aPosition")
         ptATextureCoordHandle = GLES20.glGetAttribLocation(passthroughProgramId, "aTextureCoord")
         ptSTextureHandle = GLES20.glGetUniformLocation(passthroughProgramId, "sTexture")
+        ptFrameAlphaHandle = GLES20.glGetUniformLocation(passthroughProgramId, "uFrameAlpha")
 
-        val fragmentShader = VideoAdjustmentsPipeline.GLES_VIDEO_ADJUSTMENTS_FRAGMENT_SHADER
+        // Keep alpha compositing local to this relay, while preserving its current shader processing.
+        var fragmentShader = VideoAdjustmentsPipeline.GLES_VIDEO_ADJUSTMENTS_FRAGMENT_SHADER
+        fragmentShader = fragmentShader.replace(
+            "precision highp float;",
+            "precision highp float;\n        uniform float uFrameAlpha;"
+        )
+        fragmentShader = fragmentShader.replace(
+            "gl_FragColor = color;",
+            "gl_FragColor = vec4(color.rgb, color.a * uFrameAlpha);"
+        )
+        fragmentShader = fragmentShader.replace(
+            "gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);",
+            "gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a * uFrameAlpha);"
+        )
+        check(fragmentShader.contains("uniform float uFrameAlpha;") &&
+            fragmentShader.contains("color.a * uFrameAlpha")) {
+            "Unable to prepare alpha-aware relay adjustment shader"
+        }
 
         programId = createProgram(vertexShader, fragmentShader)
         vadjHandles = VideoAdjustmentsPipeline.VideoAdjustmentsShaderHandles(programId)
@@ -499,6 +532,7 @@ class DualCameraRecordingRelay(
         aPositionHandle = GLES20.glGetAttribLocation(programId, "aPosition")
         aTextureCoordHandle = GLES20.glGetAttribLocation(programId, "aTextureCoord")
         sTextureHandle = GLES20.glGetUniformLocation(programId, "sTexture")
+        uFrameAlphaHandle = GLES20.glGetUniformLocation(programId, "uFrameAlpha")
 
         vertexBuffer = ByteBuffer.allocateDirect(4 * 3 * 4)
             .order(ByteOrder.nativeOrder())
@@ -586,9 +620,12 @@ class DualCameraRecordingRelay(
         val st = if (isUltraWide) ultraWideSurfaceTexture else mainSurfaceTexture
         if (st == null) return
 
+        val sourceStMatrix = if (isUltraWide) ultraWideStMatrix else mainStMatrix
         try {
-            // Always drain the incoming buffer so both Main and Ultra-Wide Camera2 pipelines stay warm at full FPS
+            // Drain and retain both incoming streams so either can supply the outgoing layer.
             st.updateTexImage()
+            st.getTransformMatrix(sourceStMatrix)
+            if (isUltraWide) hasUltraWideFrameBuffer = true else hasMainFrameBuffer = true
         } catch (_: Throwable) {
             return
         }
@@ -602,8 +639,20 @@ class DualCameraRecordingRelay(
 
         if (!encoderTargetSurface.isValid) return
 
+        val outgoingSource = if (expectedSource == PreviewStreamSource.MAIN) {
+            PreviewStreamSource.ULTRAWIDE
+        } else {
+            PreviewStreamSource.MAIN
+        }
+        val outgoingFrameAvailable = if (outgoingSource == PreviewStreamSource.ULTRAWIDE) {
+            hasUltraWideFrameBuffer
+        } else {
+            hasMainFrameBuffer
+        }
+        val outgoingAlpha = recordingFrameHandoff.outgoingAlphaForFrame(expectedSource, outgoingFrameAvailable)
+
         try {
-            st.getTransformMatrix(stMatrix)
+            System.arraycopy(sourceStMatrix, 0, stMatrix, 0, stMatrix.size)
             val rawTimestampNs = st.timestamp.takeIf { it > 0L } ?: System.nanoTime()
             if (recordingStartMonotonicNs <= 0L) {
                 recordingStartMonotonicNs = rawTimestampNs
@@ -646,6 +695,9 @@ class DualCameraRecordingRelay(
                 val isDefaultAdjustments = currentVideoAdjustments.isDefault
                 val activeProg = if (isDefaultAdjustments && passthroughProgramId != 0) passthroughProgramId else programId
                 GLES20.glUseProgram(activeProg)
+                val frameAlphaHandle = if (activeProg == passthroughProgramId) ptFrameAlphaHandle else uFrameAlphaHandle
+                GLES20.glDisable(GLES20.GL_BLEND)
+                GLES20.glUniform1f(frameAlphaHandle, 1f)
 
                 computeCameraTexMatrix(
                     stMatrix = stMatrix,
@@ -716,6 +768,22 @@ class DualCameraRecordingRelay(
                     GLES20.glDisableVertexAttribArray(aTex)
                 }
 
+                if (outgoingAlpha != null && outgoingAlpha > 0f) {
+                    GLES20.glEnable(GLES20.GL_BLEND)
+                    GLES20.glBlendFuncSeparate(
+                        GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA,
+                        GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA
+                    )
+                    drawFrameHandoffOverlay(
+                        source = outgoingSource, alpha = outgoingAlpha, activeProg = activeProg,
+                        viewportWidth = outW, viewportHeight = outH, outMatrix = renderTexMatrix,
+                        uMvp = uMvp, uSt = uSt, aPos = aPos, aTex = aTex, sTex = sTex,
+                        frameAlphaHandle = frameAlphaHandle
+                    )
+                    GLES20.glDisable(GLES20.GL_BLEND)
+                    GLES20.glUniform1f(frameAlphaHandle, 1f)
+                }
+
                 EGLExt.eglPresentationTimeANDROID(display, surface, candidatePtsNs)
                 val swapped = EGL14.eglSwapBuffers(display, surface)
                 if (swapped) {
@@ -750,6 +818,8 @@ class DualCameraRecordingRelay(
                             GLES20.glUniformMatrix4fv(uMvp, 1, false, mvpMatrix, 0)
                             GLES20.glUniformMatrix4fv(uSt, 1, false, renderPreviewTexMatrix, 0)
                             GLES20.glUniform1i(sTex, 0)
+                            GLES20.glDisable(GLES20.GL_BLEND)
+                            GLES20.glUniform1f(frameAlphaHandle, 1f)
 
                             if (activeProg == programId && handles != null) {
                                 VideoAdjustmentsPipeline.bindUniforms(
@@ -779,6 +849,22 @@ class DualCameraRecordingRelay(
                                 GLES20.glDisableVertexAttribArray(aTex)
                             }
 
+                            if (outgoingAlpha != null && outgoingAlpha > 0f) {
+                                GLES20.glEnable(GLES20.GL_BLEND)
+                                GLES20.glBlendFuncSeparate(
+                                    GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA,
+                                    GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA
+                                )
+                                drawFrameHandoffOverlay(
+                                    source = outgoingSource, alpha = outgoingAlpha, activeProg = activeProg,
+                                    viewportWidth = pW, viewportHeight = pH, outMatrix = renderPreviewTexMatrix,
+                                    uMvp = uMvp, uSt = uSt, aPos = aPos, aTex = aTex, sTex = sTex,
+                                    frameAlphaHandle = frameAlphaHandle
+                                )
+                                GLES20.glDisable(GLES20.GL_BLEND)
+                                GLES20.glUniform1f(frameAlphaHandle, 1f)
+                            }
+
                             EGL14.eglSwapBuffers(display, prevSurf)
                         }
                     } catch (t: Throwable) {
@@ -788,6 +874,70 @@ class DualCameraRecordingRelay(
             }
         } catch (t: Throwable) {
             Log.w(TAG, "Error relaying recording frame: ${t.message}")
+        }
+    }
+
+    private fun drawFrameHandoffOverlay(
+        source: PreviewStreamSource,
+        alpha: Float,
+        activeProg: Int,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        outMatrix: FloatArray,
+        uMvp: Int,
+        uSt: Int,
+        aPos: Int,
+        aTex: Int,
+        sTex: Int,
+        frameAlphaHandle: Int
+    ) {
+        if (alpha <= 0f || viewportWidth <= 0 || viewportHeight <= 0) return
+        val isUltraWide = source == PreviewStreamSource.ULTRAWIDE
+        if ((isUltraWide && !hasUltraWideFrameBuffer) || (!isUltraWide && !hasMainFrameBuffer)) return
+
+        val sourceMatrix = if (isUltraWide) ultraWideStMatrix else mainStMatrix
+        computeCameraTexMatrix(
+            stMatrix = sourceMatrix, isFront = isFrontFacing,
+            sensorOrientation = cameraSensorOrientation, deviceRotation = activeDeviceRotation,
+            viewportWidth = viewportWidth, viewportHeight = viewportHeight,
+            camBufferWidth = if (isUltraWide) ultraWideBufferW else mainBufferW,
+            camBufferHeight = if (isUltraWide) ultraWideBufferH else mainBufferH,
+            outMatrix = outMatrix
+        )
+        GLES20.glUseProgram(activeProg)
+        GLES20.glUniformMatrix4fv(uMvp, 1, false, mvpMatrix, 0)
+        GLES20.glUniformMatrix4fv(uSt, 1, false, outMatrix, 0)
+        GLES20.glUniform1i(sTex, 0)
+        GLES20.glUniform1f(frameAlphaHandle, alpha)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(
+            GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            if (isUltraWide) ultraWideOesTexId else mainOesTexId
+        )
+
+        val vb = vertexBuffer
+        val tb = texCoordBuffer
+        if (vboVertexBufferId != 0 && vboTexCoordBufferId != 0 && aPos >= 0 && aTex >= 0) {
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboVertexBufferId)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, 0)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, vboTexCoordBufferId)
+            GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 0, 0)
+            GLES20.glEnableVertexAttribArray(aTex)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            GLES20.glDisableVertexAttribArray(aPos)
+            GLES20.glDisableVertexAttribArray(aTex)
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
+        } else if (vb != null && tb != null && aPos >= 0 && aTex >= 0) {
+            vb.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, vb)
+            GLES20.glEnableVertexAttribArray(aPos)
+            tb.position(0)
+            GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 0, tb)
+            GLES20.glEnableVertexAttribArray(aTex)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            GLES20.glDisableVertexAttribArray(aPos)
+            GLES20.glDisableVertexAttribArray(aTex)
         }
     }
 
