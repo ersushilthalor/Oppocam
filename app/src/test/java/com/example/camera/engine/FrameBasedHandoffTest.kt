@@ -26,6 +26,13 @@ class FrameBasedHandoffTest {
     }
 
     @Test
+    fun oneXTapUsesHoldInsteadOfFrameBasedHandoffAndDefaultHoldIs200Ms() {
+        assertEquals(200L, ZoomTransitionController.DEFAULT_HOLD_AT_ONE_X_DURATION_MS)
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 1.0f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 2.0f))
+    }
+
+    @Test
     fun preparedTargetFramesAreObservedBeforeTheVisibleHandoffBegins() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
