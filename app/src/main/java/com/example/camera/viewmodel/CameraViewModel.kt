@@ -493,8 +493,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setEvControlOpen(!_isEvControlOpen.value)
     }
 
-    // Video Adjustments State (Normal Video Mode)
-    private val _videoAdjustments = MutableStateFlow(preferences.getVideoAdjustments())
+    // Video adjustments are isolated per physical lens instead of sharing one global profile.
+    private fun videoAdjustmentProfileKey(lens: LensInfo?): String {
+        if (lens == null) return "default"
+        val cameraIdentity = lens.physicalCameraId
+            ?: "${lens.cameraId}_${lens.lensType.name}"
+        return "${lens.facing}_${cameraIdentity}"
+    }
+
+    private val _videoAdjustments = MutableStateFlow(
+        preferences.getVideoAdjustments(videoAdjustmentProfileKey(engine.selectedLens.value))
+    )
     val videoAdjustments: StateFlow<com.example.camera.model.VideoAdjustments> = _videoAdjustments.asStateFlow()
 
     private val _isVideoAdjustmentsOpen = MutableStateFlow(false)
@@ -516,24 +525,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var saveVideoAdjustmentsJob: kotlinx.coroutines.Job? = null
 
     fun updateVideoAdjustments(adjustments: com.example.camera.model.VideoAdjustments) {
+        val profileKey = videoAdjustmentProfileKey(engine.selectedLens.value)
         _videoAdjustments.value = adjustments
         engine.currentVideoAdjustments = adjustments
 
-        // Debounce persistence to background thread to prevent UI lag while dragging sliders
+        // Capture the profile key now so a lens switch during debounce cannot save
+        // the previous lens's adjustments into the newly selected lens profile.
         saveVideoAdjustmentsJob?.cancel()
         saveVideoAdjustmentsJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             kotlinx.coroutines.delay(300)
-            preferences.saveVideoAdjustments(adjustments)
+            preferences.saveVideoAdjustments(adjustments, profileKey)
         }
     }
 
     fun resetVideoAdjustments() {
         saveVideoAdjustmentsJob?.cancel()
+        val profileKey = videoAdjustmentProfileKey(engine.selectedLens.value)
         val def = com.example.camera.model.VideoAdjustments()
         _videoAdjustments.value = def
         engine.currentVideoAdjustments = def
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            preferences.saveVideoAdjustments(def)
+            preferences.saveVideoAdjustments(def, profileKey)
         }
     }
 
@@ -985,6 +997,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setCinemaConfig(preferences.getCinemaConfig())
         setHybridStabilizationConfig(preferences.hybridStabilizationConfig)
         engine.currentVideoAdjustments = _videoAdjustments.value
+
+        // Keep the tuning UI and both preview/recording processors synchronized with the
+        // selected physical lens. This also restores that lens's persisted profile on switch.
+        viewModelScope.launch {
+            engine.selectedLens.collect { lens ->
+                val profile = preferences.getVideoAdjustments(videoAdjustmentProfileKey(lens))
+                _videoAdjustments.value = profile
+                engine.currentVideoAdjustments = profile
+            }
+        }
         engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs
