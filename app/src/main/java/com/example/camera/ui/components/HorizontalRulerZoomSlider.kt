@@ -61,7 +61,7 @@ fun normalizedToZoomLog(t: Float, minZ: Float, maxZ: Float): Float {
 
 const val RULER_TOTAL_TICKS = 120
 val RULER_TICK_SPACING_DP = 6.5.dp
-const val ZOOM_SLIDER_DRAG_SENSITIVITY = 1.8f
+const val ZOOM_SLIDER_DRAG_SENSITIVITY = 1.35f
 
 /**
  * Flagship Horizontal Ruler Zoom Slider matching the reference camera UI:
