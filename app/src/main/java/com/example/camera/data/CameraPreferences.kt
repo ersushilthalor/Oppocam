@@ -257,9 +257,12 @@ class CameraPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_REFOCUS_PHOTO_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_REFOCUS_PHOTO_ENABLED, value).apply()
 
+    private fun normalizeRefocusFrameCount(value: Int): Int =
+        listOf(3, 5, 7).minBy { kotlin.math.abs(it - value) }
+
     var refocusFrameCount: Int
-        get() = prefs.getInt(KEY_REFOCUS_FRAME_COUNT, 5).coerceIn(5, 20)
-        set(value) = prefs.edit().putInt(KEY_REFOCUS_FRAME_COUNT, value.coerceIn(5, 20)).apply()
+        get() = normalizeRefocusFrameCount(prefs.getInt(KEY_REFOCUS_FRAME_COUNT, 5))
+        set(value) = prefs.edit().putInt(KEY_REFOCUS_FRAME_COUNT, normalizeRefocusFrameCount(value)).apply()
 
     var isUltraFastShutterEnabled: Boolean
         get() = prefs.getBoolean(KEY_ULTRA_FAST_SHUTTER_ENABLED, false)
@@ -1138,12 +1141,15 @@ class CameraPreferences(context: Context) {
     }
 
     fun setModeRefocusFrameCount(mode: CameraMode, count: Int) {
-        refocusFrameCount = count
-        prefs.edit().putInt(modeKey(mode, "refocus_count"), count).apply()
+        val normalized = normalizeRefocusFrameCount(count)
+        refocusFrameCount = normalized
+        prefs.edit().putInt(modeKey(mode, "refocus_count"), normalized).apply()
     }
 
     fun getModeRefocusFrameCount(mode: CameraMode): Int {
-        return prefs.getInt(modeKey(mode, "refocus_count"), refocusFrameCount)
+        return normalizeRefocusFrameCount(
+            prefs.getInt(modeKey(mode, "refocus_count"), refocusFrameCount)
+        )
     }
 
     fun setModeUltraFastShutterEnabled(mode: CameraMode, enabled: Boolean) {
