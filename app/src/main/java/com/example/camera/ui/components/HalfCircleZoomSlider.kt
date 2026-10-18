@@ -3,6 +3,7 @@ package com.example.camera.ui.components
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.SystemClock
+import android.view.SoundEffectConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.font.FontWeight
@@ -92,6 +94,7 @@ fun HalfCircleZoomSlider(
     val safeMinZoom = minZoom.coerceAtLeast(0.3f)
     val safeMaxZoom = maxZoom.coerceAtLeast(safeMinZoom + 0.05f)
     val density = LocalDensity.current
+    val hostView = LocalView.current
     val tickStrokePx = with(density) { 1.dp.toPx() }
     val majorTickLengthPx = with(density) { 15.dp.toPx() }
     val minorTickLengthPx = with(density) { 8.dp.toPx() }
@@ -107,6 +110,23 @@ fun HalfCircleZoomSlider(
         mutableFloatStateOf(currentZoom.coerceIn(safeMinZoom, safeMaxZoom))
     }
     var lastUserDragEndTimeMs by remember { mutableLongStateOf(0L) }
+    var lastSoundStep by remember {
+        mutableIntStateOf((zoomToNormalizedLog(activeZoom, safeMinZoom, safeMaxZoom) * 40f).roundToInt())
+    }
+    var lastSoundTimeMs by remember { mutableLongStateOf(0L) }
+
+    // Play a subtle system camera-style tick at meaningful zoom increments, not on every pointer event.
+    fun playZoomTickIfNeeded(zoom: Float) {
+        val step = (zoomToNormalizedLog(zoom, safeMinZoom, safeMaxZoom) * 40f).roundToInt()
+        if (step != lastSoundStep) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastSoundTimeMs >= 45L) {
+                hostView.playSoundEffect(SoundEffectConstants.CLICK)
+                lastSoundTimeMs = now
+            }
+            lastSoundStep = step
+        }
+    }
 
     LaunchedEffect(safeMinZoom, safeMaxZoom) {
         activeZoom = activeZoom.coerceIn(safeMinZoom, safeMaxZoom)
@@ -173,6 +193,7 @@ fun HalfCircleZoomSlider(
                             accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                             val newZoom = normalizedToZoomLog(accumulatedNorm, minZ, maxZ)
                             activeZoom = newZoom
+                            playZoomTickIfNeeded(newZoom)
                             lastX = currentX
                             change.consume()
                             restartAutoHideTimer()
@@ -188,6 +209,7 @@ fun HalfCircleZoomSlider(
                                 accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                                 val newZoom = normalizedToZoomLog(accumulatedNorm, minZ, maxZ)
                                 activeZoom = newZoom
+                                playZoomTickIfNeeded(newZoom)
                                 restartAutoHideTimer()
                                 onZoomChangeState.value(newZoom)
                             }
