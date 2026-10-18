@@ -67,6 +67,10 @@ class ZoomTransitionController(
         private const val FRAME_HANDOFF_WARMUP_FRAMES = 2
         private const val FRAME_HANDOFF_REQUIRED_FRAMES = 16
         private const val FRAME_HANDOFF_TIMEOUT_MS = 900L
+        // Once the incoming lens moves away from the shared ~1x field of view, shorten the
+        // overlap so differently cropped frames do not remain visibly doubled.
+        private const val MAIN_FOV_DIVERGENCE_FADE_RANGE = 0.35f
+        private const val MAX_HANDOFF_ALPHA_STEP = 0.30f
         // Pre-warmed frames are reusable only if the target stream is still actively updating.
         private const val FRAME_HANDOFF_PREWARM_MAX_AGE_MS = 120L
 
@@ -84,11 +88,10 @@ class ZoomTransitionController(
             isTelephotoPresetZoom(fromZoom) && isHalfXZoom(targetZoom)
 
         /**
-         * Calculates alpha progress from real incoming frames, with an FOV-aware escape for the
-         * reverse transition. Once zoom drops below 1x, Main cannot widen further, so keeping
-         * both layers blended for all 16 frames would show increasingly different FOVs. We still
-         * require incoming frames, but accelerate the fade only as the zoom leaves the range where
-         * Main and Ultra-Wide can be kept geometrically close.
+         * Calculates alpha progress from real incoming frames and the shared-FOV window.
+         * A pure 16-frame blend leaves differently cropped views visible as double edges.
+         * In either direction, fade faster once zoom moves away from the ~1x handoff FOV;
+         * incoming frames still gate every progress update, so we never fade to a stale stream.
          */
         internal fun calculateFrameHandoffProgress(
             incomingFrameCount: Int,
@@ -100,16 +103,21 @@ class ZoomTransitionController(
                 FRAME_HANDOFF_REQUIRED_FRAMES.toFloat()
             val frameEased = (0.5 * (1.0 - cos(PI * frameProgress.toDouble()))).toFloat()
             val zoomEased = if (targetSource == PreviewStreamSource.ULTRAWIDE) {
+                // Reverse handoff: below 1x, Main cannot widen enough to match Ultra-Wide.
                 val zoomProgress = ((1.0f - currentZoom) / (1.0f - 0.5f)).coerceIn(0f, 1f)
                 val acceleratedZoomProgress = 1f - (1f - zoomProgress) * (1f - zoomProgress) * (1f - zoomProgress)
                 (0.5 * (1.0 - cos(PI * acceleratedZoomProgress.toDouble()))).toFloat()
             } else {
-                0f
+                // Forward handoff: the outgoing Ultra-Wide frame is effectively parked near 1x,
+                // while Main's FOV keeps tightening for 2x/3x. Fade along this shared-FOV window.
+                val zoomProgress = ((currentZoom - 1.0f) / MAIN_FOV_DIVERGENCE_FADE_RANGE).coerceIn(0f, 1f)
+                val acceleratedZoomProgress = 1f - (1f - zoomProgress) * (1f - zoomProgress) * (1f - zoomProgress)
+                (0.5 * (1.0 - cos(PI * acceleratedZoomProgress.toDouble()))).toFloat()
             }
             val previous = previousProgress.coerceIn(0f, 1f)
             val desired = maxOf(frameEased, zoomEased)
-            // Avoid a one-frame opacity jump if zoom reaches the incompatible FOV range abruptly.
-            return minOf(desired, previous + 0.45f).coerceIn(previous, 1f)
+            // Cap per-frame opacity changes to keep the fade smooth even if zoom/FOV jumps a tick.
+            return minOf(desired, previous + MAX_HANDOFF_ALPHA_STEP).coerceIn(previous, 1f)
         }
 
         /** Frame-based preview handoff is intentionally limited to 0.5x <-> 2x/3x. */
