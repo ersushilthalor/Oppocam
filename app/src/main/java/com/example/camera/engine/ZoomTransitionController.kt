@@ -513,7 +513,9 @@ class ZoomTransitionController(
                             if (abs(lastDispatchedZoom - effectiveSwitchZoom) >= 0.005f) {
                                 onZoomUpdate(effectiveSwitchZoom)
                             }
-                            onApplyZoomToEngine(effectiveSwitchZoom, true)
+                            // The coordinated lens-selection callback below owns this exact switch-point
+                            // update. Calling setZoom here can independently invoke selectLens(), creating
+                            // a second physical switch request on the transition dispatcher.
 
                             if (useFrameBasedHandoff) {
                                 beginFrameBasedHandoff(
@@ -629,7 +631,9 @@ class ZoomTransitionController(
                 // Ensure Ultra-Wide reaches the exact selected focal length field of view
                 _currentInterpolatedZoom.value = effectiveSwitchZoom
                 onZoomUpdate(effectiveSwitchZoom)
-                onApplyZoomToEngine(effectiveSwitchZoom, true)
+                // Do not call onApplyZoomToEngine at the exact switch point: setZoom() can
+                // independently select a physical lens. The explicit onSelectLens callback below is
+                // the single owner of the handoff and applies this target zoom during selection.
 
                 // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
                 // Direct 2x/3x preset taps should cross the lens switch without pausing at 1x.
