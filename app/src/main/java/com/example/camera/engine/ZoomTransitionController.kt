@@ -451,7 +451,7 @@ class ZoomTransitionController(
             val isStartingOnUltraWide = (currentLens?.lensType == LensType.ULTRAWIDE || startZ < switchZoom)
             val isTappingOneX = abs(endZ - 1.0f) < 0.05f
             val isCrossingOrAtSwitchPoint = (endZ >= switchZoom - 0.05f) || isTappingOneX
-            val effectiveSwitchZoom = if (isTappingOneX && switchZoom > 1.0f) 1.0f else switchZoom
+            val effectiveSwitchZoom = if ((isTappingOneX && switchZoom > 1.0f) || isHalfXToTelephotoPresetTransition(startZ, endZ)) 1.0f else switchZoom
             val isUltraWideToMainSwitch = !isFrontCamera && isStartingOnUltraWide &&
                 isCrossingOrAtSwitchPoint &&
                 ultraWideLens != null && mainWideLens != null &&
