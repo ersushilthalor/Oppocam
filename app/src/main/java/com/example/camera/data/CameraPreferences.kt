@@ -1483,67 +1483,76 @@ class CameraPreferences(context: Context) {
         }
     }
 
-    fun getVideoAdjustments(): com.example.camera.model.VideoAdjustments {
+    private fun videoAdjustmentKey(suffix: String, lensKey: String): String =
+        if (lensKey == "main") "pref_va_${suffix}" else "pref_va_${lensKey}_${suffix}"
+
+    fun getVideoAdjustments(): com.example.camera.model.VideoAdjustments = getVideoAdjustmentsForLens("main")
+
+    fun getVideoAdjustmentsForLens(lensKey: String): com.example.camera.model.VideoAdjustments {
+        val safeLensKey = if (lensKey == "ultrawide") "ultrawide" else "main"
         return com.example.camera.model.VideoAdjustments(
-            tonality = prefs.getFloat("pref_va_tonality", 0f),
-            saturation = prefs.getFloat("pref_va_saturation", 0f),
-            contrast = prefs.getFloat("pref_va_contrast", 0f),
-            exposure = prefs.getFloat("pref_va_exposure", 0.0f),
-            temperature = prefs.getFloat("pref_va_temperature", 0f),
-            tint = prefs.getFloat("pref_va_tint", 0f),
-            highlights = prefs.getFloat("pref_va_highlights", 0f),
-            shadows = prefs.getFloat("pref_va_shadows", 0f),
-            vignette = prefs.getFloat("pref_va_vignette", 0f),
-            grain = prefs.getFloat("pref_va_grain", 0f),
-            clarity = prefs.getFloat("pref_va_clarity", 0f),
-            sharpness = prefs.getFloat("pref_va_sharpness", 0f),
-            curveBlacks = prefs.getFloat("pref_va_curve_blacks", 0f),
-            curveShadows = prefs.getFloat("pref_va_curve_shadows", 0f),
-            curveMidtones = prefs.getFloat("pref_va_curve_midtones", 0f),
-            curveHighlights = prefs.getFloat("pref_va_curve_highlights", 0f),
-            curveWhites = prefs.getFloat("pref_va_curve_whites", 0f),
-            colorVibrance = prefs.getFloat("pref_va_color_vibrance", 0f),
-            colorBalanceR = prefs.getFloat("pref_va_color_bal_r", 0f),
-            colorBalanceG = prefs.getFloat("pref_va_color_bal_g", 0f),
-            colorBalanceB = prefs.getFloat("pref_va_color_bal_b", 0f),
-            lightFxFlash = prefs.getFloat("pref_va_lfx_flash", 0f),
-            lightFxBloom = prefs.getFloat("pref_va_lfx_bloom", 0f),
-            lightFxSoftLight = prefs.getFloat("pref_va_lfx_soft_light", 0f),
-            textureFilmGrain = prefs.getFloat("pref_va_tex_grain", 0f),
-            textureHalation = prefs.getFloat("pref_va_tex_halation", 0f),
-            textureMicroContrast = prefs.getFloat("pref_va_tex_micro_contrast", 0f)
+            tonality = prefs.getFloat(videoAdjustmentKey("tonality", safeLensKey), 0f),
+            saturation = prefs.getFloat(videoAdjustmentKey("saturation", safeLensKey), 0f),
+            contrast = prefs.getFloat(videoAdjustmentKey("contrast", safeLensKey), 0f),
+            exposure = prefs.getFloat(videoAdjustmentKey("exposure", safeLensKey), 0.0f),
+            temperature = prefs.getFloat(videoAdjustmentKey("temperature", safeLensKey), 0f),
+            tint = prefs.getFloat(videoAdjustmentKey("tint", safeLensKey), 0f),
+            highlights = prefs.getFloat(videoAdjustmentKey("highlights", safeLensKey), 0f),
+            shadows = prefs.getFloat(videoAdjustmentKey("shadows", safeLensKey), 0f),
+            vignette = prefs.getFloat(videoAdjustmentKey("vignette", safeLensKey), 0f),
+            grain = prefs.getFloat(videoAdjustmentKey("grain", safeLensKey), 0f),
+            clarity = prefs.getFloat(videoAdjustmentKey("clarity", safeLensKey), 0f),
+            sharpness = prefs.getFloat(videoAdjustmentKey("sharpness", safeLensKey), 0f),
+            curveBlacks = prefs.getFloat(videoAdjustmentKey("curve_blacks", safeLensKey), 0f),
+            curveShadows = prefs.getFloat(videoAdjustmentKey("curve_shadows", safeLensKey), 0f),
+            curveMidtones = prefs.getFloat(videoAdjustmentKey("curve_midtones", safeLensKey), 0f),
+            curveHighlights = prefs.getFloat(videoAdjustmentKey("curve_highlights", safeLensKey), 0f),
+            curveWhites = prefs.getFloat(videoAdjustmentKey("curve_whites", safeLensKey), 0f),
+            colorVibrance = prefs.getFloat(videoAdjustmentKey("color_vibrance", safeLensKey), 0f),
+            colorBalanceR = prefs.getFloat(videoAdjustmentKey("color_bal_r", safeLensKey), 0f),
+            colorBalanceG = prefs.getFloat(videoAdjustmentKey("color_bal_g", safeLensKey), 0f),
+            colorBalanceB = prefs.getFloat(videoAdjustmentKey("color_bal_b", safeLensKey), 0f),
+            lightFxFlash = prefs.getFloat(videoAdjustmentKey("lfx_flash", safeLensKey), 0f),
+            lightFxBloom = prefs.getFloat(videoAdjustmentKey("lfx_bloom", safeLensKey), 0f),
+            lightFxSoftLight = prefs.getFloat(videoAdjustmentKey("lfx_soft_light", safeLensKey), 0f),
+            textureFilmGrain = prefs.getFloat(videoAdjustmentKey("tex_grain", safeLensKey), 0f),
+            textureHalation = prefs.getFloat(videoAdjustmentKey("tex_halation", safeLensKey), 0f),
+            textureMicroContrast = prefs.getFloat(videoAdjustmentKey("tex_micro_contrast", safeLensKey), 0f)
         )
     }
 
-    fun saveVideoAdjustments(va: com.example.camera.model.VideoAdjustments) {
+    fun saveVideoAdjustments(va: com.example.camera.model.VideoAdjustments) = saveVideoAdjustmentsForLens(va, "main")
+
+    fun saveVideoAdjustmentsForLens(va: com.example.camera.model.VideoAdjustments, lensKey: String) {
+        val safeLensKey = if (lensKey == "ultrawide") "ultrawide" else "main"
         prefs.edit()
-            .putFloat("pref_va_tonality", va.tonality)
-            .putFloat("pref_va_saturation", va.saturation)
-            .putFloat("pref_va_contrast", va.contrast)
-            .putFloat("pref_va_exposure", va.exposure)
-            .putFloat("pref_va_temperature", va.temperature)
-            .putFloat("pref_va_tint", va.tint)
-            .putFloat("pref_va_highlights", va.highlights)
-            .putFloat("pref_va_shadows", va.shadows)
-            .putFloat("pref_va_vignette", va.vignette)
-            .putFloat("pref_va_grain", va.grain)
-            .putFloat("pref_va_clarity", va.clarity)
-            .putFloat("pref_va_sharpness", va.sharpness)
-            .putFloat("pref_va_curve_blacks", va.curveBlacks)
-            .putFloat("pref_va_curve_shadows", va.curveShadows)
-            .putFloat("pref_va_curve_midtones", va.curveMidtones)
-            .putFloat("pref_va_curve_highlights", va.curveHighlights)
-            .putFloat("pref_va_curve_whites", va.curveWhites)
-            .putFloat("pref_va_color_vibrance", va.colorVibrance)
-            .putFloat("pref_va_color_bal_r", va.colorBalanceR)
-            .putFloat("pref_va_color_bal_g", va.colorBalanceG)
-            .putFloat("pref_va_color_bal_b", va.colorBalanceB)
-            .putFloat("pref_va_lfx_flash", va.lightFxFlash)
-            .putFloat("pref_va_lfx_bloom", va.lightFxBloom)
-            .putFloat("pref_va_lfx_soft_light", va.lightFxSoftLight)
-            .putFloat("pref_va_tex_grain", va.textureFilmGrain)
-            .putFloat("pref_va_tex_halation", va.textureHalation)
-            .putFloat("pref_va_tex_micro_contrast", va.textureMicroContrast)
+            .putFloat(videoAdjustmentKey("tonality", safeLensKey), va.tonality)
+            .putFloat(videoAdjustmentKey("saturation", safeLensKey), va.saturation)
+            .putFloat(videoAdjustmentKey("contrast", safeLensKey), va.contrast)
+            .putFloat(videoAdjustmentKey("exposure", safeLensKey), va.exposure)
+            .putFloat(videoAdjustmentKey("temperature", safeLensKey), va.temperature)
+            .putFloat(videoAdjustmentKey("tint", safeLensKey), va.tint)
+            .putFloat(videoAdjustmentKey("highlights", safeLensKey), va.highlights)
+            .putFloat(videoAdjustmentKey("shadows", safeLensKey), va.shadows)
+            .putFloat(videoAdjustmentKey("vignette", safeLensKey), va.vignette)
+            .putFloat(videoAdjustmentKey("grain", safeLensKey), va.grain)
+            .putFloat(videoAdjustmentKey("clarity", safeLensKey), va.clarity)
+            .putFloat(videoAdjustmentKey("sharpness", safeLensKey), va.sharpness)
+            .putFloat(videoAdjustmentKey("curve_blacks", safeLensKey), va.curveBlacks)
+            .putFloat(videoAdjustmentKey("curve_shadows", safeLensKey), va.curveShadows)
+            .putFloat(videoAdjustmentKey("curve_midtones", safeLensKey), va.curveMidtones)
+            .putFloat(videoAdjustmentKey("curve_highlights", safeLensKey), va.curveHighlights)
+            .putFloat(videoAdjustmentKey("curve_whites", safeLensKey), va.curveWhites)
+            .putFloat(videoAdjustmentKey("color_vibrance", safeLensKey), va.colorVibrance)
+            .putFloat(videoAdjustmentKey("color_bal_r", safeLensKey), va.colorBalanceR)
+            .putFloat(videoAdjustmentKey("color_bal_g", safeLensKey), va.colorBalanceG)
+            .putFloat(videoAdjustmentKey("color_bal_b", safeLensKey), va.colorBalanceB)
+            .putFloat(videoAdjustmentKey("lfx_flash", safeLensKey), va.lightFxFlash)
+            .putFloat(videoAdjustmentKey("lfx_bloom", safeLensKey), va.lightFxBloom)
+            .putFloat(videoAdjustmentKey("lfx_soft_light", safeLensKey), va.lightFxSoftLight)
+            .putFloat(videoAdjustmentKey("tex_grain", safeLensKey), va.textureFilmGrain)
+            .putFloat(videoAdjustmentKey("tex_halation", safeLensKey), va.textureHalation)
+            .putFloat(videoAdjustmentKey("tex_micro_contrast", safeLensKey), va.textureMicroContrast)
             .apply()
     }
 }

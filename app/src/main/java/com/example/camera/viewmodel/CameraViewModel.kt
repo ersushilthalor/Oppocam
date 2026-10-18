@@ -493,9 +493,31 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         setEvControlOpen(!_isEvControlOpen.value)
     }
 
-    // Video Adjustments State (Normal Video Mode)
-    private val _videoAdjustments = MutableStateFlow(preferences.getVideoAdjustments())
+    // Independent Normal Video tuning profiles; existing settings remain the Main profile.
+    private val _selectedVideoTuningLens = MutableStateFlow(com.example.camera.model.VideoTuningLens.MAIN)
+    val selectedVideoTuningLens: StateFlow<com.example.camera.model.VideoTuningLens> = _selectedVideoTuningLens.asStateFlow()
+    private val _mainVideoAdjustments = MutableStateFlow(preferences.getVideoAdjustmentsForLens("main"))
+    private val _ultraWideVideoAdjustments = MutableStateFlow(preferences.getVideoAdjustmentsForLens("ultrawide"))
+    private val _videoAdjustments = MutableStateFlow(_mainVideoAdjustments.value)
     val videoAdjustments: StateFlow<com.example.camera.model.VideoAdjustments> = _videoAdjustments.asStateFlow()
+    private val _activeVideoAdjustments = MutableStateFlow(_mainVideoAdjustments.value)
+    val activeVideoAdjustments: StateFlow<com.example.camera.model.VideoAdjustments> = _activeVideoAdjustments.asStateFlow()
+
+    private fun profileFor(lens: com.example.camera.model.VideoTuningLens) =
+        if (lens == com.example.camera.model.VideoTuningLens.ULTRAWIDE) _ultraWideVideoAdjustments.value else _mainVideoAdjustments.value
+
+    private fun refreshActiveVideoAdjustments() {
+        val useUltraWide = engine.currentZoomState.value < 0.85f &&
+            engine.selectedLens.value?.facing != CameraCharacteristics.LENS_FACING_FRONT
+        val active = if (useUltraWide) _ultraWideVideoAdjustments.value else _mainVideoAdjustments.value
+        _activeVideoAdjustments.value = active
+        engine.currentVideoAdjustments = active
+    }
+
+    fun selectVideoTuningLens(lens: com.example.camera.model.VideoTuningLens) {
+        _selectedVideoTuningLens.value = lens
+        _videoAdjustments.value = profileFor(lens)
+    }
 
     private val _isVideoAdjustmentsOpen = MutableStateFlow(false)
     val isVideoAdjustmentsOpen: StateFlow<Boolean> = _isVideoAdjustmentsOpen.asStateFlow()
@@ -503,6 +525,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setVideoAdjustmentsOpen(isOpen: Boolean) {
         _isVideoAdjustmentsOpen.value = isOpen
         if (isOpen) {
+            val activeProfile = if (engine.currentZoomState.value < 0.85f &&
+                engine.selectedLens.value?.facing != CameraCharacteristics.LENS_FACING_FRONT) {
+                com.example.camera.model.VideoTuningLens.ULTRAWIDE
+            } else {
+                com.example.camera.model.VideoTuningLens.MAIN
+            }
+            selectVideoTuningLens(activeProfile)
             _isVideoSettingsPanelOpen.value = false
             _isSettingsOpen.value = false
             _isManualProOpen.value = false
@@ -516,24 +545,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var saveVideoAdjustmentsJob: kotlinx.coroutines.Job? = null
 
     fun updateVideoAdjustments(adjustments: com.example.camera.model.VideoAdjustments) {
+        val lens = _selectedVideoTuningLens.value
         _videoAdjustments.value = adjustments
-        engine.currentVideoAdjustments = adjustments
+        if (lens == com.example.camera.model.VideoTuningLens.ULTRAWIDE) _ultraWideVideoAdjustments.value = adjustments
+        else _mainVideoAdjustments.value = adjustments
+        refreshActiveVideoAdjustments()
 
-        // Debounce persistence to background thread to prevent UI lag while dragging sliders
         saveVideoAdjustmentsJob?.cancel()
         saveVideoAdjustmentsJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             kotlinx.coroutines.delay(300)
-            preferences.saveVideoAdjustments(adjustments)
+            preferences.saveVideoAdjustmentsForLens(adjustments, lens.preferenceKey)
         }
     }
 
     fun resetVideoAdjustments() {
         saveVideoAdjustmentsJob?.cancel()
         val def = com.example.camera.model.VideoAdjustments()
+        val lens = _selectedVideoTuningLens.value
         _videoAdjustments.value = def
-        engine.currentVideoAdjustments = def
+        if (lens == com.example.camera.model.VideoTuningLens.ULTRAWIDE) _ultraWideVideoAdjustments.value = def
+        else _mainVideoAdjustments.value = def
+        refreshActiveVideoAdjustments()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            preferences.saveVideoAdjustments(def)
+            preferences.saveVideoAdjustmentsForLens(def, lens.preferenceKey)
         }
     }
 
@@ -984,7 +1018,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.restoreInitialVideoResolution(CameraResolution(preferences.videoWidth, preferences.videoHeight))
         engine.setCinemaConfig(preferences.getCinemaConfig())
         setHybridStabilizationConfig(preferences.hybridStabilizationConfig)
-        engine.currentVideoAdjustments = _videoAdjustments.value
+        refreshActiveVideoAdjustments()
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(engine.currentZoomState, engine.selectedLens) { _, _ -> Unit }
+                .collect { refreshActiveVideoAdjustments() }
+        }
         engine.setKeepUltraWideReady(preferences.isKeepUltraWideReady)
         engine.setAutoSwitchToUltraWide(preferences.isAutoSwitchToUltraWide)
         engine.zoomTransitionController.overlapDurationMs = preferences.lensSwitchOverlapDurationMs

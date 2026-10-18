@@ -88,6 +88,11 @@ data class VideoAdjustments(
     }
 }
 
+enum class VideoTuningLens(val label: String, val preferenceKey: String) {
+    ULTRAWIDE("Ultra-wide · 0.5x", "ultrawide"),
+    MAIN("Main · 1x", "main")
+}
+
 enum class VideoAdjustmentsTab {
     BASIC,
     ADVANCED

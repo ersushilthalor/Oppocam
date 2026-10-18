@@ -61,6 +61,8 @@ fun VideoAdjustmentsPanel(
     onAdjustmentsChange: (VideoAdjustments) -> Unit,
     onReset: () -> Unit,
     onDismiss: () -> Unit,
+    selectedLensProfile: VideoTuningLens = VideoTuningLens.MAIN,
+    onLensProfileChange: (VideoTuningLens) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(VideoAdjustmentsTab.BASIC) }
@@ -210,6 +212,36 @@ fun VideoAdjustmentsPanel(
                             contentDescription = stringResource(R.string.close),
                             tint = Color.White.copy(alpha = 0.9f),
                             modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Lens-specific profiles. Each profile is persisted independently.
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color(0xFF232630)).padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                VideoTuningLens.values().forEach { lensProfile ->
+                    Box(
+                        modifier = Modifier.weight(1f)
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(if (selectedLensProfile == lensProfile) SelectedPillBg else Color.Transparent)
+                            .clickable {
+                                onLensProfileChange(lensProfile)
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                            .padding(horizontal = 8.dp, vertical = 9.dp)
+                            .testTag("video_tuning_profile_${lensProfile.preferenceKey}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = lensProfile.label,
+                            color = if (selectedLensProfile == lensProfile) Color.White else UnselectedTextColor,
+                            fontSize = 12.sp,
+                            fontWeight = if (selectedLensProfile == lensProfile) FontWeight.Bold else FontWeight.Medium
                         )
                     }
                 }
