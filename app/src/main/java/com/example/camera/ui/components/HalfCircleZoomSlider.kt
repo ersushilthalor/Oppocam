@@ -327,7 +327,7 @@ fun HalfCircleZoomSlider(
             val markerNormalY = markerInvLength
             drawLine(
                 color = Color(0xFFFF9418),
-                start = Offset(markerX = centerX, y = markerY),
+                start = Offset(x = centerX, y = markerY),
                 end = Offset(
                     centerX + markerNormalX * with(density) { 19.dp.toPx() },
                     markerY + markerNormalY * with(density) { 19.dp.toPx() }
