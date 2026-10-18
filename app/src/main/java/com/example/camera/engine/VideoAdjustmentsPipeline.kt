@@ -333,6 +333,7 @@ object VideoAdjustmentsPipeline {
     """.trimIndent()
 
     class VideoAdjustmentsShaderHandles(programId: Int) {
+        val uFrameAlphaHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uFrameAlpha")
         val uBypassAdjustmentsHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uBypassAdjustments")
         val uResolutionHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uResolution")
         val uTimeHandle: Int = android.opengl.GLES20.glGetUniformLocation(programId, "uTime")
@@ -371,6 +372,9 @@ object VideoAdjustmentsPipeline {
         height: Int,
         timeSec: Float
     ) {
+        // Alpha defaults to fully opaque for every existing shader consumer; the recording
+        // relay overrides it per draw only when a lens handoff is actually blending.
+        android.opengl.GLES20.glUniform1f(handles.uFrameAlphaHandle, 1f)
         if (adjustments == null || adjustments.isDefault) {
             android.opengl.GLES20.glUniform1i(handles.uBypassAdjustmentsHandle, 1)
             return
