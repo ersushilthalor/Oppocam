@@ -293,6 +293,8 @@ class Camera2Engine(private val context: Context) {
     @Volatile
     private var standbyConfiguredIsVideoMode: Boolean = false
     private val isPreparingUltraWideStandby = java.util.concurrent.atomic.AtomicBoolean(false)
+    // Coalesce per-frame predictive crop updates; the worker samples the latest logical zoom.
+    private val predictiveStandbyZoomSyncPending = java.util.concurrent.atomic.AtomicBoolean(false)
     private val isUltraWideStreaming = java.util.concurrent.atomic.AtomicBoolean(false)
     private var activeLogicalMultiCamUltraWideConfigured = false
     private val standbySessionGeneration = java.util.concurrent.atomic.AtomicInteger(0)
@@ -734,7 +736,9 @@ class Camera2Engine(private val context: Context) {
             // not diverge merely because the 16-frame crossfade outlasts the zoom animation.
             val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: Rect(0, 0, 4000, 3000)
             val handoffState = zoomTransitionController.previewOverlapState.value
-            val handoffZoom = if (handoffState.isOverlapping) {
+            // Track the authoritative logical zoom BEFORE handoff as well as during the frame blend.
+            val transitionActive = zoomTransitionController.isTransitionActive.value
+            val handoffZoom = if (handoffState.isOverlapping || transitionActive) {
                 zoomTransitionController.currentInterpolatedZoom.value
             } else {
                 null
@@ -777,7 +781,8 @@ class Camera2Engine(private val context: Context) {
      */
     private fun syncStandbyStreamSettings(forceDuringFrameHandoff: Boolean = false) {
         val handoffActive = zoomTransitionController.previewOverlapState.value.isOverlapping
-        if ((!_isKeepUltraWideReady.value && !(forceDuringFrameHandoff && handoffActive)) || isClosingCamera) return
+        val transitionActive = zoomTransitionController.isTransitionActive.value
+        if ((!_isKeepUltraWideReady.value && !(forceDuringFrameHandoff && (handoffActive || transitionActive))) || isClosingCamera) return
         val session = ultraWideStandbyCaptureSession ?: return
         val builder = ultraWideStandbyRequestBuilder ?: return
         val standbyCam = ultraWideStandbyCameraDevice ?: return
@@ -789,6 +794,24 @@ class Camera2Engine(private val context: Context) {
             applySynchronizedStandbySettings(builder, standbyLens)
             session.setRepeatingRequest(builder.build(), standbyCaptureCallback, backgroundHandler)
         } catch (ignored: Exception) {}
+    }
+
+    /**
+     * Push the latest logical zoom to the already-running standby stream without blocking the
+     * zoom coroutine. At most one worker task is queued; it samples the newest timeline value.
+     */
+    private fun schedulePredictiveStandbyZoomSync() {
+        val handler = backgroundHandler ?: return
+        if (!predictiveStandbyZoomSyncPending.compareAndSet(false, true)) return
+        val posted = handler.post {
+            try {
+                syncStandbyStreamSettings(forceDuringFrameHandoff = true)
+                Log.v(TAG, "[ZOOM_PREDICTIVE] logicalZoom=${zoomTransitionController.currentInterpolatedZoom.value} active=${_selectedLens.value?.lensType} standby=${ultraWideStandbyCameraDevice?.id} overlap=${zoomTransitionController.previewOverlapState.value.isOverlapping}")
+            } finally {
+                predictiveStandbyZoomSyncPending.set(false)
+            }
+        }
+        if (!posted) predictiveStandbyZoomSyncPending.set(false)
     }
 
     fun setAutoSwitchToUltraWide(enabled: Boolean) {
@@ -5840,6 +5863,8 @@ class Camera2Engine(private val context: Context) {
 
         currentZoom = clampedZoom
         _currentZoom.value = clampedZoom
+        // Predictively update the destination camera's crop before the visible source switches.
+        if (isContinuousZoomTransitionActive && !isFront) schedulePredictiveStandbyZoomSync()
         if (!isContinuousZoomTransitionActive && !isContinuousTransition) {
             preferences.currentZoom = clampedZoom
         }
