@@ -57,8 +57,8 @@ class ZoomTransitionController(
     companion object {
         private const val TAG = "ZoomTransitionCtrl"
         const val TOTAL_TRANSITION_DURATION_MS = 400L // Fixed duration of exactly 400ms (0.40s), never less
-        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 20L // 0.02 second default hold at exact 1x FOV before physical switch
-        const val HOLD_AT_ONE_X_DURATION_MS = 20L // Preserved for backwards compatibility
+        const val DEFAULT_HOLD_AT_ONE_X_DURATION_MS = 200L // 0.02 second default hold at exact 1x FOV before physical switch
+        const val HOLD_AT_ONE_X_DURATION_MS = 200L // Preserved for backwards compatibility
         const val MIN_HOLD_AT_ONE_X_DURATION_MS = 0L
         const val MAX_HOLD_AT_ONE_X_DURATION_MS = 300L
         const val DEFAULT_OVERLAP_DURATION_MS = 400L
