@@ -5890,11 +5890,16 @@ class Camera2Engine(private val context: Context) {
 
         val activeLens = activeSessionLens ?: currentLens
         val isContinuous = isContinuousTransition || isContinuousZoomTransitionActive
-        val effectiveTargetLens = if (isContinuousZoomTransitionActive && activeLens.lensType == LensType.ULTRAWIDE) {
-            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally up to switch point FOV
-            ultraWideLens ?: targetLens
-        } else if (isContinuous && activeLens.lensType == LensType.ULTRAWIDE && pZoom < switchZoom) {
-            // Keep on Ultra-Wide during continuous transition so it smoothly crops digitally all the way to switchZoom FOV
+        // Hold Ultra-Wide only while its digital crop is matching the Main lens below the
+        // calibrated handoff point. Never pin Ultra-Wide once the slider reaches 1x or above.
+        val keepUltraWideUntilSwitchPoint =
+            CameraOpticalCalibration.shouldKeepUltraWideDuringContinuousZoom(
+                currentLensType = activeLens.lensType,
+                targetZoom = pZoom,
+                switchPointMm = switchPoint,
+                isContinuousTransition = isContinuous
+            )
+        val effectiveTargetLens = if (keepUltraWideUntilSwitchPoint) {
             ultraWideLens ?: targetLens
         } else {
             targetLens
