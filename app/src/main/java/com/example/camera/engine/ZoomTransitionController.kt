@@ -767,6 +767,15 @@ class ZoomTransitionController(
             val useReverseFrameBasedHandoff = isOverlapAnimationEnabled &&
                 isTelephotoPresetToHalfXTransition(startZ, endZ)
             var reverseFrameBasedHandoffStarted = false
+            if (useReverseFrameBasedHandoff) {
+                // Observe incoming Ultra-Wide frames from the beginning, before the 1x boundary.
+                // Camera2Engine updates the standby request from this same logical zoom timeline.
+                prepareFrameBasedHandoff(
+                    fromSource = PreviewStreamSource.MAIN,
+                    targetSource = PreviewStreamSource.ULTRAWIDE
+                )
+                Log.i(TAG, "[ZOOM_PREDICTIVE_BEGIN] direction=MAIN_TO_ULTRAWIDE start=$startZ target=$endZ")
+            }
 
             // Move the slider in the background from startNorm to targetNorm over exactly 400ms (0.40s)
             while (isActive) {
