@@ -211,7 +211,7 @@ class RefocusRepository(private val context: Context) {
                     val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, imageId)
                     val imageIdText = imageId.toString()
                     val mediaUri = uri.toString()
-                    val cleanDisplayName = displayName.substringAfterLast('/').substringAfterLast('\\\\')
+                    val cleanDisplayName = displayName.substringAfterLast('/')
                     val legacyMatch = metadataByBundle.firstOrNull { (_, json) ->
                         val storedUri = json.optString("photoUri", "").substringBefore('?').trimEnd('/')
                         val storedTail = storedUri.substringAfterLast('/')
