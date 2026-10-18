@@ -100,6 +100,43 @@ class FrameBasedHandoffTest {
     }
 
     @Test
+    fun forwardHandoffShortensBlendAsMainFovMovesAwayFromSwitchFov() {
+        val atSwitch = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 1,
+            targetSource = PreviewStreamSource.MAIN,
+            currentZoom = 1.0f,
+            previousProgress = 0f
+        )
+        val atOnePointZeroFive = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 2,
+            targetSource = PreviewStreamSource.MAIN,
+            currentZoom = 1.05f,
+            previousProgress = atSwitch
+        )
+        val atOnePointOne = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 3,
+            targetSource = PreviewStreamSource.MAIN,
+            currentZoom = 1.10f,
+            previousProgress = atOnePointZeroFive
+        )
+        val atOnePointFifteen = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 4,
+            targetSource = PreviewStreamSource.MAIN,
+            currentZoom = 1.15f,
+            previousProgress = atOnePointOne
+        )
+
+        assertTrue("Blend should begin gently at the shared switch FOV", atSwitch > 0f && atSwitch < 0.05f)
+        assertTrue("Alpha must increase monotonically", atOnePointZeroFive > atSwitch)
+        assertTrue("Alpha must increase monotonically", atOnePointOne > atOnePointZeroFive)
+        assertTrue("Alpha must increase monotonically", atOnePointFifteen > atOnePointOne)
+        assertTrue(
+            "Blend should be nearly complete before large FOV mismatch creates visible double edges",
+            atOnePointFifteen > 0.85f && atOnePointFifteen < 1f
+        )
+    }
+
+    @Test
     fun handoffUsesTwoWarmupFramesThenSixteenBlendFramesAndIgnoresOutgoingFrames() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
