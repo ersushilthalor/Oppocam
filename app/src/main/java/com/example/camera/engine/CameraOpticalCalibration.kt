@@ -296,6 +296,22 @@ object CameraOpticalCalibration {
     }
 
     /**
+     * Returns true only while a continuous slider gesture is still below the physical lens
+     * handoff threshold. This prevents the outgoing Ultra-Wide stream from being held forever
+     * after the zoom crosses 1x, which would otherwise digitally crop Ultra-Wide all the way in.
+     */
+    fun shouldKeepUltraWideDuringContinuousZoom(
+        currentLensType: LensType,
+        targetZoom: Float,
+        switchPointMm: Float = DEFAULT_SWITCH_POINT_MM,
+        isContinuousTransition: Boolean
+    ): Boolean {
+        if (!isContinuousTransition || currentLensType != LensType.ULTRAWIDE) return false
+        val switchZoom = switchPointToZoom(switchPointMm)
+        return targetZoom < switchZoom
+    }
+
+    /**
      * Hysteresis-aware lens selection during continuous zoom dragging based on user-selected Switch Point.
      * At or above the Switch Point threshold (Switch Point / 23mm): switches to Main (or Telephoto).
      * Strictly below the Switch Point threshold: uses Ultra-wide if available.

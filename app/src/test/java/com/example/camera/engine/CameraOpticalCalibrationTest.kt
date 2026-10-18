@@ -214,6 +214,46 @@ class CameraOpticalCalibrationTest {
     }
 
     @Test
+    fun testContinuousSliderHandsOffUltraWideAtSwitchPointInsteadOfCroppingToMaxZoom() {
+        // While dragging below 1x, keep Ultra-Wide active to avoid a premature lens switch.
+        assertTrue(
+            CameraOpticalCalibration.shouldKeepUltraWideDuringContinuousZoom(
+                currentLensType = LensType.ULTRAWIDE,
+                targetZoom = 0.999f,
+                isContinuousTransition = true
+            )
+        )
+
+        // At 1x, and above, the continuous slider must be allowed to switch to Main/telephoto.
+        listOf(1.0f, 1.1f, 2.0f, 3.0f, 10.0f).forEach { zoom ->
+            assertTrue(
+                "Ultra-Wide must not be pinned at ${zoom}x",
+                !CameraOpticalCalibration.shouldKeepUltraWideDuringContinuousZoom(
+                    currentLensType = LensType.ULTRAWIDE,
+                    targetZoom = zoom,
+                    isContinuousTransition = true
+                )
+            )
+        }
+
+        // A non-continuous action or a different active lens must never force Ultra-Wide retention.
+        assertTrue(
+            !CameraOpticalCalibration.shouldKeepUltraWideDuringContinuousZoom(
+                currentLensType = LensType.ULTRAWIDE,
+                targetZoom = 0.8f,
+                isContinuousTransition = false
+            )
+        )
+        assertTrue(
+            !CameraOpticalCalibration.shouldKeepUltraWideDuringContinuousZoom(
+                currentLensType = LensType.WIDE,
+                targetZoom = 0.8f,
+                isContinuousTransition = true
+            )
+        )
+    }
+
+    @Test
     fun testPresetTapAlwaysSelectsCalibratedPhysicalLens() {
         // 1.0x preset tap MUST ALWAYS select Main Wide
         val lensFor1x = CameraOpticalCalibration.resolveTargetLensType(
