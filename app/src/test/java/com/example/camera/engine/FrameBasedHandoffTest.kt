@@ -26,7 +26,7 @@ class FrameBasedHandoffTest {
     }
 
     @Test
-    fun predictiveTargetFramesAreObservedBeforeTheVisibleHandoffBegins() {
+    fun preparedTargetFramesAreObservedBeforeTheVisibleHandoffBegins() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
 
