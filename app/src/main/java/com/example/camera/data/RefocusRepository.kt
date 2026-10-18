@@ -242,6 +242,15 @@ class RefocusRepository(private val context: Context) {
                     val far = File(bundle, "plane_far.jpg")
                     if (!near.exists() || !mid.exists() || !far.exists()) continue
 
+                    // Older bundles can store an equivalent external_primary URI while the
+                    // current MediaStore query returns external. Replace that alias instead
+                    // of displaying the same Refocus photo twice.
+                    existing.filter { stored ->
+                        stored.bundleDir == bundle.absolutePath &&
+                            stored.photoUri != uri.toString() &&
+                            stored.photoUri.substringBefore('?').substringAfterLast('/') == imageIdText
+                    }.forEach { dao.deleteRefocusPhoto(it.photoUri) }
+
                     val entity = RefocusPhotoEntity(
                         photoUri = uri.toString(),
                         bundleDir = bundle.absolutePath,
