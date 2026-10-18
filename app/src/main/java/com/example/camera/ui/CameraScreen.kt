@@ -197,6 +197,11 @@ fun CameraScreen(
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
+    var isRefocusGalleryOpen by rememberSaveable { mutableStateOf(false) }
+
+    if (isRefocusGalleryOpen) {
+        BackHandler { isRefocusGalleryOpen = false }
+    }
 
     LaunchedEffect(cameraMode) {
         isQuickOptionsOpen = false
@@ -1023,7 +1028,7 @@ fun CameraScreen(
             onFastShutterHoldEnd = { viewModel.onFastShutterHoldEnd() },
             onFlipCameraClick = { viewModel.toggleCameraFacing() },
             onGalleryClick = {
-                viewModel.openGallery(context)
+                isRefocusGalleryOpen = true
             },
             onCinemaModeClick = { viewModel.toggleCinemaSettings() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
@@ -1135,6 +1140,13 @@ fun CameraScreen(
             com.example.camera.pipeline.ui.PipelineBeforeAfterDialog(
                 viewModel = viewModel,
                 onDismissRequest = { viewModel.setBeforeAfterOpen(false) }
+            )
+        }
+
+        if (isRefocusGalleryOpen) {
+            RefocusGalleryScreen(
+                onClose = { isRefocusGalleryOpen = false },
+                modifier = Modifier.fillMaxSize()
             )
         }
 
