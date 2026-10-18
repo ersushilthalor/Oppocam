@@ -124,8 +124,18 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
 
     fun setActiveStreamSource(source: PreviewStreamSource) {
         if (activeStreamSource != source) {
+            val previous = activeStreamSource
             activeStreamSource = source
             pendingSourceSwitchClockSync = true
+            if (isRecording.get() && !isStopping.get()) {
+                handoffFromSource = previous
+                handoffTargetSource = source
+                handoffTargetFrameCount = 0
+            } else {
+                handoffFromSource = null
+                handoffTargetSource = null
+                handoffTargetFrameCount = 0
+            }
         }
     }
 
@@ -138,11 +148,14 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     fun updateUltraWideBufferSize(width: Int, height: Int) {
         val w = maxOf(width, height).coerceAtLeast(320)
         val h = minOf(width, height).coerceAtLeast(240)
+        ultraWideCameraBufferWidth = w
+        ultraWideCameraBufferHeight = h
         try { ultraWideCameraSurfaceTexture?.setDefaultBufferSize(w, h) } catch (_: Throwable) {}
     }
 
     private var uMVPMatrixHandle: Int = -1
     private var uSTMatrixHandle: Int = -1
+    private var uFrameAlphaHandle: Int = -1
     private var uColorMatrixHandle: Int = -1
     private var uColorOffsetHandle: Int = -1
     private var uShadowsHandle: Int = -1
@@ -1338,6 +1351,17 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
     private var activeDeviceRotation: Int = 0
     private var cameraBufferWidth: Int = 1920
     private var cameraBufferHeight: Int = 1080
+    private var ultraWideCameraBufferWidth: Int = 1920
+    private var ultraWideCameraBufferHeight: Int = 1080
+
+    @Volatile private var handoffFromSource: PreviewStreamSource? = null
+    @Volatile private var handoffTargetSource: PreviewStreamSource? = null
+    @Volatile private var handoffTargetFrameCount: Int = 0
+    private val mainRawStMatrix = FloatArray(16)
+    private val ultraWideRawStMatrix = FloatArray(16)
+    private val handoffTexMatrix = FloatArray(16)
+    private val HANDOFF_WARMUP_FRAMES = 2
+    private val HANDOFF_BLEND_FRAMES = 32
 
     @Volatile
     var stabilizationOffsetX: Float = 0f
@@ -1446,6 +1470,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 programId = createGlProgram()
                 uMVPMatrixHandle = GLES20.glGetUniformLocation(programId, "uMVPMatrix")
                 uSTMatrixHandle = GLES20.glGetUniformLocation(programId, "uSTMatrix")
+                uFrameAlphaHandle = GLES20.glGetUniformLocation(programId, "uFrameAlpha")
                 uColorMatrixHandle = GLES20.glGetUniformLocation(programId, "uColorMatrix")
                 uColorOffsetHandle = GLES20.glGetUniformLocation(programId, "uColorOffset")
                 uShadowsHandle = GLES20.glGetUniformLocation(programId, "uShadows")
@@ -1724,10 +1749,29 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         Matrix.multiplyMM(outMatrix, 0, stMatrix, 0, localTexMatrix, 0)
     }
 
+    private fun drawCinemaQuad() {
+        val vb = vertexBuffer
+        val tb = texCoordBuffer
+        if (vb != null && tb != null && aPositionHandle >= 0 && aTextureCoordHandle >= 0) {
+            vb.position(0)
+            GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vb)
+            GLES20.glEnableVertexAttribArray(aPositionHandle)
+            tb.position(0)
+            GLES20.glVertexAttribPointer(aTextureCoordHandle, 2, GLES20.GL_FLOAT, false, 0, tb)
+            GLES20.glEnableVertexAttribArray(aTextureCoordHandle)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            GLES20.glDisableVertexAttribArray(aPositionHandle)
+            GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
+        }
+    }
+
     private fun onCameraFrameAvailable(isUltraWide: Boolean = false) {
         val st = (if (isUltraWide) ultraWideCameraSurfaceTexture else cameraSurfaceTexture) ?: return
         try {
             st.updateTexImage()
+            st.getTransformMatrix(stMatrix)
+            val cachedRawMatrix = if (isUltraWide) ultraWideRawStMatrix else mainRawStMatrix
+            System.arraycopy(stMatrix, 0, cachedRawMatrix, 0, 16)
         } catch (_: Throwable) {
             return
         }
@@ -1735,9 +1779,19 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
         val expectedSource = if (isUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
         if (activeStreamSource != expectedSource) return
 
+        val handoffFrom = handoffFromSource
+        val isFrameHandoffActive = handoffTargetSource == expectedSource && handoffFrom != null && handoffFrom != expectedSource
+        if (isFrameHandoffActive) handoffTargetFrameCount++
+        val handoffBlendProgress = if (!isFrameHandoffActive || handoffTargetFrameCount <= HANDOFF_WARMUP_FRAMES) {
+            0f
+        } else {
+            ((handoffTargetFrameCount - HANDOFF_WARMUP_FRAMES).toFloat() / HANDOFF_BLEND_FRAMES).coerceIn(0f, 1f)
+        }
+        val finishFrameHandoff = isFrameHandoffActive &&
+            handoffTargetFrameCount >= HANDOFF_WARMUP_FRAMES + HANDOFF_BLEND_FRAMES
+
         try {
-            st.getTransformMatrix(stMatrix)
-            val rawTimestampNs = st.timestamp.takeIf { it > 0L } ?: System.nanoTime()
+            val rawTimestampNs = st.timestamp.takeIf { it > 0L } ?: System.nanoTime();
             if (firstFramePtsNs < 0L) {
                 firstFramePtsNs = rawTimestampNs
             }
@@ -1840,27 +1894,61 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             GLES20.glUniform1f(uMicroContrastHandle, cfg.microContrast.coerceIn(-1f, 1f))
             GLES20.glUniform1f(uOutputGammaHandle, cfg.outputGamma.coerceIn(0.5f, 1.5f))
 
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, if (isUltraWide) ultraWideOesTextureId else oesTextureId)
-
             GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lutTextureId)
 
-            val vb = vertexBuffer
-            val tb = texCoordBuffer
-            if (vb != null && tb != null && aPositionHandle >= 0 && aTextureCoordHandle >= 0) {
-                vb.position(0)
-                GLES20.glVertexAttribPointer(aPositionHandle, 3, GLES20.GL_FLOAT, false, 0, vb)
-                GLES20.glEnableVertexAttribArray(aPositionHandle)
+            // Mirror the preview's frame-count handoff in the encoded output. The old source
+            // remains visible during the two warm-up frames, then 32 real incoming frames blend.
+            val fromSource = handoffFrom
+            val canBlendHandoff = isFrameHandoffActive && fromSource != null
+            if (canBlendHandoff) {
+                val oldIsUltraWide = fromSource == PreviewStreamSource.ULTRAWIDE
+                System.arraycopy(
+                    if (oldIsUltraWide) ultraWideRawStMatrix else mainRawStMatrix,
+                    0, stMatrix, 0, 16
+                )
+                computeCameraTexMatrix(
+                    stMatrix = stMatrix,
+                    isFront = isFrontFacing,
+                    sensorOrientation = cameraSensorOrientation,
+                    deviceRotation = activeDeviceRotation,
+                    viewportWidth = currentNormWidth,
+                    viewportHeight = currentNormHeight,
+                    camBufferWidth = if (oldIsUltraWide) ultraWideCameraBufferWidth else cameraBufferWidth,
+                    camBufferHeight = if (oldIsUltraWide) ultraWideCameraBufferHeight else cameraBufferHeight,
+                    outMatrix = handoffTexMatrix
+                )
+                GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, handoffTexMatrix, 0)
+                GLES20.glUniform1f(uFrameAlphaHandle, 1f)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glBindTexture(
+                    GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                    if (oldIsUltraWide) ultraWideOesTextureId else oesTextureId
+                )
+                drawCinemaQuad()
 
-                tb.position(0)
-                GLES20.glVertexAttribPointer(aTextureCoordHandle, 2, GLES20.GL_FLOAT, false, 0, tb)
-                GLES20.glEnableVertexAttribArray(aTextureCoordHandle)
-
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-
-                GLES20.glDisableVertexAttribArray(aPositionHandle)
-                GLES20.glDisableVertexAttribArray(aTextureCoordHandle)
+                if (handoffBlendProgress > 0f) {
+                    GLES20.glEnable(GLES20.GL_BLEND)
+                    GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                    GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
+                    GLES20.glUniform1f(uFrameAlphaHandle, handoffBlendProgress)
+                    GLES20.glBindTexture(
+                        GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                        if (isUltraWide) ultraWideOesTextureId else oesTextureId
+                    )
+                    drawCinemaQuad()
+                    GLES20.glDisable(GLES20.GL_BLEND)
+                }
+                GLES20.glUniform1f(uFrameAlphaHandle, 1f)
+            } else {
+                GLES20.glUniformMatrix4fv(uSTMatrixHandle, 1, false, finalTexMatrix, 0)
+                GLES20.glUniform1f(uFrameAlphaHandle, 1f)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glBindTexture(
+                    GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                    if (isUltraWide) ultraWideOesTextureId else oesTextureId
+                )
+                drawCinemaQuad()
             }
 
             val display = eglDisplay
@@ -1871,6 +1959,11 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                 if (swapped) {
                     encodedVideoFramesCount.incrementAndGet()
                     CameraPerformanceMonitor.onRecordingFrame()
+                }
+                if (finishFrameHandoff) {
+                    handoffFromSource = null
+                    handoffTargetSource = null
+                    handoffTargetFrameCount = 0
                 }
             }
         } catch (t: Throwable) {
@@ -1958,6 +2051,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
             precision highp float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
+            uniform float uFrameAlpha;
             uniform sampler2D sLutTexture;
             uniform mat4 uColorMatrix;
             uniform vec4 uColorOffset;
@@ -2274,7 +2368,7 @@ class CinemaSoftwareRecordingEngine(private val context: Context) {
                     c = pow(clamp(c, 0.0, 1.0), vec3(uOutputGamma));
                 }
 
-                gl_FragColor = vec4(c, src.a);
+                gl_FragColor = vec4(c, src.a * uFrameAlpha);
             }
         """.trimIndent()
 
