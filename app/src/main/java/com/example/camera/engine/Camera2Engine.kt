@@ -6715,7 +6715,7 @@ class Camera2Engine(private val context: Context) {
                         val midFile = tempPlaneFiles.getOrNull(bestMidIndex)?.takeIf { it.exists() && it.length() > 0 }
                             ?: validFiles.first()
                         val midBytes = midFile.readBytes()
-                        finalUri = saveJpegBytesToMediaStore(midBytes, filePrefix = "REFOCUS")
+                        finalUri = saveJpegBytesToMediaStore(midBytes, filePrefix = "REFOCUS${frameCount}F")
                         if (finalUri != null) {
                             refocusEngine.processAndPersistPlanes(
                                 photoUri = finalUri,
