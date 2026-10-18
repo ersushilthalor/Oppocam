@@ -1146,6 +1146,10 @@ fun CameraScreen(
         if (isRefocusGalleryOpen) {
             RefocusGalleryScreen(
                 onClose = { isRefocusGalleryOpen = false },
+                onOpenDeviceGallery = {
+                    isRefocusGalleryOpen = false
+                    viewModel.openGallery(context)
+                },
                 modifier = Modifier.fillMaxSize()
             )
         }
