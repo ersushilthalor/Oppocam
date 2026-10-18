@@ -12,10 +12,7 @@ enum class UiTemplateType(
     val accentHex: String
 ) {
     OPPO("OPPO Camera", "Screenshot-matched OPPO layout with an orange shutter, dark selected-mode pill and only supported modes", "#FF8A00"),
-    STOCK_PIXEL("Arnova GCam 8.7", "Google Camera 8.7-inspired layout with a clean mode strip, minimal controls and zoom selector", "#FFFFFF"),
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
-    IPHONE("iPhone (iOS)", "Screenshot-matched iPhone Camera layout with a silver-ring shutter and liquid-glass mode pill", "#FFD54F"),
-    VIVO("Vivo OriginOS", "Screenshot-matched Vivo camera layout with yellow selected mode, focal-length labels and concentric shutter rings", "#FFD54F"),
     CUSTOM("Custom UI", "Completely personalized layout, spacing, typography & controls", "#64B5F6")
 }
 
@@ -143,7 +140,6 @@ enum class TopControlItem(val id: String, val label: String) {
     LOG("log", "Log Profiles (Pro Video)"),
     LUT("lut", "Cinematic LUTs (Pro Video)"),
     PRO_VIDEO_SETTINGS("pro_video_settings", "Fine Tuning Controls"),
-    EV("ev", "Exposure Compensation (EV)"),
     VIDEO_ADJUSTMENTS("video_adjustments", "Video Adjustments"),
     STABILIZATION("stabilization", "Video Stabilization (OFF/EIS/EIS+)"),
     PIPELINE("pipeline", "Custom Pipeline"),
@@ -206,7 +202,7 @@ data class ModeLayoutConfig(
     fun getIconPosition(item: TopControlItem): TopIconPosition {
         return topIconPositions[item] ?: when (item) {
             TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
-            TopControlItem.LOG, TopControlItem.LUT, TopControlItem.EV, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
+            TopControlItem.LOG, TopControlItem.LUT, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
             TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.PIPELINE -> TopIconPosition.RIGHT
         }
     }
@@ -514,40 +510,16 @@ data class UiCustomizationState(
                     }
                 }
 
-                // Migrate an untouched legacy Samsung default to OPPO. Preserve explicit
-                // per-mode layouts and any globally customized template configuration.
+                // Migrate legacy selections or removed templates cleanly to OPPO
                 val isUnmodifiedLegacySamsungDefault =
                     template == UiTemplateType.SAMSUNG &&
                     modeMap.isEmpty() &&
                     gConfig.toJson().toString() ==
                         CameraUiTemplates.getTemplateConfig(UiTemplateType.SAMSUNG).toJson().toString()
 
-                // Upgrade an untouched Vivo preset saved before the focal-length layout was introduced.
-                // Only migrate an exact legacy preset match, preserving any user-customized configuration.
-                val legacyVivoDefault = CameraUiTemplates.getTemplateConfig(UiTemplateType.VIVO).copy(
-                    visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE),
-                    useFocalLengthZoomLabels = false,
-                    modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
-                    modeSelectorStyle = ModeSelectorStyle.UNDERLINE,
-                    accentColorHex = "#FF7043",
-                    modeTextSizeSp = 14.0f,
-                    bottomPaddingDp = 14,
-                    textCaseOption = TextCaseOption.UPPERCASE,
-                    letterSpacingSp = 0.5f,
-                    textShadowOption = TextShadowOption.SUBTLE_SHADOW,
-                    iconStyleOption = IconStyleOption.ROUNDED_MATERIAL,
-                    iconContainerOpacity = 0.35f,
-                    iconStrokeWidthDp = 1.8f
-                )
-                val isUnmodifiedLegacyVivoDefault =
-                    template == UiTemplateType.VIVO &&
-                    modeMap.isEmpty() &&
-                    gConfig.toJson().toString() == legacyVivoDefault.toJson().toString()
-
-                // These templates are retired from the UI. Migrate previously saved selections
-                // to OPPO so the removed template cannot reappear after reopening settings.
-                val isRemovedTemplate = template == UiTemplateType.STOCK_PIXEL ||
-                    template == UiTemplateType.IPHONE || template == UiTemplateType.VIVO
+                val rawTemplateName = root.optString("selectedTemplate", "")
+                val isRemovedTemplate = rawTemplateName == "STOCK_PIXEL" ||
+                    rawTemplateName == "IPHONE" || rawTemplateName == "VIVO"
                 val resolvedTemplate = if (isUnmodifiedLegacySamsungDefault || isRemovedTemplate) {
                     UiTemplateType.OPPO
                 } else template
@@ -663,70 +635,6 @@ object CameraUiTemplates {
                 iconContainerOpacity = 0.35f,
                 iconStrokeWidthDp = 1.8f
             )
-            UiTemplateType.STOCK_PIXEL -> ModeLayoutConfig(
-                visibleModes = listOf(
-                    CameraMode.PHOTO,
-                    CameraMode.VIDEO,
-                    CameraMode.CINEMA,
-                    CameraMode.AI_SUBJECT_TRACKING
-                ),
-                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
-                shutterStyle = ShutterStyle.PIXEL_SOLID,
-                shutterSizeDp = 80,
-                shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 52,
-                galleryThumbSizeDp = 52,
-                topControlsIconSizeDp = 18,
-                topControlsSpacingDp = 16,
-                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#FFFFFF",
-                modeTextSizeSp = 12.5f,
-                modeFontFamily = FontFamilyOption.DEFAULT,
-                topPaddingDp = 8,
-                bottomPaddingDp = 12,
-                showZoomCapsule = true,
-                zoomCapsuleScale = 0.96f,
-                zoomCapsuleVerticalOffsetDp = 0,
-                textColorHex = "#FFFFFF",
-                fontWeightOption = FontWeightOption.SEMI_BOLD,
-                textCaseOption = TextCaseOption.TITLE_CASE,
-                letterSpacingSp = 0.2f,
-                textShadowOption = TextShadowOption.NONE,
-                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
-                iconColorHex = "#FFFFFF",
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
-                iconContainerOpacity = 0.0f,
-                iconStrokeWidthDp = 1.6f
-            )
-            UiTemplateType.IPHONE -> ModeLayoutConfig(
-                // Match the reference order: Video, Photo, then the app's existing More/active mode.
-                visibleModes = listOf(CameraMode.VIDEO, CameraMode.PHOTO, CameraMode.MORE),
-                modeSelectorPosition = ModeSelectorPosition.BELOW_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.IPHONE_LIQUID_GLASS,
-                shutterStyle = ShutterStyle.IPHONE_RING,
-                shutterSizeDp = 78,
-                shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 52,
-                galleryThumbSizeDp = 52,
-                topControlsIconSizeDp = 18,
-                topControlsSpacingDp = 14,
-                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#FFD54F",
-                modeTextSizeSp = 13.0f,
-                modeFontFamily = FontFamilyOption.DEFAULT,
-                topPaddingDp = 10,
-                bottomPaddingDp = 12,
-                textColorHex = "#FFFFFF",
-                fontWeightOption = FontWeightOption.SEMI_BOLD,
-                textCaseOption = TextCaseOption.UPPERCASE,
-                letterSpacingSp = 0.0f,
-                textShadowOption = TextShadowOption.NONE,
-                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
-                iconColorHex = "#FFFFFF",
-                iconContainerOpacity = 0.0f,
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE
-            )
             UiTemplateType.SAMSUNG -> ModeLayoutConfig(
                 // Samsung template tuned to the supplied reference. Keep the app's existing
                 // top-control configuration/order untouched; only the lower camera controls change.
@@ -752,35 +660,6 @@ object CameraUiTemplates {
                 letterSpacingSp = 0.2f,
                 textShadowOption = TextShadowOption.NONE,
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE
-            )
-            UiTemplateType.VIVO -> ModeLayoutConfig(
-                visibleModes = listOf(CameraMode.VIDEO, CameraMode.PHOTO, CameraMode.MORE),
-                useFocalLengthZoomLabels = true,
-                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
-                modeSelectorStyle = ModeSelectorStyle.MINIMAL_TEXT,
-                shutterStyle = ShutterStyle.VIVO_GIMBAL,
-                shutterSizeDp = 84,
-                shutterHorizontalOffsetDp = 0,
-                flipButtonSizeDp = 54,
-                galleryThumbSizeDp = 54,
-                topControlsIconSizeDp = 20,
-                topControlsSpacingDp = 16,
-                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
-                accentColorHex = "#FFD54F",
-                modeTextSizeSp = 14.5f,
-                modeFontFamily = FontFamilyOption.DEFAULT,
-                topPaddingDp = 12,
-                bottomPaddingDp = 12,
-                textColorHex = "#FFFFFF",
-                fontWeightOption = FontWeightOption.SEMI_BOLD,
-                textCaseOption = TextCaseOption.TITLE_CASE,
-                letterSpacingSp = 0.0f,
-                textShadowOption = TextShadowOption.NONE,
-                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
-                iconColorHex = "#FFFFFF",
-                iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
-                iconContainerOpacity = 0.0f,
-                iconStrokeWidthDp = 1.6f
             )
             UiTemplateType.CUSTOM -> ModeLayoutConfig(
                 modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,

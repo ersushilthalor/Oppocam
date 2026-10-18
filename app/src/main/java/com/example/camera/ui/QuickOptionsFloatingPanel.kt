@@ -277,27 +277,11 @@ fun QuickOptionsFloatingPanel(
 
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Row 2: Exposure EV, Fine Tuning, Audio, Settings
+                            // Row 2: Fine Tuning, Audio, Settings
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                val evText = when {
-                                    exposureCompensation == 0 -> "0.0"
-                                    exposureCompensation > 0 -> String.format(java.util.Locale.US, "+%.1f", exposureCompensation * evStepSize)
-                                    else -> String.format(java.util.Locale.US, "%.1f", exposureCompensation * evStepSize)
-                                }
-                                val isEvActive = exposureCompensation != 0 || isEvOpen
-                                QuickOptionCircleButton(
-                                    icon = Icons.Filled.Exposure,
-                                    label = "Exposure EV",
-                                    statusText = evText,
-                                    isActive = isEvActive,
-                                    activeColor = accentColor,
-                                    onClick = onEvClick,
-                                    testTag = "panel_cinema_ev_button",
-                                    modifier = Modifier.weight(1f)
-                                )
 
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.Tune,

@@ -661,48 +661,7 @@ fun TopControlBar(
 
 
 
-        val isEvActive = exposureCompensation != 0
-        val evButton = @Composable {
-            val evText = when {
-                exposureCompensation == 0 -> "EV"
-                exposureCompensation > 0 -> String.format(java.util.Locale.US, "+%.1f", exposureCompensation * evStepSize)
-                else -> String.format(java.util.Locale.US, "%.1f", exposureCompensation * evStepSize)
-            }
-            Box(
-                modifier = Modifier
-                    .height(34.dp)
-                    .topControlStyle(
-                        layoutConfig,
-                        activeColor = if (isEvOpen || isEvActive) accentColor else null,
-                        isPill = true
-                    )
-                    .clickable { onEvClick() }
-                    .padding(horizontal = 9.dp)
-                    .testTag("top_bar_ev_button"),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Exposure,
-                        contentDescription = "Exposure Compensation (EV)",
-                        tint = if (isEvOpen || isEvActive) accentColor else Color.White.copy(alpha = 0.9f),
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        text = evText,
-                        color = if (isEvOpen || isEvActive) accentColor else Color.White.copy(alpha = 0.95f),
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                }
-            }
-        }
+
 
         val sixDotMenuButton = @Composable {
             val sixDotOrange = Color(0xFFFF7A00)
@@ -744,7 +703,6 @@ fun TopControlBar(
                     TopControlItem.LOG -> logButton()
                     TopControlItem.LUT -> lutButton()
                     TopControlItem.PRO_VIDEO_SETTINGS -> cinemaSettingsQuickButton()
-                    TopControlItem.EV -> evButton()
                     TopControlItem.PIPELINE -> pipelineButton()
                     TopControlItem.SIX_DOT_MENU -> sixDotMenuButton()
                     TopControlItem.SETTINGS -> settingsButton()

@@ -36,7 +36,6 @@ import kotlin.math.roundToInt
 
 enum class ProActiveSlider {
     NONE,
-    EV,
     ISO,
     SHUTTER,
     WB,
@@ -134,10 +133,6 @@ fun ManualProControlBar(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val (sliderTitle, sliderValue) = when (activeSlider) {
-                                ProActiveSlider.EV -> {
-                                    val evVal = exposureCompensation * capabilities.exposureCompensationStep
-                                    "EXPOSURE COMPENSATION" to (if (evVal >= 0) "+%.2f EV".format(evVal) else "%.2f EV".format(evVal))
-                                }
                                 ProActiveSlider.ISO -> "ISO SENSITIVITY" to (manualIso?.toString() ?: "AUTO")
                                 ProActiveSlider.SHUTTER -> "SHUTTER SPEED" to formatShutterSpeed(manualShutterSpeedNs)
                                 ProActiveSlider.WB -> "WHITE BALANCE" to whiteBalance.title
@@ -284,20 +279,6 @@ fun ManualProControlBar(
                             contentAlignment = Alignment.Center
                         ) {
                             when (activeSlider) {
-                                ProActiveSlider.EV -> {
-                                    Slider(
-                                        value = exposureCompensation.toFloat(),
-                                        onValueChange = { onExposureChange(it.roundToInt()) },
-                                        valueRange = capabilities.minExposureCompensation.toFloat()..capabilities.maxExposureCompensation.toFloat(),
-                                        steps = maxOf(0, (capabilities.maxExposureCompensation - capabilities.minExposureCompensation) - 1),
-                                        colors = SliderDefaults.colors(
-                                            thumbColor = Color(0xFFFFD54F),
-                                            activeTrackColor = Color(0xFFFFD54F),
-                                            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
-                                        ),
-                                        modifier = Modifier.padding(horizontal = 4.dp)
-                                    )
-                                }
                                 ProActiveSlider.ISO -> {
                                     val isoValues = listOf(null, 50, 100, 200, 400, 800, 1600, 3200, 6400)
                                         .filter { it == null || (it in capabilities.minIso..capabilities.maxIso) }
@@ -627,20 +608,6 @@ fun ManualProControlBar(
                         tag = "pro_circle_iso"
                     )
 
-                    // EV
-                    val evVal = exposureCompensation * capabilities.exposureCompensationStep
-                    val evText = if (evVal >= 0) "+%.1f".format(evVal) else "%.1f".format(evVal)
-                    CompactCircularControl(
-                        title = "EV",
-                        value = evText,
-                        isSelected = activeSlider == ProActiveSlider.EV,
-                        isCustom = exposureCompensation != 0,
-                        onClick = {
-                            activeSlider = if (activeSlider == ProActiveSlider.EV) ProActiveSlider.NONE else ProActiveSlider.EV
-                            onTabSelected(ProControlTab.EXPOSURE)
-                        },
-                        tag = "pro_circle_ev"
-                    )
 
                     // ADJ (Tuning)
                     val isAnyAdjModified = proSaturation != 0f || proContrast != 1.0f || proHighlights != 0f ||

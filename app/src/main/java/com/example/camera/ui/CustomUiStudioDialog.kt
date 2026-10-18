@@ -230,10 +230,8 @@ fun CustomUiStudioDialog(
                         Spacer(modifier = Modifier.height(6.dp))
                         val studioQuickTemplates = remember {
                             listOf(
-                                UiTemplateType.STOCK_PIXEL to "Pixel",
+                                UiTemplateType.OPPO to "OPPO",
                                 UiTemplateType.SAMSUNG to "One UI",
-                                UiTemplateType.IPHONE to "iPhone",
-                                UiTemplateType.VIVO to "Vivo",
                             )
                         }
                         studioQuickTemplates.chunked(4).forEach { rowTemplates ->
@@ -2064,10 +2062,8 @@ private fun SavedPresetsTabContent(
             subtitle = "Quickly re-align your customization with an official camera style"
         ) {
             val baseTemplates = listOf(
-                UiTemplateType.STOCK_PIXEL,
+                UiTemplateType.OPPO,
                 UiTemplateType.SAMSUNG,
-                UiTemplateType.IPHONE,
-                UiTemplateType.VIVO,
             )
 
             baseTemplates.chunked(2).forEach { rowItems ->

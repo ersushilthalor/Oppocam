@@ -124,10 +124,7 @@ fun CameraUiCustomizationView(
                     ) {
                         val icon = when (template) {
                             UiTemplateType.OPPO -> Icons.Outlined.CameraAlt
-                            UiTemplateType.STOCK_PIXEL -> Icons.Outlined.CameraAlt
-                            UiTemplateType.IPHONE -> Icons.Outlined.PhoneIphone
                             UiTemplateType.SAMSUNG -> Icons.Outlined.PhoneAndroid
-                            UiTemplateType.VIVO -> Icons.Outlined.Camera
                             UiTemplateType.CUSTOM -> Icons.Outlined.Tune
                         }
                         Icon(
@@ -638,7 +635,6 @@ fun LivePreviewCanvas(
                     TopControlItem.LOG -> Icons.Outlined.Videocam
                     TopControlItem.LUT -> Icons.Outlined.Palette
                     TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
-                    TopControlItem.EV -> Icons.Filled.Exposure
                     TopControlItem.VIDEO_ADJUSTMENTS -> Icons.Outlined.Tune
                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                     TopControlItem.PIPELINE -> Icons.Outlined.Tune
@@ -1753,7 +1749,6 @@ fun TopBarControlsEditor(
                                             TopControlItem.LOG -> Icons.Outlined.Videocam
                                             TopControlItem.LUT -> Icons.Outlined.Palette
                                             TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
-                                            TopControlItem.EV -> Icons.Filled.Exposure
                                             TopControlItem.SETTINGS -> Icons.Outlined.Settings
                                             TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                             else -> Icons.Outlined.Tune
@@ -1799,7 +1794,6 @@ fun TopBarControlsEditor(
                                                     TopControlItem.LOG -> Icons.Outlined.Videocam
                                                     TopControlItem.LUT -> Icons.Outlined.Palette
                                                     TopControlItem.PRO_VIDEO_SETTINGS -> Icons.Outlined.Movie
-                                                    TopControlItem.EV -> Icons.Filled.Exposure
                                                     TopControlItem.SETTINGS -> Icons.Outlined.Settings
                                                     TopControlItem.STABILIZATION -> Icons.Outlined.VideoStable
                                                     else -> Icons.Outlined.Tune

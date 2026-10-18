@@ -196,7 +196,6 @@ fun CameraScreen(
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
-    val isEvControlOpen by viewModel.isEvControlOpen.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(cameraMode) {
@@ -206,12 +205,6 @@ fun CameraScreen(
     if (isQuickOptionsOpen) {
         BackHandler {
             isQuickOptionsOpen = false
-        }
-    }
-
-    if (isEvControlOpen) {
-        BackHandler {
-            viewModel.setEvControlOpen(false)
         }
     }
 
@@ -333,7 +326,7 @@ fun CameraScreen(
             isVideoSettingsPanelOpen ||
             isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
-            isEvControlOpen || isQuickOptionsOpen
+            isQuickOptionsOpen
 
     LaunchedEffect(isAnyWindowOpen) {
         com.example.camera.ui.components.BackdropBlurManager.isWindowActive = isAnyWindowOpen
@@ -570,7 +563,7 @@ fun CameraScreen(
             onCinemaEvChange = { ev ->
                 viewModel.updateCinemaConfig(cinemaConfig.copy(exposureCompensation = ev))
             },
-            isEvOpen = isEvControlOpen,
+            isEvOpen = false,
             onEvClick = { viewModel.toggleEvControlOpen() },
             exposureCompensation = exposureCompensation,
             evStepSize = capabilities.exposureCompensationStep,
@@ -601,8 +594,7 @@ fun CameraScreen(
         val isAnyFloatingOverlayOpen = isQuickOptionsOpen ||
                 (isVideoSettingsPanelOpen && (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA)) ||
                 (isLogProfileWindowOpen && cameraMode == CameraMode.CINEMA) ||
-                (isLutWindowOpen && cameraMode == CameraMode.CINEMA) ||
-                isEvControlOpen
+                (isLutWindowOpen && cameraMode == CameraMode.CINEMA)
         if (isAnyFloatingOverlayOpen) {
             Box(
                 modifier = Modifier
@@ -615,7 +607,6 @@ fun CameraScreen(
                         viewModel.setVideoSettingsPanelOpen(false)
                         viewModel.setLogProfileWindowOpen(false)
                         viewModel.setLutWindowOpen(false)
-                        viewModel.setEvControlOpen(false)
                     }
             )
         }
@@ -636,7 +627,7 @@ fun CameraScreen(
             isAudioEnabled = isAudioEnabled,
             hasActiveVideoAdjustments = !videoAdjustments.isDefault,
             cinemaConfig = cinemaConfig,
-            isEvOpen = isEvControlOpen,
+            isEvOpen = false,
             exposureCompensation = exposureCompensation,
             evStepSize = capabilities.exposureCompensationStep,
             onFlashClick = { viewModel.cycleFlashMode() },
@@ -687,42 +678,6 @@ fun CameraScreen(
                 .padding(top = 58.dp)
         )
 
-        // 2a. Transparent Floating EV Control Window (Video Mode & Cinema Mode)
-        AnimatedVisibility(
-            visible = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) && isEvControlOpen,
-            enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(180)) + slideInVertically(
-                animationSpec = androidx.compose.animation.core.spring(
-                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-                ),
-                initialOffsetY = { -it / 2 }
-            ),
-            exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(150)) + slideOutVertically(
-                animationSpec = androidx.compose.animation.core.tween(150),
-                targetOffsetY = { -it / 2 }
-            ),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 62.dp)
-        ) {
-            com.example.camera.ui.components.FloatingEvControlWindow(
-                currentEvIndex = exposureCompensation,
-                minEvIndex = capabilities.minExposureCompensation,
-                maxEvIndex = capabilities.maxExposureCompensation,
-                evStepSize = capabilities.exposureCompensationStep,
-                accentColor = activeLayoutConfig.getComposeAccentColor(),
-                onEvIndexChange = { newEv ->
-                    viewModel.setExposureCompensation(newEv)
-                },
-                onReset = {
-                    viewModel.resetExposureCompensation()
-                },
-                onDismiss = {
-                    viewModel.setEvControlOpen(false)
-                }
-            )
-        }
 
         // 2b. Floating Frosted Video Settings Panel (Resolution & Frame Rate)
         if (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) {
@@ -968,17 +923,8 @@ fun CameraScreen(
             )
         }
 
-        // 3e. Dedicated More Modes Drawer (Excluded from Pixel UI Template)
-        val isPixelTemplate = uiCustomizationState.selectedTemplate == UiTemplateType.STOCK_PIXEL ||
-                activeLayoutConfig.modeSelectorStyle == ModeSelectorStyle.PIXEL_PILL
-        LaunchedEffect(isPixelTemplate, cameraMode, isMoreModesOpen) {
-            if (isPixelTemplate) {
-                if (isMoreModesOpen) viewModel.setMoreModesOpen(false)
-                if (cameraMode == CameraMode.MORE) viewModel.setCameraMode(CameraMode.PHOTO)
-            }
-        }
-        if (!isPixelTemplate) {
-            MoreModesDrawer(
+        // 3e. Dedicated More Modes Drawer
+        MoreModesDrawer(
                 isOpen = isMoreModesOpen,
                 onDismissRequest = {
                     viewModel.setMoreModesOpen(false)
@@ -1010,7 +956,6 @@ fun CameraScreen(
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 140.dp)
             )
-        }
 
         // 4. Toast Notification Overlay
         AnimatedVisibility(
@@ -1091,7 +1036,7 @@ fun CameraScreen(
             },
             selectedPhotoFilter = selectedPhotoFilter,
             onPhotoFilterClick = { viewModel.togglePhotoFilterBar() },
-            isEvOpen = isEvControlOpen,
+            isEvOpen = false,
             onEvClick = { viewModel.toggleEvControlOpen() },
             exposureCompensation = exposureCompensation,
             evStepSize = capabilities.exposureCompensationStep,
