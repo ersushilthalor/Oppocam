@@ -57,6 +57,7 @@ import kotlin.math.roundToInt
 @Composable
 fun BottomControlBar(
     cameraMode: CameraMode,
+    isOppoVideoTemplate: Boolean = false,
     currentZoom: Float = 1.0f,
     displayedLenses: List<LensInfo> = emptyList(),
     selectedLens: LensInfo? = null,
@@ -226,7 +227,11 @@ fun BottomControlBar(
                     onShutterAreaHeightMeasured(heightDp)
                 }
                 .then(
-                    if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL ||
+                    if (isOppoVideoTemplate) {
+                        // The OPPO video preview continues behind the shutter row and ends
+                        // before the mode carousel; transparent here reveals only that preview.
+                        Modifier.background(Color.Transparent)
+                    } else if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL ||
                         layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS ||
                         layoutConfig.useFocalLengthZoomLabels) {
                         Modifier.background(Color.Black)
