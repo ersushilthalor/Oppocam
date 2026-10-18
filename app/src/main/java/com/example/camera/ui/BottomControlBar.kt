@@ -57,7 +57,6 @@ import kotlin.math.roundToInt
 @Composable
 fun BottomControlBar(
     cameraMode: CameraMode,
-    isOppoVideoTemplate: Boolean = false,
     currentZoom: Float = 1.0f,
     displayedLenses: List<LensInfo> = emptyList(),
     selectedLens: LensInfo? = null,
@@ -97,7 +96,8 @@ fun BottomControlBar(
     evStepSize: Float = 0.333f,
     onShutterAreaHeightMeasured: (Dp) -> Unit = {},
     layoutConfig: ModeLayoutConfig = ModeLayoutConfig(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isOppoVideoTemplate: Boolean = false
 ) {
     val accentColor = layoutConfig.getComposeAccentColor()
     val fontFamily = layoutConfig.modeFontFamily.toComposeFontFamily()
