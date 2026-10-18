@@ -1,6 +1,9 @@
 package com.example.camera.data
 
 import android.content.Context
+import android.content.ContentUris
+import android.provider.MediaStore
+import android.media.ExifInterface
 import com.example.camera.data.db.AppDatabase
 import com.example.camera.data.db.RefocusPhotoEntity
 import kotlinx.coroutines.Dispatchers
@@ -159,6 +162,108 @@ class RefocusRepository(private val context: Context) {
             } catch (_: Exception) {
                 // Ignore incomplete/corrupt bundles and keep indexing the rest.
             }
+        }
+    }
+
+    /**
+     * Matches Refocus JPEGs in the device media library to their companion focus-plane bundles.
+     * New captures carry both a REFOCUS_ filename and an EXIF marker. Legacy captures without
+     * a marker are recovered by matching their MediaStore image ID to the URI in bundle metadata.
+     */
+    suspend fun discoverDeviceRefocusPhotos() = withContext(Dispatchers.IO) {
+        try {
+            val bundles = getRefocusStorageDir().listFiles { file -> file.isDirectory }
+                ?.sortedByDescending { it.lastModified() }
+                .orEmpty()
+            val metadataByBundle = bundles.mapNotNull { dir ->
+                runCatching {
+                    val metadataFile = File(dir, "metadata.json")
+                    if (!metadataFile.exists()) return@runCatching null
+                    dir to org.json.JSONObject(metadataFile.readText())
+                }.getOrNull()
+            }
+            val existing = dao.getAllRefocusPhotosList()
+            val resolver = context.contentResolver
+            val columns = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.DATE_TAKEN,
+                MediaStore.Images.Media.WIDTH,
+                MediaStore.Images.Media.HEIGHT
+            )
+            resolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                columns,
+                null,
+                null,
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+                val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
+                val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+
+                while (cursor.moveToNext()) {
+                    val imageId = cursor.getLong(idColumn)
+                    val displayName = cursor.getString(nameColumn).orEmpty()
+                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, imageId)
+                    val imageIdText = imageId.toString()
+                    val legacyMatch = metadataByBundle.firstOrNull { (_, json) ->
+                        val storedUri = json.optString("photoUri", "")
+                        storedUri.substringBefore('?').substringAfterLast('/') == imageIdText
+                    }
+                    // Avoid decoding EXIF for every ordinary photo. New Refocus captures use a
+                    // dedicated filename; old captures are inspected only when a bundle URI matches.
+                    if (!displayName.startsWith("REFOCUS_", ignoreCase = true) && legacyMatch == null) {
+                        continue
+                    }
+
+                    val marker = runCatching {
+                        resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                            val exif = ExifInterface(descriptor.fileDescriptor)
+                            exif.getAttribute(ExifInterface.TAG_USER_COMMENT).orEmpty()
+                                .ifBlank { exif.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION).orEmpty() }
+                                .substringBefore(";")
+                        }.orEmpty()
+                    }.getOrDefault("")
+
+                    val markedBundleId = marker.takeIf { it.startsWith("OPPOCAM_REFOCUS_V1:") }
+                        ?.substringAfter("OPPOCAM_REFOCUS_V1:")
+                    val matched = metadataByBundle.firstOrNull { (dir, json) ->
+                        (markedBundleId != null && (dir.name == markedBundleId ||
+                            json.optString("refocusId", "") == markedBundleId)) ||
+                            (legacyMatch != null && dir.absolutePath == legacyMatch.first.absolutePath)
+                    } ?: continue
+
+                    val (bundle, json) = matched
+                    val near = File(bundle, "plane_near.jpg")
+                    val mid = File(bundle, "plane_mid.jpg")
+                    val far = File(bundle, "plane_far.jpg")
+                    if (!near.exists() || !mid.exists() || !far.exists()) continue
+
+                    val entity = RefocusPhotoEntity(
+                        photoUri = uri.toString(),
+                        bundleDir = bundle.absolutePath,
+                        timestamp = json.optLong("timestamp", cursor.getLong(dateColumn).takeIf { it > 0L } ?: bundle.lastModified()),
+                        nearPlanePath = near.absolutePath,
+                        midPlanePath = mid.absolutePath,
+                        farPlanePath = far.absolutePath,
+                        depthMapPath = File(bundle, "depth_map.png").takeIf { it.exists() }?.absolutePath.orEmpty(),
+                        planeCount = json.optInt("planeCount", 3).coerceIn(3, 20),
+                        nearDiopters = json.optDouble("nearDiopters", 0.0).toFloat(),
+                        midDiopters = json.optDouble("midDiopters", 0.0).toFloat(),
+                        farDiopters = json.optDouble("farDiopters", 0.0).toFloat(),
+                        width = json.optInt("width", cursor.getInt(widthColumn)),
+                        height = json.optInt("height", cursor.getInt(heightColumn))
+                    )
+                    dao.insertRefocusPhoto(entity)
+                }
+            }
+        } catch (e: SecurityException) {
+            android.util.Log.w("RefocusRepository", "Media access permission not granted; internal Refocus bundles can still be shown", e)
+        } catch (e: Exception) {
+            android.util.Log.w("RefocusRepository", "Device Refocus scan failed", e)
         }
     }
 
