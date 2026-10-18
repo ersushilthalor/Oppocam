@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
 
 /**
  * Repository managing persistent Refocus photo packages and database records.
@@ -209,15 +210,22 @@ class RefocusRepository(private val context: Context) {
                     val displayName = cursor.getString(nameColumn).orEmpty()
                     val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, imageId)
                     val imageIdText = imageId.toString()
+                    val mediaUri = uri.toString()
+                    val cleanDisplayName = displayName.substringAfterLast('/').substringAfterLast('\\\\')
                     val legacyMatch = metadataByBundle.firstOrNull { (_, json) ->
-                        val storedUri = json.optString("photoUri", "")
-                        storedUri.substringBefore('?').substringAfterLast('/') == imageIdText
+                        val storedUri = json.optString("photoUri", "").substringBefore('?').trimEnd('/')
+                        val storedTail = storedUri.substringAfterLast('/')
+                        // MediaStore can change a URI from "external" to "external_primary"
+                        // after restore/migration. Match the numeric image ID, exact URI, or a
+                        // stored file URI/name instead of relying on one provider's URI format.
+                        storedUri == mediaUri ||
+                            storedTail == imageIdText ||
+                            (storedTail.isNotBlank() && storedTail.equals(cleanDisplayName, ignoreCase = true))
                     }
-                    // Avoid decoding EXIF for every ordinary photo. New Refocus captures use a
-                    // dedicated filename; old captures are inspected only when a bundle URI matches.
-                    if (!displayName.startsWith("REFOCUS_", ignoreCase = true) && legacyMatch == null) {
-                        continue
-                    }
+                    val looksLikeRefocus = displayName.startsWith("REFOCUS", ignoreCase = true)
+                    // Frame-count filenames such as REFOCUS3F_... must be recognized too.
+                    // Only inspect EXIF for likely Refocus files or images with a companion bundle.
+                    if (!looksLikeRefocus && legacyMatch == null) continue
 
                     val marker = runCatching {
                         resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
@@ -230,11 +238,26 @@ class RefocusRepository(private val context: Context) {
 
                     val markedBundleId = marker.takeIf { it.startsWith("OPPOCAM_REFOCUS_V1:") }
                         ?.substringAfter("OPPOCAM_REFOCUS_V1:")
-                    val matched = metadataByBundle.firstOrNull { (dir, json) ->
-                        (markedBundleId != null && (dir.name == markedBundleId ||
-                            json.optString("refocusId", "") == markedBundleId)) ||
-                            (legacyMatch != null && dir.absolutePath == legacyMatch.first.absolutePath)
-                    } ?: continue
+                    val markedMatch = metadataByBundle.firstOrNull { (dir, json) ->
+                        markedBundleId != null && (dir.name == markedBundleId ||
+                            json.optString("refocusId", "") == markedBundleId)
+                    }
+                    val imageDate = cursor.getLong(dateColumn).takeIf { it > 0L } ?: 0L
+                    // Last-resort recovery for older files whose MediaStore URI changed during
+                    // device restore or gallery migration: pair a REFOCUS-named JPEG with the
+                    // closest bundle timestamp, but only inside a narrow two-minute window.
+                    val timestampMatch = if (looksLikeRefocus && imageDate > 0L) {
+                        metadataByBundle
+                            .filter { (_, json) ->
+                                val stamp = json.optLong("timestamp", 0L)
+                                stamp > 0L && abs(stamp - imageDate) <= 120_000L
+                            }
+                            .minByOrNull { (_, json) -> abs(json.optLong("timestamp", 0L) - imageDate) }
+                    } else null
+                    val matched = markedMatch
+                        ?: legacyMatch
+                        ?: timestampMatch
+                        ?: continue
 
                     val (bundle, json) = matched
                     val near = File(bundle, "plane_near.jpg")
