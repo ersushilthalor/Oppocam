@@ -1483,9 +1483,35 @@ class CameraPreferences(context: Context) {
         }
     }
 
-(profile,legacy)=>`    private fun readVideoAdjustments(prefix: String): com.example.camera.model.VideoAdjustments {
+    private fun readVideoAdjustments(prefix: String): com.example.camera.model.VideoAdjustments {
         return com.example.camera.model.VideoAdjustments(
-${fields.map(([prop,key,def])=>`            ${prop} = prefs.getFloat(prefix + "${key}", ${def})`).join(",\n")}
+            tonality = prefs.getFloat(prefix + "tonality", 0f),
+            saturation = prefs.getFloat(prefix + "saturation", 0f),
+            contrast = prefs.getFloat(prefix + "contrast", 0f),
+            exposure = prefs.getFloat(prefix + "exposure", 0f),
+            temperature = prefs.getFloat(prefix + "temperature", 0f),
+            tint = prefs.getFloat(prefix + "tint", 0f),
+            highlights = prefs.getFloat(prefix + "highlights", 0f),
+            shadows = prefs.getFloat(prefix + "shadows", 0f),
+            vignette = prefs.getFloat(prefix + "vignette", 0f),
+            grain = prefs.getFloat(prefix + "grain", 0f),
+            clarity = prefs.getFloat(prefix + "clarity", 0f),
+            sharpness = prefs.getFloat(prefix + "sharpness", 0f),
+            curveBlacks = prefs.getFloat(prefix + "curve_blacks", 0f),
+            curveShadows = prefs.getFloat(prefix + "curve_shadows", 0f),
+            curveMidtones = prefs.getFloat(prefix + "curve_midtones", 0f),
+            curveHighlights = prefs.getFloat(prefix + "curve_highlights", 0f),
+            curveWhites = prefs.getFloat(prefix + "curve_whites", 0f),
+            colorVibrance = prefs.getFloat(prefix + "color_vibrance", 0f),
+            colorBalanceR = prefs.getFloat(prefix + "color_bal_r", 0f),
+            colorBalanceG = prefs.getFloat(prefix + "color_bal_g", 0f),
+            colorBalanceB = prefs.getFloat(prefix + "color_bal_b", 0f),
+            lightFxFlash = prefs.getFloat(prefix + "lfx_flash", 0f),
+            lightFxBloom = prefs.getFloat(prefix + "lfx_bloom", 0f),
+            lightFxSoftLight = prefs.getFloat(prefix + "lfx_soft_light", 0f),
+            textureFilmGrain = prefs.getFloat(prefix + "tex_grain", 0f),
+            textureHalation = prefs.getFloat(prefix + "tex_halation", 0f),
+            textureMicroContrast = prefs.getFloat(prefix + "tex_micro_contrast", 0f)
         )
     }
 
@@ -1519,13 +1545,38 @@ ${fields.map(([prop,key,def])=>`            ${prop} = prefs.getFloat(prefix + "$
     fun saveVideoAdjustments(va: com.example.camera.model.VideoAdjustments, profileKey: String = "") {
         val prefix = videoAdjustmentPrefix(profileKey)
         val editor = prefs.edit()
-${fields.map(([prop,key])=>`            .putFloat(prefix + "${key}", va.${prop})`).join("\n")}
+            .putFloat(prefix + "tonality", va.tonality)
+            .putFloat(prefix + "saturation", va.saturation)
+            .putFloat(prefix + "contrast", va.contrast)
+            .putFloat(prefix + "exposure", va.exposure)
+            .putFloat(prefix + "temperature", va.temperature)
+            .putFloat(prefix + "tint", va.tint)
+            .putFloat(prefix + "highlights", va.highlights)
+            .putFloat(prefix + "shadows", va.shadows)
+            .putFloat(prefix + "vignette", va.vignette)
+            .putFloat(prefix + "grain", va.grain)
+            .putFloat(prefix + "clarity", va.clarity)
+            .putFloat(prefix + "sharpness", va.sharpness)
+            .putFloat(prefix + "curve_blacks", va.curveBlacks)
+            .putFloat(prefix + "curve_shadows", va.curveShadows)
+            .putFloat(prefix + "curve_midtones", va.curveMidtones)
+            .putFloat(prefix + "curve_highlights", va.curveHighlights)
+            .putFloat(prefix + "curve_whites", va.curveWhites)
+            .putFloat(prefix + "color_vibrance", va.colorVibrance)
+            .putFloat(prefix + "color_bal_r", va.colorBalanceR)
+            .putFloat(prefix + "color_bal_g", va.colorBalanceG)
+            .putFloat(prefix + "color_bal_b", va.colorBalanceB)
+            .putFloat(prefix + "lfx_flash", va.lightFxFlash)
+            .putFloat(prefix + "lfx_bloom", va.lightFxBloom)
+            .putFloat(prefix + "lfx_soft_light", va.lightFxSoftLight)
+            .putFloat(prefix + "tex_grain", va.textureFilmGrain)
+            .putFloat(prefix + "tex_halation", va.textureHalation)
+            .putFloat(prefix + "tex_micro_contrast", va.textureMicroContrast)
         if (profileKey.isNotBlank()) {
             val safeKey = profileKey.map { if (it.isLetterOrDigit() || it == '_' || it == '-') it else '_' }
                 .joinToString("")
-            editor.putBoolean("pref_va_\${safeKey}_initialized", true)
+            editor.putBoolean("pref_va_${safeKey}_initialized", true)
         }
         editor.apply()
     }
-`
 }
