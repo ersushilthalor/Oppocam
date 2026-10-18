@@ -118,6 +118,50 @@ class RefocusRepository(private val context: Context) {
         null
     }
 
+
+    /**
+     * Re-indexes valid bundles on disk so the built-in gallery can recover Refocus captures
+     * even if a database record was lost or the app was upgraded from an older build.
+     */
+    suspend fun discoverStoredRefocusPhotos() = withContext(Dispatchers.IO) {
+        val bundles = getRefocusStorageDir().listFiles { file -> file.isDirectory }
+            ?.sortedByDescending { it.lastModified() }
+            .orEmpty()
+
+        for (bundle in bundles) {
+            try {
+                val metadata = File(bundle, "metadata.json")
+                if (!metadata.exists()) continue
+                val json = org.json.JSONObject(metadata.readText())
+                val near = File(bundle, "plane_near.jpg")
+                val mid = File(bundle, "plane_mid.jpg")
+                val far = File(bundle, "plane_far.jpg")
+                if (!near.exists() || !mid.exists() || !far.exists()) continue
+
+                val storedUri = json.optString("photoUri", "").ifBlank { "refocus://${bundle.name}" }
+                val planeCount = json.optInt("planeCount", 3).coerceIn(3, 20)
+                val entity = RefocusPhotoEntity(
+                    photoUri = storedUri,
+                    bundleDir = bundle.absolutePath,
+                    timestamp = json.optLong("timestamp", bundle.lastModified()),
+                    nearPlanePath = near.absolutePath,
+                    midPlanePath = mid.absolutePath,
+                    farPlanePath = far.absolutePath,
+                    depthMapPath = File(bundle, "depth_map.png").takeIf { it.exists() }?.absolutePath.orEmpty(),
+                    planeCount = planeCount,
+                    nearDiopters = json.optDouble("nearDiopters", 0.0).toFloat(),
+                    midDiopters = json.optDouble("midDiopters", 0.0).toFloat(),
+                    farDiopters = json.optDouble("farDiopters", 0.0).toFloat(),
+                    width = json.optInt("width", 0),
+                    height = json.optInt("height", 0)
+                )
+                dao.insertRefocusPhoto(entity)
+            } catch (_: Exception) {
+                // Ignore incomplete/corrupt bundles and keep indexing the rest.
+            }
+        }
+    }
+
     suspend fun saveRefocusPhoto(entity: RefocusPhotoEntity) = withContext(Dispatchers.IO) {
         dao.insertRefocusPhoto(entity)
     }
