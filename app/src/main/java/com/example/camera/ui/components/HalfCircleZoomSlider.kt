@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -132,7 +133,7 @@ fun HalfCircleZoomSlider(
         modifier = modifier
             .widthIn(min = 280.dp, max = 380.dp)
             .fillMaxWidth()
-            .height(122.dp)
+            .height(220.dp)
             .testTag("half_circle_zoom_slider")
             .pointerInput(HALF_CIRCLE_TOTAL_TICKS) {
                 val totalRulerWidthPx = size.width * HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER
@@ -206,26 +207,36 @@ fun HalfCircleZoomSlider(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val width = size.width
             val height = size.height
-            val baseline = height * 0.985f
-            val arcRise = height * 0.79f
+            // Use a true 180-degree circular arc, not a quadratic/parabolic curve.
+            // The larger canvas gives the semicircle enough vertical room while keeping
+            // its endpoints close to the viewfinder's left and right edges.
+            val baseline = height - arcBorderPx
             val centerX = width / 2f
+            val radius = width / 2f
             val trackWidth = width * HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER
             val currentProgress = zoomToNormalizedLog(activeZoom, safeMinZoom, safeMaxZoom)
 
             fun curveY(x: Float): Float {
-                val t = (x / width).coerceIn(0f, 1f)
-                return baseline - arcRise * (1f - (2f * t - 1f).pow(2))
+                val dx = (x.coerceIn(0f, width) - centerX)
+                return baseline - sqrt((radius * radius - dx * dx).coerceAtLeast(0f))
             }
 
             fun tangentSlope(x: Float): Float {
-                val t = (x / width).coerceIn(0f, 1f)
-                return (4f * arcRise / width) * (2f * t - 1f)
+                val dx = x.coerceIn(0f, width) - centerX
+                val denominator = sqrt((radius * radius - dx * dx).coerceAtLeast(1f))
+                return dx / denominator
             }
 
-            // The translucent dome follows the same wide, low arch as the screenshot.
+            // Fill the translucent dial beneath the exact upper semicircle.
+            val circleBounds = Rect(
+                left = centerX - radius,
+                top = baseline - radius,
+                right = centerX + radius,
+                bottom = baseline + radius
+            )
             val dome = Path().apply {
                 moveTo(0f, baseline)
-                quadraticTo(centerX, baseline - 2f * arcRise, width, baseline)
+                arcTo(circleBounds, 180f, 180f, false)
                 lineTo(width, height)
                 lineTo(0f, height)
                 close()
@@ -233,7 +244,7 @@ fun HalfCircleZoomSlider(
             drawPath(dome, Color(0xB3444548))
             val arch = Path().apply {
                 moveTo(0f, baseline)
-                quadraticTo(centerX, baseline - 2f * arcRise, width, baseline)
+                arcTo(circleBounds, 180f, 180f, false)
             }
             drawPath(
                 path = arch,
