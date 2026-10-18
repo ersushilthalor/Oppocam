@@ -82,6 +82,7 @@ class DualCameraRecordingRelay(
     private var handoffTargetFrameCount: Int = 0
     private val mainRawTexMatrix = FloatArray(16)
     private val ultraWideRawTexMatrix = FloatArray(16)
+    private val drawMatrixScratch = FloatArray(16)
     private var hasMainRawTexMatrix = false
     private var hasUltraWideRawTexMatrix = false
     private val HANDOFF_WARMUP_FRAMES = 2
@@ -740,7 +741,7 @@ class DualCameraRecordingRelay(
         val isUltraWide = source == PreviewStreamSource.ULTRAWIDE
         val rawMatrix = if (isUltraWide) ultraWideRawTexMatrix else mainRawTexMatrix
         val texId = if (isUltraWide) ultraWideOesTexId else mainOesTexId
-        val outMatrix = FloatArray(16)
+        val outMatrix = drawMatrixScratch
         computeCameraTexMatrix(
             stMatrix = rawMatrix,
             isFront = isFrontFacing,
@@ -763,8 +764,6 @@ class DualCameraRecordingRelay(
         GLES20.glUniformMatrix4fv(uMvp, 1, false, mvpMatrix, 0)
         GLES20.glUniformMatrix4fv(uSt, 1, false, outMatrix, 0)
         GLES20.glUniform1i(sTex, 0)
-        val alphaHandle = GLES20.glGetUniformLocation(activeProg, "uFrameAlpha")
-        if (alphaHandle >= 0) GLES20.glUniform1f(alphaHandle, alpha.coerceIn(0f, 1f))
         if (!isPassthrough) {
             val handles = vadjHandles
             if (handles != null) VideoAdjustmentsPipeline.bindUniforms(
@@ -775,6 +774,9 @@ class DualCameraRecordingRelay(
                 timeSec = frameTimeSec
             )
         }
+        // Set after bindUniforms, which deliberately resets the shared shader to opaque.
+        val alphaHandle = GLES20.glGetUniformLocation(activeProg, "uFrameAlpha")
+        if (alphaHandle >= 0) GLES20.glUniform1f(alphaHandle, alpha.coerceIn(0f, 1f))
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
 
