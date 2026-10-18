@@ -483,66 +483,104 @@ class ZoomTransitionController(
                         )
                     }
                     val startTime = SystemClock.uptimeMillis()
-                    var lastDispatchedZoom = startZ
-                    var lastDispatchedTime = 0L
                     var mainLensSelected = false
 
-                    while (isActive) {
-                        val now = SystemClock.uptimeMillis()
-                        val elapsed = now - startTime
-                        if (elapsed >= transitionDurationMs) break
+                    if (isDirectHalfXToTelephotoPreset) {
+                        // Emit every 0.05x value in order. The 0.5x -> 2x path has
+                        // 30 equal intervals, so each interval is 400/30 ms (~13.33 ms).
+                        // Use absolute deadlines so callback/camera latency does not accumulate
+                        // into the total animation duration. The physical handoff happens exactly
+                        // at 1.00x, without restarting the timeline or inserting a hold.
+                        val stepCount = ((endZ - startZ) / 0.05f).roundToInt().coerceAtLeast(1)
+                        for (stepIndex in 0..stepCount) {
+                            if (!isActive) break
+                            val deadline = startTime +
+                                (stepIndex.toDouble() * transitionDurationMs.toDouble() / stepCount.toDouble()).roundToInt()
+                            val waitMs = deadline - SystemClock.uptimeMillis()
+                            if (waitMs > 0L) delay(waitMs)
 
-                        val linearProgress = (elapsed.toDouble() / transitionDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                        val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
-                        val currentNorm = (startNorm + (endNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
-                        val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
-                        val currentZ = rawZoom.coerceIn(minZoom, maxZoom)
-                        val reachedSwitchPoint = currentNorm >= switchNorm || currentZ >= effectiveSwitchZoom
+                            val zoomValue = if (stepIndex == stepCount) {
+                                endZ
+                            } else {
+                                (startZ + stepIndex * 0.05f).coerceIn(startZ, endZ)
+                            }.let { (it * 100f).roundToInt() / 100f }
 
-                        if (!mainLensSelected && reachedSwitchPoint) {
-                            // Pin the optical handoff to its calibrated FOV, select Main immediately,
-                            // and then apply this frame's already-advanced zoom value without restarting
-                            // the clock or easing curve.
-                            _currentInterpolatedZoom.value = effectiveSwitchZoom
-                            if (abs(lastDispatchedZoom - effectiveSwitchZoom) >= 0.005f) {
+                            if (!mainLensSelected && zoomValue >= effectiveSwitchZoom - 0.0001f) {
+                                _currentInterpolatedZoom.value = effectiveSwitchZoom
                                 onZoomUpdate(effectiveSwitchZoom)
+                                onApplyZoomToEngine(effectiveSwitchZoom, true)
+                                if (useFrameBasedHandoff) {
+                                    beginFrameBasedHandoff(
+                                        fromSource = PreviewStreamSource.ULTRAWIDE,
+                                        targetSource = PreviewStreamSource.MAIN,
+                                        scope = scope
+                                    )
+                                }
+                                onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
+                                if (!useFrameBasedHandoff) setSteadyStatePreview(false)
+                                mainLensSelected = true
                             }
-                            onApplyZoomToEngine(effectiveSwitchZoom, true)
 
-                            if (useFrameBasedHandoff) {
-                                beginFrameBasedHandoff(
-                                    fromSource = PreviewStreamSource.ULTRAWIDE,
-                                    targetSource = PreviewStreamSource.MAIN,
-                                    scope = scope
-                                )
-                            }
-                            onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
-                            if (!useFrameBasedHandoff) setSteadyStatePreview(false)
-                            mainLensSelected = true
-                            lastDispatchedZoom = effectiveSwitchZoom
-                            lastDispatchedTime = now
-
-                            if (currentZ > effectiveSwitchZoom + 0.005f) {
-                                _currentInterpolatedZoom.value = currentZ
-                                onZoomUpdate(currentZ)
-                                onApplyZoomToEngine(currentZ, true)
-                                lastDispatchedZoom = currentZ
-                                lastDispatchedTime = now
-                            }
-                        } else {
-                            val zoomToApply = if (mainLensSelected) currentZ else currentZ.coerceAtMost(effectiveSwitchZoom)
-                            if (abs(zoomToApply - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
-                                lastDispatchedZoom = zoomToApply
-                                lastDispatchedTime = now
-                                _currentInterpolatedZoom.value = zoomToApply
-                                onZoomUpdate(zoomToApply)
-                                onApplyZoomToEngine(zoomToApply, true)
-                            }
+                            _currentInterpolatedZoom.value = zoomValue
+                            onZoomUpdate(zoomValue)
+                            onApplyZoomToEngine(zoomValue, true)
                         }
+                    } else {
+                        // Preserve the existing continuous curve for all other zoom transitions.
+                        var lastDispatchedZoom = startZ
+                        var lastDispatchedTime = 0L
+                        while (isActive) {
+                            val now = SystemClock.uptimeMillis()
+                            val elapsed = now - startTime
+                            if (elapsed >= transitionDurationMs) break
 
-                        val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
-                        val waitMs = nextTick - SystemClock.uptimeMillis()
-                        if (waitMs > 0) delay(waitMs)
+                            val linearProgress = (elapsed.toDouble() / transitionDurationMs.toDouble()).coerceIn(0.0, 1.0)
+                            val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+                            val currentNorm = (startNorm + (endNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
+                            val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
+                            val currentZ = rawZoom.coerceIn(minZoom, maxZoom)
+                            val reachedSwitchPoint = currentNorm >= switchNorm || currentZ >= effectiveSwitchZoom
+
+                            if (!mainLensSelected && reachedSwitchPoint) {
+                                _currentInterpolatedZoom.value = effectiveSwitchZoom
+                                if (abs(lastDispatchedZoom - effectiveSwitchZoom) >= 0.005f) {
+                                    onZoomUpdate(effectiveSwitchZoom)
+                                }
+                                onApplyZoomToEngine(effectiveSwitchZoom, true)
+                                if (useFrameBasedHandoff) {
+                                    beginFrameBasedHandoff(
+                                        fromSource = PreviewStreamSource.ULTRAWIDE,
+                                        targetSource = PreviewStreamSource.MAIN,
+                                        scope = scope
+                                    )
+                                }
+                                onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
+                                if (!useFrameBasedHandoff) setSteadyStatePreview(false)
+                                mainLensSelected = true
+                                lastDispatchedZoom = effectiveSwitchZoom
+                                lastDispatchedTime = now
+                                if (currentZ > effectiveSwitchZoom + 0.005f) {
+                                    _currentInterpolatedZoom.value = currentZ
+                                    onZoomUpdate(currentZ)
+                                    onApplyZoomToEngine(currentZ, true)
+                                    lastDispatchedZoom = currentZ
+                                    lastDispatchedTime = now
+                                }
+                            } else {
+                                val zoomToApply = if (mainLensSelected) currentZ else currentZ.coerceAtMost(effectiveSwitchZoom)
+                                if (abs(zoomToApply - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                                    lastDispatchedZoom = zoomToApply
+                                    lastDispatchedTime = now
+                                    _currentInterpolatedZoom.value = zoomToApply
+                                    onZoomUpdate(zoomToApply)
+                                    onApplyZoomToEngine(zoomToApply, true)
+                                }
+                            }
+
+                            val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
+                            val waitMs = nextTick - SystemClock.uptimeMillis()
+                            if (waitMs > 0) delay(waitMs)
+                        }
                     }
 
                     val totalElapsed = SystemClock.uptimeMillis() - startTime
