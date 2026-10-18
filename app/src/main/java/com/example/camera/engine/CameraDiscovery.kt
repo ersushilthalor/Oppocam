@@ -109,7 +109,9 @@ object CameraDiscovery {
                 primaryBackChars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
             } else null
             val primaryBackMinZoom = primaryBackZoomRange?.lower ?: 1.0f
-            val primaryBackMaxZoom = maxOf(primaryBackZoomRange?.upper ?: 10.0f, 20.0f)
+            val primaryBackMaxZoom = primaryBackZoomRange?.upper
+                ?: primaryBackChars?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)
+                ?: 8.0f
             val hasLogicalUltraWide = primaryBackMinZoom < 0.95f
 
             // Baseline Main Sensor dimensions
