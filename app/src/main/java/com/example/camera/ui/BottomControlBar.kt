@@ -121,8 +121,7 @@ fun BottomControlBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .offset(y = layoutConfig.zoomCapsuleVerticalOffsetDp.dp)
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 14.dp),
+                    .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
                 if (!isFrontCamera) {
@@ -1148,7 +1147,11 @@ fun MasterZoomCapsule(
     // Persistent outer container so opening the slider during a horizontal swipe
     // never unmounts the pointerInput target or drops the first swipe gesture.
     Box(
-        modifier = modifier.pointerInput(totalRulerWidthPx) {
+        modifier = modifier
+            // Keep the closed capsule separated from the bottom panel, but when expanded,
+            // let the semicircle base meet the black panel edge exactly (no gap/overlap).
+            .padding(bottom = if (isSliderOpen) 0.dp else 14.dp)
+            .pointerInput(totalRulerWidthPx) {
             awaitPointerEventScope {
                 while (true) {
                     val down = awaitFirstDown(requireUnconsumed = false)
