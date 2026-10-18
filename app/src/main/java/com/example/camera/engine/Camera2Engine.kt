@@ -190,7 +190,19 @@ class Camera2Engine(private val context: Context) {
             setZoom(zoom, isPresetTap = false, isContinuousTransition = isContinuous)
         },
         onSelectLensOnEngine = { lens, targetZoom, isContinuous ->
-            selectLens(lens, preserveZoom = true, targetZoom = targetZoom, isContinuousTransition = isContinuous)
+            // The transition controller runs on Main.immediate. A pre-warmed stream swap still
+            // takes the lifecycle lock and updates SurfaceTexture sizing, so execute the switch
+            // on the camera worker instead of blocking the zoom animation's dispatcher.
+            val handler = backgroundHandler
+            if (handler != null) {
+                handler.post {
+                    Log.d(TAG, "[ZOOM_HANDOFF] dispatch switch off main: target=${lens.lensType} zoom=$targetZoom continuous=$isContinuous thread=${Thread.currentThread().name}")
+                    selectLens(lens, preserveZoom = true, targetZoom = targetZoom, isContinuousTransition = isContinuous)
+                }
+            } else {
+                Log.w(TAG, "[ZOOM_HANDOFF] camera worker unavailable; deferring lens switch to engine fallback")
+                selectLens(lens, preserveZoom = true, targetZoom = targetZoom, isContinuousTransition = isContinuous)
+            }
         }
     )
     val previewOverlapState: StateFlow<PreviewOverlapState> = zoomTransitionController.previewOverlapState
@@ -205,8 +217,11 @@ class Camera2Engine(private val context: Context) {
 
     /** Route actual TextureView buffer updates to the frame-based lens handoff controller. */
     fun onPreviewFrameAvailable(source: PreviewStreamSource) {
+        val frameArrivalNs = System.nanoTime()
         val wasOverlapping = zoomTransitionController.previewOverlapState.value.isOverlapping
         zoomTransitionController.onPreviewFrameAvailable(source)
+        val overlap = zoomTransitionController.previewOverlapState.value
+        Log.v(TAG, "[ZOOM_FRAME] source=$source activeCamera=${cameraDevice?.id} standbyCamera=${ultraWideStandbyCameraDevice?.id} zoom=${zoomTransitionController.currentInterpolatedZoom.value} frameArrivalNs=$frameArrivalNs overlap=${overlap.isOverlapping} progress=${overlap.overlapProgress} thread=${Thread.currentThread().name}")
         val handoffCompleted = wasOverlapping &&
             !zoomTransitionController.previewOverlapState.value.isOverlapping
         if (handoffCompleted) {
