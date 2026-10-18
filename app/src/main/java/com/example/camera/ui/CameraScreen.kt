@@ -183,6 +183,8 @@ fun CameraScreen(
     val isLutWindowOpen by viewModel.isLutWindowOpen.collectAsStateWithLifecycle()
     val isMoreModesOpen by viewModel.isMoreModesOpen.collectAsStateWithLifecycle()
     val videoAdjustments by viewModel.videoAdjustments.collectAsStateWithLifecycle()
+    val activeVideoAdjustments by viewModel.activeVideoAdjustments.collectAsStateWithLifecycle()
+    val selectedVideoTuningLens by viewModel.selectedVideoTuningLens.collectAsStateWithLifecycle()
     val isVideoAdjustmentsOpen by viewModel.isVideoAdjustmentsOpen.collectAsStateWithLifecycle()
 
     val flashMode by viewModel.flashMode.collectAsStateWithLifecycle()
@@ -446,7 +448,7 @@ fun CameraScreen(
         // 1b. Normal Video Adjustments Live Spatial Effects Overlay (Grain, Vignette, Soft Light)
         if (cameraMode == CameraMode.VIDEO) {
             VideoAdjustmentsViewfinderOverlay(
-                adjustments = videoAdjustments,
+                adjustments = activeVideoAdjustments,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -770,6 +772,8 @@ fun CameraScreen(
                 onDismiss = {
                     viewModel.setVideoAdjustmentsOpen(false)
                 },
+                selectedLensProfile = selectedVideoTuningLens,
+                onLensProfileChange = { viewModel.selectVideoTuningLens(it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
