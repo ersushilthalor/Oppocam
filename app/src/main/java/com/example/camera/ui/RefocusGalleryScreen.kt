@@ -39,6 +39,7 @@ import java.util.Date
 @Composable
 fun RefocusGalleryScreen(
     onClose: () -> Unit,
+    onOpenDeviceGallery: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -91,7 +92,9 @@ fun RefocusGalleryScreen(
                         Text("Refocus Gallery", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 21.sp)
                         Text("${photos.size} refocus ${if (photos.size == 1) "photo" else "photos"}", color = Color.White.copy(alpha = 0.65f), fontSize = 13.sp)
                     }
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFFFFD54F), modifier = Modifier.padding(end = 12.dp).size(26.dp))
+                    TextButton(onClick = onOpenDeviceGallery) {
+                        Text("Device gallery", color = Color(0xFFFFD54F), fontSize = 12.sp)
+                    }
                 }
 
                 if (photos.isEmpty()) {
