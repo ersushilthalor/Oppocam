@@ -2030,8 +2030,13 @@ class Camera2Engine(private val context: Context) {
             val charsFlashAvailable = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
             val facing = chars.get(CameraCharacteristics.LENS_FACING)
             val flashAvailable = charsFlashAvailable || (facing == CameraCharacteristics.LENS_FACING_BACK && hasBackCameraFlash())
-            val reportedDigitalZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 8f
-            val maxZoom = maxOf(reportedDigitalZoom, 20.0f)
+            val zoomRatioRangeMax = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.upper
+            } else null
+            val reportedDigitalZoom = zoomRatioRangeMax
+                ?: chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)
+                ?: 8f
+            val maxZoom = reportedDigitalZoom.coerceAtLeast(1.0f)
 
             // OIS / EIS
             val oisModes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
