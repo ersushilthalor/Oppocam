@@ -506,17 +506,10 @@ class ZoomTransitionController(
 
                         if (!mainLensSelected && reachedSwitchPoint) {
                             Log.i(TAG, "[ZOOM_CROSSING] elapsedMs=$elapsed durationMs=$transitionDurationMs zoom=$currentZ switchZoom=$effectiveSwitchZoom target=$endZ")
-                            // Pin the optical handoff to its calibrated FOV, select Main immediately,
-                            // and then apply this frame's already-advanced zoom value without restarting
-                            // the clock or easing curve.
-                            _currentInterpolatedZoom.value = effectiveSwitchZoom
-                            if (abs(lastDispatchedZoom - effectiveSwitchZoom) >= 0.005f) {
-                                onZoomUpdate(effectiveSwitchZoom)
-                            }
-                            // The coordinated lens-selection callback below owns this exact switch-point
-                            // update. Calling setZoom here can independently invoke selectLens(), creating
-                            // a second physical switch request on the transition dispatcher.
-
+                            // Switch the visible source at the current point on the existing zoom
+                            // timeline. Do not emit an artificial 1x update and then a second zoom
+                            // update in the same tick: that creates a visible snap/double transition
+                            // and can stall the apparent motion at the lens boundary.
                             if (useFrameBasedHandoff) {
                                 beginFrameBasedHandoff(
                                     fromSource = PreviewStreamSource.ULTRAWIDE,
@@ -524,19 +517,16 @@ class ZoomTransitionController(
                                     scope = scope
                                 )
                             }
-                            onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
+                            _currentInterpolatedZoom.value = currentZ
+                            onZoomUpdate(currentZ)
+                            // This coordinated callback owns both the lens switch and the zoom value
+                            // for this frame. Do not also route the same value through onApplyZoomToEngine,
+                            // which can independently re-evaluate physical-lens selection.
+                            onSelectLensOnEngine(mainWideLens, currentZ, true)
                             if (!useFrameBasedHandoff) setSteadyStatePreview(false)
                             mainLensSelected = true
-                            lastDispatchedZoom = effectiveSwitchZoom
+                            lastDispatchedZoom = currentZ
                             lastDispatchedTime = now
-
-                            if (currentZ > effectiveSwitchZoom + 0.005f) {
-                                _currentInterpolatedZoom.value = currentZ
-                                onZoomUpdate(currentZ)
-                                onApplyZoomToEngine(currentZ, true)
-                                lastDispatchedZoom = currentZ
-                                lastDispatchedTime = now
-                            }
                         } else {
                             val zoomToApply = if (mainLensSelected) currentZ else currentZ.coerceAtMost(effectiveSwitchZoom)
                             if (abs(zoomToApply - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
