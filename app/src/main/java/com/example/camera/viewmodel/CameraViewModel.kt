@@ -525,6 +525,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setVideoAdjustmentsOpen(isOpen: Boolean) {
         _isVideoAdjustmentsOpen.value = isOpen
         if (isOpen) {
+            val activeProfile = if (engine.currentZoomState.value < 0.85f &&
+                engine.selectedLens.value?.facing != CameraCharacteristics.LENS_FACING_FRONT) {
+                com.example.camera.model.VideoTuningLens.ULTRAWIDE
+            } else {
+                com.example.camera.model.VideoTuningLens.MAIN
+            }
+            selectVideoTuningLens(activeProfile)
             _isVideoSettingsPanelOpen.value = false
             _isSettingsOpen.value = false
             _isManualProOpen.value = false
