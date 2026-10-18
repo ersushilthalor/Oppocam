@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -43,6 +44,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.camera.model.*
 import com.example.camera.ui.components.HorizontalRulerZoomSlider
+import com.example.camera.ui.components.HalfCircleZoomSlider
+import com.example.camera.ui.components.HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
@@ -1082,6 +1085,7 @@ fun MasterZoomCapsule(
     if (isFrontCamera) {
         return
     }
+    val isOppoStyle = layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL
     val hasRealUltraWide = remember(displayedLenses) {
         displayedLenses.any { it.lensType == LensType.ULTRAWIDE }
     }
@@ -1107,12 +1111,16 @@ fun MasterZoomCapsule(
     val maxLensZoom = remember(displayedLenses, selectedLens?.facing) {
         displayedLenses
             .filter { selectedLens == null || it.facing == selectedLens.facing }
-            .maxOfOrNull { it.maxZoomRatio } ?: (if (isFrontCamera) 10.0f else 20.0f)
+            .maxOfOrNull { it.maxZoomRatio }
     }
     val maxZoom = if (isFrontCamera) {
         1.0f
+    } else if (isOppoStyle) {
+        // Oppo's curved dial is deliberately limited to the device-supported range up to 10x.
+        val supportedMax = maxOf(capabilities.maxZoom, maxLensZoom ?: capabilities.maxZoom)
+        supportedMax.coerceAtMost(10.0f).coerceAtLeast(minZoom)
     } else {
-        maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
+        maxOf(capabilities.maxZoom, maxLensZoom ?: 20.0f, 20.0f)
     }
 
     var liveZoom by remember { mutableFloatStateOf(currentZoom.coerceIn(minZoom, maxZoom)) }
@@ -1129,7 +1137,12 @@ fun MasterZoomCapsule(
     val isSliderOpenState = rememberUpdatedState(isSliderOpen)
 
     val density = LocalDensity.current
-    val totalRulerWidthPx = with(density) { (com.example.camera.ui.components.RULER_TOTAL_TICKS * com.example.camera.ui.components.RULER_TICK_SPACING_DP.value).dp.toPx() }
+    val totalRulerWidthPx = if (isOppoStyle) {
+        val sliderWidthDp = (LocalConfiguration.current.screenWidthDp - 32).coerceAtMost(380).coerceAtLeast(280)
+        with(density) { sliderWidthDp.dp.toPx() * HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER }
+    } else {
+        with(density) { (com.example.camera.ui.components.RULER_TOTAL_TICKS * com.example.camera.ui.components.RULER_TICK_SPACING_DP.value).dp.toPx() }
+    }
     val capsuleSwipeSlopPx = with(density) { 3.5.dp.toPx() }
 
     // Persistent outer container so opening the slider during a horizontal swipe
@@ -1217,20 +1230,33 @@ fun MasterZoomCapsule(
         contentAlignment = Alignment.Center
     ) {
         if (isSliderOpen) {
-            HorizontalRulerZoomSlider(
-                currentZoom = liveZoom,
-                minZoom = minZoom,
-                maxZoom = maxZoom,
-                onZoomChange = { newZoom ->
-                    liveZoom = newZoom
-                    onZoomChange(newZoom)
-                },
-                onClose = {
-                    isCapsuleDragging = false
-                    isSliderOpen = false
-                },
-                isExternalDragging = isCapsuleDragging
-            )
+            val sliderZoomChange: (Float) -> Unit = { newZoom ->
+                liveZoom = newZoom.coerceIn(minZoom, maxZoom)
+                onZoomChange(liveZoom)
+            }
+            val closeSlider = {
+                isCapsuleDragging = false
+                isSliderOpen = false
+            }
+            if (isOppoStyle) {
+                HalfCircleZoomSlider(
+                    currentZoom = liveZoom,
+                    minZoom = minZoom,
+                    maxZoom = maxZoom,
+                    onZoomChange = sliderZoomChange,
+                    onClose = closeSlider,
+                    isExternalDragging = isCapsuleDragging
+                )
+            } else {
+                HorizontalRulerZoomSlider(
+                    currentZoom = liveZoom,
+                    minZoom = minZoom,
+                    maxZoom = maxZoom,
+                    onZoomChange = sliderZoomChange,
+                    onClose = closeSlider,
+                    isExternalDragging = isCapsuleDragging
+                )
+            }
         } else if (layoutConfig.useFocalLengthZoomLabels) {
             // Vivo-style focal length scale: 14 / 35 mm / 85 / 170 / 230.
             // Keep the existing horizontal ruler slider and zoom callback behavior.
