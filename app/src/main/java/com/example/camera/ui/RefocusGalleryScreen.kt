@@ -14,6 +14,8 @@ import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +44,7 @@ fun RefocusGalleryScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val repository = remember(context) { RefocusRepository(context) }
     val photos by repository.allRefocusPhotos.collectAsStateWithLifecycle(initialValue = emptyList())
+    LaunchedEffect(repository) { repository.discoverStoredRefocusPhotos() }
     var selectedPhoto by remember { mutableStateOf<RefocusPhotoEntity?>(null) }
 
     Surface(
@@ -134,7 +137,7 @@ private fun RefocusGalleryRow(
         }
     }
     val thumbnail by produceState<android.graphics.Bitmap?>(initialValue = null, previewPath) {
-        value = with(kotlinx.coroutines.Dispatchers.IO) {
+        value = withContext(Dispatchers.IO) {
             previewPath?.let { path ->
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(path, bounds)
