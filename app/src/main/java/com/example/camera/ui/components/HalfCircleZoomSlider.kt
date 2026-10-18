@@ -3,7 +3,6 @@ package com.example.camera.ui.components
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.SystemClock
-import android.view.SoundEffectConstants
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -18,7 +17,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,7 +34,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -62,7 +59,7 @@ const val HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER = 1.5f
  * - Perfectly flush baseline that touches the black bottom control bar with ZERO gap and ZERO overlap.
  * - Edge-to-edge full width coverage with radial ticks and horizontal upright numerical markings.
  * - Top-center apex needle in vibrant Oppo Orange with matching bold live zoom readout.
- * - Smooth drag scrubbing and tap-to-select bounded to 0.5x – 10x.
+ * - Smooth, completely silent drag scrubbing and tap-to-select bounded to 0.5x – 10x.
  */
 @Composable
 fun HalfCircleZoomSlider(
@@ -94,7 +91,6 @@ fun HalfCircleZoomSlider(
     val safeMinZoom = minZoom.coerceAtLeast(0.3f)
     val safeMaxZoom = maxZoom.coerceAtLeast(safeMinZoom + 0.05f)
     val density = LocalDensity.current
-    val hostView = LocalView.current
 
     val containerHeightDp = 156.dp
     val arcHeightDp = 110.dp
@@ -118,22 +114,6 @@ fun HalfCircleZoomSlider(
         mutableFloatStateOf(currentZoom.coerceIn(safeMinZoom, safeMaxZoom))
     }
     var lastUserDragEndTimeMs by remember { mutableLongStateOf(0L) }
-    var lastSoundStep by remember {
-        mutableIntStateOf((zoomToNormalizedLog(activeZoom, safeMinZoom, safeMaxZoom) * 40f).roundToInt())
-    }
-    var lastSoundTimeMs by remember { mutableLongStateOf(0L) }
-
-    fun playZoomTickIfNeeded(zoom: Float) {
-        val step = (zoomToNormalizedLog(zoom, safeMinZoom, safeMaxZoom) * 40f).roundToInt()
-        if (step != lastSoundStep) {
-            val now = SystemClock.uptimeMillis()
-            if (now - lastSoundTimeMs >= 45L) {
-                hostView.playSoundEffect(SoundEffectConstants.CLICK)
-                lastSoundTimeMs = now
-            }
-            lastSoundStep = step
-        }
-    }
 
     LaunchedEffect(safeMinZoom, safeMaxZoom) {
         activeZoom = activeZoom.coerceIn(safeMinZoom, safeMaxZoom)
@@ -209,7 +189,6 @@ fun HalfCircleZoomSlider(
                                     val tappedNorm = (accumulatedNorm + deltaFromTap).coerceIn(0f, 1f)
                                     val newZoom = normalizedToZoomLog(tappedNorm, minZ, maxZ)
                                     activeZoom = newZoom
-                                    playZoomTickIfNeeded(newZoom)
                                     onZoomChangeState.value(newZoom)
                                     change.consume()
                                 }
@@ -227,7 +206,6 @@ fun HalfCircleZoomSlider(
                             accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                             val newZoom = normalizedToZoomLog(accumulatedNorm, minZ, maxZ)
                             activeZoom = newZoom
-                            playZoomTickIfNeeded(newZoom)
                             lastX = currentX
                             change.consume()
                             restartAutoHideTimer()
@@ -240,7 +218,6 @@ fun HalfCircleZoomSlider(
                                 accumulatedNorm = (accumulatedNorm + deltaNorm).coerceIn(0f, 1f)
                                 val newZoom = normalizedToZoomLog(accumulatedNorm, minZ, maxZ)
                                 activeZoom = newZoom
-                                playZoomTickIfNeeded(newZoom)
                                 restartAutoHideTimer()
                                 onZoomChangeState.value(newZoom)
                             }
