@@ -102,7 +102,7 @@ class CameraPreferences(context: Context) {
         get() = (lensSwitchHoldDurationSec * 1000f + 0.5f).toLong()
 
     var isLensSwitchOverlapAnimationEnabled: Boolean
-        get() = prefs.getBoolean(KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED, false)
+        get() = prefs.getBoolean(KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED, value).apply()
 
     var lensSwitchOverlapDurationSec: Float
