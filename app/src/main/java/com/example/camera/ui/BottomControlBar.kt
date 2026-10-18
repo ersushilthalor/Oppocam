@@ -121,7 +121,7 @@ fun BottomControlBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .offset(y = layoutConfig.zoomCapsuleVerticalOffsetDp.dp)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 0.dp),
                 contentAlignment = Alignment.Center
             ) {
                 if (!isFrontCamera) {
@@ -1137,7 +1137,7 @@ fun MasterZoomCapsule(
 
     val density = LocalDensity.current
     val totalRulerWidthPx = if (isOppoStyle) {
-        val sliderWidthDp = (LocalConfiguration.current.screenWidthDp - 32).coerceAtMost(380).coerceAtLeast(280)
+        val sliderWidthDp = LocalConfiguration.current.screenWidthDp.coerceAtLeast(300)
         with(density) { sliderWidthDp.dp.toPx() * HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER }
     } else {
         with(density) { (com.example.camera.ui.components.RULER_TOTAL_TICKS * com.example.camera.ui.components.RULER_TICK_SPACING_DP.value).dp.toPx() }
@@ -1248,7 +1248,8 @@ fun MasterZoomCapsule(
                     maxZoom = maxZoom,
                     onZoomChange = sliderZoomChange,
                     onClose = closeSlider,
-                    isExternalDragging = isCapsuleDragging
+                    isExternalDragging = isCapsuleDragging,
+                    modifier = Modifier.offset(y = (-20).dp)
                 )
             } else {
                 HorizontalRulerZoomSlider(

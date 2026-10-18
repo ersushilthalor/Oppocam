@@ -46,9 +46,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -56,14 +56,13 @@ const val HALF_CIRCLE_TOTAL_TICKS = 80
 const val HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER = 1.5f
 
 /**
- * Flagship Oppo-style semicircular zoom slider matching the reference UI:
- * - Large, genuine, smooth 180° circular arc (not a parabola or stretched ellipse).
- * - Translucent dark-grey frosted dome background revealing the live preview.
- * - Radial tick marks with clean hierarchy: major ticks at preset zooms, intermediate ticks,
- *   and fine minor tick marks pointing radially toward the circle center.
- * - Horizontal, upright numerical markings (0.5, 1, 2, 3, 5, 10) following the curvature.
- * - Top-center apex needle in vibrant Oppo Orange with matching bold live zoom readout (e.g. "20x" / "2x").
- * - Range strictly bounded to 0.5x – 10x with smooth, accurate drag scrubbing and haptic feedback.
+ * Flagship Oppo-style arched zoom slider:
+ * - Shallow circular arc segment (gentle curvature, NOT a pure 180° semicircle).
+ * - Reduced compact height (~156dp) so it never dominates the screen.
+ * - Perfectly flush baseline that touches the black bottom control bar with ZERO gap and ZERO overlap.
+ * - Edge-to-edge full width coverage with radial ticks and horizontal upright numerical markings.
+ * - Top-center apex needle in vibrant Oppo Orange with matching bold live zoom readout.
+ * - Smooth drag scrubbing and tap-to-select bounded to 0.5x – 10x.
  */
 @Composable
 fun HalfCircleZoomSlider(
@@ -97,15 +96,18 @@ fun HalfCircleZoomSlider(
     val density = LocalDensity.current
     val hostView = LocalView.current
 
+    val containerHeightDp = 156.dp
+    val arcHeightDp = 110.dp
+    val centerTextTopPadding = (containerHeightDp - arcHeightDp + 20.dp) // 66.dp
+
     val tickStrokePx = with(density) { 1.dp.toPx() }
     val majorTickStrokePx = with(density) { 1.5.dp.toPx() }
-    val majorTickLengthPx = with(density) { 15.dp.toPx() }
-    val mediumTickLengthPx = with(density) { 10.dp.toPx() }
+    val majorTickLengthPx = with(density) { 14.5.dp.toPx() }
+    val mediumTickLengthPx = with(density) { 9.5.dp.toPx() }
     val minorTickLengthPx = with(density) { 6.5.dp.toPx() }
     val arcBorderPx = with(density) { 1.2.dp.toPx() }
-    val centerNeedleLengthPx = with(density) { 20.dp.toPx() }
+    val centerNeedleLengthPx = with(density) { 18.dp.toPx() }
     val centerNeedleStrokePx = with(density) { 2.4.dp.toPx() }
-    val centerTextTopPadding = 24.dp
 
     val onZoomChangeState = rememberUpdatedState(onZoomChange)
     val minZoomState = rememberUpdatedState(safeMinZoom)
@@ -121,7 +123,6 @@ fun HalfCircleZoomSlider(
     }
     var lastSoundTimeMs by remember { mutableLongStateOf(0L) }
 
-    // Subtle Oppo-style camera click at discrete zoom intervals
     fun playZoomTickIfNeeded(zoom: Float) {
         val step = (zoomToNormalizedLog(zoom, safeMinZoom, safeMaxZoom) * 40f).roundToInt()
         if (step != lastSoundStep) {
@@ -157,7 +158,7 @@ fun HalfCircleZoomSlider(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(205.dp)
+            .height(containerHeightDp)
             .testTag("half_circle_zoom_slider")
             .pointerInput(safeMinZoom, safeMaxZoom) {
                 val dragThresholdPx = 1.5f
@@ -174,11 +175,16 @@ fun HalfCircleZoomSlider(
                     val maxZ = maxZoomState.value
                     val w = size.width.toFloat()
                     val h = size.height.toFloat()
-                    val baseline = h - arcBorderPx
-                    val cx = w / 2f
-                    val radius = min(w / 2f - with(density) { 4.dp.toPx() }, baseline - with(density) { 20.dp.toPx() })
-                    // Angular span covering the zoom range
-                    val trackAngleSpan = 2.45f // ~140 degrees along the semicircle
+                    val baseline = h
+                    val arcH = with(density) { arcHeightDp.toPx() }
+                    val halfW = w / 2f
+                    // Radius of circular segment using sagitta formula: R = ((W/2)^2 + H^2) / (2H)
+                    val radius = (halfW * halfW + arcH * arcH) / (2f * arcH)
+                    val offsetY = radius - arcH
+                    val cx = halfW
+                    val cy = baseline + offsetY
+                    val phiMax = asin((halfW / radius).coerceIn(0f, 1f))
+                    val trackAngleSpan = phiMax * 1.85f
                     val totalTrackWidthPx = radius * trackAngleSpan
 
                     var accumulatedNorm = zoomToNormalizedLog(
@@ -194,12 +200,11 @@ fun HalfCircleZoomSlider(
                             ?: break
 
                         if (!change.pressed) {
-                            // If released without significant drag, treat as direct arc tap
-                            if (!hasDragged && abs(change.position.x - downX) < 12f && abs(change.position.y - downY) < 12f) {
+                            if (!hasDragged && abs(change.position.x - downX) < 14f && abs(change.position.y - downY) < 14f) {
                                 val tapX = change.position.x
                                 val tapY = change.position.y
-                                val angleFromApex = atan2(tapX - cx, baseline - tapY)
-                                if (abs(angleFromApex) < 1.35f) {
+                                val angleFromApex = atan2(tapX - cx, cy - tapY)
+                                if (abs(angleFromApex) < phiMax) {
                                     val deltaFromTap = (angleFromApex / trackAngleSpan).coerceIn(-0.5f, 0.5f)
                                     val tappedNorm = (accumulatedNorm + deltaFromTap).coerceIn(0f, 1f)
                                     val newZoom = normalizedToZoomLog(tappedNorm, minZ, maxZ)
@@ -253,59 +258,75 @@ fun HalfCircleZoomSlider(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val width = size.width
             val height = size.height
-            val baseline = height - arcBorderPx
-            val centerX = width / 2f
-            // True geometric circle radius: identical width and height radii
-            val radius = min(width / 2f - with(density) { 4.dp.toPx() }, baseline - with(density) { 20.dp.toPx() })
+            // Baseline touches the very bottom pixel of this composable: zero gap and zero overlap with black bar below
+            val baseline = height
+            val arcH = with(density) { arcHeightDp.toPx() }
+            val halfW = width / 2f
+            val centerX = halfW
 
-            // 1. Draw large, translucent dark-grey semicircular dome background
-            val circleBounds = Rect(
+            // Mathematical circular segment (shallower arc, NOT a 180° pure half-circle)
+            val radius = (halfW * halfW + arcH * arcH) / (2f * arcH)
+            val offsetY = radius - arcH
+            val centerY = baseline + offsetY
+            val phiMax = asin((halfW / radius).coerceIn(0f, 1f))
+            val phiMaxDeg = Math.toDegrees(phiMax.toDouble()).toFloat()
+
+            val circleRect = Rect(
                 left = centerX - radius,
-                top = baseline - radius,
+                top = centerY - radius,
                 right = centerX + radius,
-                bottom = baseline + radius
+                bottom = centerY + radius
             )
+
+            // 1. Draw translucent dark-grey dome bounded by the circular arc and baseline
             val domePath = Path().apply {
-                moveTo(centerX - radius, baseline)
-                arcTo(circleBounds, 180f, 180f, false)
-                lineTo(centerX + radius, baseline)
+                moveTo(0f, baseline)
+                arcTo(
+                    rect = circleRect,
+                    startAngleDegrees = 270f - phiMaxDeg,
+                    sweepAngleDegrees = 2f * phiMaxDeg,
+                    forceMoveTo = false
+                )
+                lineTo(width, baseline)
+                lineTo(0f, baseline)
                 close()
             }
-            // Translucent dark-grey glass fill matching Oppo reference screenshot
             drawPath(domePath, Color(0x8C1B1C22))
 
-            // 2. Delicate top rim border along the smooth arc
+            // 2. Delicate top rim stroke along the smooth arc
             val rimPath = Path().apply {
-                moveTo(centerX - radius, baseline)
-                arcTo(circleBounds, 180f, 180f, false)
+                arcTo(
+                    rect = circleRect,
+                    startAngleDegrees = 270f - phiMaxDeg,
+                    sweepAngleDegrees = 2f * phiMaxDeg,
+                    forceMoveTo = true
+                )
             }
             drawPath(
                 path = rimPath,
                 color = Color.White.copy(alpha = 0.22f),
-                style = Stroke(width = arcBorderPx, cap = StrokeCap.Round)
+                style = Stroke(width = arcBorderPx, cap = StrokeCap.Butt)
             )
 
             val currentProgress = zoomToNormalizedLog(activeZoom, safeMinZoom, safeMaxZoom)
-            val trackAngleSpan = 2.45f // Total angular spread of the zoom scale across the arc
+            val trackAngleSpan = phiMax * 1.85f
 
-            // 3. Draw fine minor and medium ticks along the true circular arc
+            // 3. Draw fine minor and medium ticks along the circular arc
             val totalTicks = HALF_CIRCLE_TOTAL_TICKS
             for (tick in 0..totalTicks) {
                 val tickNorm = tick.toFloat() / totalTicks
                 val phi = (tickNorm - currentProgress) * trackAngleSpan
-                // Clip ticks outside the visible semicircle
-                if (phi < -1.35f || phi > 1.35f) continue
+                if (phi < -phiMax + 0.02f || phi > phiMax - 0.02f) continue
 
                 val x = centerX + radius * sin(phi)
-                val y = baseline - radius * cos(phi)
+                val y = centerY - radius * cos(phi)
 
-                // Inward normal vector pointing radially toward the circle center
                 val normalX = -sin(phi)
                 val normalY = cos(phi)
 
                 val isMedium = tick % 5 == 0
                 val tickLength = if (isMedium) mediumTickLengthPx else minorTickLengthPx
-                val tickAlpha = (1f - abs(phi) / 1.45f).coerceIn(0.25f, 1f)
+                val tickAlpha = (1f - abs(phi) / phiMax).coerceIn(0.25f, 1f)
                 val color = if (isMedium) {
                     Color.White.copy(alpha = 0.68f * tickAlpha)
                 } else {
@@ -316,13 +337,12 @@ fun HalfCircleZoomSlider(
                     color = color,
                     start = Offset(x, y),
                     end = Offset(x + normalX * tickLength, y + normalY * tickLength),
-                    strokeWidth = if (isMedium) tickStrokePx * 1.2f else tickStrokePx,
+                    strokeWidth = if (isMedium) tickStrokePx * 1.25f else tickStrokePx,
                     cap = StrokeCap.Round
                 )
             }
 
             // 4. Draw major ticks and upright numerical labels for primary focal points
-            // Required labels: 0.5x, 1x, 2x, 3x, 5x, 10x
             val majorZoomValues = listOf(
                 safeMinZoom,
                 1.0f,
@@ -343,16 +363,15 @@ fun HalfCircleZoomSlider(
             majorZoomValues.forEach { zoomVal ->
                 val zoomNorm = zoomToNormalizedLog(zoomVal, safeMinZoom, safeMaxZoom)
                 val phi = (zoomNorm - currentProgress) * trackAngleSpan
-                if (phi < -1.35f || phi > 1.35f) return@forEach
+                if (phi < -phiMax + 0.02f || phi > phiMax - 0.02f) return@forEach
 
                 val x = centerX + radius * sin(phi)
-                val y = baseline - radius * cos(phi)
+                val y = centerY - radius * cos(phi)
 
                 val normalX = -sin(phi)
                 val normalY = cos(phi)
 
-                // Draw prominent major tick
-                val edgeFade = (1f - abs(phi) / 1.45f).coerceIn(0.3f, 1f)
+                val edgeFade = (1f - abs(phi) / phiMax).coerceIn(0.35f, 1f)
                 drawLine(
                     color = Color.White.copy(alpha = 0.88f * edgeFade),
                     start = Offset(x, y),
@@ -367,7 +386,7 @@ fun HalfCircleZoomSlider(
                 val labelY = y + normalY * labelDistancePx
 
                 // Smoothly fade out white scale label when under the orange center readout
-                val centerProximityAlpha = (abs(phi) / 0.22f).coerceIn(0f, 1f)
+                val centerProximityAlpha = (abs(phi) / 0.18f).coerceIn(0f, 1f)
                 if (centerProximityAlpha > 0.05f) {
                     val labelText = when {
                         zoomVal < 1f -> String.format(Locale.US, "%.1f", zoomVal)
@@ -386,7 +405,7 @@ fun HalfCircleZoomSlider(
 
             // 5. Prominent Oppo Orange selected zoom indicator needle at the apex (top center)
             val apexX = centerX
-            val apexY = baseline - radius
+            val apexY = baseline - arcH
             drawLine(
                 color = Color(0xFFFF9418),
                 start = Offset(apexX, apexY),
@@ -397,7 +416,6 @@ fun HalfCircleZoomSlider(
         }
 
         // 6. Selected zoom value readout in vibrant Oppo Orange (e.g. "20x", "2x", "1x")
-        // Positioned right beneath the center needle inside the translucent dome
         val zoomText = when {
             activeZoom < 1f -> String.format(Locale.US, "%.1fx", activeZoom)
             abs(activeZoom - activeZoom.roundToInt()) < 0.05f ->
@@ -407,7 +425,7 @@ fun HalfCircleZoomSlider(
         Text(
             text = zoomText,
             color = Color(0xFFFF9418),
-            fontSize = 16.5.sp,
+            fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.2.sp,
             modifier = Modifier
