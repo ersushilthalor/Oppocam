@@ -2,6 +2,7 @@ package com.example.camera.engine
 
 import android.hardware.camera2.CameraCharacteristics
 import android.os.SystemClock
+import android.util.Log
 import com.example.camera.model.LensInfo
 import com.example.camera.model.LensType
 import com.example.camera.ui.components.normalizedToZoomLog
@@ -249,12 +250,14 @@ class ZoomTransitionController(
     ) {
         frameHandoffTimeoutJob?.cancel()
         val nowMs = SystemClock.uptimeMillis()
+        val preparedFrameAgeMs = if (preparedTargetLastFrameAtMs > 0L) nowMs - preparedTargetLastFrameAtMs else -1L
         val hasFreshPreparedTargetFrames =
             preparedFrameHandoffFromSource == fromSource &&
                 preparedFrameHandoffTargetSource == targetSource &&
                 preparedTargetFrameCount >= FRAME_HANDOFF_WARMUP_FRAMES &&
                 preparedTargetLastFrameAtMs > 0L &&
-                nowMs - preparedTargetLastFrameAtMs <= FRAME_HANDOFF_PREWARM_MAX_AGE_MS
+                preparedFrameAgeMs in 0L..FRAME_HANDOFF_PREWARM_MAX_AGE_MS
+        Log.i(TAG, "[HANDOFF_BEGIN] from=$fromSource target=$targetSource zoom=${_currentInterpolatedZoom.value} preparedFrames=$preparedTargetFrameCount preparedFrameAgeMs=$preparedFrameAgeMs fresh=$hasFreshPreparedTargetFrames")
         clearPreparedFrameHandoff()
 
         if (fromSource == targetSource) {
@@ -300,6 +303,7 @@ class ZoomTransitionController(
                 preparedTargetFrameCount =
                     (preparedTargetFrameCount + 1).coerceAtMost(FRAME_HANDOFF_WARMUP_FRAMES)
                 preparedTargetLastFrameAtMs = SystemClock.uptimeMillis()
+                Log.v(TAG, "[HANDOFF_PREWARM_FRAME] source=$source count=$preparedTargetFrameCount zoom=${_currentInterpolatedZoom.value} ageMs=0")
             }
             return
         }
@@ -309,6 +313,7 @@ class ZoomTransitionController(
             FRAME_HANDOFF_WARMUP_FRAMES + FRAME_HANDOFF_REQUIRED_FRAMES
         )
         val fromSource = frameHandoffFromSource ?: return
+        Log.v(TAG, "[HANDOFF_FRAME] from=$fromSource target=$targetSource count=$frameHandoffFrameCount zoom=${_currentInterpolatedZoom.value} ageMs=0")
 
         // Let two real target frames arrive before blending. Camera2 applies crop/zoom changes
         // asynchronously; these warm-up frames let the new stream catch up to the continuously
@@ -500,15 +505,11 @@ class ZoomTransitionController(
                         val reachedSwitchPoint = currentNorm >= switchNorm || currentZ >= effectiveSwitchZoom
 
                         if (!mainLensSelected && reachedSwitchPoint) {
-                            // Pin the optical handoff to its calibrated FOV, select Main immediately,
-                            // and then apply this frame's already-advanced zoom value without restarting
-                            // the clock or easing curve.
-                            _currentInterpolatedZoom.value = effectiveSwitchZoom
-                            if (abs(lastDispatchedZoom - effectiveSwitchZoom) >= 0.005f) {
-                                onZoomUpdate(effectiveSwitchZoom)
-                            }
-                            onApplyZoomToEngine(effectiveSwitchZoom, true)
-
+                            Log.i(TAG, "[ZOOM_CROSSING] elapsedMs=$elapsed durationMs=$transitionDurationMs zoom=$currentZ switchZoom=$effectiveSwitchZoom target=$endZ")
+                            // Switch the visible source at the current point on the existing zoom
+                            // timeline. Do not emit an artificial 1x update and then a second zoom
+                            // update in the same tick: that creates a visible snap/double transition
+                            // and can stall the apparent motion at the lens boundary.
                             if (useFrameBasedHandoff) {
                                 beginFrameBasedHandoff(
                                     fromSource = PreviewStreamSource.ULTRAWIDE,
@@ -516,19 +517,16 @@ class ZoomTransitionController(
                                     scope = scope
                                 )
                             }
-                            onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
+                            _currentInterpolatedZoom.value = currentZ
+                            onZoomUpdate(currentZ)
+                            // This coordinated callback owns both the lens switch and the zoom value
+                            // for this frame. Do not also route the same value through onApplyZoomToEngine,
+                            // which can independently re-evaluate physical-lens selection.
+                            onSelectLensOnEngine(mainWideLens, currentZ, true)
                             if (!useFrameBasedHandoff) setSteadyStatePreview(false)
                             mainLensSelected = true
-                            lastDispatchedZoom = effectiveSwitchZoom
+                            lastDispatchedZoom = currentZ
                             lastDispatchedTime = now
-
-                            if (currentZ > effectiveSwitchZoom + 0.005f) {
-                                _currentInterpolatedZoom.value = currentZ
-                                onZoomUpdate(currentZ)
-                                onApplyZoomToEngine(currentZ, true)
-                                lastDispatchedZoom = currentZ
-                                lastDispatchedTime = now
-                            }
                         } else {
                             val zoomToApply = if (mainLensSelected) currentZ else currentZ.coerceAtMost(effectiveSwitchZoom)
                             if (abs(zoomToApply - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
@@ -623,7 +621,9 @@ class ZoomTransitionController(
                 // Ensure Ultra-Wide reaches the exact selected focal length field of view
                 _currentInterpolatedZoom.value = effectiveSwitchZoom
                 onZoomUpdate(effectiveSwitchZoom)
-                onApplyZoomToEngine(effectiveSwitchZoom, true)
+                // Do not call onApplyZoomToEngine at the exact switch point: setZoom() can
+                // independently select a physical lens. The explicit onSelectLens callback below is
+                // the single owner of the handoff and applies this target zoom during selection.
 
                 // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
                 // Direct 2x/3x preset taps should cross the lens switch without pausing at 1x.
@@ -757,6 +757,15 @@ class ZoomTransitionController(
             val useReverseFrameBasedHandoff = isOverlapAnimationEnabled &&
                 isTelephotoPresetToHalfXTransition(startZ, endZ)
             var reverseFrameBasedHandoffStarted = false
+            if (useReverseFrameBasedHandoff) {
+                // Prewarm frame-based handoff by observing incoming Ultra-Wide frames before
+                // the 1x boundary. This only prepares frame synchronization; it does not drive
+                // the standby camera's zoom/crop ahead of the visible lens switch.
+                prepareFrameBasedHandoff(
+                    fromSource = PreviewStreamSource.MAIN,
+                    targetSource = PreviewStreamSource.ULTRAWIDE
+                )
+            }
 
             // Move the slider in the background from startNorm to targetNorm over exactly 400ms (0.40s)
             while (isActive) {

@@ -26,6 +26,33 @@ class FrameBasedHandoffTest {
     }
 
     @Test
+    fun preparedTargetFramesAreObservedBeforeTheVisibleHandoffBegins() {
+        val controller = ZoomTransitionController()
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+
+        controller.prepareFrameBasedHandoff(
+            fromSource = PreviewStreamSource.MAIN,
+            targetSource = PreviewStreamSource.ULTRAWIDE
+        )
+        // Collect actual standby frames while Main remains the visible source.
+        controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
+        controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
+
+        controller.beginFrameBasedHandoff(
+            fromSource = PreviewStreamSource.MAIN,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            scope = scope
+        )
+        assertTrue(controller.previewOverlapState.value.isOverlapping)
+        assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
+
+        // Previously collected fresh frames satisfy warm-up; the next real target frame starts
+        // the blend instead of spending two more frames waiting at the switch boundary.
+        controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
+        assertTrue(controller.previewOverlapState.value.overlapProgress > 0f)
+    }
+
+    @Test
     fun reverseHandoffBlendsOnlyIncomingUltraWideFrames() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
