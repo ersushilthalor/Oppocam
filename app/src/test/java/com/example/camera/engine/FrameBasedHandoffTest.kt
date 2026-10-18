@@ -52,7 +52,7 @@ class FrameBasedHandoffTest {
         }
 
         var previousProgress = 0f
-        repeat(15) {
+        repeat(31) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
             assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
 
@@ -74,70 +74,57 @@ class FrameBasedHandoffTest {
     }
 
     @Test
-    fun reverseHandoffAcceleratesFadeWhenUltraWideFovMovesWiderThanMain() {
-        val atOneX = ZoomTransitionController.calculateFrameHandoffProgress(
-            incomingFrameCount = 1,
-            targetSource = PreviewStreamSource.ULTRAWIDE,
-            currentZoom = 1.0f,
-            previousProgress = 0f
-        )
-        val atPointEightX = ZoomTransitionController.calculateFrameHandoffProgress(
-            incomingFrameCount = 1,
-            targetSource = PreviewStreamSource.ULTRAWIDE,
-            currentZoom = 0.8f,
-            previousProgress = 0f
-        )
-        assertTrue("Reverse handoff should fade faster once Main cannot match the wider FOV", atPointEightX > atOneX)
-
-        val nextFrame = ZoomTransitionController.calculateFrameHandoffProgress(
-            incomingFrameCount = 2,
-            targetSource = PreviewStreamSource.ULTRAWIDE,
-            currentZoom = 0.7f,
-            previousProgress = atPointEightX
-        )
-        assertTrue("Reverse handoff alpha must remain monotonic", nextFrame >= atPointEightX)
-        assertTrue("Fade must finish before a large FOV mismatch remains visible", nextFrame > 0.8f)
-    }
-
-    @Test
-    fun forwardHandoffShortensBlendAsMainFovMovesAwayFromSwitchFov() {
-        val atSwitch = ZoomTransitionController.calculateFrameHandoffProgress(
+    fun everyIncomingFrameAdvancesBlendByExactlyOneOfThirtyTwoSteps() {
+        val firstAtOneX = ZoomTransitionController.calculateFrameHandoffProgress(
             incomingFrameCount = 1,
             targetSource = PreviewStreamSource.MAIN,
-            currentZoom = 1.0f,
-            previousProgress = 0f
+            currentZoom = 1.0f
         )
-        val atOnePointZeroFive = ZoomTransitionController.calculateFrameHandoffProgress(
-            incomingFrameCount = 2,
+        val firstAwayFromOneX = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 1,
             targetSource = PreviewStreamSource.MAIN,
-            currentZoom = 1.05f,
-            previousProgress = atSwitch
+            currentZoom = 1.15f
         )
-        val atOnePointOne = ZoomTransitionController.calculateFrameHandoffProgress(
-            incomingFrameCount = 3,
-            targetSource = PreviewStreamSource.MAIN,
-            currentZoom = 1.10f,
-            previousProgress = atOnePointZeroFive
-        )
-        val atOnePointFifteen = ZoomTransitionController.calculateFrameHandoffProgress(
-            incomingFrameCount = 4,
+        val frame31 = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 31,
             targetSource = PreviewStreamSource.MAIN,
             currentZoom = 1.15f,
-            previousProgress = atOnePointOne
+            previousProgress = 30f / 32f
+        )
+        val frame32 = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 32,
+            targetSource = PreviewStreamSource.MAIN,
+            currentZoom = 1.15f,
+            previousProgress = frame31
         )
 
-        assertTrue("Blend should begin gently at the shared switch FOV", atSwitch > 0f && atSwitch < 0.05f)
-        assertTrue("Alpha must increase monotonically", atOnePointZeroFive > atSwitch)
-        assertTrue("Alpha must increase monotonically", atOnePointOne > atOnePointZeroFive)
-        assertTrue("Alpha must increase monotonically", atOnePointFifteen > atOnePointOne)
-        assertTrue(
-            "Blend should be nearly complete before large FOV mismatch creates visible double edges",
-            atOnePointFifteen > 0.85f && atOnePointFifteen < 1f
-        )
+        assertEquals(1f / 32f, firstAtOneX, 0.0001f)
+        assertEquals("FOV changes must not skip handoff frames", firstAtOneX, firstAwayFromOneX, 0.0001f)
+        assertEquals(31f / 32f, frame31, 0.0001f)
+        assertTrue("Frame 31 must not finish the blend", frame31 < 1f)
+        assertEquals(1f, frame32, 0.0001f)
     }
 
     @Test
-    fun handoffUsesTwoWarmupFramesThenSixteenBlendFramesAndIgnoresOutgoingFrames() {
+    fun frameProgressNeverRegressesAndUsesOnlyIncomingFrames() {
+        val afterTwoFrames = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 2,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 0.8f
+        )
+        val withLaterIncomingFrame = ZoomTransitionController.calculateFrameHandoffProgress(
+            incomingFrameCount = 3,
+            targetSource = PreviewStreamSource.ULTRAWIDE,
+            currentZoom = 0.7f,
+            previousProgress = afterTwoFrames
+        )
+        assertEquals(2f / 32f, afterTwoFrames, 0.0001f)
+        assertEquals(3f / 32f, withLaterIncomingFrame, 0.0001f)
+        assertTrue(withLaterIncomingFrame > afterTwoFrames)
+    }
+
+    @Test
+    fun handoffUsesTwoWarmupFramesThenThirtyTwoBlendFramesAndIgnoresOutgoingFrames() {
         val controller = ZoomTransitionController()
         val scope = CoroutineScope(Dispatchers.Unconfined)
 
@@ -154,7 +141,7 @@ class FrameBasedHandoffTest {
         controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
         assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
 
-        // Wait for two fresh Main frames before starting the actual 16-frame blend.
+        // Wait for two fresh Main frames before starting the actual 32-frame blend.
         repeat(2) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
@@ -167,19 +154,19 @@ class FrameBasedHandoffTest {
         }
 
         var previousProgress = 0f
-        repeat(15) {
+        repeat(31) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
             val state = controller.previewOverlapState.value
-            assertTrue("Handoff must remain active before the sixteenth target frame", state.isOverlapping)
+            assertTrue("Handoff must remain active before the thirty-second target frame", state.isOverlapping)
             assertTrue("Crossfade progress must increase on each real target frame", state.overlapProgress > previousProgress)
-            assertTrue("Crossfade must not finish before the sixteenth target frame", state.overlapProgress < 1f)
+            assertTrue("Crossfade must not finish before the thirty-second target frame", state.overlapProgress < 1f)
             assertEquals("Outgoing preview remains underneath the incoming preview", 1f, state.ultraWideAlpha, 0.0001f)
             previousProgress = state.overlapProgress
         }
 
         controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
         val completed = controller.previewOverlapState.value
-        assertFalse("Handoff should finish on the sixteenth target frame", completed.isOverlapping)
+        assertFalse("Handoff should finish on the thirty-second target frame", completed.isOverlapping)
         assertEquals(PreviewStreamSource.MAIN, completed.activeSource)
         assertEquals(1f, completed.mainAlpha, 0.0001f)
         assertEquals(0f, completed.ultraWideAlpha, 0.0001f)
@@ -211,12 +198,12 @@ class FrameBasedHandoffTest {
         assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
 
         // Fresh standby frames satisfy warm-up. The first post-switch target frame starts the
-        // 16-frame blend rather than spending two more frames waiting.
+        // 32-frame blend rather than spending two more frames waiting.
         controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
         assertTrue(controller.previewOverlapState.value.overlapProgress > 0f)
         assertTrue(controller.previewOverlapState.value.isOverlapping)
 
-        repeat(14) {
+        repeat(30) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
             assertTrue(controller.previewOverlapState.value.isOverlapping)
         }
@@ -227,4 +214,44 @@ class FrameBasedHandoffTest {
         assertEquals(1f, completed.mainAlpha, 0.0001f)
         assertEquals(0f, completed.ultraWideAlpha, 0.0001f)
     }
+
+    @Test
+    fun recordingHandoffRendersThirtyTwoBlendFramesEvenIfPreviewFinishesFirst() {
+        val recording = RecordingFrameHandoff()
+        recording.update(
+            PreviewOverlapState(
+                isOverlapping = true,
+                activeSource = PreviewStreamSource.MAIN,
+                overlapProgress = 0f
+            )
+        )
+
+        // Before the preview starts blending, the recorded stream must hold the outgoing lens.
+        assertEquals(1f, recording.outgoingAlphaForFrame(PreviewStreamSource.MAIN, true)!!, 0.0001f)
+
+        recording.update(
+            PreviewOverlapState(
+                isOverlapping = true,
+                activeSource = PreviewStreamSource.MAIN,
+                overlapProgress = 1f / 32f
+            )
+        )
+
+        for (frame in 1..32) {
+            val alpha = recording.outgoingAlphaForFrame(PreviewStreamSource.MAIN, true)
+            assertTrue("Recording should report every one of its 32 handoff frames", alpha != null)
+            assertEquals(1f - frame / 32f, alpha!!, 0.0001f)
+            if (frame == 4) {
+                // The UI can finish on its own clock; recording must finish all 32 real frames.
+                recording.update(
+                    PreviewOverlapState(
+                        isOverlapping = false,
+                        activeSource = PreviewStreamSource.MAIN
+                    )
+                )
+            }
+        }
+        assertTrue(recording.outgoingAlphaForFrame(PreviewStreamSource.MAIN, true) == null)
+    }
+
 }
