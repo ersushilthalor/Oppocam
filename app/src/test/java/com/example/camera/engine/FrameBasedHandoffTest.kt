@@ -10,16 +10,18 @@ import org.junit.Test
 class FrameBasedHandoffTest {
 
     @Test
-    fun frameBasedHandoffIsRestrictedToHalfXAndTwoOrThreeXEndpoints() {
-        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 2.0f))
-        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 3.0f))
+    fun frameBasedHandoffIsLimitedToTransitionsCrossingTheOneXBoundary() {
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 1.0f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 1.2f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.8f, 1.2f))
         assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(2.0f, 0.5f))
-        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(3.0f, 0.5f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(1.2f, 0.8f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(1.0f, 0.5f))
 
-        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 1.0f))
-        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(1.0f, 0.5f))
-        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(0.7f, 2.0f))
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 0.8f))
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(1.0f, 2.0f))
         assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(2.0f, 1.0f))
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(1.2f, 2.0f))
 
         assertTrue(ZoomTransitionController.isHalfXToTelephotoPresetTransition(0.5f, 2.0f))
         assertFalse(ZoomTransitionController.isHalfXToTelephotoPresetTransition(0.5f, 1.0f))
