@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -131,9 +130,8 @@ fun HalfCircleZoomSlider(
 
     Box(
         modifier = modifier
-            .widthIn(min = 280.dp, max = 380.dp)
             .fillMaxWidth()
-            .height(220.dp)
+            .height(190.dp)
             .testTag("half_circle_zoom_slider")
             .pointerInput(HALF_CIRCLE_TOTAL_TICKS) {
                 val totalRulerWidthPx = size.width * HALF_CIRCLE_TRACK_WIDTH_MULTIPLIER
