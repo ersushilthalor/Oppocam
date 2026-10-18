@@ -25,6 +25,34 @@ class VideoAdjustmentsPipelineTest {
     }
 
     @Test
+    fun lensVideoAdjustmentProfilesRemainIndependentAndPersist() {
+        val suffix = System.nanoTime().toString()
+        val ultraWideKey = "test_ultrawide_$suffix"
+        val mainKey = "test_main_$suffix"
+        val ultraWide = VideoAdjustments(
+            tonality = 12f, saturation = 24f, contrast = 36f, exposure = 1.2f,
+            temperature = 18f, tint = -14f, highlights = 22f, shadows = -26f,
+            vignette = 31f, grain = 17f, clarity = 42f, sharpness = 53f
+        )
+        val main = VideoAdjustments(
+            tonality = -11f, saturation = -23f, contrast = -35f, exposure = -1.1f,
+            temperature = -17f, tint = 13f, highlights = -21f, shadows = 25f,
+            vignette = 30f, grain = 16f, clarity = -41f, sharpness = 52f
+        )
+
+        preferences.saveVideoAdjustments(ultraWide, ultraWideKey)
+        preferences.saveVideoAdjustments(main, mainKey)
+
+        assertEquals(ultraWide, preferences.getVideoAdjustments(ultraWideKey))
+        assertEquals(main, preferences.getVideoAdjustments(mainKey))
+        assertNotEquals(
+            "Saving the main lens profile must not overwrite the ultra-wide profile",
+            main,
+            preferences.getVideoAdjustments(ultraWideKey)
+        )
+    }
+
+    @Test
     fun testDefaultVideoAdjustments() {
         val adjustments = VideoAdjustments()
         assertTrue("Default adjustments should report isDefault = true", adjustments.isDefault)
