@@ -5,8 +5,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -113,13 +115,15 @@ fun RefocusGalleryScreen(
                         Text("Photos captured with Refocus Photo enabled will appear here. Open one to tap a subject or use the focus slider.", color = Color.White.copy(alpha = 0.65f), fontSize = 14.sp)
                     }
                 } else {
-                    LazyColumn(
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        contentPadding = PaddingValues(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         items(photos, key = { it.photoUri }) { photo ->
-                            RefocusGalleryRow(photo = photo, onClick = { selectedPhoto = photo })
+                            RefocusGalleryTile(photo = photo, onClick = { selectedPhoto = photo })
                         }
                     }
                 }
@@ -129,11 +133,11 @@ fun RefocusGalleryScreen(
 }
 
 @Composable
-private fun RefocusGalleryRow(
+private fun RefocusGalleryTile(
     photo: RefocusPhotoEntity,
     onClick: () -> Unit
 ) {
-    val previewPath = remember(photo.bundleDir, photo.midPlanePath) {
+    val previewPath = remember(photo.bundleDir, photo.midPlanePath, photo.planeCount) {
         val mid = File(photo.bundleDir, "plane_${(photo.planeCount.coerceAtLeast(1) / 2)}.jpg")
         when {
             mid.exists() -> mid.absolutePath
@@ -148,51 +152,53 @@ private fun RefocusGalleryRow(
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(path, bounds)
                 var sample = 1
-                while (bounds.outWidth / (sample * 2) >= 320 || bounds.outHeight / (sample * 2) >= 320) sample *= 2
+                while (bounds.outWidth / (sample * 2) >= 240 || bounds.outHeight / (sample * 2) >= 240) sample *= 2
                 BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
             }
         }
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF171B24))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(0.78f)
+            .clip(RoundedCornerShape(7.dp))
+            .background(Color(0xFF20242D))
+            .clickable(onClick = onClick)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+        if (thumbnail != null) {
+            Image(
+                bitmap = thumbnail!!.asImageBitmap(),
+                contentDescription = "Refocus photo, ${photo.planeCount} frames",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.CenterFocusStrong,
+                    contentDescription = null,
+                    tint = Color(0xFFFFD54F),
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+
+        // Small, subtle frame-count tag directly over the photo.
+        Surface(
+            modifier = Modifier.align(Alignment.TopStart).padding(3.dp),
+            color = Color.Black.copy(alpha = 0.48f),
+            shape = RoundedCornerShape(4.dp)
         ) {
-            Box(
-                modifier = Modifier.size(width = 112.dp, height = 84.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF252B36)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (thumbnail != null) {
-                    Image(
-                        bitmap = thumbnail!!.asImageBitmap(),
-                        contentDescription = "Refocus photo thumbnail",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Icon(Icons.Default.CenterFocusStrong, contentDescription = null, tint = Color(0xFFFFD54F), modifier = Modifier.size(30.dp))
-                }
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(
-                    DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(photo.timestamp)),
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp
-                )
-                Text(
-                    "${photo.width.takeIf { it > 0 } ?: "—"} × ${photo.height.takeIf { it > 0 } ?: "—"}  ·  ${photo.planeCount.coerceAtLeast(3)} focus planes",
-                    color = Color.White.copy(alpha = 0.62f),
-                    fontSize = 12.sp
-                )
-                Text("Tap to adjust focus  ›", color = Color(0xFFFFD54F), fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            }
+            Text(
+                "${photo.planeCount.coerceAtLeast(3)}F",
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                color = Color.White.copy(alpha = 0.92f),
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
         }
     }
 }
