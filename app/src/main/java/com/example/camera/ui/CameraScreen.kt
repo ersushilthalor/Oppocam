@@ -354,7 +354,8 @@ fun CameraScreen(
             val maxViewfinderZoom = maxOf(capabilities.maxZoom, maxLensZoom, 20.0f)
             // OPPO video preview uses a dedicated portrait frame below the top controls.
             // Keep other templates and all non-video modes on their existing full-screen layout.
-            val isOppoVideoTemplate = cameraMode == CameraMode.VIDEO &&
+            // Use the same extended preview geometry for both Video and Pro Video (Cinema).
+            val isOppoVideoTemplate = (cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.CINEMA) &&
                     uiCustomizationState.selectedTemplate.name.contains("OPPO", ignoreCase = true)
             val oppoVideoPreviewTopInset = 72.dp
             // Match the preview's lower edge to the bottom of the shutter button, leaving
