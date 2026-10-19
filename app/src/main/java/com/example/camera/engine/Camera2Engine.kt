@@ -1789,7 +1789,56 @@ class Camera2Engine(private val context: Context) {
             }
         }
     var isRefocusPhotoEnabled: Boolean = false
+        set(value) {
+            val changed = field != value
+            field = value
+            if (changed && currentMode == CameraMode.PHOTO) {
+                val activeLens = _selectedLens.value
+                val cameraId = activeLens?.physicalCameraId ?: activeLens?.cameraId
+                if (cameraId != null && cameraDevice != null && !isConfiguringSession) {
+                    setupImageReaders(cameraId)
+                    createCameraCaptureSession()
+                }
+            }
+        }
     var refocusFrameCount: Int = 5
+        set(value) {
+            field = value.coerceIn(3, 20)
+        }
+
+    private val _lensSwitchPointMm = MutableStateFlow(preferences.lensSwitchPointMm)
+    val lensSwitchPointMm: StateFlow<Float> = _lensSwitchPointMm.asStateFlow()
+
+    fun setLensSwitchPointMm(pointMm: Float) {
+        val clamped = pointMm.coerceIn(23.0f, 85.0f)
+        _lensSwitchPointMm.value = clamped
+        preferences.lensSwitchPointMm = clamped
+    }
+
+    private var refocusBufferPool: RefocusBufferPool? = null
+    private val isRefocusCaptureActive = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var refocusFrameListener: ((android.media.Image) -> Unit)? = null
+
+    private fun configureRefocusBufferPool(width: Int, height: Int) {
+        val yuvByteSize = width * height * 3 / 2
+        if (refocusBufferPool?.frameByteSize != yuvByteSize) {
+            refocusBufferPool?.clear()
+            refocusBufferPool = RefocusBufferPool(yuvByteSize, maxPoolCapacity = 10)
+        }
+    }
+
+    private fun onRefocusSensorImageAvailable(reader: ImageReader) {
+        val image = try {
+            reader.acquireNextImage()
+        } catch (e: Exception) {
+            null
+        } ?: return
+        try {
+            refocusFrameListener?.invoke(image)
+        } finally {
+            try { image.close() } catch (ignored: Throwable) {}
+        }
+    }
 
     // Ultra Fast Shutter System
     val ultraFastShutterEngine = com.example.camera.ultrafast.engine.UltraFastShutterEngine(
@@ -4285,12 +4334,13 @@ class Camera2Engine(private val context: Context) {
             _selectedPhotoResolution.value = CameraResolution(targetSize.width, targetSize.height, ImageFormat.JPEG)
         }
 
+        val jpegCapacity = if (isRefocusPhotoEnabled) maxOf(8, refocusFrameCount + 2) else 3
         try {
             imageReaderJpeg = ImageReader.newInstance(
                 targetSize.width,
                 targetSize.height,
                 ImageFormat.JPEG,
-                3
+                jpegCapacity
             )
             val mp = (targetSize.width.toLong() * targetSize.height.toLong()) / 1_000_000f
             Log.i(TAG, "[PHOTO_RES] Recreated ImageReader for ${activeLens?.lensType} (cameraId=$cameraId): JPEG=${targetSize.width}x${targetSize.height} (~${mp}MP)")
@@ -4298,25 +4348,28 @@ class Camera2Engine(private val context: Context) {
             Log.e(TAG, "Failed to create ImageReader with ${targetSize.width}x${targetSize.height}, falling back to largest supported", t)
             val fallback = caps.supportedPhotoResolutions.firstOrNull() ?: CameraResolution(1920, 1080)
             try {
-                imageReaderJpeg = ImageReader.newInstance(fallback.width, fallback.height, ImageFormat.JPEG, 3)
+                imageReaderJpeg = ImageReader.newInstance(fallback.width, fallback.height, ImageFormat.JPEG, jpegCapacity)
             } catch (t2: Throwable) {
                 Log.e(TAG, "Failed fallback ImageReader", t2)
             }
         }
 
         val isFastShutterSupported = currentMode == CameraMode.PHOTO && isUltraFastShutterEnabled
-        if (isFastShutterSupported) {
+        val isRefocusSupported = currentMode == CameraMode.PHOTO && isRefocusPhotoEnabled
+        if (isFastShutterSupported || isRefocusSupported) {
             try {
                 val optimalBurstSize = getOptimalBurstYuvSize(activeLens, cameraId, targetSize)
                 val yuvWidth = optimalBurstSize.width
                 val yuvHeight = optimalBurstSize.height
+                val yuvMaxImages = if (isRefocusSupported) maxOf(8, refocusFrameCount + 3) else 4
                 imageReaderYuv = ImageReader.newInstance(
                     yuvWidth,
                     yuvHeight,
                     ImageFormat.YUV_420_888,
-                    4
+                    yuvMaxImages
                 )
                 ultraFastShutterEngine.configureFramePool(yuvWidth, yuvHeight)
+                configureRefocusBufferPool(yuvWidth, yuvHeight)
                 imageReaderYuv?.setOnImageAvailableListener({ reader ->
                     if (ultraFastShutterEngine.isBurstActive()) {
                         CameraPerformanceMonitor.onYuvFrame()
@@ -4327,6 +4380,8 @@ class Camera2Engine(private val context: Context) {
                             isFrontFacing = isFront,
                             saveMirrored = saveSelfieAsPreviewed
                         )
+                    } else if (isRefocusCaptureActive.get()) {
+                        onRefocusSensorImageAvailable(reader)
                     } else {
                         // Immediately drain stray frame if any so ImageReader never stalls or holds memory
                         try {
@@ -4334,9 +4389,9 @@ class Camera2Engine(private val context: Context) {
                         } catch (ignored: Throwable) {}
                     }
                 }, ultraFastShutterEngine.getCaptureHandler() ?: backgroundHandler)
-                Log.i(TAG, "[FAST_SHUTTER] Created YUV ImageReader ${yuvWidth}x${yuvHeight} (idle, not in preview repeating request)")
+                Log.i(TAG, "[UNCOMPRESSED_YUV] Created YUV ImageReader ${yuvWidth}x${yuvHeight} maxImages=$yuvMaxImages for fast capture")
             } catch (t: Throwable) {
-                Log.e(TAG, "Failed to create uncompressed YUV ImageReader for Ultra Fast Shutter", t)
+                Log.e(TAG, "Failed to create uncompressed YUV ImageReader", t)
                 imageReaderYuv = null
             }
         } else {
@@ -6642,27 +6697,19 @@ class Camera2Engine(private val context: Context) {
     }
 
     /**
-     * Refocus Photo Capture:
-     * When Refocus Photo is enabled, captures a short sequence of 3 focus planes:
-     * Near (macro/foreground) -> Mid (subject/user focus) -> Far (background/infinity).
-     *
-     * - The subject/mid plane is immediately saved and presented as the normal photo preview
-     *   to ensure zero shutter lag or preview stall.
-     * - Sequential/tiled depth map generation and permanent bundling is handled in the
-     *   background thread without keeping all full-resolution frames in RAM simultaneously.
-     * - If burst capture or refocus processing fails, it automatically falls back to saving
-     *   the normal photo without failing capture.
+     * Instant Refocus Photo Capture (3F, 5F, 7F):
+     * - Immediate optical focal plane burst via uncompressed RAW/YUV sensor stream (or zero-delay in-memory JPEG fallback).
+     * - Zero-stall UI return: control is released back to the camera preview and UI immediately upon frame acquisition.
+     * - Background worker alignment, focus energy extraction, depth map synthesis, and JPEG persistence.
+     * - MediaStore naming with frame count tag (REFOCUS_3F, REFOCUS_5F, REFOCUS_7F) for gallery detection.
      */
     private fun takePhotoRefocus(onComplete: (Uri?) -> Unit) {
         val camera = cameraDevice
         val session = captureSession
-        val readerJpeg = imageReaderJpeg
-        if (camera == null || session == null || readerJpeg == null) {
+        if (camera == null || session == null) {
             takePhoto(onComplete)
             return
         }
-
-        _isCapturing.value = true
 
         val lens = _selectedLens.value
         val chars = if (lens != null) getCharacteristics(lens.cameraId) else null
@@ -6672,102 +6719,162 @@ class Camera2Engine(private val context: Context) {
         val lastFocusDiopters = lastCaptureResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
             ?: (effectiveMinDist * 0.35f)
 
-        val frameCount = refocusFrameCount.coerceIn(5, 20)
+        val frameCount = refocusFrameCount.coerceIn(3, 20)
         val focusPlanes = FloatArray(frameCount)
         for (i in 0 until frameCount) {
             val fraction = i.toFloat() / (frameCount - 1).coerceAtLeast(1)
-            // Sweep from maximum focus (closest near) down to 0.0 (infinity/far)
+            // Sweep from closest near down to infinity/far
             focusPlanes[i] = (effectiveMinDist * (1.0f - fraction)).coerceIn(0f, effectiveMinDist)
         }
-
-        // Identify the frame closest to current user AF distance for instant saving as default gallery photo
-        var bestMidIndex = frameCount / 2
-        var minDiff = Float.MAX_VALUE
-        for (i in 0 until frameCount) {
-            val diff = kotlin.math.abs(focusPlanes[i] - lastFocusDiopters)
-            if (diff < minDiff) {
-                minDiff = diff
-                bestMidIndex = i
-            }
-        }
-
-        val tempPlaneFiles = List(frameCount) { idx ->
-            File(context.cacheDir, "refocus_tmp_${idx}_${System.currentTimeMillis()}.jpg")
-        }
-
-        var framesReceived = 0
-        val isCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
 
         val captureOrientation = getCaptureJpegOrientation()
         val isFrontFacing = lens?.facing == CameraCharacteristics.LENS_FACING_FRONT
 
-        fun finalizeRefocusCapture() {
-            if (!isCompleted.compareAndSet(false, true)) return
-            readerJpeg.setOnImageAvailableListener(null, null)
-            engineScope.launch(Dispatchers.IO) {
-                var finalUri: Uri? = null
+        // Prefer uncompressed raw YUV for zero ISP compression lag; fallback to JPEG reader if YUV is not in session
+        val useYuvStream = imageReaderYuv != null && imageReaderYuv?.surface != null && imageReaderYuv?.surface?.isValid == true
+        val targetSurface = if (useYuvStream) {
+            imageReaderYuv!!.surface
+        } else {
+            imageReaderJpeg?.surface ?: run {
+                takePhoto(onComplete)
+                return
+            }
+        }
+
+        _isCapturing.value = true
+
+        val acquiredFrames = java.util.Collections.synchronizedList(mutableListOf<RawRefocusFrame>())
+        val isHandoffCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val framesReceived = java.util.concurrent.atomic.AtomicInteger(0)
+
+        fun handoffToBackgroundProcessing() {
+            if (!isHandoffCompleted.compareAndSet(false, true)) return
+            isRefocusCaptureActive.set(false)
+            refocusFrameListener = null
+            if (!useYuvStream) {
+                imageReaderJpeg?.setOnImageAvailableListener(null, null)
+            }
+
+            // INSTANT SHUTTER RETURN: release UI immediately once required frames are acquired!
+            _isCapturing.value = false
+
+            val framesSnapshot = synchronized(acquiredFrames) { acquiredFrames.toList() }
+            Log.i(TAG, "[INSTANT_REFOCUS] Acquired ${framesSnapshot.size}/$frameCount frames. Control returned to UI. Processing in background...")
+
+            if (framesSnapshot.isEmpty()) {
+                engineScope.launch(Dispatchers.Main) { onComplete(null) }
+                return
+            }
+
+            engineScope.launch(Dispatchers.Default) {
                 try {
-                    val validFiles = tempPlaneFiles.filter { it.exists() && it.length() > 0 }
-                    if (validFiles.isNotEmpty()) {
-                        val midFile = tempPlaneFiles.getOrNull(bestMidIndex)?.takeIf { it.exists() && it.length() > 0 }
-                            ?: validFiles.first()
-                        val midBytes = midFile.readBytes()
-                        finalUri = saveJpegBytesToMediaStore(midBytes)
-                        if (finalUri != null) {
-                            refocusEngine.processAndPersistPlanes(
-                                photoUri = finalUri,
-                                tempPlaneFiles = tempPlaneFiles,
-                                planeDiopters = focusPlanes.toList(),
-                                captureOrientation = captureOrientation,
-                                isFrontFacing = isFrontFacing,
-                                saveMirrored = saveSelfieAsPreviewed
+                    val entity = refocusEngine.processRawFocusFramesAsync(
+                        rawFrames = framesSnapshot,
+                        planeDiopters = focusPlanes.toList(),
+                        captureOrientation = captureOrientation,
+                        isFrontFacing = isFrontFacing,
+                        saveMirrored = saveSelfieAsPreviewed,
+                        bufferPool = refocusBufferPool,
+                        saveMediaStoreJpeg = { jpegBytes, count ->
+                            saveJpegBytesToMediaStore(
+                                bytes = jpegBytes,
+                                skipPipeline = false,
+                                filePrefix = "REFOCUS_${count}F"
                             )
+                        }
+                    )
+                    if (entity != null) {
+                        val uri = Uri.parse(entity.photoUri)
+                        _lastCapturedMedia.value = CapturedMedia(
+                            uri = uri,
+                            isVideo = false,
+                            timestamp = System.currentTimeMillis(),
+                            displayName = "REFOCUS_${entity.planeCount}F.jpg"
+                        )
+                        updateStorageStats()
+                        withContext(Dispatchers.Main) {
+                            onComplete(uri)
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            onComplete(null)
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error finalizing refocus package", e)
-                } finally {
-                    tempPlaneFiles.forEach { runCatching { it.delete() } }
-                    _isCapturing.value = false
-                    updateStorageStats()
+                    Log.e(TAG, "[INSTANT_REFOCUS] Background processing error", e)
                     withContext(Dispatchers.Main) {
-                        onComplete(finalUri)
+                        onComplete(null)
                     }
                 }
             }
         }
 
-        readerJpeg.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
-            val buffer = image.planes[0].buffer
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            image.close() // Close Image immediately to free Camera2 buffer pool
+        if (useYuvStream) {
+            isRefocusCaptureActive.set(true)
+            refocusFrameListener = { image ->
+                val idx = framesReceived.getAndIncrement()
+                if (idx < frameCount) {
+                    val buffer = refocusBufferPool?.acquire() ?: ByteArray(image.width * image.height * 3 / 2)
+                    val ok = RefocusImageUtils.extractNv21(image, buffer, image.width, image.height)
+                    if (ok) {
+                        val rawFrame = RawRefocusFrame(
+                            index = idx,
+                            focusDiopter = focusPlanes.getOrElse(idx) { 0f },
+                            width = image.width,
+                            height = image.height,
+                            nv21Bytes = buffer,
+                            timestampNs = image.timestamp
+                        )
+                        acquiredFrames.add(rawFrame)
+                    } else {
+                        refocusBufferPool?.recycle(buffer)
+                    }
 
-            val frameIndex = synchronized(this) { framesReceived++ }
-            if (frameIndex < frameCount) {
-                try {
-                    tempPlaneFiles[frameIndex].writeBytes(bytes)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed writing refocus frame $frameIndex", e)
-                }
-
-                if (frameIndex >= frameCount - 1) {
-                    finalizeRefocusCapture()
+                    if (acquiredFrames.size >= frameCount) {
+                        handoffToBackgroundProcessing()
+                    }
                 }
             }
-        }, backgroundHandler)
+        } else {
+            imageReaderJpeg?.setOnImageAvailableListener({ reader ->
+                val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
+                val idx = framesReceived.getAndIncrement()
+                try {
+                    if (idx < frameCount) {
+                        val buffer = image.planes[0].buffer
+                        val bytes = ByteArray(buffer.remaining())
+                        buffer.get(bytes)
+                        val rawFrame = RawRefocusFrame(
+                            index = idx,
+                            focusDiopter = focusPlanes.getOrElse(idx) { 0f },
+                            width = image.width,
+                            height = image.height,
+                            jpegBytes = bytes,
+                            timestampNs = image.timestamp
+                        )
+                        acquiredFrames.add(rawFrame)
+                        if (acquiredFrames.size >= frameCount) {
+                            handoffToBackgroundProcessing()
+                        }
+                    }
+                } finally {
+                    image.close()
+                }
+            }, backgroundHandler)
+        }
 
         try {
             val requests = mutableListOf<CaptureRequest>()
             for (i in 0 until frameCount) {
                 val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                    addTarget(readerJpeg.surface)
+                    addTarget(targetSurface)
                     applyCommonSettings(this, isStillCapture = true)
-                    set(CaptureRequest.JPEG_ORIENTATION, getCaptureJpegOrientation())
-                    set(CaptureRequest.JPEG_QUALITY, 95.toByte())
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                     set(CaptureRequest.LENS_FOCUS_DISTANCE, focusPlanes[i])
+                    if (!useYuvStream) {
+                        set(CaptureRequest.JPEG_ORIENTATION, captureOrientation)
+                        set(CaptureRequest.JPEG_QUALITY, 95.toByte())
+                    }
                 }
                 requests.add(req.build())
             }
@@ -6789,14 +6896,19 @@ class Camera2Engine(private val context: Context) {
                 }
             }, backgroundHandler)
 
-            // Watchdog fallback: in case burst fails or frame is missed, ensure normal photo is saved
+            // Watchdog fallback: ensures control returns to UI even if camera HAL drops a burst frame
             engineScope.launch {
-                delay(6000)
-                finalizeRefocusCapture()
+                delay(3500)
+                if (!isHandoffCompleted.get()) {
+                    Log.w(TAG, "[INSTANT_REFOCUS] Watchdog triggered after 3.5s. Handoff with ${acquiredFrames.size} frames")
+                    handoffToBackgroundProcessing()
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed submitting refocus burst, falling back to standard capture", e)
-            tempPlaneFiles.forEach { runCatching { it.delete() } }
+            _isCapturing.value = false
+            isRefocusCaptureActive.set(false)
+            refocusFrameListener = null
             takePhoto(onComplete)
         }
     }

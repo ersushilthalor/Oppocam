@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.net.Uri
 import android.util.Log
 import com.example.camera.data.RefocusRepository
@@ -11,6 +14,7 @@ import com.example.camera.data.db.RefocusPhotoEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -23,10 +27,11 @@ import kotlin.math.roundToInt
  * Memory-Efficient Refocus Photo Processing & Packaging Engine.
  *
  * Implements:
- * 1. Sequential, tiled/chunked processing: never decodes all full-resolution frames into RAM simultaneously.
- * 2. High-frequency Laplacian focus-plane energy estimation for accurate depth field reconstruction.
- * 3. Smooth, edge-aware depth map synthesis for tap-to-focus and 3D parallax effects.
- * 4. Resilient fallback: automatically keeps the normal photo untouched if refocus synthesis fails.
+ * 1. Instant RAW/uncompressed frame handoff: zero-stall shutter return to UI.
+ * 2. Background image alignment across focal planes (3F, 5F, 7F).
+ * 3. High-frequency Laplacian focus-plane energy estimation for accurate depth field reconstruction.
+ * 4. Smooth, edge-aware depth map synthesis for tap-to-focus and 3D parallax effects.
+ * 5. Asynchronous JPEG encoding and persistence with frame-count identification.
  */
 class RefocusEngine(private val context: Context) {
 
@@ -51,6 +56,229 @@ class RefocusEngine(private val context: Context) {
             val py = (normY * (height - 1)).roundToInt().coerceIn(0, height - 1)
             val idx = py * width + px
             return if (idx in depths.indices) depths[idx] else 0.5f
+        }
+    }
+
+    /**
+     * Non-blocking background refocus pipeline:
+     * Receives in-memory RAW/YUV frames immediately after acquisition,
+     * performs multi-plane alignment, focus energy extraction, depth map synthesis,
+     * asynchronous JPEG encoding, MediaStore saving, and Room database persistence.
+     */
+    suspend fun processRawFocusFramesAsync(
+        rawFrames: List<RawRefocusFrame>,
+        planeDiopters: List<Float>,
+        captureOrientation: Int = 90,
+        isFrontFacing: Boolean = false,
+        saveMirrored: Boolean = false,
+        bufferPool: RefocusBufferPool? = null,
+        saveMediaStoreJpeg: suspend (ByteArray, Int) -> Uri?
+    ): RefocusPhotoEntity? = withContext(Dispatchers.Default) {
+        if (rawFrames.isEmpty()) return@withContext null
+        var bundleDir: File? = null
+        try {
+            val count = rawFrames.size
+            val photoId = "refocus_" + System.currentTimeMillis() + "_" + UUID.randomUUID().toString().take(6)
+            bundleDir = File(repository.getRefocusStorageDir(), photoId).apply { mkdirs() }
+
+            val sortedFrames = rawFrames.sortedBy { it.index }
+            val firstFrame = sortedFrames.first()
+            val fullWidth = firstFrame.width
+            val fullHeight = firstFrame.height
+
+            // Calculate proxy dimensions for ultra-fast depth estimation
+            val maxEdge = max(fullWidth, fullHeight)
+            var sampleSize = 1
+            while (maxEdge / (sampleSize * 2) >= PROXY_TARGET_LONG_EDGE) {
+                sampleSize *= 2
+            }
+            val proxyW = (fullWidth / sampleSize).coerceAtLeast(16)
+            val proxyH = (fullHeight / sampleSize).coerceAtLeast(16)
+
+            // Extract luma grids for all planes
+            val lumaGrids = ArrayList<FloatArray>(count)
+            for (f in sortedFrames) {
+                if (f.nv21Bytes != null) {
+                    val luma = RefocusImageUtils.extractDownsampledY(f.nv21Bytes, f.width, f.height, proxyW, proxyH)
+                    lumaGrids.add(luma)
+                } else if (f.jpegBytes != null) {
+                    val opts = BitmapFactory.Options().apply {
+                        inSampleSize = sampleSize
+                        inPreferredConfig = Bitmap.Config.RGB_565
+                    }
+                    val bmp = BitmapFactory.decodeByteArray(f.jpegBytes, 0, f.jpegBytes.size, opts)
+                    if (bmp != null) {
+                        val pixels = IntArray(bmp.width * bmp.height)
+                        bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                        val luma = FloatArray(bmp.width * bmp.height)
+                        for (p in pixels.indices) {
+                            val c = pixels[p]
+                            val r = (c shr 16) and 0xFF
+                            val g = (c shr 8) and 0xFF
+                            val b = c and 0xFF
+                            luma[p] = 0.299f * r + 0.587f * g + 0.114f * b
+                        }
+                        bmp.recycle()
+                        lumaGrids.add(luma)
+                    } else {
+                        lumaGrids.add(FloatArray(proxyW * proxyH))
+                    }
+                } else {
+                    lumaGrids.add(FloatArray(proxyW * proxyH))
+                }
+            }
+
+            // Estimate alignment shift between near/first frame and mid frame
+            val midIndex = count / 2
+            val refLuma = lumaGrids.getOrNull(midIndex) ?: lumaGrids.first()
+            val firstLuma = lumaGrids.first()
+            val (alignDx, alignDy) = RefocusImageUtils.computeAlignmentShift(refLuma, firstLuma, proxyW, proxyH)
+
+            // Compute focus energy per plane
+            val energyList = ArrayList<FloatArray>(count)
+            for (i in 0 until count) {
+                val luma = lumaGrids[i]
+                val energy = FloatArray(proxyW * proxyH)
+                for (y in 1 until (proxyH - 1)) {
+                    val row = y * proxyW
+                    for (x in 1 until (proxyW - 1)) {
+                        val c = luma[row + x]
+                        val top = luma[row - proxyW + x]
+                        val bottom = luma[row + proxyW + x]
+                        val left = luma[row + x - 1]
+                        val right = luma[row + x + 1]
+                        energy[row + x] = abs(4f * c - top - bottom - left - right)
+                    }
+                }
+                energyList.add(energy)
+            }
+
+            // Synthesize normalized depth map
+            val totalPixels = proxyW * proxyH
+            val depthArray = FloatArray(totalPixels)
+            for (idx in 0 until totalPixels) {
+                var sumEnergy = 0f
+                var weightedIndex = 0f
+                for (p in 0 until count) {
+                    val e = energyList[p].getOrElse(idx) { 0f }
+                    sumEnergy += e
+                    weightedIndex += e * (p.toFloat() / (count - 1).coerceAtLeast(1))
+                }
+                depthArray[idx] = if (sumEnergy > 1e-4f) {
+                    (weightedIndex / sumEnergy).coerceIn(0f, 1f)
+                } else {
+                    0.5f
+                }
+            }
+            val smoothedDepths = smoothDepthMap(depthArray, proxyW, proxyH)
+
+            // Write depth map PNG
+            val depthDest = File(bundleDir, "depth_map.png")
+            val depthBitmap = Bitmap.createBitmap(proxyW, proxyH, Bitmap.Config.ARGB_8888)
+            val depthPixels = IntArray(totalPixels)
+            for (i in smoothedDepths.indices) {
+                val v = (smoothedDepths[i] * 255f).roundToInt().coerceIn(0, 255)
+                depthPixels[i] = Color.argb(255, v, v, v)
+            }
+            depthBitmap.setPixels(depthPixels, 0, proxyW, 0, 0, proxyW, proxyH)
+            FileOutputStream(depthDest).use { out ->
+                depthBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            depthBitmap.recycle()
+
+            // Asynchronously encode planes to JPEG and save to bundle
+            val savedFiles = mutableListOf<File>()
+            var midPlaneJpegBytes: ByteArray? = null
+
+            for (i in 0 until count) {
+                val frame = sortedFrames[i]
+                val dest = File(bundleDir, "plane_$i.jpg")
+
+                val jpegBytes: ByteArray = if (frame.nv21Bytes != null) {
+                    val yuvImage = YuvImage(frame.nv21Bytes, ImageFormat.NV21, frame.width, frame.height, null)
+                    val out = ByteArrayOutputStream(maxOf(1024 * 512, frame.width * frame.height / 3))
+                    yuvImage.compressToJpeg(Rect(0, 0, frame.width, frame.height), 95, out)
+                    val bytes = out.toByteArray()
+                    bufferPool?.recycle(frame.nv21Bytes)
+                    bytes
+                } else if (frame.jpegBytes != null) {
+                    frame.jpegBytes
+                } else {
+                    ByteArray(0)
+                }
+
+                if (i == midIndex) {
+                    midPlaneJpegBytes = jpegBytes
+                }
+
+                FileOutputStream(dest).use { it.write(jpegBytes) }
+                ensurePlaneExifOrientation(dest, captureOrientation, isFrontFacing)
+                savedFiles.add(dest)
+            }
+
+            // Save near, mid, far plane copies for backward compatibility
+            val nearDest = savedFiles.first()
+            val midDest = savedFiles[midIndex]
+            val farDest = savedFiles.last()
+            copyFile(nearDest, File(bundleDir, "plane_near.jpg"))
+            copyFile(midDest, File(bundleDir, "plane_mid.jpg"))
+            copyFile(farDest, File(bundleDir, "plane_far.jpg"))
+
+            // Save final primary JPEG to MediaStore DCIM/Camera with frame count in filename
+            val primaryJpeg = midPlaneJpegBytes ?: midDest.readBytes()
+            val mediaStoreUri = saveMediaStoreJpeg(primaryJpeg, count)
+                ?: Uri.fromFile(midDest)
+
+            // Write metadata JSON
+            val metaDest = File(bundleDir, "metadata.json")
+            val metaJson = JSONObject().apply {
+                put("photoUri", mediaStoreUri.toString())
+                put("timestamp", System.currentTimeMillis())
+                put("width", fullWidth)
+                put("height", fullHeight)
+                put("planeCount", count)
+                put("mode", "${count}F")
+                val dioptersJson = org.json.JSONArray()
+                planeDiopters.forEach { dioptersJson.put(it) }
+                put("diopters", dioptersJson)
+                put("nearDiopters", planeDiopters.firstOrNull() ?: 0f)
+                put("midDiopters", planeDiopters.getOrNull(midIndex) ?: 0f)
+                put("farDiopters", planeDiopters.lastOrNull() ?: 0f)
+                put("depthWidth", proxyW)
+                put("depthHeight", proxyH)
+                put("alignmentDx", alignDx)
+                put("alignmentDy", alignDy)
+            }
+            metaDest.writeText(metaJson.toString())
+
+            // Persist to Room
+            val entity = RefocusPhotoEntity(
+                photoUri = mediaStoreUri.toString(),
+                bundleDir = bundleDir.absolutePath,
+                timestamp = System.currentTimeMillis(),
+                nearPlanePath = nearDest.absolutePath,
+                midPlanePath = midDest.absolutePath,
+                farPlanePath = farDest.absolutePath,
+                depthMapPath = depthDest.absolutePath,
+                planeCount = count,
+                nearDiopters = planeDiopters.firstOrNull() ?: 0f,
+                midDiopters = planeDiopters.getOrNull(midIndex) ?: 0f,
+                farDiopters = planeDiopters.lastOrNull() ?: 0f,
+                alignmentDx = alignDx,
+                alignmentDy = alignDy,
+                width = fullWidth,
+                height = fullHeight
+            )
+            repository.saveRefocusPhoto(entity)
+
+            Log.i(TAG, "Instant Refocus background processing completed: $count planes (${count}F), uri=$mediaStoreUri")
+            entity
+        } catch (t: Throwable) {
+            Log.e(TAG, "Instant Refocus processing failed", t)
+            rawFrames.forEach { f ->
+                if (f.nv21Bytes != null) bufferPool?.recycle(f.nv21Bytes)
+            }
+            null
         }
     }
 

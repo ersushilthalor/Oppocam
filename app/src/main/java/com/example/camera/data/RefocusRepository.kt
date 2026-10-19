@@ -96,6 +96,13 @@ class RefocusRepository(private val context: Context) {
                     val far = File(newest, "plane_far.jpg")
                     val depth = File(newest, "depth_map.png")
                     if (near.exists() && mid.exists() && far.exists()) {
+                        val metaFile = File(newest, "metadata.json")
+                        val count = if (metaFile.exists()) {
+                            runCatching { org.json.JSONObject(metaFile.readText()).optInt("planeCount", 3) }.getOrDefault(3)
+                        } else {
+                            val planeFiles = newest.listFiles { f -> f.name.startsWith("plane_") && f.name.endsWith(".jpg") && !f.name.contains("near") && !f.name.contains("mid") && !f.name.contains("far") }
+                            planeFiles?.size ?: 3
+                        }
                         val recovered = RefocusPhotoEntity(
                             photoUri = photoUri,
                             bundleDir = newest.absolutePath,
@@ -104,7 +111,7 @@ class RefocusRepository(private val context: Context) {
                             midPlanePath = mid.absolutePath,
                             farPlanePath = far.absolutePath,
                             depthMapPath = if (depth.exists()) depth.absolutePath else "",
-                            planeCount = 5
+                            planeCount = count
                         )
                         dao.insertRefocusPhoto(recovered)
                         return@withContext recovered

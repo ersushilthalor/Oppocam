@@ -329,6 +329,29 @@ fun BottomControlBar(
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
+                                    val isRefocusMedia = lastCapturedMedia.displayName.startsWith("REFOCUS_")
+                                    if (isRefocusMedia) {
+                                        val frameTag = lastCapturedMedia.displayName
+                                            .substringAfter("REFOCUS_")
+                                            .substringBefore(".jpg")
+                                            .substringBefore("_")
+                                            .take(2)
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(2.dp)
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(Color(0xCC000000))
+                                                .padding(horizontal = 2.dp, vertical = 0.5.dp)
+                                        ) {
+                                            Text(
+                                                text = if (frameTag.isNotEmpty()) frameTag else "F",
+                                                color = Color(0xFFFFD54F),
+                                                fontSize = 7.5.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
                                 } else {
                                     Icon(
                                         imageVector = Icons.Outlined.PhotoLibrary,
