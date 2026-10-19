@@ -135,10 +135,11 @@ fun InteractiveRefocusViewer(
         } else {
             val currentFocus = focusAnimatable.value
             val totalPlanes = planeBitmaps.size.coerceAtLeast(1)
+            // Three captured planes cannot be blended safely: cross-fading two full frames
+            // creates obvious double edges/ghosting when focus breathing or subject motion shifts
+            // even a few pixels. Show one registered capture at a time instead.
             val exactPlane = (currentFocus * (totalPlanes - 1)).coerceIn(0f, (totalPlanes - 1).toFloat())
-            val idx0 = exactPlane.toInt().coerceIn(0, totalPlanes - 1)
-            val idx1 = kotlin.math.min(totalPlanes - 1, idx0 + 1)
-            val planeFrac = exactPlane - idx0
+            val idx0 = exactPlane.roundToInt().coerceIn(0, totalPlanes - 1)
 
             // Photo Rendering Container with Touch Gestures
             Box(
@@ -169,22 +170,13 @@ fun InteractiveRefocusViewer(
                     },
                 contentAlignment = Alignment.Center
             ) {
-                // Render focus plane layers
-                val bmp0 = planeBitmaps.getOrNull(idx0)
-                val bmp1 = planeBitmaps.getOrNull(idx1)
-                if (bmp0 != null) {
+                // Render a single focus plane. Never alpha-blend two differently focused
+                // frames: that is the main source of visible ghosting/double outlines.
+                val selectedBitmap = planeBitmaps.getOrNull(idx0)
+                if (selectedBitmap != null) {
                     androidx.compose.foundation.Image(
-                        bitmap = bmp0.asImageBitmap(),
+                        bitmap = selectedBitmap.asImageBitmap(),
                         contentDescription = "Focus Plane $idx0",
-                        alpha = 1f - planeFrac,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-                if (bmp1 != null && idx1 != idx0 && planeFrac > 0.01f) {
-                    androidx.compose.foundation.Image(
-                        bitmap = bmp1.asImageBitmap(),
-                        contentDescription = "Focus Plane $idx1",
-                        alpha = planeFrac,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
