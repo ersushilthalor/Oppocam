@@ -1043,17 +1043,7 @@ private fun PhotoSettingsPage(
             )
         }
 
-        if (isRefocusPhotoEnabled) {
-            item {
-                SettingsSegmentedCard(
-                    title = "Refocus Focal Frames",
-                    description = "Number of optical focal planes acquired during refocus capture.",
-                    options = listOf(3 to "3 Frames", 5 to "5 Frames", 7 to "7 Frames"),
-                    selectedOption = refocusFrameCount,
-                    onOptionSelected = onRefocusFrameCountChange
-                )
-            }
-        }
+        // Refocus always captures 3 focal planes. Frame-count selection is intentionally removed.
 
         item {
             SettingsSwitchCard(
