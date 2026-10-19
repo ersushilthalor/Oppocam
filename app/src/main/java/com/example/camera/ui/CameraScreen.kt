@@ -924,39 +924,7 @@ fun CameraScreen(
             )
         }
 
-        // 3e. Dedicated More Modes Drawer
-        MoreModesDrawer(
-                isOpen = isMoreModesOpen,
-                onDismissRequest = {
-                    viewModel.setMoreModesOpen(false)
-                    if (cameraMode == CameraMode.MORE) {
-                        viewModel.setCameraMode(CameraMode.PHOTO)
-                    }
-                },
-                onSelectProManual = {
-                    viewModel.setMoreModesOpen(false)
-                    viewModel.setCameraMode(CameraMode.PHOTO)
-                    viewModel.setManualProOpen(true)
-                },
-                onSelectCinemaLog = {
-                    viewModel.setMoreModesOpen(false)
-                    viewModel.setCameraMode(CameraMode.CINEMA)
-                },
-                onSelectAiSubjectTracking = {
-                    viewModel.setMoreModesOpen(false)
-                    viewModel.setCameraMode(CameraMode.AI_SUBJECT_TRACKING)
-                },
-                onOpenSettings = {
-                    viewModel.setMoreModesOpen(false)
-                    if (cameraMode == CameraMode.MORE) {
-                        viewModel.setCameraMode(CameraMode.PHOTO)
-                    }
-                    viewModel.setSettingsOpen(true)
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 140.dp)
-            )
+        // More Modes drawer removed: all camera modes are available in the mode selector.
 
         // 4. Toast Notification Overlay
         AnimatedVisibility(
