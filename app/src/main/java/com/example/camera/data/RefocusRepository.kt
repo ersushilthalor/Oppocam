@@ -223,10 +223,10 @@ class RefocusRepository(private val context: Context) {
                             (storedTail.isNotBlank() && storedTail.equals(cleanDisplayName, ignoreCase = true))
                     }
                     val looksLikeRefocus = displayName.startsWith("REFOCUS", ignoreCase = true)
-                    // Frame-count filenames such as REFOCUS3F_... must be recognized too.
-                    // Only inspect EXIF for likely Refocus files or images with a companion bundle.
-                    if (!looksLikeRefocus && legacyMatch == null) continue
 
+                    // Read the lightweight EXIF marker before filtering by filename. Older
+                    // captures may have been renamed by the system gallery, file manager, or
+                    // cloud restore, so their names no longer start with REFOCUS.
                     val marker = runCatching {
                         resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
                             val exif = ExifInterface(descriptor.fileDescriptor)
@@ -235,6 +235,11 @@ class RefocusRepository(private val context: Context) {
                                 .substringBefore(";")
                         }.orEmpty()
                     }.getOrDefault("")
+                    val hasRefocusMarker = marker.startsWith("OPPOCAM_REFOCUS_V1:")
+
+                    // Do not skip renamed legacy photos until filename, companion metadata,
+                    // and EXIF marker have all had a chance to identify the capture.
+                    if (!looksLikeRefocus && legacyMatch == null && !hasRefocusMarker) continue
 
                     val markedBundleId = marker.takeIf { it.startsWith("OPPOCAM_REFOCUS_V1:") }
                         ?.substringAfter("OPPOCAM_REFOCUS_V1:")
