@@ -258,8 +258,11 @@ class CameraPreferences(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_REFOCUS_PHOTO_ENABLED, value).apply()
 
     var refocusFrameCount: Int
-        get() = prefs.getInt(KEY_REFOCUS_FRAME_COUNT, 5).coerceIn(5, 20)
-        set(value) = prefs.edit().putInt(KEY_REFOCUS_FRAME_COUNT, value.coerceIn(5, 20)).apply()
+        get() = 3
+        set(@Suppress("UNUSED_PARAMETER") value) {
+            // Refocus frame count is fixed at 3; retain the legacy preference key for compatibility.
+            prefs.edit().putInt(KEY_REFOCUS_FRAME_COUNT, 3).apply()
+        }
 
     var isUltraFastShutterEnabled: Boolean
         get() = prefs.getBoolean(KEY_ULTRA_FAST_SHUTTER_ENABLED, false)
