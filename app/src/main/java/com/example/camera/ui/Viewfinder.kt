@@ -179,10 +179,13 @@ fun Viewfinder(
         val calib = if (isUltraWide) currentUwCalib else com.example.camera.engine.CameraOpticalCalibration.OpticalFramingCalibration()
         // Main and ultra-wide TextureViews can be fed by different Camera2 output sizes.
         // Use the buffer geometry belonging to this stream, not the currently selected lens.
-        val transformBufferSize = if (isUltraWide) {
-            ultraWidePreviewBufferSize ?: previewBufferSize
-        } else {
-            mainPreviewBufferSize ?: previewBufferSize
+        // The front camera shares the primary TextureView, but its Camera2 stream can
+        // have different dimensions from the rear main lens. Never reuse rear-main geometry
+        // when the active source is the front camera.
+        val transformBufferSize = when {
+            isUltraWide -> ultraWidePreviewBufferSize ?: previewBufferSize
+            isFrontCamera -> previewBufferSize ?: mainPreviewBufferSize
+            else -> mainPreviewBufferSize ?: previewBufferSize
         }
         updateTextureViewTransform(
             textureView = tv,
@@ -206,7 +209,8 @@ fun Viewfinder(
         targetRatioCalc,
         cameraMode,
         sensorOrientation,
-        isUsingUltraWideSurface
+        isUsingUltraWideSurface,
+        isFrontCamera
     ) {
         if (!isSettingsOpen) {
             // Apply after Compose has committed the restored layout. This also refreshes
