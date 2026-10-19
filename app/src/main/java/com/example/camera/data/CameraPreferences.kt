@@ -500,9 +500,9 @@ class CameraPreferences(context: Context) {
 
     var cinemaSharpness: com.example.camera.model.CinemaSharpness
         get() {
-            val name = prefs.getString("pref_cinema_sharpness", com.example.camera.model.CinemaSharpness.NATURAL.name)
-                ?: com.example.camera.model.CinemaSharpness.NATURAL.name
-            return try { com.example.camera.model.CinemaSharpness.valueOf(name) } catch (e: Exception) { com.example.camera.model.CinemaSharpness.NATURAL }
+            val name = prefs.getString("pref_cinema_sharpness", com.example.camera.model.CinemaSharpness.OFF.name)
+                ?: com.example.camera.model.CinemaSharpness.OFF.name
+            return try { com.example.camera.model.CinemaSharpness.valueOf(name) } catch (e: Exception) { com.example.camera.model.CinemaSharpness.OFF }
         }
         set(value) = prefs.edit().putString("pref_cinema_sharpness", value.name).apply()
 
