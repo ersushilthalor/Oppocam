@@ -56,7 +56,7 @@ class FrameBasedHandoffTest {
         }
 
         var previousProgress = 0f
-        repeat(15) {
+        repeat(31) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
             assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
 
@@ -158,7 +158,7 @@ class FrameBasedHandoffTest {
         controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
         assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
 
-        // Wait for two fresh Main frames before starting the actual 16-frame blend.
+        // Wait for two fresh Main frames before starting the actual 32-frame blend.
         repeat(2) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.ULTRAWIDE)
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
@@ -171,19 +171,19 @@ class FrameBasedHandoffTest {
         }
 
         var previousProgress = 0f
-        repeat(15) {
+        repeat(31) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
             val state = controller.previewOverlapState.value
-            assertTrue("Handoff must remain active before the sixteenth target frame", state.isOverlapping)
+            assertTrue("Handoff must remain active before the thirty-second target frame", state.isOverlapping)
             assertTrue("Crossfade progress must increase on each real target frame", state.overlapProgress > previousProgress)
-            assertTrue("Crossfade must not finish before the sixteenth target frame", state.overlapProgress < 1f)
+            assertTrue("Crossfade must not finish before the thirty-second target frame", state.overlapProgress < 1f)
             assertEquals("Outgoing preview remains underneath the incoming preview", 1f, state.ultraWideAlpha, 0.0001f)
             previousProgress = state.overlapProgress
         }
 
         controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
         val completed = controller.previewOverlapState.value
-        assertFalse("Handoff should finish on the sixteenth target frame", completed.isOverlapping)
+        assertFalse("Handoff should finish on the thirty-second target frame", completed.isOverlapping)
         assertEquals(PreviewStreamSource.MAIN, completed.activeSource)
         assertEquals(1f, completed.mainAlpha, 0.0001f)
         assertEquals(0f, completed.ultraWideAlpha, 0.0001f)
@@ -215,12 +215,12 @@ class FrameBasedHandoffTest {
         assertEquals(0f, controller.previewOverlapState.value.overlapProgress, 0.0001f)
 
         // Fresh standby frames satisfy warm-up. The first post-switch target frame starts the
-        // 16-frame blend rather than spending two more frames waiting.
+        // 32-frame blend rather than spending two more frames waiting.
         controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
         assertTrue(controller.previewOverlapState.value.overlapProgress > 0f)
         assertTrue(controller.previewOverlapState.value.isOverlapping)
 
-        repeat(14) {
+        repeat(30) {
             controller.onPreviewFrameAvailable(PreviewStreamSource.MAIN)
             assertTrue(controller.previewOverlapState.value.isOverlapping)
         }
