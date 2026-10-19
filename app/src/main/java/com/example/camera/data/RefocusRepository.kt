@@ -254,10 +254,19 @@ class RefocusRepository(private val context: Context) {
                             }
                             .minByOrNull { (_, json) -> abs(json.optLong("timestamp", 0L) - imageDate) }
                     } else null
-                    val matched = markedMatch
-                        ?: legacyMatch
-                        ?: timestampMatch
-                        ?: continue
+                    val matched = markedMatch ?: legacyMatch ?: timestampMatch
+                    if (matched == null) {
+                        // Legacy Refocus JPEGs may have been copied/restored to device storage
+                        // without their private focus-plane bundle. Keep them visible in the
+                        // built-in gallery by importing a single-image fallback bundle.
+                        // This cannot recreate missing focus planes, but it preserves the photo.
+                        if (looksLikeRefocus) {
+                            importLegacyRefocusImage(uri, displayName, imageDate, imageId)?.let {
+                                dao.insertRefocusPhoto(it)
+                            }
+                        }
+                        continue
+                    }
 
                     val (bundle, json) = matched
                     val near = File(bundle, "plane_near.jpg")
@@ -296,6 +305,61 @@ class RefocusRepository(private val context: Context) {
             android.util.Log.w("RefocusRepository", "Media access permission not granted; internal Refocus bundles can still be shown", e)
         } catch (e: Exception) {
             android.util.Log.w("RefocusRepository", "Device Refocus scan failed", e)
+        }
+    }
+
+
+    /**
+     * Imports a legacy Refocus JPEG that exists in MediaStore but has no companion bundle.
+     * The original image is copied into a small fallback bundle so existing gallery/viewer code
+     * can render it. Missing historical focus planes cannot be reconstructed from a flattened JPEG.
+     */
+    private fun importLegacyRefocusImage(
+        uri: android.net.Uri,
+        displayName: String,
+        imageDate: Long,
+        imageId: Long
+    ): RefocusPhotoEntity? {
+        val resolver = context.contentResolver
+        val frameCount = Regex("REFOCUS([357])F", RegexOption.IGNORE_CASE)
+            .find(displayName)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 3
+        val bundle = File(getRefocusStorageDir(), "legacy_$imageId")
+        val imageFile = File(bundle, "plane_mid.jpg")
+        return try {
+            if (!bundle.exists() && !bundle.mkdirs()) return null
+            if (!imageFile.exists()) {
+                resolver.openInputStream(uri)?.use { input ->
+                    imageFile.outputStream().use { output -> input.copyTo(output) }
+                } ?: return null
+            }
+            // Provide the conventional filenames used by the viewer and thumbnail loader.
+            for (i in 0 until frameCount) {
+                val plane = File(bundle, "plane_$i.jpg")
+                if (!plane.exists()) imageFile.copyTo(plane, overwrite = false)
+            }
+            val near = File(bundle, "plane_near.jpg")
+            val far = File(bundle, "plane_far.jpg")
+            if (!near.exists()) imageFile.copyTo(near, overwrite = false)
+            if (!far.exists()) imageFile.copyTo(far, overwrite = false)
+            val metadata = org.json.JSONObject()
+                .put("photoUri", uri.toString())
+                .put("timestamp", imageDate.takeIf { it > 0L } ?: System.currentTimeMillis())
+                .put("planeCount", frameCount)
+                .put("legacyFlattenedImage", true)
+            File(bundle, "metadata.json").writeText(metadata.toString())
+            RefocusPhotoEntity(
+                photoUri = uri.toString(),
+                bundleDir = bundle.absolutePath,
+                timestamp = imageDate.takeIf { it > 0L } ?: bundle.lastModified(),
+                nearPlanePath = near.absolutePath,
+                midPlanePath = imageFile.absolutePath,
+                farPlanePath = far.absolutePath,
+                depthMapPath = "",
+                planeCount = frameCount
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("RefocusRepository", "Could not import legacy Refocus image: $displayName", e)
+            null
         }
     }
 
