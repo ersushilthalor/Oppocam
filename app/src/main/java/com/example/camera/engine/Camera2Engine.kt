@@ -41,6 +41,7 @@ import android.util.SizeF
 import android.view.Surface
 import com.example.camera.model.*
 import com.example.camera.data.CubeLutParser
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import java.io.ByteArrayInputStream
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -109,6 +110,39 @@ class Camera2Engine(private val context: Context) {
             null
         }
     }
+
+    private fun resolveEisPlusInputSize(
+        characteristics: CameraCharacteristics?,
+        outputWidth: Int,
+        outputHeight: Int,
+    ): Size? {
+        val streamMap = characteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return null
+        val yuvSizes = streamMap.getOutputSizes(ImageFormat.YUV_420_888)
+            ?.filter { it.width >= 320 && it.height >= 240 }
+            .orEmpty()
+        if (yuvSizes.isEmpty()) return null
+
+        // Keep software stabilization bounded to 1080p where possible; native EIS+ is CPU/GPU
+        // sensitive, and a 4K ImageReader ring would need hundreds of MB of transient buffers.
+        val preferred = yuvSizes.filter { maxOf(it.width, it.height) <= 1920 }
+        val bounded = yuvSizes.filter { maxOf(it.width, it.height) <= 2560 }
+        val candidates = preferred.ifEmpty { bounded.ifEmpty { yuvSizes } }
+        val targetLong = maxOf(outputWidth, outputHeight).coerceAtLeast(320)
+        val targetShort = minOf(outputWidth, outputHeight).coerceAtLeast(240)
+        val targetAspect = targetLong.toDouble() / targetShort
+        val targetArea = targetLong.toDouble() * targetShort
+
+        return candidates.minByOrNull { size ->
+            val longSide = maxOf(size.width, size.height).toDouble()
+            val shortSide = minOf(size.width, size.height).toDouble()
+            val aspectError = kotlin.math.abs(longSide / shortSide - targetAspect)
+            val areaError = kotlin.math.abs(longSide * shortSide - targetArea) / targetArea
+            aspectError * 1000.0 + areaError
+        }
+    }
+
+    private val eisPlusCoordinator by lazy { RealtimeStabilizationCoordinator(context) }
 
     private val preferences by lazy { com.example.camera.data.CameraPreferences(context) }
     var antiBandingMode: String = preferences.antiBanding
@@ -1572,11 +1606,14 @@ class Camera2Engine(private val context: Context) {
     var isRawCaptureEnabled: Boolean = false
     // EIS was removed because its software crop path caused lag and could conflict with OIS.
     // Keep this legacy property as a hard-OFF compatibility shim.
-    var isVideoStabilizationEnabled: Boolean = false
-        set(@Suppress("UNUSED_PARAMETER") value) {
-            field = false
-            gyroStabilizationEngine.stop()
-            updatePreviewSettings()
+    var isVideoStabilizationEnabled: Boolean
+        get() = videoStabilizationMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+        set(value) {
+            videoStabilizationMode = if (value) {
+                com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+            } else {
+                com.example.camera.model.VideoStabilizationMode.OFF
+            }
         }
     var videoBitrateOption: VideoBitrateOption = VideoBitrateOption.AUTO
     var videoFps: Int = 30
@@ -1624,6 +1661,8 @@ class Camera2Engine(private val context: Context) {
     var selectedPhotoFilter: PhotoFilter = PhotoFilter.ORIGINAL
     private val cinemaSoftwareRecorder by lazy { CinemaSoftwareRecordingEngine(context) }
     private val normalVideoRecorder by lazy { NormalVideoRecordingEngine(context) }
+    @Volatile
+    private var isEisPlusRecording: Boolean = false
     private var isSoftwareCinemaRecording: Boolean = false
     private var recordingCinemaConfig: CinemaConfig? = null
 
@@ -1654,10 +1693,16 @@ class Camera2Engine(private val context: Context) {
 
     val gyroStabilizationEngine by lazy { GyroStabilizationEngine(context) }
 
-    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = com.example.camera.model.VideoStabilizationMode.OFF
-        set(@Suppress("UNUSED_PARAMETER") value) {
-            field = com.example.camera.model.VideoStabilizationMode.OFF
-            preferences.videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.OFF
+    var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode = preferences.videoStabilizationMode
+        set(value) {
+            // The old Camera2 HAL EIS path remains OFF to avoid double stabilization. EIS+ is
+            // a separate gyro/YUV/GPU recording pipeline and never requests hardware EIS.
+            field = if (value == com.example.camera.model.VideoStabilizationMode.EIS_PLUS) {
+                com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+            } else {
+                com.example.camera.model.VideoStabilizationMode.OFF
+            }
+            preferences.videoStabilizationMode = field
             updatePreviewSettings()
         }
 
@@ -4872,6 +4917,13 @@ class Camera2Engine(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
             lastCaptureResult = result
+            if (_isRecordingVideo.value && isEisPlusRecording && !isSoftwareCinemaRecording) {
+                normalVideoRecorder.submitEisPlusCaptureResult(
+                    result = result,
+                    request = request,
+                    outputPhysicalCameraId = activeSessionPhysicalCameraId,
+                )
+            }
             CameraPerformanceMonitor.onPreviewFrame()
 
             // Verify OIS using the HAL's CaptureResult, not just the preference toggle.
