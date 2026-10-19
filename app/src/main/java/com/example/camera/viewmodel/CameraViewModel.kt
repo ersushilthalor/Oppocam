@@ -314,7 +314,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val refocusFrameCount: StateFlow<Int> = _refocusFrameCount.asStateFlow()
 
     fun setRefocusFrameCount(count: Int) {
-        val clamped = count.coerceIn(5, 20)
+        val clamped = when (count) { 3 -> 3; 7 -> 7; else -> 5 }
         _refocusFrameCount.value = clamped
         preferences.refocusFrameCount = clamped
         preferences.setModeRefocusFrameCount(_cameraMode.value, clamped)
@@ -2643,7 +2643,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _thermalProtection.value = true
         _viewfinderFps.value = 60
         _isRefocusPhotoEnabled.value = true
-        _refocusFrameCount.value = 10
+        _refocusFrameCount.value = 5
         _photoMegapixelMode.value = PhotoMegapixelMode.M12
         resetFloatingWindowAppearance()
         showToast("All settings reset to defaults")

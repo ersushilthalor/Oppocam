@@ -172,7 +172,12 @@ class RefocusEngine(private val context: Context) {
 
             // Write companion metadata JSON
             val metaDest = File(bundleDir, "metadata.json")
+            val refocusId = bundleDir.name
+            val refocusMarker = "OPPOCAM_REFOCUS_V1:$refocusId"
             val metaJson = JSONObject().apply {
+                put("format", "OPPOCAM_REFOCUS_V1")
+                put("refocusId", refocusId)
+                put("refocusMarker", refocusMarker)
                 put("photoUri", photoUri.toString())
                 put("timestamp", System.currentTimeMillis())
                 put("width", fullWidth)
@@ -188,6 +193,10 @@ class RefocusEngine(private val context: Context) {
                 put("depthHeight", proxyH)
             }
             metaDest.writeText(metaJson.toString())
+
+            // Mark the visible JPEG itself so the built-in gallery and other scanners can
+            // identify it even when the Room database has been rebuilt.
+            writeRefocusMarker(photoUri, refocusMarker, count)
 
             // Save to Room Database
             val entity = RefocusPhotoEntity(
@@ -233,6 +242,21 @@ class RefocusEngine(private val context: Context) {
             tempPlaneFiles = listOf(tempNearFile, tempMidFile, tempFarFile),
             planeDiopters = listOf(nearDiopters, midDiopters, farDiopters)
         )
+    }
+
+    private fun writeRefocusMarker(photoUri: Uri, marker: String, planeCount: Int) {
+        try {
+            context.contentResolver.openFileDescriptor(photoUri, "rw")?.use { descriptor ->
+                val exif = android.media.ExifInterface(descriptor.fileDescriptor)
+                exif.setAttribute(android.media.ExifInterface.TAG_USER_COMMENT, marker)
+                exif.setAttribute(android.media.ExifInterface.TAG_IMAGE_DESCRIPTION, "$marker;planes=$planeCount")
+                exif.saveAttributes()
+            }
+        } catch (t: Throwable) {
+            // Some MediaStore providers don't permit EXIF updates. The REFOCUS_ filename
+            // and private bundle metadata remain as fallback identifiers.
+            Log.w(TAG, "Could not write Refocus EXIF marker to $photoUri", t)
+        }
     }
 
     /**

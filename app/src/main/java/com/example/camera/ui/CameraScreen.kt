@@ -65,54 +65,64 @@ fun CameraScreen(
 ) {
     val context = LocalContext.current
 
-    // Permission handling
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    // Request the app's runtime permissions together on first launch, including
+    // camera, microphone, and media access needed by the built-in Refocus gallery.
+    fun requiredRuntimePermissions(): Array<String> {
+        val permissions = mutableListOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
         )
-    }
-    var hasAudioPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        )
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            permissions += Manifest.permission.READ_MEDIA_IMAGES
+            permissions += Manifest.permission.READ_MEDIA_VIDEO
+            permissions += "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+        } else if (android.os.Build.VERSION.SDK_INT >= 33) {
+            permissions += Manifest.permission.READ_MEDIA_IMAGES
+            permissions += Manifest.permission.READ_MEDIA_VIDEO
+        } else {
+            permissions += Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        if (android.os.Build.VERSION.SDK_INT <= 28) {
+            permissions += Manifest.permission.WRITE_EXTERNAL_STORAGE
+        }
+        return permissions.toTypedArray()
     }
 
+    var hasCameraPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    }
+    var hasAudioPermission by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+    }
     var pendingAudioEnable by remember { mutableStateOf(false) }
     var pendingVideoStart by remember { mutableStateOf(false) }
+    var startupPermissionsRequested by rememberSaveable { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        hasCameraPermission = permissions[Manifest.permission.CAMERA] == true ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-
-        val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val audioGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         hasAudioPermission = audioGranted
 
-        // Ask for microphone access only when the user explicitly enables audio or starts
-        // an audio-enabled video recording; never block the initial camera UI with this prompt.
         if (pendingAudioEnable) {
             pendingAudioEnable = false
-            if (audioGranted && !viewModel.isAudioEnabled.value) {
-                viewModel.toggleAudio()
-            }
+            if (audioGranted && !viewModel.isAudioEnabled.value) viewModel.toggleAudio()
         }
         if (pendingVideoStart) {
             pendingVideoStart = false
-            if (!audioGranted && viewModel.isAudioEnabled.value) {
-                // Keep video recording usable when microphone permission is denied.
-                viewModel.toggleAudio()
-            }
+            if (!audioGranted && viewModel.isAudioEnabled.value) viewModel.toggleAudio()
             viewModel.onMainActionButtonClick()
         }
     }
 
     LaunchedEffect(Unit) {
-        // Camera permission is required for the preview. Microphone permission is not
-        // required to open the app or take photos, so defer it until audio is requested.
-        if (!hasCameraPermission) {
-            permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+        if (!startupPermissionsRequested) {
+            startupPermissionsRequested = true
+            val missingPermissions = requiredRuntimePermissions().filter {
+                ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (missingPermissions.isNotEmpty()) permissionLauncher.launch(missingPermissions.toTypedArray())
         }
     }
 
@@ -197,6 +207,11 @@ fun CameraScreen(
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
+    var isRefocusGalleryOpen by rememberSaveable { mutableStateOf(false) }
+
+    if (isRefocusGalleryOpen) {
+        BackHandler { isRefocusGalleryOpen = false }
+    }
 
     LaunchedEffect(cameraMode) {
         isQuickOptionsOpen = false
@@ -1023,7 +1038,7 @@ fun CameraScreen(
             onFastShutterHoldEnd = { viewModel.onFastShutterHoldEnd() },
             onFlipCameraClick = { viewModel.toggleCameraFacing() },
             onGalleryClick = {
-                viewModel.openGallery(context)
+                isRefocusGalleryOpen = true
             },
             onCinemaModeClick = { viewModel.toggleCinemaSettings() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
@@ -1135,6 +1150,17 @@ fun CameraScreen(
             com.example.camera.pipeline.ui.PipelineBeforeAfterDialog(
                 viewModel = viewModel,
                 onDismissRequest = { viewModel.setBeforeAfterOpen(false) }
+            )
+        }
+
+        if (isRefocusGalleryOpen) {
+            RefocusGalleryScreen(
+                onClose = { isRefocusGalleryOpen = false },
+                onOpenDeviceGallery = {
+                    isRefocusGalleryOpen = false
+                    viewModel.openGallery(context)
+                },
+                modifier = Modifier.fillMaxSize()
             )
         }
 
