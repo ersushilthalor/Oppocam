@@ -314,12 +314,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val refocusFrameCount: StateFlow<Int> = _refocusFrameCount.asStateFlow()
 
     fun setRefocusFrameCount(count: Int) {
-        val clamped = count.coerceIn(5, 20)
-        _refocusFrameCount.value = clamped
-        preferences.refocusFrameCount = clamped
-        preferences.setModeRefocusFrameCount(_cameraMode.value, clamped)
-        engine.refocusFrameCount = clamped
-        showToast("Refocus: $clamped Focus Planes")
+        // Refocus is fixed to 3 focal planes; ignore legacy/custom frame-count requests.
+        _refocusFrameCount.value = 3
+        preferences.refocusFrameCount = 3
+        preferences.setModeRefocusFrameCount(_cameraMode.value, 3)
+        engine.refocusFrameCount = 3
     }
 
     // Ultra Fast Shutter System
