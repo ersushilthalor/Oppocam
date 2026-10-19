@@ -6672,7 +6672,7 @@ class Camera2Engine(private val context: Context) {
         val lastFocusDiopters = lastCaptureResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
             ?: (effectiveMinDist * 0.35f)
 
-        val frameCount = refocusFrameCount.coerceIn(5, 20)
+        val frameCount = 3
         val focusPlanes = FloatArray(frameCount)
         for (i in 0 until frameCount) {
             val fraction = i.toFloat() / (frameCount - 1).coerceAtLeast(1)
