@@ -2650,7 +2650,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _thermalProtection.value = true
         _viewfinderFps.value = 60
         _isRefocusPhotoEnabled.value = true
-        _refocusFrameCount.value = 10
+        _refocusFrameCount.value = 3
         _photoMegapixelMode.value = PhotoMegapixelMode.M12
         resetFloatingWindowAppearance()
         showToast("All settings reset to defaults")
