@@ -24,6 +24,9 @@ class CameraPreferences(context: Context) {
         private const val KEY_VIDEO_FPS = "pref_video_fps"
         private const val KEY_VIDEO_BITRATE = "pref_video_bitrate"
         private const val KEY_VIDEO_STABILIZATION = "pref_video_stabilization"
+        private const val KEY_EIS_PLUS_ENABLED = "pref_video_eis_plus_enabled"
+        private const val KEY_EIS_PLUS_STRENGTH = "pref_video_eis_plus_strength"
+        private const val KEY_EIS_PLUS_LOOKAHEAD = "pref_video_eis_plus_lookahead"
         private const val KEY_AUDIO_ENABLED = "pref_audio_enabled"
         private const val KEY_COLOR_PROFILE = "pref_color_profile"
         private const val KEY_WHITE_BALANCE = "pref_white_balance"
@@ -324,20 +327,45 @@ class CameraPreferences(context: Context) {
         }
         set(value) = prefs.edit().putString(KEY_VIDEO_BITRATE, value.name).apply()
 
-    // EIS is removed from this app. Legacy setters persist OFF so old values cannot revive it.
+    // The legacy hardware-EIS preference remains hard OFF. EIS+ uses separate keys so a
+    // stale HAL-EIS setting can never enable or double-apply hardware stabilization.
     var isVideoStabilizationEnabled: Boolean
-        get() = false
-        set(@Suppress("UNUSED_PARAMETER") value) {
-            prefs.edit().putBoolean(KEY_VIDEO_STABILIZATION, false).apply()
+        get() = prefs.getBoolean(KEY_EIS_PLUS_ENABLED, false)
+        set(value) {
+            val enabled = value
+            prefs.edit()
+                .putBoolean(KEY_EIS_PLUS_ENABLED, enabled)
+                .putBoolean(KEY_VIDEO_STABILIZATION, false)
+                .putString(
+                    "key_video_stabilization_mode",
+                    if (enabled) com.example.camera.model.VideoStabilizationMode.EIS_PLUS.name
+                    else com.example.camera.model.VideoStabilizationMode.OFF.name
+                )
+                .apply()
         }
 
     var videoStabilizationMode: com.example.camera.model.VideoStabilizationMode
-        get() = com.example.camera.model.VideoStabilizationMode.OFF
-        set(@Suppress("UNUSED_PARAMETER") value) {
-            prefs.edit()
-                .putString("key_video_stabilization_mode", com.example.camera.model.VideoStabilizationMode.OFF.name)
-                .apply()
+        get() = if (isVideoStabilizationEnabled) {
+            com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+        } else {
+            com.example.camera.model.VideoStabilizationMode.OFF
         }
+        set(value) {
+            isVideoStabilizationEnabled =
+                value == com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+        }
+
+    var videoStabilizationStrength: Float
+        get() = prefs.getFloat(KEY_EIS_PLUS_STRENGTH, 1.0f)
+            .takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 1.0f
+        set(value) {
+            val safe = if (value.isFinite()) value.coerceIn(0f, 1f) else 1.0f
+            prefs.edit().putFloat(KEY_EIS_PLUS_STRENGTH, safe).apply()
+        }
+
+    var videoStabilizationLookahead: Int
+        get() = prefs.getInt(KEY_EIS_PLUS_LOOKAHEAD, 7).coerceIn(3, 10)
+        set(value) = prefs.edit().putInt(KEY_EIS_PLUS_LOOKAHEAD, value.coerceIn(3, 10)).apply()
 
     var isAudioEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUDIO_ENABLED, true)
@@ -1243,23 +1271,39 @@ class CameraPreferences(context: Context) {
         return prefs.getFloat(modeKey(mode, "focus_dist"), manualFocusDistance)
     }
 
-    fun setModeVideoStabilization(mode: CameraMode, @Suppress("UNUSED_PARAMETER") enabled: Boolean) {
-        isVideoStabilizationEnabled = false
-        prefs.edit().putBoolean(modeKey(mode, "video_stab"), false).apply()
+    fun setModeVideoStabilization(mode: CameraMode, enabled: Boolean) {
+        val isEisPlus = enabled
+        prefs.edit()
+            .putBoolean(modeKey(mode, "eis_plus"), isEisPlus)
+            .putBoolean(modeKey(mode, "video_stab"), false)
+            .putString(
+                modeKey(mode, "video_stab_mode"),
+                if (isEisPlus) com.example.camera.model.VideoStabilizationMode.EIS_PLUS.name
+                else com.example.camera.model.VideoStabilizationMode.OFF.name
+            )
+            .apply()
+        if (mode == cameraMode) {
+            isVideoStabilizationEnabled = isEisPlus
+        }
     }
 
-    fun getModeVideoStabilization(@Suppress("UNUSED_PARAMETER") mode: CameraMode): Boolean = false
+    fun getModeVideoStabilization(mode: CameraMode): Boolean =
+        prefs.getBoolean(modeKey(mode, "eis_plus"), false)
 
     fun setModeVideoStabilizationMode(
         mode: CameraMode,
-        @Suppress("UNUSED_PARAMETER") stabMode: com.example.camera.model.VideoStabilizationMode
+        stabMode: com.example.camera.model.VideoStabilizationMode
     ) {
-        videoStabilizationMode = com.example.camera.model.VideoStabilizationMode.OFF
-        prefs.edit().putString(modeKey(mode, "video_stab_mode"), com.example.camera.model.VideoStabilizationMode.OFF.name).apply()
+        // Legacy EIS is intentionally mapped to OFF; only EIS+ is implemented in software.
+        setModeVideoStabilization(
+            mode,
+            stabMode == com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+        )
     }
 
-    fun getModeVideoStabilizationMode(@Suppress("UNUSED_PARAMETER") mode: CameraMode): com.example.camera.model.VideoStabilizationMode =
-        com.example.camera.model.VideoStabilizationMode.OFF
+    fun getModeVideoStabilizationMode(mode: CameraMode): com.example.camera.model.VideoStabilizationMode =
+        if (getModeVideoStabilization(mode)) com.example.camera.model.VideoStabilizationMode.EIS_PLUS
+        else com.example.camera.model.VideoStabilizationMode.OFF
 
     fun setModeVideoFps(mode: CameraMode, fps: Int) {
         videoFps = fps
