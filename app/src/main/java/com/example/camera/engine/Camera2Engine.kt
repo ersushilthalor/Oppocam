@@ -1789,7 +1789,7 @@ class Camera2Engine(private val context: Context) {
             }
         }
     var isRefocusPhotoEnabled: Boolean = false
-    var refocusFrameCount: Int = 5
+    var refocusFrameCount: Int = 3
 
     // Ultra Fast Shutter System
     val ultraFastShutterEngine = com.example.camera.ultrafast.engine.UltraFastShutterEngine(
