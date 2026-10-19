@@ -7673,6 +7673,21 @@ class Camera2Engine(private val context: Context) {
                     if (isFront) 270 else 90
                 }
 
+                val eisPlusRequested = videoStabilizationMode ==
+                    com.example.camera.model.VideoStabilizationMode.EIS_PLUS && !isSoftwareCinema
+                val eisPlusInputSize = if (eisPlusRequested && !isFront) {
+                    resolveEisPlusInputSize(chars, finalRecordWidth, finalRecordHeight)
+                } else {
+                    null
+                }
+                if (eisPlusRequested && (isFront || eisPlusInputSize == null)) {
+                    Log.w(
+                        TAG,
+                        "EIS+ cannot run for this camera/session; recording without software stabilization " +
+                            "(frontCamera=$isFront, inputSize=$eisPlusInputSize)"
+                    )
+                }
+
                 recorderSurface = try {
                     normalVideoRecorder.startRecording(
                         destFile = tempFile,
@@ -7685,7 +7700,18 @@ class Camera2Engine(private val context: Context) {
                         orientationHint = activeOrientHint,
                         isFront = isFront,
                         sensorOrientation = sensorOrient,
-                        deviceRotation = currentRot
+                        deviceRotation = currentRot,
+                        eisPlusCoordinator = if (eisPlusRequested && !isFront) eisPlusCoordinator else null,
+                        eisPlusCameraId = lens.cameraId,
+                        eisPlusCameraCharacteristics = if (eisPlusRequested && !isFront) chars else null,
+                        eisPlusCameraInputSize = eisPlusInputSize,
+                        eisPlusStrength = preferences.videoStabilizationStrength,
+                        eisPlusLookaheadFrames = preferences.videoStabilizationLookahead,
+                        eisPlusOutputRotationDegrees = if (isPortraitRecording) {
+                            if (currentRot == 0) 90 else 270
+                        } else {
+                            0
+                        }
                     )
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed starting normal video recording: ${t.message}", t)
@@ -7695,6 +7721,7 @@ class Camera2Engine(private val context: Context) {
                     onError("Failed starting video recording: ${t.localizedMessage ?: t.message}")
                     return
                 }
+                isEisPlusRecording = normalVideoRecorder.isEisPlusActive
 
                 preparedVideoGeometry = PreparedVideoGeometry(
                     width = finalRecordWidth,
