@@ -258,16 +258,8 @@ class CameraPreferences(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_REFOCUS_PHOTO_ENABLED, value).apply()
 
     var refocusFrameCount: Int
-        get() = prefs.getInt(KEY_REFOCUS_FRAME_COUNT, 5).coerceIn(3, 20)
-        set(value) = prefs.edit().putInt(KEY_REFOCUS_FRAME_COUNT, value.coerceIn(3, 20)).apply()
-
-    var lensSwitchPointMm: Float
-        get() = prefs.getFloat("pref_lens_switch_point_mm", 23.0f).coerceIn(23.0f, 85.0f)
-        set(value) = prefs.edit().putFloat("pref_lens_switch_point_mm", value.coerceIn(23.0f, 85.0f)).apply()
-
-    var isIncludeLensSwitchPointsInPresets: Boolean
-        get() = prefs.getBoolean("pref_include_lens_switch_presets", false)
-        set(value) = prefs.edit().putBoolean("pref_include_lens_switch_presets", value).apply()
+        get() = prefs.getInt(KEY_REFOCUS_FRAME_COUNT, 5).coerceIn(5, 20)
+        set(value) = prefs.edit().putInt(KEY_REFOCUS_FRAME_COUNT, value.coerceIn(5, 20)).apply()
 
     var isUltraFastShutterEnabled: Boolean
         get() = prefs.getBoolean(KEY_ULTRA_FAST_SHUTTER_ENABLED, false)
@@ -1151,7 +1143,7 @@ class CameraPreferences(context: Context) {
     }
 
     fun getModeRefocusFrameCount(mode: CameraMode): Int {
-        return prefs.getInt(modeKey(mode, "refocus_count"), refocusFrameCount).coerceIn(3, 20)
+        return prefs.getInt(modeKey(mode, "refocus_count"), refocusFrameCount)
     }
 
     fun setModeUltraFastShutterEnabled(mode: CameraMode, enabled: Boolean) {

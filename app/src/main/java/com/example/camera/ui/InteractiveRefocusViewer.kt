@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.FilterTiltShift
 import androidx.compose.material3.*
@@ -57,15 +56,14 @@ import kotlin.math.roundToInt
  *
  * Provides:
  * 1. Tap-to-Refocus: tapping any depth region shifts optical focus to that depth plane.
- * 2. Smooth Continuous Focus Slider: seamlessly shifts focus across near, mid, and far planes (3F, 5F, 7F).
+ * 2. Smooth Continuous Focus Slider: seamlessly shifts focus across near, mid, and far planes.
  * 3. Natural 3D / Parallax Effect: device tilt and touch drag steer depth layers for holographic depth pop.
  * 4. Memory-safe: decodes screen-adapted bitmaps and recycles them safely.
  */
 @Composable
 fun InteractiveRefocusViewer(
     refocusEntity: RefocusPhotoEntity,
-    modifier: Modifier = Modifier,
-    onClose: (() -> Unit)? = null
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -243,7 +241,7 @@ fun InteractiveRefocusViewer(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = "INTERACTIVE REFOCUS • ${totalPlanes}F",
+                        text = "INTERACTIVE REFOCUS",
                         color = Color.White,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold,
@@ -268,13 +266,13 @@ fun InteractiveRefocusViewer(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Focus Plane: ${(exactPlane.roundToInt() + 1)} of $totalPlanes (${totalPlanes}F)",
+                                text = "Focus Plane: ${(exactPlane.roundToInt() + 1)} of $totalPlanes",
                                 color = Color(0xFFFFD54F),
                                 fontSize = 12.5.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = "${totalPlanes}F Mode • Tap photo or drag slider",
+                                text = if (totalPlanes > 3) "$totalPlanes planes captured" else "Tap photo or drag slider",
                                 color = Color.White.copy(alpha = 0.6f),
                                 fontSize = 11.sp
                             )
@@ -341,25 +339,6 @@ fun InteractiveRefocusViewer(
                         }
                     }
                 }
-            }
-        }
-
-        if (onClose != null) {
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier
-                    .statusBarsPadding()
-                    .padding(16.dp)
-                    .align(Alignment.TopStart)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .testTag("refocus_viewer_close_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Close Refocus Viewer",
-                    tint = Color.White
-                )
             }
         }
     }

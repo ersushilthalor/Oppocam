@@ -85,7 +85,7 @@ class CinemaPipelineVerificationTest {
     @Test
     fun testHlg2ProfileCurveAndTechnicalTransform() {
         val config = CinemaConfig(
-            colorProfile = CinemaColorProfile.HLG10,
+            colorProfile = CinemaColorProfile.HLG_2,
             shadows = 0f,
             highlights = 0f,
             contrast = 0f,
@@ -496,7 +496,7 @@ class CinemaPipelineVerificationTest {
         assertTrue("HLG10 must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.HLG10))
         assertTrue("S-Log must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.S_LOG))
         assertTrue("N-Log must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.N_LOG))
-        assertTrue("Apple Log 2 must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.APPLE_LOG_2))
+        assertTrue("HLG 2 must always be available in supportedColorProfiles", caps.supportedColorProfiles.contains(CinemaColorProfile.HLG_2))
 
         // On devices without hardware 10-bit, standard codecs (H.264/H.265) hide 10-bit
         if (!caps.supportsEndToEnd10Bit) {

@@ -313,14 +313,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _refocusFrameCount = MutableStateFlow(preferences.getModeRefocusFrameCount(preferences.cameraMode))
     val refocusFrameCount: StateFlow<Int> = _refocusFrameCount.asStateFlow()
 
-    val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
-    fun setLensSwitchPointMm(pointMm: Float) = engine.setLensSwitchPointMm(pointMm)
-    fun setIncludeLensSwitchPointsInPresets(include: Boolean) {
-        preferences.isIncludeLensSwitchPointsInPresets = include
-    }
-
     fun setRefocusFrameCount(count: Int) {
-        val clamped = count.coerceIn(3, 20)
+        val clamped = count.coerceIn(5, 20)
         _refocusFrameCount.value = clamped
         preferences.refocusFrameCount = clamped
         preferences.setModeRefocusFrameCount(_cameraMode.value, clamped)
@@ -1993,14 +1987,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         preferences.preferredGalleryPackage = packageName
     }
 
-    val refocusRepository by lazy { com.example.camera.data.RefocusRepository(getApplication()) }
-    private val _activeRefocusEntity = MutableStateFlow<com.example.camera.data.db.RefocusPhotoEntity?>(null)
-    val activeRefocusEntity: StateFlow<com.example.camera.data.db.RefocusPhotoEntity?> = _activeRefocusEntity.asStateFlow()
-
-    fun closeRefocusViewer() {
-        _activeRefocusEntity.value = null
-    }
-
     fun setGallerySelectionDialogOpen(open: Boolean) {
         _isGallerySelectionDialogOpen.value = open
     }
@@ -2008,23 +1994,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun openGallery(context: Context) {
         val media = lastCapturedMedia.value
         if (media != null) {
-            viewModelScope.launch {
-                val refocusEntity = if (!media.isVideo) refocusRepository.getRefocusPhoto(media.uri.toString()) else null
-                if (refocusEntity != null) {
-                    _activeRefocusEntity.value = refocusEntity
-                } else {
-                    if (!preferences.hasPromptedGallerySelection && preferences.preferredGalleryPackage == null) {
-                        preferences.hasPromptedGallerySelection = true
-                        _isGallerySelectionDialogOpen.value = true
-                    } else {
-                        com.example.camera.gallery.GalleryLauncher.openMedia(
-                            context = context,
-                            uri = media.uri,
-                            isVideo = media.isVideo,
-                            preferredPackage = _preferredGalleryPackage.value
-                        )
-                    }
-                }
+            if (!preferences.hasPromptedGallerySelection && preferences.preferredGalleryPackage == null) {
+                preferences.hasPromptedGallerySelection = true
+                _isGallerySelectionDialogOpen.value = true
+            } else {
+                com.example.camera.gallery.GalleryLauncher.openMedia(
+                    context = context,
+                    uri = media.uri,
+                    isVideo = media.isVideo,
+                    preferredPackage = _preferredGalleryPackage.value
+                )
             }
         } else {
             showToast("No recent photos yet")

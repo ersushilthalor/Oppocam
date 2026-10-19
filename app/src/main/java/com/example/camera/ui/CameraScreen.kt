@@ -194,19 +194,12 @@ fun CameraScreen(
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsStateWithLifecycle()
     val isGallerySelectionDialogOpen by viewModel.isGallerySelectionDialogOpen.collectAsStateWithLifecycle()
     val preferredGalleryPackage by viewModel.preferredGalleryPackage.collectAsStateWithLifecycle()
-    val activeRefocusEntity by viewModel.activeRefocusEntity.collectAsStateWithLifecycle()
     val focusRingPoint by viewModel.focusRingPoint.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(cameraMode) {
         isQuickOptionsOpen = false
-    }
-
-    if (activeRefocusEntity != null) {
-        BackHandler {
-            viewModel.closeRefocusViewer()
-        }
     }
 
     if (isQuickOptionsOpen) {
@@ -333,7 +326,7 @@ fun CameraScreen(
             isVideoSettingsPanelOpen ||
             isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
-            isQuickOptionsOpen || (activeRefocusEntity != null)
+            isQuickOptionsOpen
 
     LaunchedEffect(isAnyWindowOpen) {
         com.example.camera.ui.components.BackdropBlurManager.isWindowActive = isAnyWindowOpen
@@ -1142,15 +1135,6 @@ fun CameraScreen(
             com.example.camera.pipeline.ui.PipelineBeforeAfterDialog(
                 viewModel = viewModel,
                 onDismissRequest = { viewModel.setBeforeAfterOpen(false) }
-            )
-        }
-
-        // 11. Interactive Refocus Photo Viewer (3F, 5F, 7F)
-        if (activeRefocusEntity != null) {
-            com.example.camera.ui.InteractiveRefocusViewer(
-                refocusEntity = activeRefocusEntity!!,
-                onClose = { viewModel.closeRefocusViewer() },
-                modifier = Modifier.fillMaxSize()
             )
         }
 
