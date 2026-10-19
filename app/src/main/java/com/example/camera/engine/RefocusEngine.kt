@@ -135,25 +135,29 @@ class RefocusEngine(private val context: Context) {
                 }
             }
 
-            // Synthesize normalized depth field (0.0=plane 0/near, 1.0=plane N-1/far)
+            // Winner-take-all focus selection: weighted averaging between planes produces
+            // intermediate depths that no captured frame actually has, causing blurred/ghosted
+            // transitions around object edges. Pick the sharpest plane per pixel instead.
             val totalPixels = proxyW * proxyH
-            val depthArray = FloatArray(totalPixels)
+            val depthArray = FloatArray(totalPixels) { 0.5f }
             for (idx in 0 until totalPixels) {
-                var sumEnergy = 0f
-                var weightedIndex = 0f
+                var bestEnergy = 0f
+                var bestPlane = count / 2
                 for (p in 0 until count) {
-                    val e = energyList[p].getOrElse(idx) { 0f }
-                    sumEnergy += e
-                    weightedIndex += e * (p.toFloat() / (count - 1).coerceAtLeast(1))
+                    val energy = energyList[p].getOrElse(idx) { 0f }
+                    if (energy > bestEnergy) {
+                        bestEnergy = energy
+                        bestPlane = p
+                    }
                 }
-                depthArray[idx] = if (sumEnergy > 1e-4f) {
-                    (weightedIndex / sumEnergy).coerceIn(0f, 1f)
+                depthArray[idx] = if (bestEnergy > 1.5f) {
+                    bestPlane.toFloat() / (count - 1).coerceAtLeast(1)
                 } else {
                     0.5f
                 }
             }
 
-            // Smooth depth map with 3x3 box filter
+            // A small spatial filter suppresses isolated focus-noise pixels.
             val smoothedDepths = smoothDepthMap(depthArray, proxyW, proxyH)
 
             // Write depth map PNG
