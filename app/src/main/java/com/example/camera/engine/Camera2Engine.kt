@@ -260,6 +260,21 @@ class Camera2Engine(private val context: Context) {
 
     fun getDualCameraRecordingRelay(): DualCameraRecordingRelay? = dualCameraRecordingRelay
 
+    /**
+     * Crossfade camera feeds only when the physical handoff belongs to an active continuous
+     * zoom transition. Calls made by instant lens switches stay on the relay's 0ms default path.
+     * No CameraDevice or CameraCaptureSession is restarted here.
+     */
+    private fun setRecordingRelaySource(source: PreviewStreamSource) {
+        val shouldCrossfade = _isRecordingVideo.value && isContinuousZoomTransitionActive
+        val durationMs = if (shouldCrossfade) {
+            DualCameraRecordingRelay.DEFAULT_RECORDING_LENS_CROSSFADE_MS
+        } else {
+            0L
+        }
+        dualCameraRecordingRelay?.setActiveSource(source, transitionDurationMs = durationMs)
+    }
+
 
 
     fun isStandbyRecordingPipelineReady(): Boolean {
@@ -2524,7 +2539,7 @@ class Camera2Engine(private val context: Context) {
                     val useUw = (lens.lensType == LensType.ULTRAWIDE)
                     val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                     if (_isRecordingVideo.value) {
-                        dualCameraRecordingRelay?.setActiveSource(targetSource)
+                        setRecordingRelaySource(targetSource)
                         dualCameraRecordingRelay?.getRecorderSurfaceForLens(lens)?.let { surf ->
                             if (surf.isValid) activeRecordingSurface = surf
                         }
@@ -2580,7 +2595,7 @@ class Camera2Engine(private val context: Context) {
                 val useUw = (lens.lensType == LensType.ULTRAWIDE && _isKeepUltraWideReady.value && activeLogicalMultiCamUltraWideConfigured)
                 val targetSource = if (lens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                 if (_isRecordingVideo.value) {
-                    dualCameraRecordingRelay?.setActiveSource(targetSource)
+                    setRecordingRelaySource(targetSource)
                 }
                 _isUsingUltraWideSurface.value = useUw
                 _displayedPreviewSource.value = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
@@ -2715,7 +2730,7 @@ class Camera2Engine(private val context: Context) {
                 val useUw = (targetLens.lensType == LensType.ULTRAWIDE)
                 val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                 if (_isRecordingVideo.value) {
-                    dualCameraRecordingRelay?.setActiveSource(targetSource)
+                    setRecordingRelaySource(targetSource)
                     dualCameraRecordingRelay?.getRecorderSurfaceForLens(targetLens)?.let { surf ->
                         if (surf.isValid) {
                             activeRecordingSurface = surf
@@ -3010,7 +3025,7 @@ class Camera2Engine(private val context: Context) {
                 val relay = dualCameraRecordingRelay
                 if (relay != null) {
                     val targetSource = if (targetLens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
-                    relay.setActiveSource(targetSource)
+                    setRecordingRelaySource(targetSource)
                     val requestedRes = activeRecordingStreamConfig?.videoResolution
                         ?: (userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080))
                     val effectiveRes = resolveEffectiveVideoResolutionForLens(targetLens.cameraId, requestedRes)
@@ -3434,7 +3449,7 @@ class Camera2Engine(private val context: Context) {
                                 if (relay != null) {
                                     relay.updateCameraFacing(isTargetFront, targetSensorOrient)
                                     val targetSource = if (lens.lensType == LensType.ULTRAWIDE) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
-                                    relay.setActiveSource(targetSource)
+                                    setRecordingRelaySource(targetSource)
                                     val requestedRes = activeRecordingStreamConfig?.videoResolution
                                         ?: (userSelectedVideoResolution ?: _selectedVideoResolution.value ?: CameraResolution(1920, 1080))
                                     val effectiveRes = resolveEffectiveVideoResolutionForLens(lens.cameraId, requestedRes)
@@ -5940,7 +5955,7 @@ class Camera2Engine(private val context: Context) {
                     val useUw = (effectiveTargetLens.lensType == LensType.ULTRAWIDE)
                     val targetSource = if (useUw) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
                     if (_isRecordingVideo.value) {
-                        dualCameraRecordingRelay?.setActiveSource(targetSource)
+                        setRecordingRelaySource(targetSource)
                     }
                     _isUsingUltraWideSurface.value = useUw
                     _displayedPreviewSource.value = targetSource
