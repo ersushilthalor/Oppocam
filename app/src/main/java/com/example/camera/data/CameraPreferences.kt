@@ -1141,13 +1141,11 @@ class CameraPreferences(context: Context) {
     }
 
     fun setModeRefocusFrameCount(mode: CameraMode, count: Int) {
-        refocusFrameCount = count
-        prefs.edit().putInt(modeKey(mode, "refocus_count"), count).apply()
+        refocusFrameCount = 3
+        prefs.edit().putInt(modeKey(mode, "refocus_count"), 3).apply()
     }
 
-    fun getModeRefocusFrameCount(mode: CameraMode): Int {
-        return prefs.getInt(modeKey(mode, "refocus_count"), refocusFrameCount)
-    }
+    fun getModeRefocusFrameCount(mode: CameraMode): Int = 3
 
     fun setModeUltraFastShutterEnabled(mode: CameraMode, enabled: Boolean) {
         isUltraFastShutterEnabled = enabled
