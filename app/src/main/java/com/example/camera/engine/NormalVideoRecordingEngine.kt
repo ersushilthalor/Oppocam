@@ -1,6 +1,9 @@
 package com.example.camera.engine
 
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.TotalCaptureResult
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaCodec
@@ -12,8 +15,10 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import android.util.Size
 import android.view.Surface
 import com.example.camera.model.CinemaCodec
+import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -65,7 +70,10 @@ class NormalVideoRecordingEngine(private val context: Context) {
 
     // Video MediaCodec
     private var videoCodec: MediaCodec? = null
+    /** Encoder input stays owned by this recorder; camera gets the YUV reader surface in EIS+ mode. */
     private var videoInputSurface: Surface? = null
+    private var eisPlusPipeline: EisPlusVideoPipeline? = null
+    val isEisPlusActive: Boolean get() = eisPlusPipeline != null
     private var videoDrainThread: Thread? = null
 
     // Audio Pipeline
@@ -86,6 +94,7 @@ class NormalVideoRecordingEngine(private val context: Context) {
     fun pause() {
         if (isRecording.get() && isPaused.compareAndSet(false, true)) {
             pauseStartNs = System.nanoTime()
+            eisPlusPipeline?.setPaused(true)
             Log.d(TAG, "Normal video recording paused")
         }
     }
@@ -96,6 +105,7 @@ class NormalVideoRecordingEngine(private val context: Context) {
             if (delta > 0L) {
                 totalPausedDurationNs += delta
             }
+            eisPlusPipeline?.setPaused(false)
             Log.d(TAG, "Normal video recording resumed (paused delta: ${delta / 1_000_000}ms)")
         }
     }
@@ -115,7 +125,14 @@ class NormalVideoRecordingEngine(private val context: Context) {
         orientationHint: Int = 0,
         isFront: Boolean = false,
         sensorOrientation: Int = 90,
-        deviceRotation: Int = 0
+        deviceRotation: Int = 0,
+        eisPlusCoordinator: RealtimeStabilizationCoordinator? = null,
+        eisPlusCameraId: String? = null,
+        eisPlusCameraCharacteristics: CameraCharacteristics? = null,
+        eisPlusCameraInputSize: Size? = null,
+        eisPlusStrength: Float = 1.0f,
+        eisPlusLookaheadFrames: Int = 7,
+        eisPlusOutputRotationDegrees: Int = 0,
     ): Surface {
         activeCodec = codec
         outputFile = destFile
@@ -210,18 +227,75 @@ class NormalVideoRecordingEngine(private val context: Context) {
             }
         }
 
-        Log.i(TAG, "NormalVideoRecordingEngine started successfully (${safeWidth}x${safeHeight} @ ${fps}fps, audio=$isAudioEnabled)")
-        return inputSurface
+        // EIS+ owns the camera-facing surface and feeds only gyro-corrected, timestamp-matched
+        // frames into the encoder. If a camera lacks required metadata/gyro support, preserve
+        // ordinary recording rather than failing the entire video capture.
+        eisPlusPipeline = null
+        val cameraSurface = if (
+            eisPlusCoordinator != null &&
+            !eisPlusCameraId.isNullOrBlank() &&
+            eisPlusCameraCharacteristics != null &&
+            eisPlusCameraInputSize != null
+        ) {
+            try {
+                EisPlusVideoPipeline(
+                    context = context,
+                    coordinator = eisPlusCoordinator,
+                    cameraId = eisPlusCameraId,
+                    characteristics = eisPlusCameraCharacteristics,
+                    cameraInputSize = eisPlusCameraInputSize,
+                    outputWidth = safeWidth,
+                    outputHeight = safeHeight,
+                    strength = eisPlusStrength.coerceIn(0f, 1f),
+                    lookaheadFrames = eisPlusLookaheadFrames.coerceIn(3, 10),
+                    outputRotationDegrees = eisPlusOutputRotationDegrees,
+                    encoderSurface = inputSurface,
+                ).also { eisPlusPipeline = it }.inputSurface
+            } catch (error: Throwable) {
+                eisPlusPipeline = null
+                Log.w(TAG, "EIS+ unavailable for this recording; using standard encoder input", error)
+                inputSurface
+            }
+        } else {
+            if (eisPlusCoordinator != null) {
+                Log.w(TAG, "EIS+ requested but camera calibration/YUV input size is unavailable")
+            }
+            inputSurface
+        }
+
+        Log.i(
+            TAG,
+            "NormalVideoRecordingEngine started successfully (${safeWidth}x${safeHeight} @ ${fps}fps, " +
+                "audio=$isAudioEnabled, eisPlus=${eisPlusPipeline != null})"
+        )
+        return cameraSurface
     }
 
     /**
      * Stops recording, flushes EOS buffers, finalizes MediaMuxer, and returns the recorded MP4 file.
      */
+    fun submitEisPlusCaptureResult(
+        result: TotalCaptureResult,
+        request: CaptureRequest,
+        outputPhysicalCameraId: String? = null,
+    ) {
+        eisPlusPipeline?.submitCaptureResult(result, request, outputPhysicalCameraId)
+    }
+
     fun stopRecording(): File? {
         isPaused.set(false)
         if (!isRecording.getAndSet(false)) return outputFile
         isStopping.set(true)
         val stopStartTime = System.currentTimeMillis()
+
+        // Stop producing frames before signaling EOS to the encoder.
+        try {
+            eisPlusPipeline?.close()
+        } catch (error: Throwable) {
+            Log.w(TAG, "EIS+ pipeline cleanup failed: ${error.message}")
+        } finally {
+            eisPlusPipeline = null
+        }
 
         // 1. Signal EOS on video input
         try {
