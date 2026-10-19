@@ -43,6 +43,7 @@ internal class EisPlusVideoPipeline(
     private val outputHeight: Int,
     strength: Float,
     lookaheadFrames: Int,
+    private val outputRotationDegrees: Int = 0,
     private val encoderSurface: Surface,
 ) : AutoCloseable {
     companion object {
@@ -74,9 +75,18 @@ internal class EisPlusVideoPipeline(
             precision highp float;
             in vec2 vTexCoord;
             uniform sampler2D uTexture;
+            uniform int uRotationDegrees;
             out vec4 outColor;
             void main() {
-                outColor = texture(uTexture, vTexCoord);
+                vec2 uv = vTexCoord;
+                if (uRotationDegrees == 90) {
+                    uv = vec2(vTexCoord.y, 1.0 - vTexCoord.x);
+                } else if (uRotationDegrees == 180) {
+                    uv = vec2(1.0 - vTexCoord.x, 1.0 - vTexCoord.y);
+                } else if (uRotationDegrees == 270) {
+                    uv = vec2(1.0 - vTexCoord.y, vTexCoord.x);
+                }
+                outColor = texture(uTexture, uv);
             }
         """
     }
@@ -87,6 +97,7 @@ internal class EisPlusVideoPipeline(
     }
     private val inputThread = HandlerThread("EisPlusYuvInput")
     private val renderQueued = AtomicBoolean(false)
+    private val renderRequested = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val paused = AtomicBoolean(false)
     private val reader = StabilizationImageReader(
@@ -101,6 +112,7 @@ internal class EisPlusVideoPipeline(
     private var outputProgram = 0
     private var vertexArray = 0
     private var textureUniform = -1
+    private var rotationUniform = -1
     private var mgcRenderer: MgcEisYuvRenderer? = null
     private var firstFrameTimestampNs = Long.MIN_VALUE
     private var lastPresentationTimestampNs = -1L
@@ -174,37 +186,33 @@ internal class EisPlusVideoPipeline(
 
     private fun scheduleRender() {
         if (closed.get()) return
+        renderRequested.set(true)
         if (!renderQueued.compareAndSet(false, true)) return
         try {
             renderExecutor.execute {
                 try {
                     if (!makeCurrent()) return@execute
-                    while (!closed.get()) {
-                        val frame = session.dequeueFrame() ?: break
-                        if (paused.get()) {
-                            frame.image.close()
-                            continue
+                    do {
+                        renderRequested.set(false)
+                        while (!closed.get()) {
+                            val frame = session.dequeueFrame() ?: break
+                            if (paused.get()) {
+                                frame.image.close()
+                                continue
+                            }
+                            val corrected = try {
+                                mgcRenderer?.render(frame)
+                            } catch (error: Throwable) {
+                                PLog.w(TAG, "EIS+ mesh render failed: ${error.message}")
+                                null
+                            } ?: continue
+                            drawCorrectedFrame(corrected.textureId, corrected.timestampNs)
                         }
-                        val corrected = try {
-                            mgcRenderer?.render(frame)
-                        } catch (error: Throwable) {
-                            PLog.w(TAG, "EIS+ mesh render failed: ${error.message}")
-                            null
-                        } ?: continue
-                        drawCorrectedFrame(corrected.textureId, corrected.timestampNs)
-                    }
+                    } while (!closed.get() && renderRequested.get())
                 } finally {
                     renderQueued.set(false)
-                    // Re-check after dropping the guard to avoid losing a callback racing the drain.
-                    if (!closed.get() && session.isOperational) {
-                        renderExecutor.execute {
-                            if (session.dequeueFrame() != null) {
-                                // A frame was already dequeued; close its image instead of leaking
-                                // it. Normally the callback-driven drain consumes every ready frame.
-                                // The next camera frame will signal the regular render loop.
-                            }
-                        }
-                    }
+                    // Preserve callbacks that arrived while the GL queue was draining.
+                    if (!closed.get() && renderRequested.get()) scheduleRender()
                 }
             }
         } catch (error: RuntimeException) {
@@ -223,6 +231,7 @@ internal class EisPlusVideoPipeline(
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
         GLES30.glUniform1i(textureUniform, 0)
+        GLES30.glUniform1i(rotationUniform, normalizeRotation(outputRotationDegrees))
         GLES30.glBindVertexArray(vertexArray)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glBindVertexArray(0)
@@ -282,9 +291,15 @@ internal class EisPlusVideoPipeline(
         outputProgram = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         check(outputProgram != 0) { "Cannot create EIS+ presentation program" }
         textureUniform = GLES30.glGetUniformLocation(outputProgram, "uTexture")
+        rotationUniform = GLES30.glGetUniformLocation(outputProgram, "uRotationDegrees")
         vertexArray = IntArray(1).also { GLES30.glGenVertexArrays(1, it, 0) }[0]
-        check(vertexArray != 0 && textureUniform >= 0) { "Cannot initialize EIS+ presentation geometry" }
+        check(vertexArray != 0 && textureUniform >= 0 && rotationUniform >= 0) {
+            "Cannot initialize EIS+ presentation geometry"
+        }
     }
+
+    private fun normalizeRotation(degrees: Int): Int =
+        ((degrees % 360 + 360) % 360).let { if (it in setOf(0, 90, 180, 270)) it else 0 }
 
     private fun makeCurrent(): Boolean =
         display != EGL14.EGL_NO_DISPLAY &&
