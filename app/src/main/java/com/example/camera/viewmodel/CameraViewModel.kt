@@ -1154,10 +1154,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         if (mode == CameraMode.CINEMA) {
-            // Set Zebra feature to OFF by default whenever Cinema Mode is opened
+            // Start Pro Video with assist overlays and edge sharpness OFF by default.
+            // The user can still enable Edge Sharpness manually from Settings.
             val curCinema = engine.cinemaConfig.value
-            if (curCinema.zebraThreshold != com.example.camera.model.ZebraThreshold.OFF) {
-                updateCinemaConfig(curCinema.copy(zebraThreshold = com.example.camera.model.ZebraThreshold.OFF))
+            if (curCinema.zebraThreshold != com.example.camera.model.ZebraThreshold.OFF ||
+                curCinema.sharpness != com.example.camera.model.CinemaSharpness.OFF
+            ) {
+                updateCinemaConfig(
+                    curCinema.copy(
+                        zebraThreshold = com.example.camera.model.ZebraThreshold.OFF,
+                        sharpness = com.example.camera.model.CinemaSharpness.OFF
+                    )
+                )
             }
         }
 
