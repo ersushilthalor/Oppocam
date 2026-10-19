@@ -267,8 +267,15 @@ enum class VideoStabilizationMode(
         id = "eis",
         title = "EIS",
         badgeLabel = "EIS",
-        subtitle = "Standard Electronic Stabilization",
-        description = "Camera2 HAL electronic image stabilization with standard smoothing"
+        subtitle = "Legacy hardware stabilization",
+        description = "Legacy Camera2 hardware EIS; not used by the EIS+ software pipeline"
+    ),
+    EIS_PLUS(
+        id = "eis_plus",
+        title = "EIS+",
+        badgeLabel = "EIS+",
+        subtitle = "Gyroscope-assisted MGC stabilization",
+        description = "Timestamp-matched software stabilization using gyro and rolling-shutter metadata"
     );
 
     val isEnabled: Boolean get() = this != OFF
