@@ -104,19 +104,11 @@ fun MoreModesDrawer(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     MoreModeCard(
-                        icon = Icons.Outlined.Tune,
-                        title = "Pro Manual",
-                        subtitle = "Full ISO, Shutter & Focus",
-                        tag = "mode_card_pro_manual",
-                        modifier = Modifier.weight(1f),
-                        onClick = onSelectProManual
-                    )
-                    MoreModeCard(
                         icon = Icons.Outlined.Movie,
                         title = "Pro Video",
                         subtitle = "Log Profiles, LUTs & 10-Bit Studio",
                         tag = "mode_card_cinema_log",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         onClick = onSelectCinemaLog
                     )
                 }
