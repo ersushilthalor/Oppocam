@@ -6706,33 +6706,47 @@ class Camera2Engine(private val context: Context) {
             readerJpeg.setOnImageAvailableListener(null, null)
             engineScope.launch(Dispatchers.IO) {
                 var finalUri: Uri? = null
+                var shutterReleased = false
                 try {
                     val validFiles = tempPlaneFiles.filter { it.exists() && it.length() > 0 }
                     if (validFiles.isNotEmpty()) {
                         val midFile = tempPlaneFiles.getOrNull(bestMidIndex)?.takeIf { it.exists() && it.length() > 0 }
                             ?: validFiles.first()
-                        val midBytes = midFile.readBytes()
-                        finalUri = saveJpegBytesToMediaStore(midBytes)
-                        if (finalUri != null) {
-                            refocusEngine.processAndPersistPlanes(
-                                photoUri = finalUri,
-                                tempPlaneFiles = tempPlaneFiles,
-                                planeDiopters = focusPlanes.toList(),
-                                captureOrientation = captureOrientation,
-                                isFrontFacing = isFrontFacing,
-                                saveMirrored = saveSelfieAsPreviewed
-                            )
-                        }
+
+                        // Save and publish the normal photo first. Refocus/depth processing is
+                        // deliberately kept off the shutter path so the next shot isn't blocked.
+                        finalUri = saveJpegBytesToMediaStore(midFile.readBytes())
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        _isCapturing.value = false
+                        onComplete(finalUri)
+                    }
+                    shutterReleased = true
+
+                    // Package the extra focus planes only after the normal gallery photo is
+                    // already saved and the UI/shutter has been released.
+                    if (finalUri != null && validFiles.isNotEmpty()) {
+                        refocusEngine.processAndPersistPlanes(
+                            photoUri = finalUri!!,
+                            tempPlaneFiles = tempPlaneFiles,
+                            planeDiopters = focusPlanes.toList(),
+                            captureOrientation = captureOrientation,
+                            isFrontFacing = isFrontFacing,
+                            saveMirrored = saveSelfieAsPreviewed
+                        )
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error finalizing refocus package", e)
                 } finally {
                     tempPlaneFiles.forEach { runCatching { it.delete() } }
-                    _isCapturing.value = false
-                    updateStorageStats()
-                    withContext(Dispatchers.Main) {
-                        onComplete(finalUri)
+                    if (!shutterReleased) {
+                        withContext(Dispatchers.Main) {
+                            _isCapturing.value = false
+                            onComplete(finalUri)
+                        }
                     }
+                    updateStorageStats()
                 }
             }
         }
