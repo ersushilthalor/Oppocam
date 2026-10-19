@@ -915,6 +915,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _isVideoStabilizationEnabled = MutableStateFlow(preferences.getModeVideoStabilization(preferences.cameraMode))
     val isVideoStabilizationEnabled: StateFlow<Boolean> = _isVideoStabilizationEnabled.asStateFlow()
+    private val _videoStabilizationStrength = MutableStateFlow(preferences.videoStabilizationStrength)
+    val videoStabilizationStrength: StateFlow<Float> = _videoStabilizationStrength.asStateFlow()
+    private val _videoStabilizationLookahead = MutableStateFlow(preferences.videoStabilizationLookahead)
+    val videoStabilizationLookahead: StateFlow<Int> = _videoStabilizationLookahead.asStateFlow()
 
     private val _videoBitrateOption = MutableStateFlow(preferences.getModeVideoBitrate(preferences.cameraMode))
     val videoBitrateOption: StateFlow<VideoBitrateOption> = _videoBitrateOption.asStateFlow()
@@ -964,17 +968,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val initialOis = preferences.isOisEnabled
         _isOisEnabled.value = initialOis
         engine.isOisEnabled = initialOis
-        // EIS was removed from the app. Clear legacy saved values at startup so a previous
-        // install cannot resurrect an EIS toggle/state when the user switches camera modes.
-        _videoStabilizationMode.value = VideoStabilizationMode.OFF
-        _isVideoStabilizationEnabled.value = false
-        preferences.videoStabilizationMode = VideoStabilizationMode.OFF
-        preferences.isVideoStabilizationEnabled = false
-        preferences.setModeVideoStabilizationMode(initialMode, VideoStabilizationMode.OFF)
-        preferences.setModeVideoStabilization(initialMode, false)
+        // Restore the distinct EIS+ software mode. Legacy HAL-EIS values are migrated to OFF
+        // by CameraPreferences; only the explicit EIS_PLUS key can enable this pipeline.
+        val initialStabilizationMode = preferences.getModeVideoStabilizationMode(initialMode)
+        _videoStabilizationMode.value = initialStabilizationMode
+        _isVideoStabilizationEnabled.value = initialStabilizationMode == VideoStabilizationMode.EIS_PLUS
+        preferences.videoStabilizationMode = initialStabilizationMode
+        engine.videoStabilizationMode = initialStabilizationMode
         preferences.isUltraStabilizationEnabled = false
-        engine.videoStabilizationMode = VideoStabilizationMode.OFF
-        engine.isVideoStabilizationEnabled = false
         engine.videoBitrateOption = preferences.getModeVideoBitrate(initialMode)
         engine.videoFps = preferences.getModeVideoFps(initialMode)
         engine.colorProfile = preferences.getModeColorProfile(initialMode)
@@ -1203,16 +1204,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _ultraFastShutterFps.value = mFastFps
         engine.ultraFastShutterFps = mFastFps
 
-        // Never restore EIS state from legacy per-mode preferences.
-        _videoStabilizationMode.value = VideoStabilizationMode.OFF
-        _isVideoStabilizationEnabled.value = false
-        preferences.videoStabilizationMode = VideoStabilizationMode.OFF
-        preferences.isVideoStabilizationEnabled = false
-        preferences.setModeVideoStabilizationMode(mode, VideoStabilizationMode.OFF)
-        preferences.setModeVideoStabilization(mode, false)
+        // Restore the selected mode's EIS+ preference without reviving legacy HAL-EIS keys.
+        val modeStabilization = preferences.getModeVideoStabilizationMode(mode)
+        _videoStabilizationMode.value = modeStabilization
+        _isVideoStabilizationEnabled.value = modeStabilization == VideoStabilizationMode.EIS_PLUS
+        preferences.videoStabilizationMode = modeStabilization
+        engine.videoStabilizationMode = modeStabilization
         preferences.isUltraStabilizationEnabled = false
-        engine.videoStabilizationMode = VideoStabilizationMode.OFF
-        engine.isVideoStabilizationEnabled = false
         _isStabilizationWindowOpen.value = false
 
         val mVideoFps = preferences.getModeVideoFps(mode)
@@ -1871,23 +1869,33 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         engine.setZoom(clamped, isPresetTap = true)
     }
 
-    // Compatibility shims: EIS has been removed and cannot be re-enabled by a legacy caller.
-    fun setVideoStabilization(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
-        _isVideoStabilizationEnabled.value = false
-        _videoStabilizationMode.value = VideoStabilizationMode.OFF
-        preferences.isVideoStabilizationEnabled = false
-        preferences.videoStabilizationMode = VideoStabilizationMode.OFF
-        preferences.setModeVideoStabilization(_cameraMode.value, false)
-        preferences.setModeVideoStabilizationMode(_cameraMode.value, VideoStabilizationMode.OFF)
-        engine.isVideoStabilizationEnabled = false
-        engine.videoStabilizationMode = VideoStabilizationMode.OFF
-        engine.updatePreviewSettings()
+    /** Enables the Photon-derived MGC EIS+ recording pipeline; legacy HAL EIS stays OFF. */
+    fun setVideoStabilization(enabled: Boolean) {
+        val mode = if (enabled) VideoStabilizationMode.EIS_PLUS else VideoStabilizationMode.OFF
+        _isVideoStabilizationEnabled.value = enabled
+        _videoStabilizationMode.value = mode
+        preferences.setModeVideoStabilization(_cameraMode.value, enabled)
+        preferences.setModeVideoStabilizationMode(_cameraMode.value, mode)
+        preferences.videoStabilizationMode = mode
+        engine.videoStabilizationMode = mode
     }
 
-    fun toggleVideoStabilization() = setVideoStabilization(false)
+    fun toggleVideoStabilization() = setVideoStabilization(!_isVideoStabilizationEnabled.value)
 
-    fun setVideoStabilizationMode(@Suppress("UNUSED_PARAMETER") mode: VideoStabilizationMode) =
-        setVideoStabilization(false)
+    fun setVideoStabilizationMode(mode: VideoStabilizationMode) =
+        setVideoStabilization(mode == VideoStabilizationMode.EIS_PLUS)
+
+    fun setVideoStabilizationStrength(strength: Float) {
+        val safeStrength = if (strength.isFinite()) strength.coerceIn(0f, 1f) else 1f
+        _videoStabilizationStrength.value = safeStrength
+        preferences.videoStabilizationStrength = safeStrength
+    }
+
+    fun setVideoStabilizationLookahead(lookaheadFrames: Int) {
+        val safeLookahead = lookaheadFrames.coerceIn(3, 10)
+        _videoStabilizationLookahead.value = safeLookahead
+        preferences.videoStabilizationLookahead = safeLookahead
+    }
 
     fun setVideoBitrate(bitrate: VideoBitrateOption) {
         _videoBitrateOption.value = bitrate
