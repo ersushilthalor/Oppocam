@@ -524,58 +524,44 @@ fun BottomControlBar(
                                 val onSelect: () -> Unit
                             )
 
-                            val pixelEntries = if (isPixelPhotoGroup) {
-                                listOf(
-                                    PixelModeEntry(
-                                        tag = "mode_photo",
-                                        label = "Photo",
-                                        isSelected = cameraMode == CameraMode.PHOTO && !isManualProOpen,
-                                        onSelect = {
-                                            onSetManualProOpen(false)
-                                            onModeSelected(CameraMode.PHOTO)
-                                        }
-                                    ),
-                                    PixelModeEntry(
-                                        tag = "mode_pro_manual",
-                                        label = "Pro Manual",
-                                        isSelected = cameraMode == CameraMode.PHOTO && isManualProOpen,
-                                        onSelect = {
-                                            onModeSelected(CameraMode.PHOTO)
-                                            onSetManualProOpen(true)
-                                        }
-                                    )
+                            val pixelEntries = listOf(
+                                PixelModeEntry(
+                                    tag = "mode_photo",
+                                    label = "Photo",
+                                    isSelected = cameraMode == CameraMode.PHOTO,
+                                    onSelect = {
+                                        onSetManualProOpen(false)
+                                        onModeSelected(CameraMode.PHOTO)
+                                    }
+                                ),
+                                PixelModeEntry(
+                                    tag = "mode_video",
+                                    label = "Video",
+                                    isSelected = cameraMode == CameraMode.VIDEO,
+                                    onSelect = {
+                                        onSetManualProOpen(false)
+                                        onModeSelected(CameraMode.VIDEO)
+                                    }
+                                ),
+                                PixelModeEntry(
+                                    tag = "mode_cinema",
+                                    label = "Pro Video",
+                                    isSelected = cameraMode == CameraMode.CINEMA,
+                                    onSelect = {
+                                        onSetManualProOpen(false)
+                                        onModeSelected(CameraMode.CINEMA)
+                                    }
+                                ),
+                                PixelModeEntry(
+                                    tag = "mode_ai_subject_tracking",
+                                    label = "AI Tracking",
+                                    isSelected = cameraMode == CameraMode.AI_SUBJECT_TRACKING,
+                                    onSelect = {
+                                        onSetManualProOpen(false)
+                                        onModeSelected(CameraMode.AI_SUBJECT_TRACKING)
+                                    }
                                 )
-                            } else {
-                                listOf(
-                                    PixelModeEntry(
-                                        tag = "mode_video",
-                                        label = "Video",
-                                        isSelected = cameraMode == CameraMode.VIDEO,
-                                        onSelect = {
-                                            onSetManualProOpen(false)
-                                            onModeSelected(CameraMode.VIDEO)
-                                        }
-                                    ),
-                                    PixelModeEntry(
-                                        tag = "mode_cinema",
-                                        label = "Pro Video",
-                                        isSelected = cameraMode == CameraMode.CINEMA,
-                                        onSelect = {
-                                            onSetManualProOpen(false)
-                                            onModeSelected(CameraMode.CINEMA)
-                                        }
-                                    ),
-                                    PixelModeEntry(
-                                        tag = "mode_ai_subject_tracking",
-                                        label = "AI Subject Tracing",
-                                        isSelected = cameraMode == CameraMode.AI_SUBJECT_TRACKING,
-                                        onSelect = {
-                                            onSetManualProOpen(false)
-                                            onModeSelected(CameraMode.AI_SUBJECT_TRACKING)
-                                        }
-                                    )
-                                )
-                            }
+                            )
 
                             val selectedIndex = pixelEntries.indexOfFirst { it.isSelected }
                             LaunchedEffect(cameraMode, isManualProOpen, isPixelPhotoGroup) {
@@ -629,18 +615,15 @@ fun BottomControlBar(
                         } else {
                             // Non-Pixel UI Templates: preserve original mode carousel behavior
                             val isOppoModeRail = layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL
-                            val modesToDisplay = remember(layoutConfig.visibleModes, isOppoModeRail) {
-                                if (isOppoModeRail) {
-                                    // Oppo's primary mode rail exposes Pro Video directly; More remains a separate mode.
-                                    listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.CINEMA, CameraMode.MORE)
-                                } else {
-                                    val filtered = layoutConfig.visibleModes.filter {
-                                        it == CameraMode.PHOTO || it == CameraMode.VIDEO || it == CameraMode.MORE
-                                    }
-                                    if (filtered.isEmpty()) {
-                                        listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.MORE)
-                                    } else filtered
-                                }
+                            // Keep every user-facing camera mode directly in the selector.
+                            // Pro Manual and the More entry are intentionally removed.
+                            val modesToDisplay = remember {
+                                listOf(
+                                    CameraMode.PHOTO,
+                                    CameraMode.VIDEO,
+                                    CameraMode.CINEMA,
+                                    CameraMode.AI_SUBJECT_TRACKING
+                                )
                             }
 
                             val isMoreModeActive = if (isOppoModeRail) {
