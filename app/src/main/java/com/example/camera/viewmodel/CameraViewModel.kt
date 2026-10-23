@@ -1752,19 +1752,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             engine.selectedVideoResolution.value
         }
-        val is4KRecording = engine.isRecordingVideo.value && isVideoMode &&
+        val is4KVideoMode = isVideoMode &&
             recordingResolution?.let { maxOf(it.width, it.height) >= 3840 } == true
         val recordingFps = if (activeMode == CameraMode.CINEMA) {
             engine.cinemaConfig.value.videoFps
         } else {
             engine.videoFps
         }
-        val zoomFrameIntervalMs = if (is4KRecording) {
+        val zoomFrameIntervalMs = if (is4KVideoMode) {
             com.example.camera.engine.ZoomTransitionController.frameIntervalMsForFps(recordingFps)
         } else {
             16L
         }
-        val zoomTransitionDurationMs = if (is4KRecording) {
+        val zoomTransitionDurationMs = if (is4KVideoMode) {
             com.example.camera.engine.ZoomTransitionController.framePacedTransitionDurationMs(
                 durationMs,
                 recordingFps
