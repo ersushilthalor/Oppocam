@@ -65,6 +65,43 @@ fun CameraScreen(
 ) {
     val context = LocalContext.current
 
+    // Keep the built-in Refocus gallery reachable without prompting for media access at startup.
+    var isRefocusGalleryOpen by rememberSaveable { mutableStateOf(false) }
+    val galleryPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        // Private Refocus bundles remain browseable even when device-media access is denied.
+        isRefocusGalleryOpen = true
+    }
+
+    fun openRefocusGallery() {
+        val sdk = android.os.Build.VERSION.SDK_INT
+        val canReadImages = when {
+            sdk >= 34 ->
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, "android.permission.READ_MEDIA_VISUAL_USER_SELECTED") == PackageManager.PERMISSION_GRANTED
+            sdk >= 33 ->
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+            else ->
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+
+        if (canReadImages) {
+            isRefocusGalleryOpen = true
+            return
+        }
+
+        val permissions = when {
+            sdk >= 34 -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+            )
+            sdk >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        galleryPermissionLauncher.launch(permissions)
+    }
+
     // Permission handling
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -199,6 +236,10 @@ fun CameraScreen(
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     var isQuickOptionsOpen by rememberSaveable { mutableStateOf(false) }
 
+    if (isRefocusGalleryOpen) {
+        BackHandler { isRefocusGalleryOpen = false }
+    }
+
     LaunchedEffect(cameraMode) {
         isQuickOptionsOpen = false
     }
@@ -325,7 +366,7 @@ fun CameraScreen(
             isCinemaSettingsOpen || isLogProfileWindowOpen || isLutWindowOpen ||
             isManualProOpen || isMoreModesOpen ||
             isVideoSettingsPanelOpen ||
-            isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen ||
+            isVideoAdjustmentsOpen || isSettingsOpen || isGallerySelectionDialogOpen || isRefocusGalleryOpen ||
             isCustomUiStudioOpen || isPipelineSheetOpen || isBeforeAfterOpen || isPipelinePresetFloatingWindowOpen ||
             isQuickOptionsOpen
 
@@ -995,7 +1036,7 @@ fun CameraScreen(
             onFastShutterHoldEnd = { viewModel.onFastShutterHoldEnd() },
             onFlipCameraClick = { viewModel.toggleCameraFacing() },
             onGalleryClick = {
-                viewModel.openGallery(context)
+                openRefocusGallery()
             },
             onCinemaModeClick = { viewModel.toggleCinemaSettings() },
             onSettingsClick = { viewModel.setSettingsOpen(true) },
@@ -1107,6 +1148,17 @@ fun CameraScreen(
             com.example.camera.pipeline.ui.PipelineBeforeAfterDialog(
                 viewModel = viewModel,
                 onDismissRequest = { viewModel.setBeforeAfterOpen(false) }
+            )
+        }
+
+        if (isRefocusGalleryOpen) {
+            RefocusGalleryScreen(
+                onClose = { isRefocusGalleryOpen = false },
+                onOpenDeviceGallery = {
+                    isRefocusGalleryOpen = false
+                    viewModel.openGallery(context)
+                },
+                modifier = Modifier.fillMaxSize()
             )
         }
 
