@@ -10,6 +10,14 @@ import org.junit.Test
 class FrameBasedHandoffTest {
 
     @Test
+    fun oneXUsesHoldTimeWhileTwoXUsesFrameBasedHandoff() {
+        assertTrue(ZoomTransitionController.isHoldTimeHandoffEligible(0.5f, 1.0f))
+        assertFalse(ZoomTransitionController.isHoldTimeHandoffEligible(0.5f, 2.0f))
+        assertFalse(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 1.0f))
+        assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 2.0f))
+    }
+
+    @Test
     fun frameBasedHandoffIsLimitedToTransitionsCrossingTheOneXBoundary() {
         assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 2.0f))
         assertTrue(ZoomTransitionController.isFrameBasedHandoffEligible(0.5f, 3.0f))
