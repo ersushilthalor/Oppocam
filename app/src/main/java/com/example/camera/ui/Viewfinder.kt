@@ -71,37 +71,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
-import com.hinnka.mycamera.camera.AspectRatio as PhotonAspectRatio
-import com.hinnka.mycamera.camera.PreviewMeteringMapper
-import com.hinnka.mycamera.camera.CameraCoordinateRect
-import com.hinnka.mycamera.camera.PreviewMeteringZoomMode
-
-fun resolvePhotonAspectRatio(
-    aspectRatio: Float,
-    cameraMode: CameraMode,
-    cinemaConfig: CinemaConfig?
-): PhotonAspectRatio {
-    if (aspectRatio <= 0f) return PhotonAspectRatio.FULL
-    if (kotlin.math.abs(aspectRatio - 1.0f) < 0.05f) return PhotonAspectRatio.RATIO_1_1
-    if (kotlin.math.abs(aspectRatio - 4f / 3f) < 0.05f || kotlin.math.abs(aspectRatio - 3f / 4f) < 0.05f) return PhotonAspectRatio.RATIO_4_3
-    if (kotlin.math.abs(aspectRatio - 16f / 9f) < 0.05f || kotlin.math.abs(aspectRatio - 9f / 16f) < 0.05f) return PhotonAspectRatio.RATIO_16_9
-    if (kotlin.math.abs(aspectRatio - 3f / 2f) < 0.05f || kotlin.math.abs(aspectRatio - 2f / 3f) < 0.05f) return PhotonAspectRatio.RATIO_3_2
-    if (kotlin.math.abs(aspectRatio - 21f / 9f) < 0.05f || kotlin.math.abs(aspectRatio - 9f / 21f) < 0.05f) return PhotonAspectRatio.RATIO_21_9
-    if (kotlin.math.abs(aspectRatio - 65f / 24f) < 0.05f || kotlin.math.abs(aspectRatio - 24f / 65f) < 0.05f) return PhotonAspectRatio.XPAN
-
-    return when (cameraMode) {
-        CameraMode.VIDEO -> PhotonAspectRatio.RATIO_16_9
-        CameraMode.CINEMA -> {
-            val cinemaRatio = cinemaConfig?.aspectRatio?.ratioValue ?: 16f / 9f
-            when {
-                kotlin.math.abs(cinemaRatio - 1.43f) < 0.05f -> PhotonAspectRatio.RATIO_4_3
-                kotlin.math.abs(cinemaRatio - 2.39f) < 0.05f -> PhotonAspectRatio.RATIO_21_9
-                else -> PhotonAspectRatio.RATIO_16_9
-            }
-        }
-        else -> PhotonAspectRatio.RATIO_4_3
-    }
-}
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 @Composable
 fun Viewfinder(
@@ -193,13 +164,11 @@ fun Viewfinder(
         currentScale = currentZoom
     }
 
-    val targetRatioCalc = if (aspectRatio > 0f) {
-        aspectRatio
-    } else when (cameraMode) {
-        CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: 16f / 9f
-        CameraMode.VIDEO -> 16f / 9f
+    val targetRatioCalc = when (cameraMode) {
         CameraMode.PHOTO -> 4f / 3f
-        else -> 4f / 3f
+        CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
+        CameraMode.VIDEO -> 16f / 9f
+        else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
     }
 
     val applyTransformToView = rememberUpdatedState { tv: TextureView?, isUltraWide: Boolean, w: Int, h: Int ->
@@ -215,20 +184,10 @@ fun Viewfinder(
         } else {
             mainPreviewBufferSize ?: previewBufferSize
         }
-        val computedTargetRatio = if (viewW > 0 && viewH > 0) {
-            val isLandscape = viewW > viewH
-            if (isLandscape) {
-                viewW.toFloat() / viewH.toFloat()
-            } else {
-                viewH.toFloat() / viewW.toFloat()
-            }
-        } else {
-            targetRatioCalc
-        }
         updateTextureViewTransform(
             textureView = tv,
             previewBufferSize = transformBufferSize,
-            targetRatio = computedTargetRatio,
+            targetRatio = targetRatioCalc,
             sensorOrientation = sensorOrientation,
             viewWidth = viewW,
             viewHeight = viewH,
@@ -306,104 +265,47 @@ fun Viewfinder(
     ) {
         val containerWidth = maxWidth
         val containerHeight = maxHeight
-        val isLandscapeContainer = containerWidth > containerHeight
-        val density = androidx.compose.ui.platform.LocalDensity.current
-        val topSafePadding = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
-        val navBarBottom = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
-        val availableHeight = (containerHeight - navBarBottom).coerceAtLeast(0.dp)
-        val topBarBottom = 52.dp + topSafePadding
 
-        val photonRatio = resolvePhotonAspectRatio(aspectRatio, cameraMode, cinemaConfig)
-        val isXpan = (photonRatio == PhotonAspectRatio.XPAN)
-        val isFull = (photonRatio == PhotonAspectRatio.FULL)
-        val isSquare = (photonRatio == PhotonAspectRatio.RATIO_1_1)
-        val isFourThree = (photonRatio == PhotonAspectRatio.RATIO_4_3)
-
-        val viewfinderFramePadding = if (isXpan) 8.dp else 0.dp
-        val sideControlSpace = if (isXpan) 16.dp else 0.dp
-        val maxCardWidth = (containerWidth - sideControlSpace * 2).coerceAtLeast(viewfinderFramePadding)
-        val maxCardHeight = if (isXpan) {
-            (availableHeight - topBarBottom - 32.dp).coerceAtLeast(viewfinderFramePadding)
-        } else {
-            availableHeight
+        // Native viewfinder uses 3:4 frame for Photo and Pro modes,
+        // mode-specific aspect ratio for Cinema mode, and 9:16 frame for Video mode.
+        val isFourThree = (cameraMode == CameraMode.PHOTO)
+        val targetRatio = when (cameraMode) {
+            CameraMode.PHOTO -> 4f / 3f
+            CameraMode.CINEMA -> cinemaConfig?.aspectRatio?.ratioValue ?: (if (aspectRatio > 0f) aspectRatio else 16f / 9f)
+            CameraMode.VIDEO -> 16f / 9f
+            else -> if (aspectRatio > 0f) aspectRatio else 4f / 3f
         }
+        val currentTargetRatio by rememberUpdatedState(targetRatio)
+        val currentPreviewBufferSize by rememberUpdatedState(previewBufferSize)
+        val currentSensorOrientation by rememberUpdatedState(sensorOrientation)
 
-        val maxViewfinderContentWidth = (maxCardWidth - viewfinderFramePadding).coerceAtLeast(0.dp)
-        val maxViewfinderContentHeight = (maxCardHeight - viewfinderFramePadding).coerceAtLeast(0.dp)
-
-        val (targetWidth, targetHeight, viewfinderTopOffset) = if (isLandscapeContainer) {
-            val landscapeRatio = when (photonRatio) {
-                PhotonAspectRatio.FULL -> containerWidth / containerHeight
-                PhotonAspectRatio.XPAN -> 65f / 24f
-                PhotonAspectRatio.RATIO_1_1 -> 1.0f
-                PhotonAspectRatio.RATIO_4_3 -> 4f / 3f
-                PhotonAspectRatio.RATIO_16_9 -> 16f / 9f
-                PhotonAspectRatio.RATIO_3_2 -> 3f / 2f
-                PhotonAspectRatio.RATIO_21_9 -> 21f / 9f
-                else -> if (targetRatioCalc > 0f) maxOf(targetRatioCalc, 1f / targetRatioCalc) else 4f / 3f
-            }
-            if (isFull) {
-                Triple(containerWidth, containerHeight, 0.dp)
-            } else {
-                val contentH = maxViewfinderContentHeight
-                val contentW = minOf(maxViewfinderContentWidth, contentH * landscapeRatio)
-                val cardW = contentW + viewfinderFramePadding
-                val cardH = contentW / landscapeRatio + viewfinderFramePadding
-                val top = ((containerHeight - cardH) / 2).coerceAtLeast(0.dp)
-                Triple(cardW, cardH, top)
-            }
+        // Viewfinder spans dimensions dictated by the mode-specific aspect ratio frame.
+        // In portrait orientation, viewfinder always spans 100% full screen width (no side black bars),
+        // matching native Google Pixel and Samsung Camera layouts.
+        val isLandscapeContainer = containerWidth > containerHeight
+        val (targetWidth, targetHeight) = if (isLandscapeContainer) {
+            val h = containerHeight
+            val w = (h * targetRatio).coerceAtMost(containerWidth)
+            w to h
         } else {
-            // Portrait orientation: portraitRatio is width / height
-            val portraitRatio = when (photonRatio) {
-                PhotonAspectRatio.FULL -> containerWidth / containerHeight
-                PhotonAspectRatio.RATIO_1_1 -> 1.0f
-                PhotonAspectRatio.RATIO_4_3 -> 3f / 4f
-                PhotonAspectRatio.RATIO_16_9 -> 9f / 16f
-                PhotonAspectRatio.RATIO_3_2 -> 2f / 3f
-                PhotonAspectRatio.RATIO_21_9 -> 9f / 21f
-                PhotonAspectRatio.XPAN -> 24f / 65f
-                else -> {
-                    val r = if (targetRatioCalc > 0f) targetRatioCalc else 4f / 3f
-                    if (r > 1.0f) 1f / r else r
-                }
-            }
-
-            if (isFull) {
-                Triple(containerWidth, containerHeight, 0.dp)
-            } else if (isXpan) {
-                val xpanW = (containerWidth - sideControlSpace * 2).coerceAtLeast(100.dp)
-                val xpanH = xpanW / (65f / 24f)
-                val top = ((availableHeight - xpanH) / 2).coerceAtLeast(topBarBottom)
-                Triple(xpanW, xpanH, top)
-            } else {
-                val contentW = minOf(
-                    maxViewfinderContentWidth,
-                    maxViewfinderContentHeight * portraitRatio
-                )
-                val cardW = contentW + viewfinderFramePadding
-                val cardH = contentW / portraitRatio + viewfinderFramePadding
-                val placeBelowTopBar = (availableHeight - cardH) >= topBarBottom
-                val extraSpacing = ((availableHeight - topBarBottom - cardH - 110.dp) / 2).coerceAtLeast(0.dp)
-                val top = if (placeBelowTopBar) {
-                    topBarBottom + extraSpacing
-                } else {
-                    ((availableHeight - cardH) / 2).coerceAtLeast(0.dp)
-                }
-                Triple(cardW, cardH, top)
-            }
+            val w = containerWidth
+            val h = w * targetRatio
+            w to h
         }
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black),
-            contentAlignment = if (isLandscapeContainer) Alignment.Center else Alignment.TopCenter
+            contentAlignment = if (isFourThree) Alignment.TopCenter else Alignment.Center
         ) {
             Box(
                 modifier = Modifier
                     .then(
-                        if (!isLandscapeContainer && viewfinderTopOffset > 0.dp) {
-                            Modifier.offset(y = viewfinderTopOffset)
+                        if (isFourThree) {
+                            Modifier
+                                .statusBarsPadding()
+                                .padding(top = 52.dp)
                         } else {
                             Modifier
                         }

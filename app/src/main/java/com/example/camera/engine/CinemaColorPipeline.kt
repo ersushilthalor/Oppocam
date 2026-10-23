@@ -339,7 +339,7 @@ object CinemaColorPipeline {
                 ))
             }
 
-            CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> {
+            CinemaColorProfile.HLG10 -> {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR Technical Transform:
                 // - Faithful Rec.2020 wide color gamut primaries with calibrated HLG tone response
                 // - Zero pedestal offset (strictly 0.0f): preserves inky blacks without crushing shadow details
@@ -707,7 +707,7 @@ object CinemaColorPipeline {
         val profile = config.colorProfile
         val isGraded = lut != CinematicLut.NONE || profile != CinemaColorProfile.NATIVE
 
-        if (!isGraded || profile == CinemaColorProfile.HLG10 || profile == CinemaColorProfile.HLG_2) return null
+        if (!isGraded || profile == CinemaColorProfile.HLG10) return null
 
         // Filmic Output S-curve:
         // Anchors deep inky blacks (-3f) while softly compressing highlights (0.975x)
@@ -1027,7 +1027,7 @@ object CinemaColorPipeline {
         }
 
         val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
-        val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2)
+        val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10)
         if (isGraded && !isHdrProfile) {
             val highlightCompression = 0.975f
             val inkyBlackAnchor = -3.5f / 255.0f
@@ -1145,7 +1145,7 @@ object CinemaColorPipeline {
                 shader.setFloatUniform("uBrilliance", config.brilliance.coerceIn(-1f, 1f))
 
                 val isGraded = (!config.selectedLut.isOff || config.colorProfile != CinemaColorProfile.NATIVE)
-                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2)
+                val isHdrProfile = (config.colorProfile == CinemaColorProfile.HLG10)
                 val filmicOutput = if (isGraded && !isHdrProfile) 1.0f else 0.0f
                 shader.setFloatUniform("uFilmicOutput", filmicOutput)
 

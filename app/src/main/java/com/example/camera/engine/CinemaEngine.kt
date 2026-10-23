@@ -188,7 +188,7 @@ class CinemaEngine(private val context: Context) {
                 return custom.toTonemapCurve()
             }
         }
-        if (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2) {
+        if (config.colorProfile == CinemaColorProfile.HLG10) {
             return hlg10AutoExposureEngine.getTonemapCurve(
                 userExposure = config.exposure,
                 userShadows = config.shadows,
@@ -309,7 +309,6 @@ class CinemaEngine(private val context: Context) {
             CinemaColorProfile.S_LOG,
             CinemaColorProfile.N_LOG,
             CinemaColorProfile.HLG10,
-            CinemaColorProfile.HLG_2,
             CinemaColorProfile.APPLE_LOG_2,
             CinemaColorProfile.D_LOG_2,
             CinemaColorProfile.SAMSUNG_APV_LOG,
@@ -354,7 +353,7 @@ class CinemaEngine(private val context: Context) {
         if (!codecDetection.supportedCodecs.contains(sanitizedConfig.codec)) {
             sanitizedConfig = sanitizedConfig.copy(codec = codecDetection.supportedCodecs.firstOrNull() ?: CinemaCodec.H264)
         }
-        if ((sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 || sanitizedConfig.colorProfile == CinemaColorProfile.HLG_2) && !availableDepthsForCurrentCodec.contains(LogBitDepth.BIT_10)) {
+        if (sanitizedConfig.colorProfile == CinemaColorProfile.HLG10 && !availableDepthsForCurrentCodec.contains(LogBitDepth.BIT_10)) {
             // Keep HLG10 active: on codecs/devices without 10-bit support, record in 8-bit
             sanitizedConfig = sanitizedConfig.copy(logBitDepth = LogBitDepth.BIT_8)
         }
@@ -399,7 +398,7 @@ class CinemaEngine(private val context: Context) {
                 } else {
                     builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)
                 }
-            } else if ((config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2) && supportsContrastCurve) {
+            } else if (config.colorProfile == CinemaColorProfile.HLG10 && supportsContrastCurve) {
                 val tonemapCurve = hlg10AutoExposureEngine.getTonemapCurve(
                     userExposure = 0.0f, // Camera2 AE handles physical sensor exposure authoritatively
                     userShadows = config.shadows,
@@ -426,7 +425,7 @@ class CinemaEngine(private val context: Context) {
                     CinemaColorProfile.NATIVE -> 2.2f
                     CinemaColorProfile.S_LOG -> 1.62f
                     CinemaColorProfile.N_LOG -> 1.68f
-                    CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> 2.2f
+                    CinemaColorProfile.HLG10 -> 2.2f
                     CinemaColorProfile.APPLE_LOG_2 -> 1.60f
                     CinemaColorProfile.D_LOG_2 -> 1.62f
                     CinemaColorProfile.SAMSUNG_APV_LOG -> 1.65f
@@ -443,7 +442,7 @@ class CinemaEngine(private val context: Context) {
 
             // 2. Hardware Color Space Matrix (Gamut Transfer + Saturation Scaling + Washed-Out Recovery + Baked LUT)
             if (supportsColorCorrection) {
-                if (config.colorProfile == CinemaColorProfile.HLG10 || config.colorProfile == CinemaColorProfile.HLG_2) {
+                if (config.colorProfile == CinemaColorProfile.HLG10) {
                     // For HLG10 HDR Profile:
                     // Maintain Camera2 ISP in High Quality Color Correction mode with factory-calibrated AWB gains.
                     // This strictly prevents channel imbalance and false color / green / pink tint artifacts in highlights!
@@ -548,7 +547,7 @@ class CinemaEngine(private val context: Context) {
 
         // 4. Real Camera2 EV (Exposure Compensation) on top of continuous Auto Exposure
         val effectiveExp = when (config.colorProfile) {
-            CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> config.exposure + hlg10AutoExposureEngine.currentParams.value.exposureComp
+            CinemaColorProfile.HLG10 -> config.exposure + hlg10AutoExposureEngine.currentParams.value.exposureComp
             else -> config.exposure
         }
         val exposureSliderSteps = (effectiveExp * 6f).roundToInt()
@@ -790,7 +789,7 @@ class CinemaEngine(private val context: Context) {
                     scaled.coerceIn(0f, 1f)
                 }
             }
-            CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> {
+            CinemaColorProfile.HLG10 -> {
                 // ARIB STD-B67 / ITU-R BT.2100 Hybrid Log-Gamma 10-bit HDR OETF Transfer Function:
                 Hlg10AutoExposureEngine.evaluateAribOetf(inVal)
             }
@@ -906,7 +905,7 @@ class CinemaEngine(private val context: Context) {
         val profileSatMultiplier = when (profile) {
             CinemaColorProfile.PROCESSED_JPEG -> 1.16f // Rich natural saturation for smartphone photo rendering
             CinemaColorProfile.NATIVE -> 1.0f
-            CinemaColorProfile.HLG10, CinemaColorProfile.HLG_2 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
+            CinemaColorProfile.HLG10 -> 1.0f // Faithful, accurate Rec.2020 wide-gamut preservation per ARIB STD-B67
             CinemaColorProfile.S_LOG -> 0.90f // Authentic Sony S-Log wide-gamut baseline
             CinemaColorProfile.N_LOG -> 0.92f // Authentic Nikon N-Log baseline
             CinemaColorProfile.APPLE_LOG_2 -> 0.88f // Flat wide-gamut baseline for grading headroom

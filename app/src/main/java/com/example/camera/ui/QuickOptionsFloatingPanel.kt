@@ -76,8 +76,6 @@ fun QuickOptionsFloatingPanel(
     onVideoAdjustmentsClick: () -> Unit,
     onCinemaResolutionClick: () -> Unit = {},
     onCinemaAspectRatioClick: () -> Unit = {},
-    onPhotoAspectRatioClick: () -> Unit = {},
-    selectedAspectRatio: com.example.camera.model.CameraAspectRatio = com.example.camera.model.CameraAspectRatio.RATIO_4_3,
     onCinemaSettingsClick: () -> Unit = {},
     onLogClick: () -> Unit = {},
     onLutClick: () -> Unit = {},
@@ -361,16 +359,6 @@ fun QuickOptionsFloatingPanel(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                QuickOptionCircleButton(
-                                    icon = Icons.Outlined.AspectRatio,
-                                    label = "Ratio",
-                                    statusText = selectedAspectRatio.label,
-                                    isActive = true,
-                                    activeColor = accentColor,
-                                    onClick = onPhotoAspectRatioClick,
-                                    testTag = "panel_photo_aspect_button",
-                                    modifier = Modifier.weight(1f)
-                                )
                             }
 
                             Spacer(modifier = Modifier.height(12.dp))

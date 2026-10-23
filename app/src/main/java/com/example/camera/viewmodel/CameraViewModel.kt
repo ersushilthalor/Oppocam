@@ -425,18 +425,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _activeZoomPresets.value = preferences.getEffectiveZoomPresets(hasUltraWide = hasUW)
     }
 
-    val lensSwitchPointMm: StateFlow<Float> = engine.lensSwitchPointMm
-
-    fun setLensSwitchPointMm(mm: Float) {
-        engine.setLensSwitchPointMm(mm)
-        refreshActiveZoomPresets()
-    }
-
-    fun setIncludeLensSwitchPointsInPresets(include: Boolean) {
-        preferences.includeLensSwitchPointsInPresets = include
-        refreshActiveZoomPresets()
-    }
-
     fun setRefocusPhotoEnabled(enabled: Boolean) {
         _isRefocusPhotoEnabled.value = enabled
         preferences.isRefocusPhotoEnabled = enabled
@@ -587,32 +575,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val values = com.example.camera.model.CinemaAspectRatio.values()
         val nextIndex = (values.indexOf(current) + 1) % values.size
         selectCinemaAspectRatio(values[nextIndex])
-    }
-
-    fun setPhotoAspectRatio(ratio: CameraAspectRatio) {
-        _selectedAspectRatio.value = ratio
-        val ratioValue = when (ratio) {
-            CameraAspectRatio.RATIO_1_1 -> 1.0f
-            CameraAspectRatio.RATIO_FULL -> 0f
-            CameraAspectRatio.RATIO_16_9, CameraAspectRatio.RATIO_9_16 -> 16f / 9f
-            CameraAspectRatio.RATIO_4_3 -> 4f / 3f
-            CameraAspectRatio.RATIO_IMAX -> 1.43f
-            CameraAspectRatio.RATIO_CINEMATIC -> 2.39f
-        }
-        engine.setPreviewAspectRatio(ratioValue)
-        showToast("Aspect Ratio: ${ratio.label}")
-    }
-
-    fun cyclePhotoAspectRatio() {
-        val supported = listOf(
-            CameraAspectRatio.RATIO_4_3,
-            CameraAspectRatio.RATIO_1_1,
-            CameraAspectRatio.RATIO_16_9,
-            CameraAspectRatio.RATIO_FULL
-        )
-        val currentIndex = supported.indexOf(_selectedAspectRatio.value)
-        val next = if (currentIndex >= 0) supported[(currentIndex + 1) % supported.size] else CameraAspectRatio.RATIO_4_3
-        setPhotoAspectRatio(next)
     }
 
     fun cycleCinemaResolution() {

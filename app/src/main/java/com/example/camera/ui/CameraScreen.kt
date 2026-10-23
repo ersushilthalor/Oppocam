@@ -188,7 +188,6 @@ fun CameraScreen(
     val selectedPhotoResolution by viewModel.engine.selectedPhotoResolution.collectAsStateWithLifecycle()
     val selectedVideoResolution by viewModel.engine.selectedVideoResolution.collectAsStateWithLifecycle()
     val previewAspectRatio by viewModel.engine.previewAspectRatio.collectAsStateWithLifecycle()
-    val selectedAspectRatio by viewModel.selectedAspectRatio.collectAsStateWithLifecycle()
     val previewBufferSize by viewModel.engine.previewBufferSize.collectAsStateWithLifecycle()
     val mainPreviewBufferSize by viewModel.engine.mainPreviewBufferSize.collectAsStateWithLifecycle()
     val ultraWidePreviewBufferSize by viewModel.engine.ultraWidePreviewBufferSize.collectAsStateWithLifecycle()
@@ -696,8 +695,6 @@ fun CameraScreen(
                 viewModel.setVideoSettingsPanelOpen(true)
             },
             onCinemaAspectRatioClick = { viewModel.cycleCinemaAspectRatio() },
-            onPhotoAspectRatioClick = { viewModel.cyclePhotoAspectRatio() },
-            selectedAspectRatio = selectedAspectRatio,
             onCinemaSettingsClick = {
                 isQuickOptionsOpen = false
                 viewModel.setCinemaSettingsOpen(true)

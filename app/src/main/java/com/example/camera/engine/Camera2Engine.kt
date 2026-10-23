@@ -16,9 +16,6 @@ import android.hardware.camera2.params.TonemapCurve
 import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
-import com.hinnka.mycamera.camera.PreviewMeteringMapper
-import com.hinnka.mycamera.camera.CameraCoordinateRect
-import com.hinnka.mycamera.camera.PreviewMeteringZoomMode
 import java.util.concurrent.Executors
 import android.media.CamcorderProfile
 import android.media.Image
@@ -1541,15 +1538,6 @@ class Camera2Engine(private val context: Context) {
 
     private val _previewAspectRatio = MutableStateFlow(4f / 3f)
     val previewAspectRatio: StateFlow<Float> = _previewAspectRatio.asStateFlow()
-
-    private val _lensSwitchPointMm = MutableStateFlow(preferences.lensSwitchPointMm)
-    val lensSwitchPointMm: StateFlow<Float> = _lensSwitchPointMm.asStateFlow()
-
-    fun setLensSwitchPointMm(mm: Float) {
-        val clamped = mm.coerceIn(23.0f, 85.0f)
-        _lensSwitchPointMm.value = clamped
-        preferences.lensSwitchPointMm = clamped
-    }
 
     private var videoTimerJob: Job? = null
     private val engineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -6028,33 +6016,16 @@ class Camera2Engine(private val context: Context) {
             val targetSensorX = sensorRect.left + zoomedOffsetX + normSensorX * zoomedW
             val targetSensorY = sensorRect.top + zoomedOffsetY + normSensorY * zoomedH
 
-            // 5. Metering Rectangle mapped via Photon's PreviewMeteringMapper
-            val activeArray = CameraCoordinateRect(sensorRect.left, sensorRect.top, sensorRect.right, sensorRect.bottom)
-            val mapped = PreviewMeteringMapper.mapPoint(
-                normalizedX = normX,
-                normalizedY = normY,
-                activeArray = activeArray,
-                scalerCropRegion = null,
-                zoomMode = PreviewMeteringZoomMode.POST_ZOOM_ACTIVE_ARRAY,
-                previewViewAspectRatio = _previewAspectRatio.value,
-                sensorOrientationDegrees = sensorOrientation,
-                isFrontFacing = isFront
-            )
+            // 5. Metering Rectangle (scaled proportionally to active sensor array)
+            val boxW = (sensorW * 0.12f).toInt().coerceIn(180, 450)
+            val boxH = (sensorH * 0.12f).toInt().coerceIn(180, 450)
 
-            val focusRect = if (mapped != null) {
-                val centered = PreviewMeteringMapper.buildCenteredRegion(mapped, 0.12f, 0.12f)
-                MeteringRectangle(centered.toAndroidRect(), MeteringRectangle.METERING_WEIGHT_MAX)
-            } else {
-                val boxW = (sensorW * 0.12f).toInt().coerceIn(180, 450)
-                val boxH = (sensorH * 0.12f).toInt().coerceIn(180, 450)
+            val left = (targetSensorX - boxW / 2).toInt().coerceIn(sensorRect.left, sensorRect.right - 10)
+            val right = (targetSensorX + boxW / 2).toInt().coerceIn(left + 10, sensorRect.right)
+            val top = (targetSensorY - boxH / 2).toInt().coerceIn(sensorRect.top, sensorRect.bottom - 10)
+            val bottom = (targetSensorY + boxH / 2).toInt().coerceIn(top + 10, sensorRect.bottom)
 
-                val left = (targetSensorX - boxW / 2).toInt().coerceIn(sensorRect.left, sensorRect.right - 10)
-                val right = (targetSensorX + boxW / 2).toInt().coerceIn(left + 10, sensorRect.right)
-                val top = (targetSensorY - boxH / 2).toInt().coerceIn(sensorRect.top, sensorRect.bottom - 10)
-                val bottom = (targetSensorY + boxH / 2).toInt().coerceIn(top + 10, sensorRect.bottom)
-
-                MeteringRectangle(Rect(left, top, right, bottom), MeteringRectangle.METERING_WEIGHT_MAX)
-            }
+            val focusRect = MeteringRectangle(Rect(left, top, right, bottom), MeteringRectangle.METERING_WEIGHT_MAX)
             activeMeteringRectangle = focusRect
 
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(focusRect))
