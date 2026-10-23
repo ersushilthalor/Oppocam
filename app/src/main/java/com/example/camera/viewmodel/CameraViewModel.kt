@@ -1745,6 +1745,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             null
         }
 
+        val activeMode = _cameraMode.value
+        val isVideoMode = activeMode == CameraMode.VIDEO || activeMode == CameraMode.CINEMA
+        val recordingResolution = if (activeMode == CameraMode.CINEMA) {
+            engine.cinemaConfig.value.selectedResolution ?: engine.selectedVideoResolution.value
+        } else {
+            engine.selectedVideoResolution.value
+        }
+        val is4KRecording = engine.isRecordingVideo.value && isVideoMode &&
+            recordingResolution?.let { maxOf(it.width, it.height) >= 3840 } == true
+        val recordingFps = if (activeMode == CameraMode.CINEMA) {
+            engine.cinemaConfig.value.videoFps
+        } else {
+            engine.videoFps
+        }
+        val zoomFrameIntervalMs = if (is4KRecording) {
+            com.example.camera.engine.ZoomTransitionController.frameIntervalMsForFps(recordingFps)
+        } else {
+            16L
+        }
+        val zoomTransitionDurationMs = if (is4KRecording) {
+            com.example.camera.engine.ZoomTransitionController.framePacedTransitionDurationMs(
+                durationMs,
+                recordingFps
+            )
+        } else {
+            durationMs
+        }
+
         engine.isContinuousZoomTransitionActive = true
         engine.ensureUltraWideSimultaneousReady()
         engine.zoomTransitionController.startTransition(
@@ -1755,8 +1783,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             currentLens = engine.selectedLens.value,
             switchPointMm = CameraOpticalCalibration.DEFAULT_SWITCH_POINT_MM,
             scope = viewModelScope,
-            durationMs = durationMs,
+            durationMs = zoomTransitionDurationMs,
             skipHoldAtSwitchPoint = skipHoldAtSwitchPoint,
+            frameIntervalMs = zoomFrameIntervalMs,
             onZoomUpdate = { interpolatedZoom ->
                 _currentZoom.value = interpolatedZoom
             },
