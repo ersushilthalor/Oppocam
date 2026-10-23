@@ -50,6 +50,8 @@ class CameraPreferences(context: Context) {
         private const val KEY_ZOOM_PRESETS_MODE = "pref_zoom_presets_mode"
         private const val KEY_CUSTOM_ZOOM_PRESETS = "pref_custom_zoom_presets"
         private const val KEY_VIEWFINDER_CORNER_RADIUS = "pref_viewfinder_corner_radius"
+        private const val KEY_LENS_SWITCH_POINT_MM = "lens_switch_point_mm"
+        private const val KEY_INCLUDE_LENS_SWITCH_POINTS = "include_lens_switch_points_in_presets"
         private const val KEY_LENS_SWITCH_OVERLAP_DURATION_SEC = "pref_lens_switch_overlap_duration_sec"
         const val DEFAULT_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.3f
         const val MIN_LENS_SWITCH_OVERLAP_DURATION_SEC = 0.1f
@@ -122,6 +124,14 @@ class CameraPreferences(context: Context) {
         get() = prefs.getInt(KEY_VIEWFINDER_CORNER_RADIUS, 0).coerceIn(0, 48)
         set(value) = prefs.edit().putInt(KEY_VIEWFINDER_CORNER_RADIUS, value.coerceIn(0, 48)).apply()
 
+    var lensSwitchPointMm: Float
+        get() = prefs.getFloat(KEY_LENS_SWITCH_POINT_MM, 23.0f).coerceIn(23.0f, 85.0f)
+        set(value) = prefs.edit().putFloat(KEY_LENS_SWITCH_POINT_MM, value.coerceIn(23.0f, 85.0f)).apply()
+
+    var includeLensSwitchPointsInPresets: Boolean
+        get() = prefs.getBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS, false)
+        set(value) = prefs.edit().putBoolean(KEY_INCLUDE_LENS_SWITCH_POINTS, value).apply()
+
     var zoomPresetsMode: String
         get() = prefs.getString(KEY_ZOOM_PRESETS_MODE, "STANDARD") ?: "STANDARD"
         set(value) = prefs.edit().putString(KEY_ZOOM_PRESETS_MODE, value).apply()
@@ -133,7 +143,7 @@ class CameraPreferences(context: Context) {
     fun getEffectiveZoomPresets(
         hasUltraWide: Boolean
     ): List<Float> {
-        return when (zoomPresetsMode) {
+        val base = when (zoomPresetsMode) {
             "POWERS_OF_TWO" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 4.0f, 8.0f) else listOf(1.0f, 2.0f, 4.0f, 8.0f)
             "CINEMATIC" -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f, 6.0f, 10.0f) else listOf(1.0f, 2.0f, 3.0f, 6.0f, 10.0f)
             "CUSTOM" -> {
@@ -147,6 +157,13 @@ class CameraPreferences(context: Context) {
             }
             else -> if (hasUltraWide) listOf(0.5f, 1.0f, 2.0f, 3.0f) else listOf(1.0f, 2.0f, 3.0f)
         }
+        if (includeLensSwitchPointsInPresets) {
+            val switchZoom = (lensSwitchPointMm / 23.0f * 10f).let { kotlin.math.round(it) } / 10f
+            if (!base.contains(switchZoom) && kotlin.math.abs(switchZoom - 1.0f) > 0.05f) {
+                return (base + switchZoom).distinct().sorted()
+            }
+        }
+        return base
     }
 
     var preferredGalleryPackage: String?

@@ -1,0 +1,395 @@
+package com.hinnka.mycamera.lut
+
+internal object PreviewColorShader {
+    fun source(variant: PreviewColorShaderVariant): String {
+        val extension = if (variant.textureSource == PreviewColorTextureSource.EXTERNAL_OES) {
+            "#extension GL_OES_EGL_image_external_essl3 : require\n"
+        } else {
+            ""
+        }
+        val sampler = if (variant.textureSource == PreviewColorTextureSource.EXTERNAL_OES) {
+            "samplerExternalOES"
+        } else {
+            "sampler2D"
+        }
+        val needsOklab = variant.includeOklchDensity || variant.includeLchMixer
+        val needsClassifiers = variant.includeLchMixer || variant.includeLutMask
+        val needsLogInput = variant.includeVideoLog ||
+            variant.includeExtendedLutCurves
+        return """
+            #version 300 es
+            ${extension}
+            precision highp float;
+            precision highp int;
+            precision highp sampler2D;
+            precision highp sampler3D;
+
+            in vec2 vTexCoord;
+            in vec2 vRawCoord;
+            in vec2 vOutputCoord;
+            out vec4 fragColor;
+
+            uniform highp $sampler uCameraTexture;
+            uniform mediump sampler3D uLutTexture;
+
+            uniform float uLutSize;
+            uniform float uLutIntensity;
+            uniform bool uLutEnabled;
+            uniform int uLutMaskType;
+            uniform int uLutCurve;
+            uniform int uLutColorSpace;
+            uniform bool uVideoLogEnabled;
+            uniform int uVideoLogCurve;
+            uniform int uVideoColorSpace;
+
+            uniform bool uColorRecipeEnabled;
+            uniform mat4 uSTMatrix;
+            uniform float uExposure;
+            uniform float uContrast;
+            uniform float uSaturation;
+            uniform float uTemperature;
+            uniform float uTint;
+            uniform float uFade;
+            uniform float uVibrance;
+            uniform float uHighlights;
+            uniform float uShadows;
+            ${if (variant.includeSharpening) "uniform float uSharpening;" else ""}
+            ${if (variant.includePreLogFilmGrain) """
+            uniform float uFilmGrain;
+            uniform float uFilmGrainSeed;
+            uniform float uFilmGrainPixelScale;
+            """ else ""}
+            uniform float uVignette;
+            uniform float uFlash;
+            uniform float uBleachBypass;
+            uniform float uChromaticAberration;
+            uniform float uNoise;
+            uniform float uNoiseSeed;
+            uniform float uLowRes;
+            uniform float uAspectRatio;
+            uniform vec3 uGradingHues;
+            uniform vec3 uGradingAmounts;
+            uniform vec3 uGradingLuminances;
+            uniform float uGradingBalance;
+            uniform float uGradingBlending;
+            uniform mat3 uPrimaryCalibrationMatrix;
+            uniform vec2 uTexelSize;
+            uniform sampler2D uCurveTexture;
+            uniform bool uCurveEnabled;
+            ${if (variant.includeSpatialRecipeEffects) """
+            uniform sampler2D uSoftLightTexture;
+            uniform float uSoftLight;
+            """ else ""}
+            ${if (variant.includeJpegInputToneCurve) """
+            uniform highp sampler2D uJpegInputToneCurveTexture;
+            uniform int uJpegInputToneCurveSize;
+            """ else ""}
+
+            const vec3 W = vec3(0.2126, 0.7152, 0.0722);
+            const float PI = 3.14159265359;
+
+            ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
+            ${if (needsLogInput) LogInputGl.GLSL else ""}
+            ${PreviewColorShaderModules.EXPOSURE}
+            ${ContrastShader.GLSL}
+            ${DirectFlashShader.GLSL}
+            ${ThreeWayColorGradingShader.GLSL}
+            ${PreviewColorShaderModules.SANITIZE}
+            ${BasicToneLutShader.GLSL}
+
+            ${if (variant.includeJpegInputToneCurve) """
+            float sampleJpegInputToneCurve(float value) {
+                int lastIndex = max(uJpegInputToneCurveSize - 1, 1);
+                float position = clamp(value, 0.0, 1.0) * float(lastIndex);
+                int lowerIndex = clamp(int(floor(position)), 0, lastIndex);
+                int upperIndex = min(lowerIndex + 1, lastIndex);
+                float amount = position - float(lowerIndex);
+                float lower = texelFetch(
+                    uJpegInputToneCurveTexture,
+                    ivec2(lowerIndex, 0),
+                    0
+                ).r;
+                float upper = texelFetch(
+                    uJpegInputToneCurveTexture,
+                    ivec2(upperIndex, 0),
+                    0
+                ).r;
+                return mix(lower, upper, amount);
+            }
+
+            vec3 applyJpegInputToneCurve(vec3 color) {
+                return vec3(
+                    sampleJpegInputToneCurve(color.r),
+                    sampleJpegInputToneCurve(color.g),
+                    sampleJpegInputToneCurve(color.b)
+                );
+            }
+            """ else ""}
+
+            float getLuma(vec3 color) {
+                return dot(color, W);
+            }
+
+            ${PreviewShadowsHighlightsShader.GLSL}
+
+            ${if (needsOklab) PreviewColorShaderModules.OKLAB else ""}
+            ${if (needsClassifiers) PreviewColorShaderModules.LCH_CLASSIFIERS else ""}
+            ${if (variant.includeOklchDensity) PreviewColorShaderModules.OKLCH_DENSITY else PreviewColorShaderModules.OKLCH_DENSITY_STUB}
+            ${if (variant.includeLchMixer) PreviewColorShaderModules.LCH_MIXER else PreviewColorShaderModules.LCH_MIXER_STUB}
+            ${if (variant.includeLutMask) PreviewColorShaderModules.LUT_MASK else PreviewColorShaderModules.LUT_MASK_STUB}
+            ${if (variant.includeExtendedLutCurves) PreviewColorShaderModules.EXTENDED_LUT_CURVES else PreviewColorShaderModules.SIMPLE_LUT_CURVES}
+            ${if (variant.includePreLogFilmGrain) FilmGrainShaders.FUNCTIONS else ""}
+
+            ${PreviewColorShaderModules.PRIMARY_CALIBRATION}
+            ${PreviewColorShaderModules.LUT_COLOR_SPACE}
+
+            ${if (variant.includeEnginePreview) RawEnginePreviewGl.SAMPLING_GLSL else ""}
+            vec4 samplePreviewSource(vec2 uv) {
+                vec4 sampled = texture(uCameraTexture, uv);
+                ${if (variant.includeEnginePreview) "sampled.rgb = sampleEnginePreview(sampled.rgb);" else ""}
+                return sampled;
+            }
+
+            void main() {
+                vec2 rcCoord = vRawCoord;
+                // The vertex stage already applies crop and the SurfaceTexture transform.
+                // Only effects that change raw coordinates need a fragment-stage transform.
+                vec2 uvCoord = vTexCoord;
+                if (uLowRes > 0.005) {
+                    float blocksX = mix(512.0, 32.0, uLowRes);
+                    vec2 gridSize = vec2(1.0 / blocksX, 1.0 / (blocksX / uAspectRatio));
+                    vec2 gridRC = floor(rcCoord / gridSize) * gridSize + gridSize * 0.5;
+                    vec2 gridUV = (uSTMatrix * vec4(gridRC, 0.0, 1.0)).xy;
+                    uvCoord = mix(uvCoord, gridUV, 0.95);
+                    rcCoord = mix(rcCoord, gridRC, 0.95);
+                }
+
+                ${if (variant.includeChromaticAberration) """
+                vec4 color;
+                {
+                    vec2 center = vec2(0.5);
+                    vec2 dir = rcCoord - center;
+                    float dist = length(dir);
+                    float offset = pow(dist, 1.5) * uChromaticAberration * 0.08;
+                    vec2 rCoord = (uSTMatrix * vec4(rcCoord + dir * offset, 0.0, 1.0)).xy;
+                    vec2 bCoord = (uSTMatrix * vec4(rcCoord - dir * offset, 0.0, 1.0)).xy;
+                    float r = samplePreviewSource(rCoord).r;
+                    vec4 centerSample = samplePreviewSource(uvCoord);
+                    float g = centerSample.g;
+                    float b = samplePreviewSource(bCoord).b;
+                    float a = centerSample.a;
+                    color = vec4(r, g, b, a);
+                }
+                """ else "vec4 color = samplePreviewSource(uvCoord);"}
+
+                ${if (variant.includeJpegInputToneCurve) """
+                color.rgb = applyJpegInputToneCurve(color.rgb);
+                color.rgb = sanitizeColor(color.rgb);
+                """ else ""}
+
+                if (${if (variant.includeColorRecipe) "uColorRecipeEnabled" else "false"}) {
+                    if (abs(uExposure) > 0.001) {
+                        color.rgb = applyExposureInLinearSpace(color.rgb, uExposure);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    color.rgb = applyPreviewShadowsHighlights(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    float luma = getLuma(color.rgb);
+
+                    color.rgb = applyContrastSCurve(color.rgb, uContrast);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    color.rgb = applyBasicToneLut(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    color.r += uTemperature * 0.1;
+                    color.b -= uTemperature * 0.1;
+                    color.g -= uTint * 0.05;
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    if (abs(uSaturation - 1.0) > 0.001) {
+                        luma = dot(color.rgb, W);
+                        color.rgb = mix(vec3(luma), color.rgb, uSaturation);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    if (abs(uVibrance) > 0.001) {
+                        color.rgb = applyOklchDensity(color.rgb, uVibrance);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    color.rgb = applyPrimaryCalibration(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    color.rgb = applyLchColorMixer(color.rgb);
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    color.rgb = applyThreeWayColorGrading(
+                        color.rgb,
+                        uGradingHues,
+                        uGradingAmounts,
+                        uGradingLuminances,
+                        uGradingBalance,
+                        uGradingBlending,
+                        W
+                    );
+                    color.rgb = sanitizeColor(color.rgb);
+
+                    if (uFade > 0.001) {
+                        float fadeAmount = uFade * 0.3;
+                        color.rgb = mix(color.rgb, vec3(0.5), fadeAmount) + fadeAmount * 0.1;
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    if (uBleachBypass > 0.001) {
+                        luma = dot(color.rgb, W);
+                        vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
+                        desaturated = (desaturated - 0.5) * 1.3 + 0.5;
+                        desaturated.r *= 0.95;
+                        desaturated.g *= 1.02;
+                        desaturated.b *= 1.05;
+                        color.rgb = mix(color.rgb, desaturated, uBleachBypass);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    if (uFlash > 0.001) {
+                        color.rgb = applyDirectFlash(color.rgb, vTexCoord, uAspectRatio, uFlash);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    if (abs(uVignette) > 0.001) {
+                        float dist = distance(vTexCoord, vec2(0.5));
+                        float vignetteMask = smoothstep(0.8, 0.3, dist);
+                        if (uVignette < 0.0) {
+                            color.rgb *= mix(0.01, 1.0, vignetteMask) * abs(uVignette) + (1.0 + uVignette);
+                        } else {
+                            color.rgb = mix(color.rgb, vec3(1.0), (1.0 - vignetteMask) * uVignette);
+                        }
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    if (uNoise > 0.001) {
+                        vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
+                        vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;
+                        float lumNoise = fract(sin(dot(noiseCoord, vec2(12.9898, 78.233))) * 43758.5453);
+                        lumNoise = (lumNoise - 0.5) * 2.0;
+                        float colorNoiseR = fract(sin(dot(noiseCoord + vec2(1.1, 2.2), vec2(39.346, 11.135))) * 43758.5453);
+                        float colorNoiseG = fract(sin(dot(noiseCoord + vec2(3.3, 4.4), vec2(73.156, 52.235))) * 43758.5453);
+                        float colorNoiseB = fract(sin(dot(noiseCoord + vec2(5.5, 6.6), vec2(27.423, 83.136))) * 43758.5453);
+                        vec3 colorNoise = (vec3(colorNoiseR, colorNoiseG, colorNoiseB) - 0.5) * 2.0;
+                        luma = dot(color.rgb, W);
+                        float noiseMask = mix(0.5, 1.0, 1.0 - abs(luma - 0.5) * 1.5);
+                        vec3 finalNoise = mix(vec3(lumNoise), mix(vec3(lumNoise), colorNoise, 0.7), 0.8);
+                        color.rgb += finalNoise * uNoise * max(0.0, noiseMask);
+                        color.rgb = sanitizeColor(color.rgb);
+                    }
+
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+
+                if (uCurveEnabled) {
+                    vec3 clamped = clamp(color.rgb, 0.0, 1.0);
+                    float r = texture(uCurveTexture, vec2(clamped.r, 0.5)).r;
+                    float g = texture(uCurveTexture, vec2(clamped.g, 0.5)).g;
+                    float b = texture(uCurveTexture, vec2(clamped.b, 0.5)).b;
+                    color.rgb = sanitizeColor(vec3(r, g, b));
+                }
+
+
+                ${if (variant.includePreLogFilmGrain) """
+                if (uFilmGrain > 0.001) {
+                    color.rgb = applyDensityFilmGrain(
+                        color.rgb,
+                        gl_FragCoord.xy,
+                        uFilmGrain,
+                        uFilmGrainSeed,
+                        uFilmGrainPixelScale
+                    );
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+                """ else ""}
+
+                ${if (variant.includeVideoLog) """
+                if (uVideoLogEnabled) {
+                    vec3 linearColor = srgbToLinear(max(color.rgb, vec3(0.0)));
+                    // HLG is a display-referred HDR transfer (BT.2100), not a camera Log
+                    // curve. Do not apply the ACR3 normalization used by the custom Log modes.
+                    if (uVideoLogCurve != 7) {
+                        linearColor = prepareLogLinearInput(linearColor);
+                    }
+                    vec3 outputColorSpace = applyLutColorSpace(linearColor, uVideoColorSpace);
+                    color.rgb = sanitizeColor(applyLutCurve(outputColorSpace, uVideoLogCurve));
+                }
+                """ else ""}
+
+                if (uLutEnabled && uLutIntensity > 0.0) {
+                    vec3 lutInColor;
+                    float effectiveLutIntensity = uLutIntensity;
+                    if (uVideoLogEnabled) {
+                        lutInColor = color.rgb;
+                    } else {
+                        vec3 linearRGB = srgbToLinear(max(color.rgb, vec3(0.0)));
+                        effectiveLutIntensity *= lutMaskWeight(uLutMaskType, linearRGB);
+                        ${if (needsLogInput) "linearRGB = prepareLutLinearInput(linearRGB, uLutCurve);" else ""}
+                        vec3 colorSpaceRGB = applyLutColorSpace(linearRGB, uLutColorSpace);
+                        lutInColor = applyLutCurve(colorSpaceRGB, uLutCurve);
+                    }
+                    float scale = (uLutSize - 1.0) / uLutSize;
+                    float offset = 1.0 / (2.0 * uLutSize);
+                    vec3 lutCoord = lutInColor * scale + offset;
+                    vec4 lutColor = texture(uLutTexture, lutCoord);
+                    // 保留大于 1.0 的混合权重，沿 LUT 色差外推以支持最高 200% 强度。
+                    color.rgb = mix(color.rgb, lutColor.rgb, effectiveLutIntensity);
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+
+                ${if (variant.includeSpatialRecipeEffects) """
+                if (uSoftLight > 0.0) {
+                    vec3 softBlur = texture(uSoftLightTexture, uvCoord).rgb;
+                    vec3 screen = vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - softBlur);
+                    vec3 softGlow = mix(color.rgb, screen, 0.42);
+                    color.rgb = mix(color.rgb, softGlow, uSoftLight * 0.75);
+                    float softLuma = dot(softBlur, W);
+                    color.rgb += vec3(softLuma) * (uSoftLight * 0.025);
+                    color.rgb = (color.rgb - 0.5) * (1.0 - uSoftLight * 0.05) + 0.5;
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+                """ else ""}
+
+                ${if (variant.includeSharpening) """
+                // 锐度是色彩配方的最终 sRGB 空间操作。邻域只用于提取亮度细节，
+                // 调整量直接叠加到完成曲线、LUT 与空间效果后的 sRGB 结果。
+                if (uColorRecipeEnabled && abs(uSharpening) > 0.0001) {
+                    vec2 rawDx = vec2(uTexelSize.x, 0.0);
+                    vec2 rawDy = vec2(0.0, uTexelSize.y);
+                    float centerLuma = getLuma(samplePreviewSource(uvCoord).rgb);
+                    float neighborLuma = 0.0;
+                    neighborLuma += getLuma(samplePreviewSource(
+                        (uSTMatrix * vec4(rcCoord - rawDx, 0.0, 1.0)).xy
+                    ).rgb);
+                    neighborLuma += getLuma(samplePreviewSource(
+                        (uSTMatrix * vec4(rcCoord + rawDx, 0.0, 1.0)).xy
+                    ).rgb);
+                    neighborLuma += getLuma(samplePreviewSource(
+                        (uSTMatrix * vec4(rcCoord - rawDy, 0.0, 1.0)).xy
+                    ).rgb);
+                    neighborLuma += getLuma(samplePreviewSource(
+                        (uSTMatrix * vec4(rcCoord + rawDy, 0.0, 1.0)).xy
+                    ).rgb);
+                    float delta = centerLuma - neighborLuma * 0.25;
+                    float detail = sign(delta) * max(abs(delta) - 0.005, 0.0);
+                    float sharpeningStrength = uSharpening > 0.0
+                        ? uSharpening * 2.0
+                        : uSharpening;
+                    color.rgb = sanitizeColor(color.rgb + vec3(detail * sharpeningStrength));
+                }
+                """ else ""}
+
+                fragColor = vec4(clamp(sanitizeColor(color.rgb), 0.0, 1.0), color.a);
+            }
+        """.trimIndent().trimStart()
+    }
+
+}
