@@ -134,6 +134,45 @@ class ZoomTransitionController(
         fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean =
             isHalfXToTelephotoPresetTransition(fromZoom, targetZoom) ||
                 isTelephotoPresetToHalfXTransition(fromZoom, targetZoom)
+
+        /**
+         * Moderate start, fast middle, and a deliberately slow finish.
+         * This cubic curve has an initial slope of 0.45 and reaches zero velocity at the end.
+         */
+        private fun easeZoomTransitionProgress(progress: Double): Double {
+            val t = progress.coerceIn(0.0, 1.0)
+            // Cubic Bezier y(t) with control values 0.15 and 1.0.
+            return (0.45 * t + 2.10 * t * t - 1.55 * t * t * t).coerceIn(0.0, 1.0)
+        }
+
+        /**
+         * Maps equally spaced zoom steps to deadlines on the custom transition curve.
+         * Used by discrete preset handoffs so they follow the same pacing as continuous zoom.
+         */
+        fun calculateZoomTransitionElapsedTimestamps(
+            stepCount: Int,
+            durationMs: Long = TOTAL_TRANSITION_DURATION_MS
+        ): LongArray {
+            val steps = stepCount.coerceAtLeast(1)
+            val timestamps = LongArray(steps + 1)
+            for (stepIndex in 1 until steps) {
+                val targetProgress = stepIndex.toDouble() / steps.toDouble()
+                var low = 0.0
+                var high = 1.0
+                repeat(32) {
+                    val mid = (low + high) / 2.0
+                    if (easeZoomTransitionProgress(mid) < targetProgress) {
+                        low = mid
+                    } else {
+                        high = mid
+                    }
+                }
+                timestamps[stepIndex] = (high * durationMs.toDouble() + 0.5).toLong()
+            }
+            timestamps[0] = 0L
+            timestamps[steps] = durationMs
+            return timestamps
+        }
     }
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
@@ -496,16 +535,15 @@ class ZoomTransitionController(
                     var mainLensSelected = false
 
                     if (isDirectHalfXToTelephotoPreset) {
-                        // Emit every 0.05x value in order. The 0.5x -> 2x path has
-                        // 30 equal intervals, so each interval is 400/30 ms (~13.33 ms).
-                        // Use absolute deadlines so callback/camera latency does not accumulate
-                        // into the total animation duration. The physical handoff happens exactly
-                        // at 1.00x, without restarting the timeline or inserting a hold.
+                        // Emit every 0.05x value in order, with custom eased timing:
+                        // moderate start, faster middle, and a very slow finish.
+                        // Absolute deadlines prevent callback/camera latency from accumulating.
+                        // The physical handoff still occurs exactly at 1.00x with no extra hold.
                         val stepCount = ((endZ - startZ) / 0.05f).roundToInt().coerceAtLeast(1)
+                        val targetElapsedMs = calculateZoomTransitionElapsedTimestamps(stepCount, transitionDurationMs)
                         for (stepIndex in 0..stepCount) {
                             if (!isActive) break
-                            val deadline = startTime +
-                                (stepIndex.toDouble() * transitionDurationMs.toDouble() / stepCount.toDouble()).roundToInt()
+                            val deadline = startTime + targetElapsedMs[stepIndex]
                             val waitMs = deadline - SystemClock.uptimeMillis()
                             if (waitMs > 0L) delay(waitMs)
 
@@ -545,7 +583,7 @@ class ZoomTransitionController(
                             if (elapsed >= transitionDurationMs) break
 
                             val linearProgress = (elapsed.toDouble() / transitionDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                            val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+                            val smoothProgress = easeZoomTransitionProgress(linearProgress)
                             val currentNorm = (startNorm + (endNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
                             val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                             val currentZ = rawZoom.coerceIn(minZoom, maxZoom)
@@ -642,7 +680,7 @@ class ZoomTransitionController(
                     if (elapsed >= uwPhaseDurationMs) break
 
                     val linearProgress = (elapsed.toDouble() / uwPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                    val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+                    val smoothProgress = easeZoomTransitionProgress(linearProgress)
                     val currentNorm = (startNorm + (switchNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
                     val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
@@ -781,7 +819,7 @@ class ZoomTransitionController(
                         if (elapsed >= mainPhaseDurationMs) break
 
                         val linearProgress = (elapsed.toDouble() / mainPhaseDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                        val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+                        val smoothProgress = easeZoomTransitionProgress(linearProgress)
                         val currentNorm = (switchNorm + (endNorm - switchNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
@@ -832,7 +870,7 @@ class ZoomTransitionController(
 
                 // Sinusoidal ease-in-out profile matching smooth finger slider glide
                 val linearProgress = (elapsed.toDouble() / transitionDurationMs.toDouble()).coerceIn(0.0, 1.0)
-                val smoothProgress = (0.5 * (1.0 - cos(PI * linearProgress))).coerceIn(0.0, 1.0)
+                val smoothProgress = easeZoomTransitionProgress(linearProgress)
                 val currentNorm = (startNorm + (targetNorm - startNorm) * smoothProgress).toFloat().coerceIn(0f, 1f)
 
                 // Calculate actual zoom level using the exact zoom slider logic
