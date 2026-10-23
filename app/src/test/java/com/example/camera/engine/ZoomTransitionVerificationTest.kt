@@ -115,6 +115,29 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
+    fun testHighResolutionRecordingZoomPacingMatchesRecordingFrameRate() {
+        assertEquals(33L, ZoomTransitionController.frameIntervalMsForFps(30))
+        assertEquals(16L, ZoomTransitionController.frameIntervalMsForFps(60))
+        assertEquals(41L, ZoomTransitionController.frameIntervalMsForFps(24))
+
+        assertEquals(
+            792L,
+            ZoomTransitionController.framePacedTransitionDurationMs(400L, 30)
+        )
+        assertEquals(
+            400L,
+            ZoomTransitionController.framePacedTransitionDurationMs(400L, 60)
+        )
+        assertEquals(
+            984L,
+            ZoomTransitionController.framePacedTransitionDurationMs(400L, 24)
+        )
+
+        // Non-4K/non-recording transitions still use the original default duration.
+        assertEquals(400L, ZoomTransitionController.TOTAL_TRANSITION_DURATION_MS)
+    }
+
+    @Test
     fun testGenerateContinuousZoomStepsIncludesEveryValue() {
         val controller = ZoomTransitionController()
 
