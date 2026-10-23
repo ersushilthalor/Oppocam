@@ -136,6 +136,20 @@ class ZoomTransitionController(
                 isTelephotoPresetToHalfXTransition(fromZoom, targetZoom)
 
         /**
+         * Space zoom updates to the active recording frame cadence.
+         * Keep the normal 60 Hz path unchanged; slower recordings receive fewer camera requests.
+         */
+        fun frameIntervalMsForFps(fps: Int): Long =
+            (1000L / fps.coerceAtLeast(1).toLong()).coerceIn(16L, 42L)
+
+        /**
+         * Preserve about 24 recorded frames for an animated zoom transition.
+         * This helper is used only during active 4K video recording.
+         */
+        fun framePacedTransitionDurationMs(durationMs: Long, fps: Int): Long =
+            maxOf(TOTAL_TRANSITION_DURATION_MS, durationMs, frameIntervalMsForFps(fps) * 24L)
+
+        /**
          * Moderate start, fast middle, and a deliberately slow finish.
          * This cubic curve has an initial slope of 0.45 and reaches zero velocity at the end.
          */
@@ -454,13 +468,16 @@ class ZoomTransitionController(
         scope: CoroutineScope,
         durationMs: Long = TOTAL_TRANSITION_DURATION_MS,
         skipHoldAtSwitchPoint: Boolean = false,
+        frameIntervalMs: Long = 16L,
         onZoomUpdate: (Float) -> Unit,
         onComplete: (Float, LensInfo?) -> Unit
     ): Job {
         cancelTransition()
 
-        // Fixed duration: must take exactly 400ms (0.40 seconds), never less
+        // Default transitions keep their existing timing. High-resolution recording may supply
+        // a frame-paced duration and interval so Camera2 isn't flooded with redundant zoom requests.
         val transitionDurationMs = maxOf(TOTAL_TRANSITION_DURATION_MS, durationMs)
+        val transitionFrameIntervalMs = frameIntervalMs.coerceIn(16L, 42L)
 
         val job = scope.launch(Dispatchers.Main.immediate) {
             val currentFacing = currentLens?.facing
@@ -616,7 +633,7 @@ class ZoomTransitionController(
                                 }
                             } else {
                                 val zoomToApply = if (mainLensSelected) currentZ else currentZ.coerceAtMost(effectiveSwitchZoom)
-                                if (abs(zoomToApply - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                                if (abs(zoomToApply - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= transitionFrameIntervalMs) {
                                     lastDispatchedZoom = zoomToApply
                                     lastDispatchedTime = now
                                     _currentInterpolatedZoom.value = zoomToApply
@@ -625,7 +642,7 @@ class ZoomTransitionController(
                                 }
                             }
 
-                            val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
+                            val nextTick = minOf(startTime + transitionDurationMs, now + transitionFrameIntervalMs)
                             val waitMs = nextTick - SystemClock.uptimeMillis()
                             if (waitMs > 0) delay(waitMs)
                         }
@@ -686,7 +703,7 @@ class ZoomTransitionController(
                     val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                     val currentZ = rawZoom.coerceIn(minZoom, effectiveSwitchZoom)
 
-                    if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                    if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= transitionFrameIntervalMs) {
                         lastDispatchedZoom = currentZ
                         lastDispatchedTime = now
                         _currentInterpolatedZoom.value = currentZ
@@ -694,7 +711,7 @@ class ZoomTransitionController(
                         onApplyZoomToEngine(currentZ, true)
                     }
 
-                    val nextTick = minOf(startTime + uwPhaseDurationMs, now + 16L)
+                    val nextTick = minOf(startTime + uwPhaseDurationMs, now + transitionFrameIntervalMs)
                     val waitMs = nextTick - SystemClock.uptimeMillis()
                     if (waitMs > 0) {
                         delay(waitMs)
@@ -833,7 +850,7 @@ class ZoomTransitionController(
                             onApplyZoomToEngine(currentZ, true)
                         }
 
-                        val nextTick = minOf(mainStartTime + mainPhaseDurationMs, now + 16L)
+                        val nextTick = minOf(mainStartTime + mainPhaseDurationMs, now + transitionFrameIntervalMs)
                         val waitMs = nextTick - SystemClock.uptimeMillis()
                         if (waitMs > 0) {
                             delay(waitMs)
@@ -898,7 +915,7 @@ class ZoomTransitionController(
                     onApplyZoomToEngine(currentZ, true)
                 }
 
-                val nextTick = minOf(startTime + transitionDurationMs, now + 16L)
+                val nextTick = minOf(startTime + transitionDurationMs, now + transitionFrameIntervalMs)
                 val waitMs = nextTick - SystemClock.uptimeMillis()
                 if (waitMs > 0) {
                     delay(waitMs)
