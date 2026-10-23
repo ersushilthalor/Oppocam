@@ -144,7 +144,7 @@ class ZoomTransitionController(
 
         /**
          * Preserve about 24 recorded frames for an animated zoom transition.
-         * This helper is used only during active 4K video recording.
+         * This helper is used only when a 4K video/cinema mode is selected.
          */
         fun framePacedTransitionDurationMs(durationMs: Long, fps: Int): Long =
             maxOf(TOTAL_TRANSITION_DURATION_MS, durationMs, frameIntervalMsForFps(fps) * 24L)
