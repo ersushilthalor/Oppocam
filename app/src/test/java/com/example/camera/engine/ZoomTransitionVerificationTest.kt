@@ -95,6 +95,26 @@ class ZoomTransitionVerificationTest {
     }
 
     @Test
+    fun testZoomTransitionTimingStartsModerateAcceleratesAndFinishesVerySlowly() {
+        val elapsed = ZoomTransitionController.calculateZoomTransitionElapsedTimestamps(50, 400L)
+
+        assertEquals(0L, elapsed.first())
+        assertEquals(400L, elapsed.last())
+
+        val firstInterval = elapsed[1] - elapsed[0]
+        val middleInterval = elapsed[25] - elapsed[24]
+        val finalInterval = elapsed[50] - elapsed[49]
+
+        assertTrue("The start should be moderate, not an abrupt jump", firstInterval in 12L..25L)
+        assertTrue("The middle should be faster than the start", middleInterval < firstInterval)
+        assertTrue("The middle should be faster than the finish", middleInterval < finalInterval)
+        assertTrue("The finish should be very slow", finalInterval >= firstInterval * 2L)
+        for (index in 0 until elapsed.lastIndex) {
+            assertTrue("Eased deadlines must be monotonic", elapsed[index] <= elapsed[index + 1])
+        }
+    }
+
+    @Test
     fun testGenerateContinuousZoomStepsIncludesEveryValue() {
         val controller = ZoomTransitionController()
 
