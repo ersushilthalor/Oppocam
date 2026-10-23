@@ -79,6 +79,13 @@ class ZoomTransitionController(
         private fun isTelephotoPresetZoom(zoom: Float): Boolean =
             abs(zoom - 2.0f) < 0.05f || abs(zoom - 3.0f) < 0.05f
 
+        /**
+         * A direct 0.5x -> 1x tap uses the user-selected hold duration, never frame handoff.
+         * Keep this separate from telephoto eligibility so the two paths cannot overlap.
+         */
+        fun isHoldTimeHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean =
+            isHalfXZoom(fromZoom) && abs(targetZoom - 1.0f) < 0.05f
+
         /** True only for direct 0.5x -> 2x/3x preset-endpoint transitions. */
         fun isHalfXToTelephotoPresetTransition(fromZoom: Float, targetZoom: Float): Boolean =
             isHalfXZoom(fromZoom) && isTelephotoPresetZoom(targetZoom)
@@ -661,10 +668,19 @@ class ZoomTransitionController(
                     delay(uwPhaseDurationMs - totalElapsedUw)
                 }
 
-                // Ensure Ultra-Wide reaches the exact selected focal length field of view
+                // Put the UI on the exact switch point. For a direct 0.5x -> 1x tap, do
+                // not send the threshold zoom to Camera2 yet: setZoom() would immediately
+                // auto-select Main and bypass the user's hold duration. Keep the live
+                // Ultra-Wide stream just below the threshold until the hold expires.
+                val usesHoldTimeHandoff = isHoldTimeHandoffEligible(startZ, endZ)
                 _currentInterpolatedZoom.value = effectiveSwitchZoom
                 onZoomUpdate(effectiveSwitchZoom)
-                onApplyZoomToEngine(effectiveSwitchZoom, true)
+                val engineZoomAtSwitch = if (usesHoldTimeHandoff) {
+                    (effectiveSwitchZoom - 0.001f).coerceAtLeast(minZoom)
+                } else {
+                    effectiveSwitchZoom
+                }
+                onApplyZoomToEngine(engineZoomAtSwitch, true)
 
                 // 2. Hold that exact FOV for the same duration as the existing 1x switch hold time
                 // Direct 2x/3x preset taps should cross the lens switch without pausing at 1x.
@@ -678,12 +694,17 @@ class ZoomTransitionController(
                     holdAtOneXDurationMs.coerceIn(MIN_HOLD_AT_ONE_X_DURATION_MS, MAX_HOLD_AT_ONE_X_DURATION_MS)
                 }
 
-                val useFrameBasedHandoff = isOverlapAnimationEnabled &&
-                    isFrameBasedHandoffEligible(startZ, endZ)
-                val mainLensPreparedInOverlap = isOverlapAnimationEnabled &&
-                    (holdDuration > 0L || isDirectTelephotoTarget || useFrameBasedHandoff)
+                val useFrameBasedHandoff = !usesHoldTimeHandoff &&
+                    isOverlapAnimationEnabled && isFrameBasedHandoffEligible(startZ, endZ)
+                val mainLensPreparedInOverlap = !usesHoldTimeHandoff &&
+                    isOverlapAnimationEnabled && (holdDuration > 0L || isDirectTelephotoTarget || useFrameBasedHandoff)
                 var frameBasedHandoffStarted = false
-                if (mainLensPreparedInOverlap) {
+                if (usesHoldTimeHandoff) {
+                    // The configured time is a real pre-switch hold: Ultra-Wide remains active
+                    // until it expires. Do not start a frame-count crossfade on the 0.5x -> 1x path.
+                    if (holdDuration > 0L) delay(holdDuration)
+                    onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
+                } else if (mainLensPreparedInOverlap) {
                     if (isDirectTelephotoTarget || useFrameBasedHandoff) {
                         // Start handoff at the Ultra-Wide/Main boundary. The outgoing frame
                         // stays visible until fresh Main buffers arrive; zoom keeps moving.
@@ -695,7 +716,8 @@ class ZoomTransitionController(
                         frameBasedHandoffStarted = true
                         onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
                     } else {
-                        // Keep the deliberately configured hold behavior for an explicit 1x tap.
+                        // Preserve hold-time behavior for non-frame-based transitions that
+                        // are not the direct 0.5x -> 1x route.
                         onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, true)
 
                         if (holdDuration > 0L) {
@@ -727,12 +749,12 @@ class ZoomTransitionController(
                         }
                     }
                 } else {
-                    // Exact hold duration applied at selected switch point FOV.
+                    // Exact hold duration applied at the selected switch-point FOV.
                     delay(holdDuration)
                 }
 
                 // Avoid resetting the frame-driven overlap before target frames arrive.
-                if (!mainLensPreparedInOverlap) {
+                if (!mainLensPreparedInOverlap && !usesHoldTimeHandoff) {
                     onSelectLensOnEngine(mainWideLens, effectiveSwitchZoom, false)
                 }
                 if (!frameBasedHandoffStarted) setSteadyStatePreview(false)
