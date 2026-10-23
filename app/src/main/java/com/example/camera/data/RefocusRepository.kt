@@ -134,6 +134,98 @@ class RefocusRepository(private val context: Context) {
         }
     }
 
+
+    /**
+     * Rebuild the gallery database from persisted Refocus bundles after app data migrations
+     * or when a previous database entry is missing.
+     */
+    suspend fun discoverStoredRefocusPhotos() = withContext(Dispatchers.IO) {
+        val root = getRefocusStorageDir()
+        val bundles = root.listFiles { file -> file.isDirectory }
+            ?.sortedByDescending { it.lastModified() }
+            ?: return@withContext
+
+        for (bundle in bundles) {
+            val metadata = File(bundle, "metadata.json")
+            if (!metadata.isFile) continue
+            try {
+                val json = org.json.JSONObject(metadata.readText())
+                val photoUri = json.optString("photoUri").takeIf { it.isNotBlank() } ?: continue
+                val near = File(bundle, "plane_near.jpg")
+                val mid = File(bundle, "plane_mid.jpg")
+                val far = File(bundle, "plane_far.jpg")
+                if (!near.isFile || !mid.isFile || !far.isFile) continue
+
+                dao.insertRefocusPhoto(
+                    RefocusPhotoEntity(
+                        photoUri = photoUri,
+                        bundleDir = bundle.absolutePath,
+                        timestamp = json.optLong("timestamp", bundle.lastModified()),
+                        nearPlanePath = near.absolutePath,
+                        midPlanePath = mid.absolutePath,
+                        farPlanePath = far.absolutePath,
+                        depthMapPath = File(bundle, "depth_map.png")
+                            .takeIf { it.isFile }?.absolutePath ?: "",
+                        planeCount = json.optInt("planeCount", 3).coerceAtLeast(3),
+                        nearDiopters = json.optDouble("nearDiopters", 0.0).toFloat(),
+                        midDiopters = json.optDouble("midDiopters", 0.0).toFloat(),
+                        farDiopters = json.optDouble("farDiopters", 0.0).toFloat(),
+                        width = json.optInt("width", 0),
+                        height = json.optInt("height", 0)
+                    )
+                )
+            } catch (_: Exception) {
+                // Ignore incomplete or malformed bundles and continue recovering others.
+            }
+        }
+    }
+
+    /**
+     * Recover bundles from app-specific external media storage as well as internal storage.
+     * This is safe on devices where external media storage is unavailable.
+     */
+    suspend fun discoverDeviceRefocusPhotos() = withContext(Dispatchers.IO) {
+        val roots = context.getExternalMediaDirs()
+            .filterNotNull()
+            .map { File(it, "refocus_bundles") }
+            .filter { it.isDirectory }
+        for (root in roots) {
+            val bundles = root.listFiles { file -> file.isDirectory } ?: continue
+            for (bundle in bundles) {
+                val metadata = File(bundle, "metadata.json")
+                if (!metadata.isFile) continue
+                try {
+                    val json = org.json.JSONObject(metadata.readText())
+                    val photoUri = json.optString("photoUri").takeIf { it.isNotBlank() } ?: continue
+                    val near = File(bundle, "plane_near.jpg")
+                    val mid = File(bundle, "plane_mid.jpg")
+                    val far = File(bundle, "plane_far.jpg")
+                    if (!near.isFile || !mid.isFile || !far.isFile) continue
+                    dao.insertRefocusPhoto(
+                        RefocusPhotoEntity(
+                            photoUri = photoUri,
+                            bundleDir = bundle.absolutePath,
+                            timestamp = json.optLong("timestamp", bundle.lastModified()),
+                            nearPlanePath = near.absolutePath,
+                            midPlanePath = mid.absolutePath,
+                            farPlanePath = far.absolutePath,
+                            depthMapPath = File(bundle, "depth_map.png")
+                                .takeIf { it.isFile }?.absolutePath ?: "",
+                            planeCount = json.optInt("planeCount", 3).coerceAtLeast(3),
+                            nearDiopters = json.optDouble("nearDiopters", 0.0).toFloat(),
+                            midDiopters = json.optDouble("midDiopters", 0.0).toFloat(),
+                            farDiopters = json.optDouble("farDiopters", 0.0).toFloat(),
+                            width = json.optInt("width", 0),
+                            height = json.optInt("height", 0)
+                        )
+                    )
+                } catch (_: Exception) {
+                    // Skip invalid bundles without preventing gallery recovery.
+                }
+            }
+        }
+    }
+
     fun getRefocusStorageDir(): File {
         val dir = File(context.filesDir, "refocus_bundles")
         if (!dir.exists()) {
