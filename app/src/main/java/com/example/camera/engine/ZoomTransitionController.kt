@@ -842,7 +842,7 @@ class ZoomTransitionController(
                         val rawZoom = normalizedToZoomLog(currentNorm, minZoom, maxZoom)
                         val currentZ = rawZoom.coerceIn(effectiveSwitchZoom, maxZoom)
 
-                        if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                        if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= transitionFrameIntervalMs) {
                             lastDispatchedZoom = currentZ
                             lastDispatchedTime = now
                             _currentInterpolatedZoom.value = currentZ
@@ -906,7 +906,7 @@ class ZoomTransitionController(
                 }
 
                 // Apply zoom through the camera controller slider handler (at ~60fps pacing)
-                if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= 16L) {
+                if (abs(currentZ - lastDispatchedZoom) >= 0.01f || (now - lastDispatchedTime) >= transitionFrameIntervalMs) {
                     lastDispatchedZoom = currentZ
                     lastDispatchedTime = now
                     _currentInterpolatedZoom.value = currentZ
