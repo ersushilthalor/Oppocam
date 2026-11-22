@@ -683,19 +683,19 @@ fun TopControlBar(
 
 
         val sixDotMenuButton = @Composable {
-            val sixDotOrange = Color(0xFFFF7A00)
+            val sixDotAccent = accentColor
             IconButton(
                 onClick = onQuickOptionsToggle,
                 modifier = Modifier
                     .size(buttonSize)
                     .topControlStyle(
                         layoutConfig,
-                        activeColor = if (isQuickOptionsOpen) sixDotOrange else null
+                        activeColor = if (isQuickOptionsOpen) sixDotAccent else null
                     )
                     .testTag("top_bar_six_dot_menu_button")
             ) {
                 SixDotGridIcon(
-                    tint = if (isQuickOptionsOpen) sixDotOrange else Color.White.copy(alpha = 0.95f),
+                    tint = if (isQuickOptionsOpen) sixDotAccent else Color.White.copy(alpha = 0.95f),
                     modifier = Modifier.size(iconSize)
                 )
             }
