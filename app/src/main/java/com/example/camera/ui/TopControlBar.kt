@@ -145,6 +145,8 @@ fun TopControlBar(
     gridType: GridType,
     isRawEnabled: Boolean,
     supportsRaw: Boolean,
+    isAutoHdrEnabled: Boolean = true,
+    onAutoHdrToggle: () -> Unit = {},
     storageStats: StorageStats = StorageStats(),
     videoQuality: VideoQualityOption = VideoQualityOption.UHD_4K_30,
     videoResolution: CameraResolution? = null,
@@ -482,6 +484,23 @@ fun TopControlBar(
             }
         }
 
+        val hdrButton = @Composable {
+            IconButton(
+                onClick = onAutoHdrToggle,
+                modifier = Modifier
+                    .size(buttonSize)
+                    .topControlStyle(layoutConfig, activeColor = if (isAutoHdrEnabled) accentColor else null)
+                    .testTag("hdr_button")
+            ) {
+                Icon(
+                    imageVector = if (isAutoHdrEnabled) Icons.Outlined.HdrOn else Icons.Outlined.HdrOff,
+                    contentDescription = if (isAutoHdrEnabled) "Auto HDR on" else "Auto HDR off",
+                    tint = if (isAutoHdrEnabled) accentColor else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+        }
+
         val gridAssistButton = @Composable {
             IconButton(
                 onClick = onGridClick,
@@ -693,6 +712,7 @@ fun TopControlBar(
                     TopControlItem.FLASH -> flashButton()
                     TopControlItem.TIMER -> timerAudioButton()
                     TopControlItem.GRID -> gridAssistButton()
+                    TopControlItem.HDR -> hdrButton()
                     TopControlItem.RESOLUTION -> {
                         if (cameraMode != CameraMode.PHOTO || photoMegapixelMode == PhotoMegapixelMode.M50) {
                             primaryBadge()
