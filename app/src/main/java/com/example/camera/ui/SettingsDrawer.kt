@@ -2773,6 +2773,11 @@ private fun UiLayoutSettingsPage(
             UiTemplateType.CUSTOM to "Custom UI"
         )
     }
+    val selectedTemplateAccent = if (uiCustomizationState.selectedTemplate == UiTemplateType.GCAM) {
+        Color(0xFF4285F4)
+    } else {
+        Color(0xFFFF8A32)
+    }
 
     val scalePresets = remember {
         listOf(
@@ -2813,7 +2818,7 @@ private fun UiLayoutSettingsPage(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    allTemplates.chunked(3).forEach { rowItems ->
+                    allTemplates.chunked(2).forEach { rowItems ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2825,10 +2830,10 @@ private fun UiLayoutSettingsPage(
                                 Surface(
                                     onClick = { onSelectTemplate(template) },
                                     shape = RoundedCornerShape(12.dp),
-                                    color = if (isSelected) Color(0xFFFF8A32) else Color.White.copy(alpha = 0.08f),
+                                    color = if (isSelected) selectedTemplateAccent else Color.White.copy(alpha = 0.08f),
                                     border = BorderStroke(
                                         1.dp,
-                                        if (isSelected) Color(0xFFFF8A32) else Color.White.copy(alpha = 0.12f)
+                                        if (isSelected) selectedTemplateAccent else Color.White.copy(alpha = 0.12f)
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -2841,7 +2846,7 @@ private fun UiLayoutSettingsPage(
                                     ) {
                                         Text(
                                             text = label,
-                                            color = if (isSelected) Color.Black else Color.White,
+                                            color = if (isSelected) Color.White else Color.White,
                                             fontSize = 12.sp,
                                             fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
                                             maxLines = 1
@@ -2855,7 +2860,7 @@ private fun UiLayoutSettingsPage(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Selected: ${uiCustomizationState.selectedTemplate.title} — ${uiCustomizationState.selectedTemplate.subtitle}",
-                        color = Color(0xFFFF8A32).copy(alpha = 0.9f),
+                        color = selectedTemplateAccent.copy(alpha = 0.9f),
                         fontSize = 11.5.sp,
                         lineHeight = 15.sp
                     )
