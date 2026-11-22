@@ -2346,6 +2346,7 @@ private fun CameraLensSettingsPage(
                 options = listOf(
                     GridType.NONE to "Off",
                     GridType.THIRDS to "3x3 Rule",
+                    GridType.FOUR_BY_FOUR to "4x4 Grid",
                     GridType.GOLDEN to "Golden Ratio",
                     GridType.SQUARE to "1:1 Box",
                     GridType.LEVEL to "Level Horizon"
