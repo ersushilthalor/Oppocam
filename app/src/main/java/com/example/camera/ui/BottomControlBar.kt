@@ -191,6 +191,7 @@ fun BottomControlBar(
                         // before the mode carousel; transparent here reveals only that preview.
                         Modifier.background(Color.Transparent)
                     } else if (layoutConfig.modeSelectorStyle == ModeSelectorStyle.OPPO_PILL ||
+                        layoutConfig.modeSelectorStyle == ModeSelectorStyle.GCAM_PILL ||
                         layoutConfig.modeSelectorStyle == ModeSelectorStyle.IPHONE_LIQUID_GLASS ||
                         layoutConfig.useFocalLengthZoomLabels) {
                         Modifier.background(Color.Black)
@@ -678,7 +679,7 @@ fun BottomControlBar(
                                 },
                                 horizontalArrangement = Arrangement.spacedBy(
                                     when (layoutConfig.modeSelectorStyle) {
-                                        ModeSelectorStyle.OPPO_PILL -> 12.dp
+                                        ModeSelectorStyle.OPPO_PILL, ModeSelectorStyle.GCAM_PILL -> 12.dp
                                         ModeSelectorStyle.IPHONE_LIQUID_GLASS -> 5.dp
                                         else -> 22.dp
                                     },
@@ -706,8 +707,8 @@ fun BottomControlBar(
                                         isOppoModeRail && mode == CameraMode.CINEMA -> "Pro Video"
                                         mode == CameraMode.MORE && isMoreModeActive &&
                                             cameraMode != CameraMode.MORE &&
-                                            layoutConfig.modeSelectorStyle != ModeSelectorStyle.OPPO_PILL -> cameraMode.name
-                                        else -> mode.name
+                                            layoutConfig.modeSelectorStyle != ModeSelectorStyle.OPPO_PILL -> cameraMode.title
+                                        else -> mode.title
                                     }
                                     val displayText = layoutConfig.formatModeText(rawName)
                                     val modeFontWeight = if (isSelected) layoutConfig.fontWeightOption.weight else FontWeight.Normal
@@ -818,6 +819,28 @@ fun BottomControlBar(
                                                         fontWeight = modeFontWeight,
                                                         fontFamily = fontFamily,
                                                         letterSpacing = modeLetterSpacing,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                                    )
+                                                }
+                                            }
+                                            ModeSelectorStyle.GCAM_PILL -> {
+                                                Surface(
+                                                    shape = RoundedCornerShape(18.dp),
+                                                    color = if (isSelected) Color(0x2EFFFFFF) else Color.Transparent,
+                                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(
+                                                        1.dp,
+                                                        Color.White.copy(alpha = 0.32f)
+                                                    ) else null
+                                                ) {
+                                                    Text(
+                                                        text = displayText,
+                                                        color = if (isSelected) Color.White else Color.White.copy(alpha = 0.68f),
+                                                        fontSize = layoutConfig.modeTextSizeSp.sp,
+                                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                                        fontFamily = fontFamily,
+                                                        letterSpacing = 0.sp,
                                                         maxLines = 1,
                                                         softWrap = false,
                                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
