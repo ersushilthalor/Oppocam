@@ -533,11 +533,6 @@ private fun SettingsOverviewPage(
                     onOptionSelected = onShutterFeedbackSelected,
                     showDivider = true
                 )
-                ReferenceNavigationRow(
-                    title = "Composition assistance",
-                    onClick = { onSelectPage(SettingsPage.CAMERA_LENS) },
-                    showDivider = true
-                )
                 ReferenceChoiceRow(
                     title = "Anti-banding filter",
                     selectedOption = antibandingMode,
@@ -660,6 +655,13 @@ private fun SettingsOverviewPage(
                     showDivider = true
                 )
                 ReferenceToggleRow(
+                    title = "Video stabilization",
+                    description = "Reduce camera shake in supported video modes.",
+                    checked = isVideoStabilizationEnabled,
+                    onCheckedChange = onStabilizationToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
                     title = "Optical stabilization (OIS)",
                     description = if (!isOisEnabled) {
                         "Hardware OIS is disabled."
@@ -683,7 +685,7 @@ private fun SettingsOverviewPage(
         }
 
         item {
-            ReferenceSettingsGroup("Handy features") {
+            ReferenceSettingsGroup("Gestures & shortcuts") {
                 ReferenceChoiceRow(
                     title = "Volume button action",
                     selectedOption = volumeKeyAction,
