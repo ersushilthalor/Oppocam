@@ -38,7 +38,7 @@ import com.example.camera.ui.components.FloatingWindowCard
  * Compact, rounded, dark translucent floating options panel that expands downward
  * over the viewfinder when tapping the 6-dot menu icon in the top control bar.
  * Matches the reference design with circular icons, clear status labels, spacing, and layout:
- * - Photo mode: Timer, Hi-Res (50MP), RAW, Motion Photo, Grid, Flash, Filters, Settings
+ * - Photo mode: Timer, HDR, Hi-Res, RAW, Grid, Flash, Filters, Settings
  * - Video mode: Dolly Zoom, Horizontal Lock, Stabilization, Resolution/FPS, Torch, Audio, Video Adjustments, Settings
  * - Cinema mode: LOG, LUT, Aspect Ratio, Resolution, EV, Tuning, Audio, Settings
  */
@@ -200,17 +200,6 @@ fun QuickOptionsFloatingPanel(
                                     activeColor = accentColor,
                                     onClick = onVideoAdjustmentsClick,
                                     testTag = "panel_video_tuning_button",
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                QuickOptionCircleButton(
-                                    icon = Icons.Outlined.Tune,
-                                    label = "Filters",
-                                    statusText = activePhotoFilter.name,
-                                    isActive = activePhotoFilter.name != "ORIGINAL",
-                                    activeColor = accentColor,
-                                    onClick = onPhotoFilterClick,
-                                    testTag = "panel_photo_filter_button",
                                     modifier = Modifier.weight(1f)
                                 )
 
@@ -417,6 +406,18 @@ fun QuickOptionsFloatingPanel(
                                     activeColor = accentColor,
                                     onClick = onFlashClick,
                                     testTag = "panel_flash_button",
+                                    modifier = Modifier.weight(1f)
+                                )
+
+
+                                QuickOptionCircleButton(
+                                    icon = Icons.Outlined.Tune,
+                                    label = "Filters",
+                                    statusText = activePhotoFilter.name,
+                                    isActive = activePhotoFilter.name != "ORIGINAL",
+                                    activeColor = accentColor,
+                                    onClick = onPhotoFilterClick,
+                                    testTag = "panel_photo_filter_button",
                                     modifier = Modifier.weight(1f)
                                 )
 
