@@ -124,6 +124,7 @@ fun CameraUiCustomizationView(
                     ) {
                         val icon = when (template) {
                             UiTemplateType.OPPO -> Icons.Outlined.CameraAlt
+                            UiTemplateType.GCAM -> Icons.Outlined.Camera
                             UiTemplateType.SAMSUNG -> Icons.Outlined.PhoneAndroid
                             UiTemplateType.CUSTOM -> Icons.Outlined.Tune
                         }
@@ -629,6 +630,7 @@ fun LivePreviewCanvas(
                     TopControlItem.FLASH -> Icons.Outlined.FlashOn
                     TopControlItem.TIMER -> Icons.Outlined.Timer
                     TopControlItem.GRID -> Icons.Outlined.GridOn
+                    TopControlItem.HDR -> Icons.Outlined.HdrOn
                     TopControlItem.RESOLUTION -> Icons.Outlined.HighQuality
                     TopControlItem.RAW -> Icons.Outlined.RawOn
                     TopControlItem.PRO_EXP -> Icons.Outlined.Tune
@@ -1034,6 +1036,25 @@ fun PreviewModeCarousel(
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                 fontFamily = fontFamily,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    ModeSelectorStyle.GCAM_PILL -> {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = if (isSelected) Color(0x2EFFFFFF) else Color.Transparent,
+                            border = if (isSelected) androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                Color.White.copy(alpha = 0.32f)
+                            ) else null
+                        ) {
+                            Text(
+                                text = mode.title,
+                                color = if (isSelected) Color.White else Color.White.copy(alpha = 0.68f),
+                                fontSize = config.modeTextSizeSp.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                fontFamily = fontFamily,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                             )
                         }
                     }

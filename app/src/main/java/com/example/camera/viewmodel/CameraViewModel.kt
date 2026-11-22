@@ -1489,7 +1489,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun cycleGridType() {
         val nextGrid = when (_gridType.value) {
             GridType.NONE -> GridType.THIRDS
-            GridType.THIRDS -> GridType.GOLDEN
+            GridType.THIRDS -> GridType.FOUR_BY_FOUR
+            GridType.FOUR_BY_FOUR -> GridType.GOLDEN
             GridType.GOLDEN -> GridType.SQUARE
             GridType.SQUARE -> GridType.LEVEL
             GridType.LEVEL -> GridType.NONE
