@@ -231,6 +231,7 @@ fun CustomUiStudioDialog(
                         val studioQuickTemplates = remember {
                             listOf(
                                 UiTemplateType.OPPO to "OPPO",
+                                UiTemplateType.GCAM to "GCam",
                                 UiTemplateType.SAMSUNG to "One UI",
                             )
                         }
@@ -2063,6 +2064,7 @@ private fun SavedPresetsTabContent(
         ) {
             val baseTemplates = listOf(
                 UiTemplateType.OPPO,
+                UiTemplateType.GCAM,
                 UiTemplateType.SAMSUNG,
             )
 
