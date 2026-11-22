@@ -52,6 +52,8 @@ fun QuickOptionsFloatingPanel(
     gridType: GridType,
     photoMegapixelMode: PhotoMegapixelMode,
     isRawEnabled: Boolean,
+    isAutoHdrEnabled: Boolean,
+    onAutoHdrToggle: () -> Unit,
     activePhotoFilter: PhotoFilter,
     isPipelineActive: Boolean,
     // Video properties
@@ -202,6 +204,17 @@ fun QuickOptionsFloatingPanel(
                                 )
 
                                 QuickOptionCircleButton(
+                                    icon = Icons.Outlined.Tune,
+                                    label = "Filters",
+                                    statusText = activePhotoFilter.name,
+                                    isActive = activePhotoFilter.name != "ORIGINAL",
+                                    activeColor = accentColor,
+                                    onClick = onPhotoFilterClick,
+                                    testTag = "panel_photo_filter_button",
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                QuickOptionCircleButton(
                                     icon = Icons.Outlined.Settings,
                                     label = "Settings",
                                     statusText = "More",
@@ -333,6 +346,17 @@ fun QuickOptionsFloatingPanel(
                                     activeColor = accentColor,
                                     onClick = onTimerClick,
                                     testTag = "panel_timer_button",
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                QuickOptionCircleButton(
+                                    icon = if (isAutoHdrEnabled) Icons.Outlined.HdrOn else Icons.Outlined.HdrOff,
+                                    label = "HDR",
+                                    statusText = if (isAutoHdrEnabled) "AUTO" else "OFF",
+                                    isActive = isAutoHdrEnabled,
+                                    activeColor = accentColor,
+                                    onClick = onAutoHdrToggle,
+                                    testTag = "panel_auto_hdr_button",
                                     modifier = Modifier.weight(1f)
                                 )
 

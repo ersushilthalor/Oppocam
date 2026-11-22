@@ -959,6 +959,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         // Apply restored mode-specific preferences into engine
         engine.flashMode = preferences.getModeFlashMode(initialMode)
+        engine.autoHdrEnabled = preferences.getModeAutoHdr(initialMode)
         engine.isRawCaptureEnabled = preferences.getModeRaw(initialMode)
         val initialOis = preferences.isOisEnabled
         _isOisEnabled.value = initialOis
@@ -1236,6 +1237,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         val mAutoHdr = preferences.getModeAutoHdr(mode)
         _autoHdrEnabled.value = mAutoHdr
+        engine.autoHdrEnabled = mAutoHdr
 
         val mAutoFraming = preferences.getModeAutoFraming(mode)
         _autoFramingEnabled.value = mAutoFraming
@@ -2604,6 +2606,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAutoHdrEnabled(enabled: Boolean) {
         _autoHdrEnabled.value = enabled
+        engine.autoHdrEnabled = enabled
         preferences.autoHdrEnabled = enabled
         preferences.setModeAutoHdr(_cameraMode.value, enabled)
         showToast(if (enabled) "Auto HDR Enabled" else "Auto HDR Disabled")
@@ -2674,6 +2677,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _jpegQuality.value = 100
         _showHorizonLevel.value = true
         _autoHdrEnabled.value = true
+        engine.autoHdrEnabled = true
         _autoFramingEnabled.value = true
         _windNoiseReduction.value = true
         _thermalProtection.value = true

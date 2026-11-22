@@ -665,6 +665,8 @@ fun CameraScreen(
             gridType = gridType,
             photoMegapixelMode = photoMegapixelMode,
             isRawEnabled = isRawEnabled,
+            isAutoHdrEnabled = isAutoHdrEnabled,
+            onAutoHdrToggle = { viewModel.setAutoHdrEnabled(!isAutoHdrEnabled) },
             activePhotoFilter = selectedPhotoFilter,
             isPipelineActive = isCustomPipelineEnabled,
             videoResolution = selectedVideoResolution,

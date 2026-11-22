@@ -1663,6 +1663,9 @@ class Camera2Engine(private val context: Context) {
 
     val photoHdrEngine by lazy { com.example.camera.engine.hdr.PhotoHdrEngine(context) }
 
+    /** Enables the multi-frame computational photo HDR bracket. Updated with the active mode's preference. */
+    @Volatile var autoHdrEnabled: Boolean = true
+
 
     fun refreshCaptureSessionForRaw() {
         val lens = _selectedLens.value ?: return
@@ -6329,13 +6332,28 @@ class Camera2Engine(private val context: Context) {
         _isCapturing.value = true
 
         val chars = activeLens?.let { getCharacteristics(it.cameraId) }
-        val hdrPlan = photoHdrEngine.planCapture(
-            chars = chars,
-            lastResult = lastCaptureResult,
-            flashMode = flashMode,
-            stats = latestLuminanceStats,
-            gyroEngine = gyroStabilizationEngine
-        )
+        val hdrPlan = if (autoHdrEnabled) {
+            photoHdrEngine.planCapture(
+                chars = chars,
+                lastResult = lastCaptureResult,
+                flashMode = flashMode,
+                stats = latestLuminanceStats,
+                gyroEngine = gyroStabilizationEngine
+            )
+        } else {
+            com.example.camera.engine.hdr.HdrCapturePlan(
+                bracketType = com.example.camera.engine.hdr.HdrBracketType.SINGLE_FRAME,
+                specs = listOf(
+                    com.example.camera.engine.hdr.HdrExposureSpec(
+                        role = com.example.camera.engine.hdr.FrameRole.REFERENCE_BASE,
+                        evOffset = 0f,
+                        aeCompIndex = 0,
+                        isReference = true
+                    )
+                ),
+                reason = "Auto HDR disabled by user"
+            )
+        }
         Log.i(TAG, "[PHOTO_CAPTURE_HDR] Plan: ${hdrPlan.bracketType}, specs=${hdrPlan.specs.size} - ${hdrPlan.reason}")
 
         try {
