@@ -136,6 +136,7 @@ enum class TopControlItem(val id: String, val label: String) {
     FLASH("flash", "Flash / Torch"),
     TIMER("timer", "Timer Countdown / Audio"),
     GRID("grid", "Grid & Horizon Level"),
+    HDR("hdr", "Auto HDR / HDR+ toggle"),
     RESOLUTION("resolution", "Photo/Video Resolution"),
     RAW("raw", "RAW Sensor Capture"),
     PRO_EXP("pro_exp", "Pro Manual Mode"),
@@ -204,7 +205,7 @@ data class ModeLayoutConfig(
     fun getIconPosition(item: TopControlItem): TopIconPosition {
         return topIconPositions[item] ?: when (item) {
             TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
-            TopControlItem.LOG, TopControlItem.LUT, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
+            TopControlItem.LOG, TopControlItem.LUT, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP, TopControlItem.HDR -> TopIconPosition.CENTER
             TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.PIPELINE -> TopIconPosition.RIGHT
         }
     }
@@ -616,14 +617,14 @@ object CameraUiTemplates {
             )
             CameraMode.PHOTO -> if (isGcamLayout) baseConfig.copy(
                 topControlsOrder = listOf(
-                    TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.GRID,
-                    TopControlItem.RAW, TopControlItem.SIX_DOT_MENU, TopControlItem.SETTINGS
+                    TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HDR,
+                    TopControlItem.GRID, TopControlItem.SIX_DOT_MENU, TopControlItem.SETTINGS
                 ),
                 topIconPositions = mapOf(
                     TopControlItem.FLASH to TopIconPosition.LEFT,
                     TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.HDR to TopIconPosition.CENTER,
                     TopControlItem.GRID to TopIconPosition.CENTER,
-                    TopControlItem.RAW to TopIconPosition.CENTER,
                     TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT,
                     TopControlItem.SETTINGS to TopIconPosition.RIGHT
                 ),
