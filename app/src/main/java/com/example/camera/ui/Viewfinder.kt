@@ -785,6 +785,14 @@ fun CameraGridOverlay(
                 drawLine(gridColor, Offset(0f, h / 3f), Offset(w, h / 3f), strokeWidth)
                 drawLine(gridColor, Offset(0f, h * 2f / 3f), Offset(w, h * 2f / 3f), strokeWidth)
             }
+            GridType.FOUR_BY_FOUR -> {
+                // Four equal columns and rows, matching GCam's 4 x 4 composition grid.
+                for (division in 1..3) {
+                    val fraction = division / 4f
+                    drawLine(gridColor, Offset(w * fraction, 0f), Offset(w * fraction, h), strokeWidth)
+                    drawLine(gridColor, Offset(0f, h * fraction), Offset(w, h * fraction), strokeWidth)
+                }
+            }
             GridType.GOLDEN -> {
                 val phi = 0.618f
                 val left = w * (1f - phi)

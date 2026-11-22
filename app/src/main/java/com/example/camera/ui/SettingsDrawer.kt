@@ -286,6 +286,8 @@ fun SettingsDrawer(
                         isAutoHdrEnabled = isAutoHdrEnabled,
                         onAutoHdrToggle = onAutoHdrToggle,
                         photoMegapixelMode = photoMegapixelMode,
+                        gridType = gridType,
+                        onGridTypeSelected = onGridTypeSelected,
                         isRawEnabled = isRawEnabled,
                         onRawToggle = onRawToggle,
                         saveSelfieAsPreviewed = saveSelfieAsPreviewed,
@@ -480,6 +482,8 @@ private fun SettingsOverviewPage(
     isAutoHdrEnabled: Boolean,
     onAutoHdrToggle: (Boolean) -> Unit,
     photoMegapixelMode: PhotoMegapixelMode,
+    gridType: GridType,
+    onGridTypeSelected: (GridType) -> Unit,
     isRawEnabled: Boolean,
     onRawToggle: () -> Unit,
     saveSelfieAsPreviewed: Boolean,
@@ -529,18 +533,6 @@ private fun SettingsOverviewPage(
                     onOptionSelected = onShutterFeedbackSelected,
                     showDivider = true
                 )
-                ReferenceToggleRow(
-                    title = "Mirror selfie",
-                    description = "Save front-camera photos as previewed.",
-                    checked = saveSelfieAsPreviewed,
-                    onCheckedChange = onSaveSelfieAsPreviewedToggle,
-                    showDivider = true
-                )
-                ReferenceNavigationRow(
-                    title = "Composition assistance",
-                    onClick = { onSelectPage(SettingsPage.CAMERA_LENS) },
-                    showDivider = true
-                )
                 ReferenceChoiceRow(
                     title = "Anti-banding filter",
                     selectedOption = antibandingMode,
@@ -551,6 +543,48 @@ private fun SettingsOverviewPage(
                         "OFF" to "Off"
                     ),
                     onOptionSelected = onAntibandingModeSelected,
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            ReferenceSettingsGroup("Composition") {
+                ReferenceChoiceRow(
+                    title = "Grid type",
+                    selectedOption = gridType,
+                    options = listOf(
+                        GridType.NONE to "Off",
+                        GridType.THIRDS to "3 x 3",
+                        GridType.FOUR_BY_FOUR to "4 x 4",
+                        GridType.GOLDEN to "Golden ratio",
+                        GridType.SQUARE to "Square frame"
+                    ),
+                    onOptionSelected = onGridTypeSelected,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Horizon level guide",
+                    description = "Show a level guide over the camera preview.",
+                    checked = horizonLeveler,
+                    onCheckedChange = onHorizonLevelerToggle,
+                    showDivider = true
+                )
+                ReferenceNavigationRow(
+                    title = "Framing and lens assistance",
+                    value = "Auto macro and composition hints",
+                    onClick = { onSelectPage(SettingsPage.CAMERA_LENS) },
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            ReferenceSettingsGroup("Manual controls") {
+                ReferenceNavigationRow(
+                    title = "Manual controls",
+                    value = "Exposure, ISO, shutter speed, white balance and focus",
+                    onClick = { onSelectPage(SettingsPage.PRO_MANUAL) },
                     showDivider = false
                 )
             }
@@ -569,6 +603,13 @@ private fun SettingsOverviewPage(
                     description = "Automatically balances highlights and shadows.",
                     checked = isAutoHdrEnabled,
                     onCheckedChange = onAutoHdrToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Save selfie as previewed",
+                    description = "Keep the same left/right orientation shown in the viewfinder.",
+                    checked = saveSelfieAsPreviewed,
+                    onCheckedChange = onSaveSelfieAsPreviewedToggle,
                     showDivider = true
                 )
                 ReferenceToggleRow(
@@ -614,6 +655,13 @@ private fun SettingsOverviewPage(
                     showDivider = true
                 )
                 ReferenceToggleRow(
+                    title = "Video stabilization",
+                    description = "Reduce camera shake in supported video modes.",
+                    checked = isVideoStabilizationEnabled,
+                    onCheckedChange = onStabilizationToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
                     title = "Optical stabilization (OIS)",
                     description = if (!isOisEnabled) {
                         "Hardware OIS is disabled."
@@ -637,7 +685,7 @@ private fun SettingsOverviewPage(
         }
 
         item {
-            ReferenceSettingsGroup("Handy features") {
+            ReferenceSettingsGroup("Gestures & shortcuts") {
                 ReferenceChoiceRow(
                     title = "Volume button action",
                     selectedOption = volumeKeyAction,
@@ -665,13 +713,6 @@ private fun SettingsOverviewPage(
                     description = "Keep the video horizon level while recording.",
                     checked = isHorizontalLockSettingEnabled,
                     onCheckedChange = onHorizontalLockSettingToggle,
-                    showDivider = true
-                )
-                ReferenceToggleRow(
-                    title = "Horizon level",
-                    description = "Show a level guide in the viewfinder.",
-                    checked = horizonLeveler,
-                    onCheckedChange = onHorizonLevelerToggle,
                     showDivider = true
                 )
                 ReferenceToggleRow(
@@ -2305,6 +2346,7 @@ private fun CameraLensSettingsPage(
                 options = listOf(
                     GridType.NONE to "Off",
                     GridType.THIRDS to "3x3 Rule",
+                    GridType.FOUR_BY_FOUR to "4x4 Grid",
                     GridType.GOLDEN to "Golden Ratio",
                     GridType.SQUARE to "1:1 Box",
                     GridType.LEVEL to "Level Horizon"
@@ -2729,9 +2771,15 @@ private fun UiLayoutSettingsPage(
     val allTemplates = remember {
         listOf(
             UiTemplateType.OPPO to "OPPO",
+            UiTemplateType.GCAM to "GCam 8.7",
             UiTemplateType.SAMSUNG to "One UI",
             UiTemplateType.CUSTOM to "Custom UI"
         )
+    }
+    val selectedTemplateAccent = if (uiCustomizationState.selectedTemplate == UiTemplateType.GCAM) {
+        Color(0xFF4285F4)
+    } else {
+        Color(0xFFFF8A32)
     }
 
     val scalePresets = remember {
@@ -2773,7 +2821,7 @@ private fun UiLayoutSettingsPage(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    allTemplates.chunked(3).forEach { rowItems ->
+                    allTemplates.chunked(2).forEach { rowItems ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2785,10 +2833,10 @@ private fun UiLayoutSettingsPage(
                                 Surface(
                                     onClick = { onSelectTemplate(template) },
                                     shape = RoundedCornerShape(12.dp),
-                                    color = if (isSelected) Color(0xFFFF8A32) else Color.White.copy(alpha = 0.08f),
+                                    color = if (isSelected) selectedTemplateAccent else Color.White.copy(alpha = 0.08f),
                                     border = BorderStroke(
                                         1.dp,
-                                        if (isSelected) Color(0xFFFF8A32) else Color.White.copy(alpha = 0.12f)
+                                        if (isSelected) selectedTemplateAccent else Color.White.copy(alpha = 0.12f)
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -2801,7 +2849,7 @@ private fun UiLayoutSettingsPage(
                                     ) {
                                         Text(
                                             text = label,
-                                            color = if (isSelected) Color.Black else Color.White,
+                                            color = if (isSelected) Color.White else Color.White,
                                             fontSize = 12.sp,
                                             fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
                                             maxLines = 1
@@ -2815,7 +2863,7 @@ private fun UiLayoutSettingsPage(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Selected: ${uiCustomizationState.selectedTemplate.title} — ${uiCustomizationState.selectedTemplate.subtitle}",
-                        color = Color(0xFFFF8A32).copy(alpha = 0.9f),
+                        color = selectedTemplateAccent.copy(alpha = 0.9f),
                         fontSize = 11.5.sp,
                         lineHeight = 15.sp
                     )

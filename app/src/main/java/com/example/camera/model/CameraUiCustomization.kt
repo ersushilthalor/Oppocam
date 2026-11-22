@@ -12,6 +12,7 @@ enum class UiTemplateType(
     val accentHex: String
 ) {
     OPPO("OPPO Camera", "Screenshot-matched OPPO layout with an orange shutter, dark selected-mode pill and only supported modes", "#FF8A00"),
+    GCAM("Google Camera", "GCam 8.7-inspired camera layout, controls and settings using Oppocam's native Camera2 features", "#4285F4"),
     SAMSUNG("One UI (Samsung)", "Samsung One UI layout with bold toggles, capsule mode selector & solid shutter", "#FFFFFF"),
     CUSTOM("Custom UI", "Completely personalized layout, spacing, typography & controls", "#64B5F6")
 }
@@ -43,6 +44,7 @@ enum class ModeSelectorStyle(val label: String) {
     UNDERLINE("Vivo Accent Underline"),
     MINIMAL_TEXT("Minimal Typography"),
     PIXEL_PILL("Pixel Dark Pill"),
+    GCAM_PILL("Google Camera Mode Rail"),
     MONO_TICKER("Pro Monospace Ticker"),
     CYBER_GLOW("Cyber Neon Glow"),
     DSLR_DIAL("Mechanical Dial Wheel")
@@ -134,6 +136,7 @@ enum class TopControlItem(val id: String, val label: String) {
     FLASH("flash", "Flash / Torch"),
     TIMER("timer", "Timer Countdown / Audio"),
     GRID("grid", "Grid & Horizon Level"),
+    HDR("hdr", "Auto HDR / HDR+ toggle"),
     RESOLUTION("resolution", "Photo/Video Resolution"),
     RAW("raw", "RAW Sensor Capture"),
     PRO_EXP("pro_exp", "Pro Manual Mode"),
@@ -202,7 +205,7 @@ data class ModeLayoutConfig(
     fun getIconPosition(item: TopControlItem): TopIconPosition {
         return topIconPositions[item] ?: when (item) {
             TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.STABILIZATION -> TopIconPosition.LEFT
-            TopControlItem.LOG, TopControlItem.LUT, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP -> TopIconPosition.CENTER
+            TopControlItem.LOG, TopControlItem.LUT, TopControlItem.RESOLUTION, TopControlItem.RAW, TopControlItem.PRO_EXP, TopControlItem.HDR -> TopIconPosition.CENTER
             TopControlItem.GRID, TopControlItem.SETTINGS, TopControlItem.SIX_DOT_MENU, TopControlItem.PRO_VIDEO_SETTINGS, TopControlItem.VIDEO_ADJUSTMENTS, TopControlItem.PIPELINE -> TopIconPosition.RIGHT
         }
     }
@@ -551,8 +554,23 @@ data class CustomUiPreset(
 
 object CameraUiTemplates {
     fun getDefaultConfigForMode(mode: CameraMode, baseConfig: ModeLayoutConfig): ModeLayoutConfig {
+        val isGcamLayout = baseConfig.modeSelectorStyle == ModeSelectorStyle.GCAM_PILL
         return when (mode) {
-            CameraMode.CINEMA -> baseConfig.copy(
+            CameraMode.CINEMA -> if (isGcamLayout) baseConfig.copy(
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH, TopControlItem.LOG, TopControlItem.LUT,
+                    TopControlItem.RESOLUTION, TopControlItem.SIX_DOT_MENU, TopControlItem.SETTINGS
+                ),
+                topIconPositions = mapOf(
+                    TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.LOG to TopIconPosition.CENTER,
+                    TopControlItem.LUT to TopIconPosition.CENTER,
+                    TopControlItem.RESOLUTION to TopIconPosition.CENTER,
+                    TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT,
+                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                ),
+                hiddenTopControls = emptySet()
+            ) else baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
                     TopControlItem.LOG,
@@ -569,7 +587,20 @@ object CameraUiTemplates {
                 ),
                 hiddenTopControls = emptySet()
             )
-            CameraMode.VIDEO -> baseConfig.copy(
+            CameraMode.VIDEO -> if (isGcamLayout) baseConfig.copy(
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH, TopControlItem.RESOLUTION, TopControlItem.TIMER,
+                    TopControlItem.SIX_DOT_MENU, TopControlItem.SETTINGS
+                ),
+                topIconPositions = mapOf(
+                    TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.RESOLUTION to TopIconPosition.CENTER,
+                    TopControlItem.TIMER to TopIconPosition.CENTER,
+                    TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT,
+                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                ),
+                hiddenTopControls = emptySet()
+            ) else baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
                     TopControlItem.RESOLUTION,
@@ -584,7 +615,21 @@ object CameraUiTemplates {
                 ),
                 hiddenTopControls = emptySet()
             )
-            CameraMode.PHOTO -> baseConfig.copy(
+            CameraMode.PHOTO -> if (isGcamLayout) baseConfig.copy(
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.HDR,
+                    TopControlItem.GRID, TopControlItem.SIX_DOT_MENU, TopControlItem.SETTINGS
+                ),
+                topIconPositions = mapOf(
+                    TopControlItem.FLASH to TopIconPosition.LEFT,
+                    TopControlItem.TIMER to TopIconPosition.LEFT,
+                    TopControlItem.HDR to TopIconPosition.CENTER,
+                    TopControlItem.GRID to TopIconPosition.CENTER,
+                    TopControlItem.SIX_DOT_MENU to TopIconPosition.RIGHT,
+                    TopControlItem.SETTINGS to TopIconPosition.RIGHT
+                ),
+                hiddenTopControls = emptySet()
+            ) else baseConfig.copy(
                 topControlsOrder = listOf(
                     TopControlItem.FLASH,
                     TopControlItem.RESOLUTION,
@@ -634,6 +679,45 @@ object CameraUiTemplates {
                 iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
                 iconContainerOpacity = 0.35f,
                 iconStrokeWidthDp = 1.8f
+            )
+            UiTemplateType.GCAM -> ModeLayoutConfig(
+                // Recreate the GCam 8.7 control hierarchy while keeping each action connected
+                // to Oppocam's existing Camera2/ViewModel implementation.
+                visibleModes = listOf(CameraMode.PHOTO, CameraMode.VIDEO, CameraMode.CINEMA, CameraMode.MORE),
+                modeSelectorPosition = ModeSelectorPosition.ABOVE_SHUTTER,
+                modeSelectorStyle = ModeSelectorStyle.GCAM_PILL,
+                shutterStyle = ShutterStyle.PIXEL_SOLID,
+                shutterSizeDp = 76,
+                shutterHorizontalOffsetDp = 0,
+                flipButtonSizeDp = 52,
+                galleryThumbSizeDp = 50,
+                showGalleryButton = true,
+                showFlipButton = true,
+                topControlsOrder = listOf(
+                    TopControlItem.FLASH, TopControlItem.TIMER, TopControlItem.GRID,
+                    TopControlItem.RAW, TopControlItem.SIX_DOT_MENU, TopControlItem.SETTINGS
+                ),
+                topControlsIconSizeDp = 20,
+                topControlsSpacingDp = 12,
+                topBarAlignment = TopBarAlignment.SPACE_BETWEEN,
+                accentColorHex = "#4285F4",
+                modeTextSizeSp = 13f,
+                modeFontFamily = FontFamilyOption.DEFAULT,
+                topPaddingDp = 10,
+                bottomPaddingDp = 12,
+                showZoomCapsule = true,
+                useFocalLengthZoomLabels = false,
+                zoomCapsuleScale = 0.96f,
+                textColorHex = "#FFFFFF",
+                fontWeightOption = FontWeightOption.MEDIUM,
+                textCaseOption = TextCaseOption.TITLE_CASE,
+                letterSpacingSp = 0.0f,
+                textShadowOption = TextShadowOption.NONE,
+                iconStyleOption = IconStyleOption.MINIMAL_OUTLINE,
+                iconColorHex = "#FFFFFF",
+                iconShapeOption = IconShapeOption.TRANSPARENT_NONE,
+                iconContainerOpacity = 0.20f,
+                iconStrokeWidthDp = 1.6f
             )
             UiTemplateType.SAMSUNG -> ModeLayoutConfig(
                 // Samsung template tuned to the supplied reference. Keep the app's existing

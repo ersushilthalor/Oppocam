@@ -38,7 +38,7 @@ import com.example.camera.ui.components.FloatingWindowCard
  * Compact, rounded, dark translucent floating options panel that expands downward
  * over the viewfinder when tapping the 6-dot menu icon in the top control bar.
  * Matches the reference design with circular icons, clear status labels, spacing, and layout:
- * - Photo mode: Timer, Hi-Res (50MP), RAW, Motion Photo, Grid, Flash, Filters, Settings
+ * - Photo mode: Timer, HDR, Hi-Res, RAW, Grid, Flash, Filters, Settings
  * - Video mode: Dolly Zoom, Horizontal Lock, Stabilization, Resolution/FPS, Torch, Audio, Video Adjustments, Settings
  * - Cinema mode: LOG, LUT, Aspect Ratio, Resolution, EV, Tuning, Audio, Settings
  */
@@ -52,6 +52,8 @@ fun QuickOptionsFloatingPanel(
     gridType: GridType,
     photoMegapixelMode: PhotoMegapixelMode,
     isRawEnabled: Boolean,
+    isAutoHdrEnabled: Boolean,
+    onAutoHdrToggle: () -> Unit,
     activePhotoFilter: PhotoFilter,
     isPipelineActive: Boolean,
     // Video properties
@@ -336,6 +338,17 @@ fun QuickOptionsFloatingPanel(
                                     modifier = Modifier.weight(1f)
                                 )
 
+                                QuickOptionCircleButton(
+                                    icon = if (isAutoHdrEnabled) Icons.Outlined.HdrOn else Icons.Outlined.HdrOff,
+                                    label = "HDR",
+                                    statusText = if (isAutoHdrEnabled) "AUTO" else "OFF",
+                                    isActive = isAutoHdrEnabled,
+                                    activeColor = accentColor,
+                                    onClick = onAutoHdrToggle,
+                                    testTag = "panel_auto_hdr_button",
+                                    modifier = Modifier.weight(1f)
+                                )
+
                                 val is50M = photoMegapixelMode == PhotoMegapixelMode.M50
                                 QuickOptionCircleButton(
                                     icon = Icons.Outlined.HighQuality,
@@ -393,6 +406,18 @@ fun QuickOptionsFloatingPanel(
                                     activeColor = accentColor,
                                     onClick = onFlashClick,
                                     testTag = "panel_flash_button",
+                                    modifier = Modifier.weight(1f)
+                                )
+
+
+                                QuickOptionCircleButton(
+                                    icon = Icons.Outlined.Tune,
+                                    label = "Filters",
+                                    statusText = activePhotoFilter.name,
+                                    isActive = activePhotoFilter.name != "ORIGINAL",
+                                    activeColor = accentColor,
+                                    onClick = onPhotoFilterClick,
+                                    testTag = "panel_photo_filter_button",
                                     modifier = Modifier.weight(1f)
                                 )
 

@@ -29,6 +29,7 @@ enum class TimerMode(val seconds: Int, val label: String) {
 enum class GridType(val title: String) {
     NONE("Off"),
     THIRDS("3x3 Rule"),
+    FOUR_BY_FOUR("4x4 Grid"),
     GOLDEN("Golden Ratio"),
     SQUARE("1:1 Box"),
     LEVEL("Level Horizon")

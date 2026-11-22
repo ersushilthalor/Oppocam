@@ -276,6 +276,7 @@ fun CameraScreen(
     val isAeLocked by viewModel.isAeLocked.collectAsStateWithLifecycle()
     val isAfLocked by viewModel.isAfLocked.collectAsStateWithLifecycle()
     val isRawEnabled by viewModel.isRawCaptureEnabled.collectAsStateWithLifecycle()
+    val isAutoHdrEnabled by viewModel.autoHdrEnabled.collectAsStateWithLifecycle()
     val videoFps by viewModel.videoFps.collectAsStateWithLifecycle()
     val colorProfile by viewModel.colorProfile.collectAsStateWithLifecycle()
     val isAudioEnabled by viewModel.isAudioEnabled.collectAsStateWithLifecycle()
@@ -587,6 +588,8 @@ fun CameraScreen(
             gridType = gridType,
             isRawEnabled = isRawEnabled,
             supportsRaw = capabilities.supportsRaw,
+            isAutoHdrEnabled = isAutoHdrEnabled,
+            onAutoHdrToggle = { viewModel.setAutoHdrEnabled(!isAutoHdrEnabled) },
             storageStats = storageStats,
             videoQuality = currentVideoQuality,
             videoResolution = selectedVideoResolution,
@@ -662,6 +665,8 @@ fun CameraScreen(
             gridType = gridType,
             photoMegapixelMode = photoMegapixelMode,
             isRawEnabled = isRawEnabled,
+            isAutoHdrEnabled = isAutoHdrEnabled,
+            onAutoHdrToggle = { viewModel.setAutoHdrEnabled(!isAutoHdrEnabled) },
             activePhotoFilter = selectedPhotoFilter,
             isPipelineActive = isCustomPipelineEnabled,
             videoResolution = selectedVideoResolution,
@@ -713,7 +718,7 @@ fun CameraScreen(
                 viewModel.setSettingsOpen(true)
             },
             onDismiss = { isQuickOptionsOpen = false },
-            accentColor = Color(0xFFFF7A00),
+            accentColor = activeLayoutConfig.getComposeAccentColor(),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
