@@ -286,6 +286,8 @@ fun SettingsDrawer(
                         isAutoHdrEnabled = isAutoHdrEnabled,
                         onAutoHdrToggle = onAutoHdrToggle,
                         photoMegapixelMode = photoMegapixelMode,
+                        gridType = gridType,
+                        onGridTypeSelected = onGridTypeSelected,
                         isRawEnabled = isRawEnabled,
                         onRawToggle = onRawToggle,
                         saveSelfieAsPreviewed = saveSelfieAsPreviewed,
@@ -480,6 +482,8 @@ private fun SettingsOverviewPage(
     isAutoHdrEnabled: Boolean,
     onAutoHdrToggle: (Boolean) -> Unit,
     photoMegapixelMode: PhotoMegapixelMode,
+    gridType: GridType,
+    onGridTypeSelected: (GridType) -> Unit,
     isRawEnabled: Boolean,
     onRawToggle: () -> Unit,
     saveSelfieAsPreviewed: Boolean,
@@ -529,13 +533,6 @@ private fun SettingsOverviewPage(
                     onOptionSelected = onShutterFeedbackSelected,
                     showDivider = true
                 )
-                ReferenceToggleRow(
-                    title = "Mirror selfie",
-                    description = "Save front-camera photos as previewed.",
-                    checked = saveSelfieAsPreviewed,
-                    onCheckedChange = onSaveSelfieAsPreviewedToggle,
-                    showDivider = true
-                )
                 ReferenceNavigationRow(
                     title = "Composition assistance",
                     onClick = { onSelectPage(SettingsPage.CAMERA_LENS) },
@@ -557,6 +554,48 @@ private fun SettingsOverviewPage(
         }
 
         item {
+            ReferenceSettingsGroup("Composition") {
+                ReferenceChoiceRow(
+                    title = "Grid type",
+                    selectedOption = gridType,
+                    options = listOf(
+                        GridType.NONE to "Off",
+                        GridType.THIRDS to "3 x 3",
+                        GridType.FOUR_BY_FOUR to "4 x 4",
+                        GridType.GOLDEN to "Golden ratio",
+                        GridType.SQUARE to "Square frame"
+                    ),
+                    onOptionSelected = onGridTypeSelected,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Horizon level guide",
+                    description = "Show a level guide over the camera preview.",
+                    checked = horizonLeveler,
+                    onCheckedChange = onHorizonLevelerToggle,
+                    showDivider = true
+                )
+                ReferenceNavigationRow(
+                    title = "Framing and lens assistance",
+                    value = "Auto macro and composition hints",
+                    onClick = { onSelectPage(SettingsPage.CAMERA_LENS) },
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
+            ReferenceSettingsGroup("Manual controls") {
+                ReferenceNavigationRow(
+                    title = "Manual controls",
+                    value = "Exposure, ISO, shutter speed, white balance and focus",
+                    onClick = { onSelectPage(SettingsPage.PRO_MANUAL) },
+                    showDivider = false
+                )
+            }
+        }
+
+        item {
             ReferenceSettingsGroup("Photo") {
                 ReferenceNavigationRow(
                     title = "Photo resolution",
@@ -569,6 +608,13 @@ private fun SettingsOverviewPage(
                     description = "Automatically balances highlights and shadows.",
                     checked = isAutoHdrEnabled,
                     onCheckedChange = onAutoHdrToggle,
+                    showDivider = true
+                )
+                ReferenceToggleRow(
+                    title = "Save selfie as previewed",
+                    description = "Keep the same left/right orientation shown in the viewfinder.",
+                    checked = saveSelfieAsPreviewed,
+                    onCheckedChange = onSaveSelfieAsPreviewedToggle,
                     showDivider = true
                 )
                 ReferenceToggleRow(
@@ -665,13 +711,6 @@ private fun SettingsOverviewPage(
                     description = "Keep the video horizon level while recording.",
                     checked = isHorizontalLockSettingEnabled,
                     onCheckedChange = onHorizontalLockSettingToggle,
-                    showDivider = true
-                )
-                ReferenceToggleRow(
-                    title = "Horizon level",
-                    description = "Show a level guide in the viewfinder.",
-                    checked = horizonLeveler,
-                    onCheckedChange = onHorizonLevelerToggle,
                     showDivider = true
                 )
                 ReferenceToggleRow(
@@ -2729,6 +2768,7 @@ private fun UiLayoutSettingsPage(
     val allTemplates = remember {
         listOf(
             UiTemplateType.OPPO to "OPPO",
+            UiTemplateType.GCAM to "GCam 8.7",
             UiTemplateType.SAMSUNG to "One UI",
             UiTemplateType.CUSTOM to "Custom UI"
         )
